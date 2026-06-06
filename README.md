@@ -1,14 +1,18 @@
 # ZKT: Zero-Knowledge Zakat
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.31-blue.svg)](https://soliditylang.org/)
-[![Next.js](https://img.shields.io/badge/Next.js-16.1.1-black.svg)](https://nextjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
-[![Noir](https://img.shields.io/badge/Noir-1.0.0--beta.21-purple.svg)](https://noir-lang.org/)
+[![Solana](https://img.shields.io/badge/Solana-Arcium%20MPC-orange.svg)](https://solana.com/)
+[![Anchor](https://img.shields.io/badge/Anchor-1.0.2-blue.svg)](https://www.anchor-lang.com/)
+[![Arcium](https://img.shields.io/badge/Arcium-0.10.3-purple.svg)](https://arcium.com/)
+[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia-gray.svg)](https://ethereum.org/)
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.31-lightgray.svg)](https://soliditylang.org/)
 
-Privacy-preserving zakat donations using UltraHONK zero-knowledge proofs on Ethereum Sepolia. Donors contribute zakat with cryptographic anonymity while maintaining verifiable Sharia compliance and institutional accountability.
+Privacy-preserving zakat donations using **Arcium MPC** (Solana) and UltraHONK zero-knowledge proofs (Ethereum Sepolia). Multi-chain support for confidential zakat compliance.
 
-- **Testnet**: [ziswaf.tawf.foundation](https://ziswaf.tawf.foundation)
+> **NEW**: Solana rewrite complete — [`solana/`](solana/) directory with Arcium MPC circuits, zkt-core facade, and React/Vite frontend. See [solana/README.md](solana/README.md).
+
+- **Solana**: [solana/](solana/) — Arcium MPC + Anchor 1.0.2 (12 tests passing)
+- **Ethereum**: Sepolia testnet — UltraHONK ZK proofs (26 tests passing)
 - **Paper**: `zk-private-zakat.pdf` (IEEE ICIMTech 2026, 6 pages, 33 references)
 - **Authors**: Muhammad Zidan Fatonie, Alexander Agung Santoso Gunawan (BINUS University)
 
