@@ -1,0 +1,34 @@
+[package]
+name = "zkt_hackathon_solana"
+version = "0.1.0"
+description = "Created with Arcium & Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "zkt_hackathon_solana"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "arcium-anchor/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { version = "1.0.2", features = ["init-if-needed"] }
+arcium-client = { default-features = false, version = "=0.10.3" }
+arcium-macros = "=0.10.3"
+arcium-anchor = "=0.10.3"
+# pin so that we do not have 1.13.*
+unicode-segmentation = { version = "=1.12.0"}
+# pin so that we do not have edition = 2024
+hashbrown = { version = "=0.16.1"}
+indexmap = { version = "=2.13.1"}
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
