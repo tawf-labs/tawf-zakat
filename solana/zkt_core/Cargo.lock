@@ -1381,14 +1381,37 @@ dependencies = [
 [[package]]
 name = "quasar-derive"
 version = "0.0.0"
-source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
  "proc-macro2",
- "quasar-idl-schema",
- "quasar-schema",
+ "quasar-idl-schema 0.0.0 (git+https://github.com/blueshift-gg/quasar?branch=master)",
+ "quasar-schema 0.0.0 (git+https://github.com/blueshift-gg/quasar?branch=master)",
  "quote",
  "serde_json",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "quasar-derive"
+version = "0.0.0"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
+dependencies = [
+ "proc-macro2",
+ "quasar-idl-schema 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
+ "quasar-schema 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
+ "quote",
+ "serde_json",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "quasar-idl-schema"
+version = "0.0.0"
+source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1404,17 +1427,36 @@ dependencies = [
 [[package]]
 name = "quasar-lang"
 version = "0.0.0"
+source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+dependencies = [
+ "const-crypto",
+ "quasar-derive 0.0.0 (git+https://github.com/blueshift-gg/quasar?branch=master)",
+ "solana-account-view",
+ "solana-address 2.2.0",
+ "solana-compiler-builtins 0.1.0 (git+https://github.com/blueshift-gg/quasar?branch=master)",
+ "solana-define-syscall 5.1.0",
+ "solana-instruction",
+ "solana-instruction-view",
+ "solana-program-error",
+ "solana-program-log",
+ "wincode",
+ "zeropod",
+]
+
+[[package]]
+name = "quasar-lang"
+version = "0.0.0"
 source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
  "bs58",
  "const-crypto",
  "inventory",
- "quasar-derive",
- "quasar-idl-schema",
+ "quasar-derive 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
+ "quasar-idl-schema 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
  "serde_json",
  "solana-account-view",
- "solana-address 2.5.0",
- "solana-compiler-builtins",
+ "solana-address 2.2.0",
+ "solana-compiler-builtins 0.1.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
  "solana-define-syscall 5.1.0",
  "solana-instruction",
  "solana-instruction-view",
@@ -1427,6 +1469,11 @@ dependencies = [
 [[package]]
 name = "quasar-schema"
 version = "0.0.0"
+source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+
+[[package]]
+name = "quasar-schema"
+version = "0.0.0"
 source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 
 [[package]]
@@ -1434,8 +1481,8 @@ name = "quasar-spl"
 version = "0.0.0"
 source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
- "quasar-lang",
- "solana-address 2.5.0",
+ "quasar-lang 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
+ "solana-address 2.2.0",
 ]
 
 [[package]]
@@ -1800,7 +1847,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9cf16495d9eb53e3d04e72366a33bb1c20c24e78c171d8b8f5978357b63ae95"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-program-error",
  "solana-program-memory",
 ]
@@ -1811,7 +1858,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc141b940560430425ebaadb7645496c45f6a10fad9911d719bd03eab7f4d422"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-program-error",
 ]
 
@@ -1821,14 +1868,14 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2ecac8e1b7f74c2baa9e774c42817e3e75b20787134b76cc4d45e8a604488f5"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
 ]
 
 [[package]]
 name = "solana-address"
-version = "2.5.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f08236dacd0e6dc8234becef58e27c8567856644ef509d7e97957d55a91dc72"
+checksum = "68c5d02824391b072dc5cd0aaa85fb0af9784a21d23286a767994d1e8a322131"
 dependencies = [
  "borsh",
  "bytemuck",
@@ -1945,6 +1992,11 @@ dependencies = [
  "solana-sdk-macro",
  "solana-sysvar-id",
 ]
+
+[[package]]
+name = "solana-compiler-builtins"
+version = "0.1.0"
+source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
 
 [[package]]
 name = "solana-compiler-builtins"
@@ -2106,7 +2158,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c35d02cd27575b1fd05938d3624e476b0173208139053b51aa48dd9bec149f1"
 dependencies = [
  "solana-account-view",
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-define-syscall 5.1.0",
  "solana-program-error",
 ]
@@ -2188,7 +2240,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0448b1fd891c5f46491e5dc7d9986385ba3c852c340db2911dd29faa01d2b08d"
 dependencies = [
  "lazy_static",
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-hash 4.4.0",
  "solana-instruction",
  "solana-sanitize",
@@ -2386,7 +2438,7 @@ version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7db719574990de7e8b0f55a8593ac92a5ccb42c8ce67b3e4bf05b139d5d9ee71"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
 ]
 
 [[package]]
@@ -2431,7 +2483,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "def234c1956ff616d46c9dd953f251fa7096ddbaa6d52b165218de97882b7280"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
 ]
 
 [[package]]
@@ -2690,7 +2742,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17358d1e9a13e5b9c2264d301102126cf11a47fd394cdf3dec174fe7bc96e1de"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-sdk-ids",
 ]
 
@@ -2700,7 +2752,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96697cff5075a028265324255efed226099f6d761ca67342b230d09f72cc48d2"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-hash 4.4.0",
  "solana-instruction",
  "solana-instruction-error",
@@ -3084,7 +3136,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efea93c3bd4eaad26f65af88348e5e08077f4a4682adb37147765172100313c4"
 dependencies = [
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-program-error",
  "wincode",
  "zeropod-derive",
@@ -3105,13 +3157,26 @@ dependencies = [
 name = "zkt_core"
 version = "0.1.0"
 dependencies = [
- "quasar-lang",
+ "quasar-lang 0.0.0 (git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4)",
  "quasar-spl",
  "quasar-svm",
  "solana-account",
- "solana-address 2.5.0",
+ "solana-address 2.2.0",
  "solana-instruction",
  "solana-pubkey 4.2.0",
+ "spl-token-interface",
+ "wincode",
+ "zkt_core-client",
+]
+
+[[package]]
+name = "zkt_core-client"
+version = "0.1.0"
+dependencies = [
+ "quasar-lang 0.0.0 (git+https://github.com/blueshift-gg/quasar?branch=master)",
+ "solana-address 2.2.0",
+ "solana-instruction",
+ "wincode",
 ]
 
 [[package]]
