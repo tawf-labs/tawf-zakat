@@ -1381,7 +1381,7 @@ dependencies = [
 [[package]]
 name = "quasar-derive"
 version = "0.0.0"
-source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
  "proc-macro2",
  "quasar-idl-schema",
@@ -1394,7 +1394,7 @@ dependencies = [
 [[package]]
 name = "quasar-idl-schema"
 version = "0.0.0"
-source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1404,7 +1404,7 @@ dependencies = [
 [[package]]
 name = "quasar-lang"
 version = "0.0.0"
-source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 dependencies = [
  "bs58",
  "const-crypto",
@@ -1427,7 +1427,16 @@ dependencies = [
 [[package]]
 name = "quasar-schema"
 version = "0.0.0"
-source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
+
+[[package]]
+name = "quasar-spl"
+version = "0.0.0"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
+dependencies = [
+ "quasar-lang",
+ "solana-address 2.5.0",
+]
 
 [[package]]
 name = "quasar-svm"
@@ -1940,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "solana-compiler-builtins"
 version = "0.1.0"
-source = "git+https://github.com/blueshift-gg/quasar?branch=master#a89a9329f05740a20520607608b2b3b78c74f7c4"
+source = "git+https://github.com/blueshift-gg/quasar?rev=a89a9329f05740a20520607608b2b3b78c74f7c4#a89a9329f05740a20520607608b2b3b78c74f7c4"
 
 [[package]]
 name = "solana-compute-budget"
@@ -3097,6 +3106,7 @@ name = "zkt_core"
 version = "0.1.0"
 dependencies = [
  "quasar-lang",
+ "quasar-spl",
  "quasar-svm",
  "solana-account",
  "solana-address 2.5.0",
