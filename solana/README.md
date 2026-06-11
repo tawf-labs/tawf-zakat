@@ -8,6 +8,9 @@ and PDA donation receipts. No governance, no ZK yet — Phase 2+ (ADR-0002).
 ## Layout
 
 - `zkt_core/` — the program (`src/state.rs`, `src/instructions/`, `src/tests.rs`)
+- `circuits/` — Phase 2 ZK: the `zakat_eligibility` Circom circuit + trusted-setup
+  ceremony (Layer A, eligibility). Fund-shielding (Layer B) is a third-party
+  pool — see `docs/adr/0004`. Not yet wired into the program.
 
 ## Toolchain
 
