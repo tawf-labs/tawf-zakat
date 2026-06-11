@@ -27,7 +27,7 @@ and PDA donation receipts. No governance, no ZK yet — Phase 2+ (ADR-0002).
 ```sh
 cd zkt_core
 quasar build        # SBF build + client codegen (target/client/)
-quasar test         # QuasarSVM test suite (7 tests)
+quasar test         # QuasarSVM test suite (9 tests)
 quasar deploy -u devnet -k <payer.json>
 ```
 

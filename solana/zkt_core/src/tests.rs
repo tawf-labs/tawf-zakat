@@ -464,6 +464,89 @@ fn test_pause_freezes_donate_and_withdraw() {
 }
 
 #[test]
+fn test_only_pool_organizer_can_withdraw() {
+    let mut svm = setup();
+    setup_funded_zakat_pool(&mut svm);
+
+    // An outsider impersonating the organizer fails the has_one(organizer)
+    // constraint — the vault is never touched.
+    let mut ix = withdraw_ix(1_000);
+    ix.accounts[0].pubkey = OUTSIDER;
+    let result = svm.process_instruction(
+        &ix,
+        &[
+            signer(&OUTSIDER),
+            token_account(&DEST_TA, &MINT, &OUTSIDER, 0),
+        ],
+    );
+    assert!(result.is_err(), "non-organizer withdraw must fail");
+}
+
+#[test]
+fn test_create_pool_rejects_over_cap_and_revoked_organizer() {
+    let mut svm = setup();
+    let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
+    svm.process_instruction(&init_config_ix(), &[signer(&ADMIN), empty(&config_pda())])
+        .assert_success();
+    svm.process_instruction(
+        &whitelist_ix(ORGANIZER),
+        &[
+            signer(&ADMIN),
+            empty(&ORGANIZER),
+            empty(&find_organizer_address(&ORGANIZER, &ID).0),
+        ],
+    )
+    .assert_success();
+
+    // cap above the global ceiling is rejected.
+    let over_cap: Instruction = Create_poolInstruction {
+        organizer: ORGANIZER,
+        config: config_pda(),
+        organizer_account: find_organizer_address(&ORGANIZER, &ID).0,
+        mint: MINT,
+        pool,
+        vault: ata(&pool, &MINT),
+        token_program: token_program(),
+        system_program: system_program(),
+        ata_program: ata_program(),
+        index: 0,
+        campaign_type: 0,
+        cap: MAX_POOL_CAP + 1,
+    }
+    .into();
+    svm.process_instruction(
+        &over_cap,
+        &[
+            signer(&ORGANIZER),
+            mint_account(&MINT, &ADMIN),
+            empty(&pool),
+            empty(&ata(&pool, &MINT)),
+        ],
+    )
+    .assert_error(ProgramError::Custom(6004)); // InvalidCap
+
+    // After revocation the organizer can no longer open pools.
+    let revoke: Instruction = Revoke_organizerInstruction {
+        authority: ADMIN,
+        config: config_pda(),
+        wallet: ORGANIZER,
+        organizer: find_organizer_address(&ORGANIZER, &ID).0,
+    }
+    .into();
+    svm.process_instruction(&revoke, &[]).assert_success();
+    svm.process_instruction(
+        &create_pool_ix(0),
+        &[
+            signer(&ORGANIZER),
+            mint_account(&MINT, &ADMIN),
+            empty(&pool),
+            empty(&ata(&pool, &MINT)),
+        ],
+    )
+    .assert_error(ProgramError::Custom(6002)); // OrganizerInactive
+}
+
+#[test]
 fn test_authority_two_step_transfer() {
     let mut svm = setup();
     svm.process_instruction(&init_config_ix(), &[signer(&ADMIN), empty(&config_pda())])
