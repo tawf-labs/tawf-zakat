@@ -18,6 +18,8 @@ const DONOR_TA: Address = Address::new_from_array([6; 32]);
 const DEST_TA: Address = Address::new_from_array([7; 32]);
 const FALLBACK_TA: Address = Address::new_from_array([8; 32]);
 const OUTSIDER: Address = Address::new_from_array([9; 32]);
+// ZK nullifier fixture (any 32 bytes; the fail-closed verifier ignores it).
+const NULLIFIER_A: [u8; 32] = [0xA1; 32];
 
 const DAY: i64 = 86_400;
 const T0: i64 = 1_750_000_000;
@@ -198,6 +200,27 @@ fn redistribute_ix(fallback_ta: Address) -> Instruction {
         vault: ata(&pool, &MINT),
         fallback_ta,
         token_program: token_program(),
+    }
+    .into()
+}
+
+fn donate_zk_ix(nullifier: [u8; 32], current_time: i64, amount: u64) -> Instruction {
+    let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
+    Donate_zkInstruction {
+        donor: DONOR,
+        config: config_pda(),
+        pool,
+        vault: ata(&pool, &MINT),
+        donor_ta: DONOR_TA,
+        nullifier_record: find_nullifier_record_address(nullifier, &ID).0,
+        token_program: token_program(),
+        system_program: system_program(),
+        nullifier,
+        nisab: 85_000_000,
+        current_time,
+        cycle_id: 1,
+        amount,
+        proof: [0u8; 256],
     }
     .into()
 }
@@ -580,4 +603,74 @@ fn test_authority_two_step_transfer() {
     let data = &result.account(&pk(&config_pda())).unwrap().data;
     assert_eq!(&data[1..33], OUTSIDER.as_ref(), "new authority");
     assert_eq!(&data[33..65], &[0u8; 32], "pending cleared");
+}
+
+// --- donate_zk (Phase 2 ZK flow) ---
+//
+// The Groth16 verifier is fail-closed, so the post-verify path (transfer + the
+// nullifier replay guard) is not yet reachable — those tests land with the
+// verifier + verifying key. The pre-verify guards below ARE reachable today.
+
+#[test]
+fn test_zk_donate_is_fail_closed() {
+    let mut svm = setup();
+    setup_funded_zakat_pool(&mut svm);
+    // A fresh, in-window proof reaches the verifier and is rejected: the program
+    // accepts no ZK donation until the verifying key is embedded.
+    svm.process_instruction(
+        &donate_zk_ix(NULLIFIER_A, T0, 1_000),
+        &[empty(&find_nullifier_record_address(NULLIFIER_A, &ID).0)],
+    )
+    .assert_error(ProgramError::Custom(6020)); // ZkVerifierNotWired
+}
+
+#[test]
+fn test_zk_donate_rejects_stale_proof() {
+    let mut svm = setup();
+    setup_funded_zakat_pool(&mut svm);
+    // current_time 1000s behind the clock > MAX_PROOF_AGE (300s) — rejected
+    // before the verifier is even consulted.
+    svm.process_instruction(
+        &donate_zk_ix(NULLIFIER_A, T0 - 1_000, 1_000),
+        &[empty(&find_nullifier_record_address(NULLIFIER_A, &ID).0)],
+    )
+    .assert_error(ProgramError::Custom(6019)); // StaleProof
+}
+
+#[test]
+fn test_zk_donate_rejects_normal_pool() {
+    // ZK eligibility certifies zakat; a normal campaign must reject donate_zk
+    // (guard runs before the verifier).
+    let mut svm = setup();
+    let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
+    svm.process_instruction(&init_config_ix(), &[signer(&ADMIN), empty(&config_pda())])
+        .assert_success();
+    svm.process_instruction(
+        &whitelist_ix(ORGANIZER),
+        &[
+            signer(&ADMIN),
+            empty(&ORGANIZER),
+            empty(&find_organizer_address(&ORGANIZER, &ID).0),
+        ],
+    )
+    .assert_success();
+    svm.process_instruction(
+        &create_pool_ix(1), // CAMPAIGN_NORMAL
+        &[
+            signer(&ORGANIZER),
+            mint_account(&MINT, &ADMIN),
+            empty(&pool),
+            empty(&ata(&pool, &MINT)),
+        ],
+    )
+    .assert_success();
+    svm.process_instruction(
+        &donate_zk_ix(NULLIFIER_A, T0, 1_000),
+        &[
+            signer(&DONOR),
+            token_account(&DONOR_TA, &MINT, &DONOR, 10_000),
+            empty(&find_nullifier_record_address(NULLIFIER_A, &ID).0),
+        ],
+    )
+    .assert_error(ProgramError::Custom(6009)); // NotZakatPool
 }

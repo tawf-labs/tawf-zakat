@@ -30,7 +30,7 @@ and PDA donation receipts. No governance, no ZK yet — Phase 2+ (ADR-0002).
 ```sh
 cd zkt_core
 quasar build        # SBF build + client codegen (target/client/)
-quasar test         # QuasarSVM test suite (9 tests)
+quasar test         # QuasarSVM test suite (12 tests)
 quasar deploy -u devnet -k <payer.json>
 ```
 
@@ -41,3 +41,6 @@ quasar deploy -u devnet -k <payer.json>
 - [ ] `init_config` authority + fallback must be Squads vault addresses
 - [ ] Donation mint on mainnet: official IDRX `idrxZcP8xiKkYk6XGD4uz1dxEYCWSgKDHqgjsBbwDur`
       (2 decimals; beware the deprecated old mint and pump.fun fakes)
+- [ ] `donate_zk` is **fail-closed** (`ZkVerifierNotWired`) until the Groth16
+      verifier + ceremony verifying key are wired — do not advertise the ZK
+      donation path until then. Bind a collision-free `campaignId` first (ADR-0004).

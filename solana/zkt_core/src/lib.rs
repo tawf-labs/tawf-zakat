@@ -90,6 +90,20 @@ mod zkt_core {
     pub fn redistribute(ctx: Ctx<Redistribute>) -> Result<(), ProgramError> {
         ctx.accounts.handler()
     }
+
+    #[instruction(discriminator = 11)]
+    pub fn donate_zk(
+        ctx: Ctx<DonateZk>,
+        nullifier: [u8; 32],
+        nisab: u64,
+        current_time: i64,
+        cycle_id: u64,
+        amount: u64,
+        proof: [u8; PROOF_LEN],
+    ) -> Result<(), ProgramError> {
+        ctx.accounts
+            .handler(nullifier, nisab, current_time, cycle_id, amount, proof, &ctx.bumps)
+    }
 }
 
 #[cfg(test)]

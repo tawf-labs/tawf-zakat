@@ -21,4 +21,11 @@ pub enum ZktError {
     InvalidReceiptIndex,
     NoPendingAuthority,
     ZeroAmount,
+    /// Eligibility proof's `current_time` is too far from the on-chain clock.
+    StaleProof,
+    /// donate_zk's Groth16 verifier is not wired yet (fail-closed). Production
+    /// builds reject all ZK donations until the verifying key is embedded.
+    ZkVerifierNotWired,
+    /// The Groth16 proof failed verification.
+    ProofInvalid,
 }

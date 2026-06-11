@@ -111,3 +111,31 @@ invalidates the Phase 2 `.zkey` and forces a re-run.
 - The donate flow gains a ZK path alongside the plain `donate` instruction: a
   `donate_zk` that verifies the Groth16 proof (via `groth16-solana`) and burns
   the nullifier through a per-nullifier PDA.
+
+## Implementation notes (Phase 2 build)
+
+Discovered while scaffolding `donate_zk` against the Quasar runtime:
+
+- **`groth16-solana` 0.2.0 does NOT drop into a Quasar program.** Even with
+  `default-features = false` it depends on `thiserror = "1.0"`, which links
+  `std`, producing `error[E0152]: duplicate lang item panic_impl` against
+  Quasar's no_std runtime. ADR-0002 assumed it drops in cleanly; it does not.
+  Resolution (verifier-wiring milestone): **vendor** the crate (~150 real lines;
+  its `std`/`Vec` uses are test-only) and replace the `thiserror` error enum
+  with a plain one, OR hand-roll the pairing over `solana-bn254` directly. Both
+  are no_std-clean; `solana-bn254`/`ark-bn254` are already in the dep graph.
+- **`donate_zk` ships fail-closed.** The verifier seam returns
+  `ZkVerifierNotWired` until the ceremony verifying key is embedded and the
+  pairing is wired — a money path must never accept unverified proofs by
+  default. Pre-verify guards (paused, zakat-only, proof freshness, deadline,
+  cap) are tested today; the post-verify path (transfer + nullifier replay) is
+  tested when the verifier lands.
+- **Nullifier PDA seed is `[u8; 32]`, not `Address`.** Quasar's `Address` seed
+  form borrows an account for its lifetime, so it cannot seed on an
+  instruction-arg nullifier (the proof's public signal). The `[u8; 32]`
+  (`SeedType::Bytes`) seed is by-value and works.
+- **`campaignId` binding is provisional.** It is bound to `pool.index`, which is
+  unique only per organizer. Before the verifier goes live, bind a
+  collision-free pool identifier (e.g. a reduced form of the pool PDA, or a
+  global pool counter) so a proof for one organizer's pool N cannot be replayed
+  against another organizer's pool N.

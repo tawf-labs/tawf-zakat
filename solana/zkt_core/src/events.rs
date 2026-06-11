@@ -76,3 +76,14 @@ pub struct Redistributed {
     pub amount: u64,
     pub destination: Address,
 }
+
+/// ZK donation. Deliberately omits the donor to keep the flow privacy-leaning
+/// (Layer A is pseudonymous; the donor still signs the tx). The nullifier is
+/// the BN254 field element (big-endian) that gated this donation.
+#[event(discriminator = 11)]
+pub struct ZkDonationReceived {
+    pub pool: Address,
+    /// BN254 field element (big-endian) as a 32-byte container.
+    pub nullifier: Address,
+    pub amount: u64,
+}

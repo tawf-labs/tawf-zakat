@@ -13,6 +13,10 @@ pub const GRACE_PERIOD: i64 = 7 * 86_400;
 /// One-time deadline extension (Phase 1: granted by admin multisig).
 pub const EXTENSION: i64 = 14 * 86_400;
 
+/// Max age of an eligibility proof's `current_time` public input vs the
+/// on-chain clock (anti-replay of a stale-but-valid proof timestamp).
+pub const MAX_PROOF_AGE: i64 = 300; // 5 minutes
+
 #[account(discriminator = 1, set_inner)]
 #[seeds(b"config")]
 pub struct Config {
@@ -63,6 +67,21 @@ pub struct Pool {
 #[seeds(b"receipt", pool: Address, index: u64)]
 pub struct Receipt {
     pub donor: Address,
+    pub pool: Address,
+    pub amount: u64,
+    pub timestamp: i64,
+    pub bump: u8,
+}
+
+/// Anti-double-zakat record for the ZK donation flow. Its PDA is seeded by the
+/// proof's `nullifier` public signal, so `init` fails on a second use of the
+/// same nullifier — that is the on-chain replay guard. The nullifier is a BN254
+/// field element serialized big-endian into 32 raw bytes (a `[u8; 32]` seed, by
+/// value — not an `Address`, whose seed form borrows an account).
+#[account(discriminator = 5, set_inner)]
+#[seeds(b"nullifier", nullifier: [u8; 32])]
+pub struct NullifierRecord {
+    pub nullifier: [u8; 32],
     pub pool: Address,
     pub amount: u64,
     pub timestamp: i64,
