@@ -2,7 +2,7 @@ use {
     crate::{
         errors::ZktError,
         events::Withdrawn,
-        state::{Pool, CAMPAIGN_ZAKAT, STATUS_ACTIVE},
+        state::{Config, Pool, CAMPAIGN_ZAKAT, STATUS_ACTIVE},
     },
     quasar_lang::{
         cpi::Seed,
@@ -15,6 +15,8 @@ use {
 #[derive(Accounts)]
 pub struct Withdraw {
     pub organizer: Signer,
+    #[account(address = Config::seeds())]
+    pub config: Account<Config>,
     #[account(mut, has_one(organizer), has_one(vault))]
     pub pool: Account<Pool>,
     #[account(mut)]
@@ -26,6 +28,9 @@ pub struct Withdraw {
 
 impl Withdraw {
     pub fn handler(&mut self, amount: u64) -> Result<(), ProgramError> {
+        // Emergency pause freezes organizer outflow (redistribute stays
+        // ungated — it is the sharia safety-valve to the trusted fallback).
+        require!(!bool::from(self.config.paused), ZktError::Paused);
         require!(amount > 0, ZktError::ZeroAmount);
         require_eq!(self.pool.status, STATUS_ACTIVE, ZktError::PoolNotActive);
 

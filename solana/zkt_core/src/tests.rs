@@ -169,11 +169,23 @@ fn withdraw_ix(amount: u64) -> Instruction {
     let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
     WithdrawInstruction {
         organizer: ORGANIZER,
+        config: config_pda(),
         pool,
         vault: ata(&pool, &MINT),
         dest_ta: DEST_TA,
         token_program: token_program(),
         amount,
+    }
+    .into()
+}
+
+fn set_config_ix(paused: bool) -> Instruction {
+    Set_configInstruction {
+        authority: ADMIN,
+        config: config_pda(),
+        fallback_authority: FALLBACK,
+        max_pool_cap: MAX_POOL_CAP,
+        paused,
     }
     .into()
 }
@@ -417,6 +429,38 @@ fn test_normal_pool_has_no_deadline() {
         &[token_account(&FALLBACK_TA, &MINT, &FALLBACK, 0)],
     )
     .assert_error(ProgramError::Custom(6009)); // NotZakatPool
+}
+
+#[test]
+fn test_pause_freezes_donate_and_withdraw() {
+    let mut svm = setup();
+    setup_funded_zakat_pool(&mut svm);
+    let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
+
+    // Admin trips the emergency pause.
+    svm.process_instruction(&set_config_ix(true), &[])
+        .assert_success();
+
+    // Both donor inflow and organizer outflow are frozen.
+    svm.process_instruction(
+        &donate_ix(1_000, 1),
+        &[empty(&find_receipt_address(&pool, 1, &ID).0)],
+    )
+    .assert_error(ProgramError::Custom(6001)); // Paused
+    svm.process_instruction(
+        &withdraw_ix(1_000),
+        &[token_account(&DEST_TA, &MINT, &ORGANIZER, 0)],
+    )
+    .assert_error(ProgramError::Custom(6001)); // Paused
+
+    // Unpause restores withdrawals.
+    svm.process_instruction(&set_config_ix(false), &[])
+        .assert_success();
+    svm.process_instruction(
+        &withdraw_ix(1_000),
+        &[token_account(&DEST_TA, &MINT, &ORGANIZER, 0)],
+    )
+    .assert_success();
 }
 
 #[test]
