@@ -1,0 +1,17 @@
+{
+  "name": "circuits",
+  "version": "1.0.0",
+  "description": "Proves a donation qualifies as zakat (`wealth ≥ nisab`, held ≥ 1 hawl) without revealing the donor's wealth, and emits a Poseidon nullifier. Verified on Solana via Light Protocol's `groth16-solana`. Design: ADR-0002, ADR-0004.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.6"
+  }
+}

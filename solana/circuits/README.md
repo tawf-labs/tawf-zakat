@@ -9,10 +9,12 @@ the money itself) is **Layer B** — a third-party shielded pool, not built here
 
 ## Public signals (order is load-bearing)
 
-The on-chain verifier consumes them in this exact order:
+snarkjs emits circuit **outputs first**, then public inputs in declaration
+order. The on-chain verifier must consume them in this exact order (verified
+against a real `public.json`):
 
 ```
-[ nisab, currentTime, campaignId, cycleId, nullifier ]
+[ nullifier, nisab, currentTime, campaignId, cycleId ]
 ```
 
 `nullifier` is the circuit's public output; the rest are public inputs.

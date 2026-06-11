@@ -64,6 +64,7 @@ template ZakatEligibility() {
     nullifier <== h.out;
 }
 
-// Public signals (order matters for the on-chain verifier):
-//   [nisab, currentTime, campaignId, cycleId, nullifier]
+// Public signals (order matters for the on-chain verifier). snarkjs emits
+// circuit OUTPUTS first, then public inputs in declaration order:
+//   [nullifier, nisab, currentTime, campaignId, cycleId]
 component main {public [nisab, currentTime, campaignId, cycleId]} = ZakatEligibility();

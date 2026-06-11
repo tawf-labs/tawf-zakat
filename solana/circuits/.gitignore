@@ -1,0 +1,12 @@
+node_modules/
+# circom build outputs
+*.r1cs
+*.wtns
+zakat_eligibility_js/
+# trusted-setup artifacts (ceremony output is published as a release, not here)
+*.ptau
+*.zkey
+verification_key.json
+# proof scratch
+proof.json
+public.json
