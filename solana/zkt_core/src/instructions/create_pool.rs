@@ -89,6 +89,7 @@ impl CreatePool {
             deadline,
             extended: false,
             donation_count: 0,
+            disbursement_count: 0,
             bump: bumps.pool,
         });
 

@@ -87,6 +87,7 @@ impl Redistribute {
             deadline: i64::from(self.pool.deadline),
             extended: bool::from(self.pool.extended),
             donation_count: u64::from(self.pool.donation_count),
+            disbursement_count: u64::from(self.pool.disbursement_count),
             bump: self.pool.bump,
         };
         self.pool.set_inner(inner);

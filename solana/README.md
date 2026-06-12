@@ -3,7 +3,9 @@
 Quasar program implementing the Phase 1 guarded launch (see `docs/adr/0003`):
 campaign pools, capped donations, organizer whitelist, the 30-day zakat
 lifecycle (deadline → grace → one extension → permissionless redistribution),
-and PDA donation receipts. No governance, no ZK yet — Phase 2+ (ADR-0002).
+PDA donation receipts, and PDA disbursement receipts (recipient + asnaf) that
+make the outflow auditable end-to-end (ADR-0005). No governance, no ZK yet —
+Phase 2+ (ADR-0002).
 
 ## Layout
 
@@ -30,7 +32,7 @@ and PDA donation receipts. No governance, no ZK yet — Phase 2+ (ADR-0002).
 ```sh
 cd zkt_core
 quasar build        # SBF build + client codegen (target/client/)
-quasar test         # QuasarSVM test suite (12 tests)
+quasar test         # QuasarSVM test suite (13 tests)
 quasar deploy -u devnet -k <payer.json>
 ```
 

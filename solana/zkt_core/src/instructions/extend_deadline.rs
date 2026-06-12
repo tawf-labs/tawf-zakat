@@ -53,6 +53,7 @@ impl ExtendDeadline {
             deadline: new_deadline,
             extended: true,
             donation_count: u64::from(self.pool.donation_count),
+            disbursement_count: u64::from(self.pool.disbursement_count),
             bump: self.pool.bump,
         };
         self.pool.set_inner(inner);

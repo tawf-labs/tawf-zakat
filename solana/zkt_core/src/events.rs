@@ -87,3 +87,15 @@ pub struct ZkDonationReceived {
     pub nullifier: Address,
     pub amount: u64,
 }
+
+/// Zakat (or normal-campaign) distribution to a recipient. The asnaf code makes
+/// the outflow auditable against the eight lawful categories (ADR-0005).
+#[event(discriminator = 12)]
+pub struct Disbursed {
+    pub pool: Address,
+    pub recipient: Address,
+    pub amount: u64,
+    /// Asnaf code 0-7, or ASNAF_NA (u8 widened: event layout must be padding-free).
+    pub asnaf: u64,
+    pub disbursement_index: u64,
+}

@@ -6,6 +6,23 @@ pub const CAMPAIGN_NORMAL: u8 = 1;
 pub const STATUS_ACTIVE: u8 = 0;
 pub const STATUS_CLOSED: u8 = 1;
 
+/// The eight asnaf (Qur'an 9:60) — the only lawful zakat recipients. A zakat
+/// disbursement must record which one it served, so the fund flow is auditable
+/// end-to-end (donation in -> which asnaf out). See ADR-0005.
+pub const ASNAF_FAKIR: u8 = 0;
+pub const ASNAF_MISKIN: u8 = 1;
+pub const ASNAF_AMIL: u8 = 2;
+pub const ASNAF_MUALLAF: u8 = 3;
+pub const ASNAF_RIQAB: u8 = 4;
+pub const ASNAF_GHARIM: u8 = 5;
+pub const ASNAF_FISABILILLAH: u8 = 6;
+pub const ASNAF_IBNU_SABIL: u8 = 7;
+/// Highest valid asnaf code (inclusive).
+pub const ASNAF_MAX: u8 = ASNAF_IBNU_SABIL;
+/// Sentinel recorded for non-zakat (normal) campaign disbursements, where the
+/// asnaf classification does not apply.
+pub const ASNAF_NA: u8 = 255;
+
 /// Zakat distribution window (sharia: zakat must be distributed promptly).
 pub const ZAKAT_WINDOW: i64 = 30 * 86_400;
 /// Grace period after the deadline before redistribution is allowed.
@@ -60,6 +77,8 @@ pub struct Pool {
     pub deadline: i64,
     pub extended: bool,
     pub donation_count: u64,
+    /// Sequential disbursement index; next disbursement uses this as its seed.
+    pub disbursement_count: u64,
     pub bump: u8,
 }
 
@@ -70,6 +89,24 @@ pub struct Receipt {
     pub pool: Address,
     pub amount: u64,
     pub timestamp: i64,
+    pub bump: u8,
+}
+
+/// On-chain record of a single zakat distribution to a mustahik. Mirrors
+/// `Receipt` on the inflow side so the full fund flow is auditable: every
+/// `withdraw` mints one of these, binding the recipient + amount + which of the
+/// eight asnaf was served. This is the transparency primitive ADR-0005 makes the
+/// product's core value, not the (pseudonymous) donor identity.
+#[account(discriminator = 6, set_inner)]
+#[seeds(b"disbursement", pool: Address, index: u64)]
+pub struct Disbursement {
+    pub pool: Address,
+    /// The mustahik: owner of the destination token account at withdraw time.
+    pub recipient: Address,
+    pub amount: u64,
+    pub timestamp: i64,
+    /// One of the eight asnaf (0-7) for zakat; `ASNAF_NA` for normal campaigns.
+    pub asnaf: u8,
     pub bump: u8,
 }
 

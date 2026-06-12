@@ -94,6 +94,7 @@ impl Donate {
             donation_count: receipt_index
                 .checked_add(1)
                 .ok_or(ProgramError::ArithmeticOverflow)?,
+            disbursement_count: u64::from(self.pool.disbursement_count),
             bump: self.pool.bump,
         };
         self.pool.set_inner(inner);

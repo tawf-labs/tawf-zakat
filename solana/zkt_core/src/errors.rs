@@ -28,4 +28,9 @@ pub enum ZktError {
     ZkVerifierNotWired,
     /// The Groth16 proof failed verification.
     ProofInvalid,
+    /// Disbursement asnaf code is invalid: not 0-7 for a zakat pool, or not
+    /// ASNAF_NA for a normal campaign.
+    InvalidAsnaf,
+    /// Disbursement index does not match the pool's disbursement counter.
+    InvalidDisbursementIndex,
 }

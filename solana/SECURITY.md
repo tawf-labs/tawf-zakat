@@ -12,8 +12,12 @@ external auditor starts from the invariants, not a cold read.
   trips `paused`, grants the one-time deadline extension, two-step transfers
   its own role. Cannot move pool funds directly.
 - **Organizer** (whitelisted wallet): opens pools under its own PDA, withdraws
-  from its own pools' vaults to any destination of the pool's mint. Trusted
-  with the funds it raises; the $300 pool cap bounds blast radius.
+  from its own pools' vaults to any destination of the pool's mint, recording a
+  `Disbursement` receipt (recipient + amount + asnaf) on each withdraw. Trusted
+  with the funds it raises; the $300 pool cap bounds blast radius. The recorded
+  recipient/asnaf are organizer-asserted — the chain captures the claim for
+  audit, it does not verify the recipient is genuinely that asnaf (off-chain /
+  the licensed amil's responsibility — ADR-0005).
 - **Donor**: transfers tokens into a pool vault, gets a `Receipt` PDA. No
   privileges.
 - **Anyone**: may call `redistribute` once a zakat pool's deadline + grace has
@@ -23,12 +27,17 @@ external auditor starts from the invariants, not a cold read.
 ## Invariants (enforced + tested)
 
 - Funds leave a vault only via `withdraw` (pool's own organizer, signed by the
-  pool PDA) or `redistribute` (zakat-only, post-grace, → fallback). Covered by
+  pool PDA, every withdraw mints a `Disbursement` receipt) or `redistribute`
+  (zakat-only, post-grace, → fallback). Covered by
   `test_only_pool_organizer_can_withdraw`, the lifecycle test, the pause test.
 - `total_donated <= cap <= max_pool_cap`; cap fixed at creation. Covered by
   `test_zakat_donate_cap_and_receipt`, `..._rejects_over_cap_...`.
 - Receipt indices are monotonic (`receipt_index == donation_count`), so receipt
   PDAs never collide. Covered by `test_zakat_donate_cap_and_receipt`.
+- Disbursement indices are monotonic (`disbursement_index == disbursement_count`),
+  so the outflow audit trail is gapless and disbursement PDAs never collide; the
+  asnaf code is 0-7 for zakat and `ASNAF_NA` for normal campaigns. Covered by
+  `test_withdraw_records_disbursement_and_validates_asnaf`.
 - Zakat pools enforce the distribution window: donate/withdraw blocked past
   deadline, one +14d extension only within grace, redistribution only after
   deadline+grace. Covered by the lifecycle test.

@@ -77,8 +77,14 @@ mod zkt_core {
     }
 
     #[instruction(discriminator = 8)]
-    pub fn withdraw(ctx: Ctx<Withdraw>, amount: u64) -> Result<(), ProgramError> {
-        ctx.accounts.handler(amount)
+    pub fn withdraw(
+        ctx: Ctx<Withdraw>,
+        amount: u64,
+        asnaf: u8,
+        disbursement_index: u64,
+    ) -> Result<(), ProgramError> {
+        ctx.accounts
+            .handler(amount, asnaf, disbursement_index, &ctx.bumps)
     }
 
     #[instruction(discriminator = 9)]
