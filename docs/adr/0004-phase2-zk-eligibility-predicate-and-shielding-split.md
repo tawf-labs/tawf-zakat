@@ -116,14 +116,26 @@ invalidates the Phase 2 `.zkey` and forces a re-run.
 
 Discovered while scaffolding `donate_zk` against the Quasar runtime:
 
-- **`groth16-solana` 0.2.0 does NOT drop into a Quasar program.** Even with
-  `default-features = false` it depends on `thiserror = "1.0"`, which links
-  `std`, producing `error[E0152]: duplicate lang item panic_impl` against
-  Quasar's no_std runtime. ADR-0002 assumed it drops in cleanly; it does not.
-  Resolution (verifier-wiring milestone): **vendor** the crate (~150 real lines;
-  its `std`/`Vec` uses are test-only) and replace the `thiserror` error enum
-  with a plain one, OR hand-roll the pairing over `solana-bn254` directly. Both
-  are no_std-clean; `solana-bn254`/`ark-bn254` are already in the dep graph.
+- ~~**`groth16-solana` 0.2.0 does NOT drop into a Quasar program.**~~ **RESOLVED
+  (vendored — `src/groth16.rs`).** The blocker was deeper than ADR-0002 assumed
+  and deeper than first diagnosed: not only does `groth16-solana` pull
+  `thiserror 1.0` (links `std`), but **`solana-bn254` itself is a `std` crate**
+  (no `#![no_std]`), so depending on it from a no_std Quasar program yields
+  `error[E0152]: duplicate lang item panic_impl`. (Normal Solana programs are
+  `std`, so this only bites Quasar.) Resolution implemented:
+  - **Vendor a ~180-line no_std Groth16 verifier** into `src/groth16.rs`, copied
+    faithfully from `groth16-solana` 0.2.0 (MIT) with `thiserror` → a plain enum
+    and `num_bigint` → a constant big-endian compare against the Fr modulus.
+  - **Call the `alt_bn128` syscalls directly** via `solana-define-syscall`
+    (no_std, the same crate Quasar uses) writing into fixed buffers — no `Vec`,
+    no allocator, no `heap` attribute needed.
+  - **Target-gate `solana-bn254` to `cfg(not(target_os = "solana"))`** so it is
+    pulled only on the host (to emulate the syscalls in tests) and never reaches
+    the SBF build. `proof_a` is negated on-chain (`negate_g1`).
+  - Correctness is proven by `groth16::tests::vendored_verifier_accepts_known_good_proof`,
+    which runs `groth16-solana`'s own known-good VK+proof+inputs vector through
+    our verifier. The verifier is wired into `donate_zk` but **fail-closed**
+    (`VERIFYING_KEY = None`) until the ceremony key is embedded.
 - **`donate_zk` ships fail-closed.** The verifier seam returns
   `ZkVerifierNotWired` until the ceremony verifying key is embedded and the
   pairing is wired — a money path must never accept unverified proofs by

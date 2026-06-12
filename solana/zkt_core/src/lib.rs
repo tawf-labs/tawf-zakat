@@ -4,6 +4,7 @@ use quasar_lang::prelude::*;
 
 mod errors;
 mod events;
+mod groth16;
 mod instructions;
 mod state;
 use instructions::*;

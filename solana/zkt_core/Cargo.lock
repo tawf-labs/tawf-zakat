@@ -3162,6 +3162,8 @@ dependencies = [
  "quasar-svm",
  "solana-account",
  "solana-address 2.2.0",
+ "solana-bn254",
+ "solana-define-syscall 5.1.0",
  "solana-instruction",
  "solana-pubkey 4.2.0",
  "spl-token-interface",

@@ -23,6 +23,16 @@ idl-build = ["quasar-lang/idl-build"]
 quasar-lang = { git = "https://github.com/blueshift-gg/quasar", rev = "a89a9329f05740a20520607608b2b3b78c74f7c4" }
 quasar-spl = { git = "https://github.com/blueshift-gg/quasar", rev = "a89a9329f05740a20520607608b2b3b78c74f7c4" }
 solana-instruction = { version = "3.2.0" }
+# Raw alt_bn128 syscall declarations (no_std) for the on-chain Groth16 verifier
+# (src/groth16.rs). Matches Quasar's own syscall linkage. See ADR-0004.
+solana-define-syscall = { version = "5", features = ["unstable-static-syscalls"] }
+
+# On the HOST target only (tests/codegen), pull solana-bn254 to emulate the
+# alt_bn128 syscalls via arkworks. It is a `std` crate, so it must NOT reach the
+# SBF build (target_os = "solana") — that would clash with Quasar's no_std panic
+# handler (the ADR-0004 blocker). Target-gating keeps it off-chain only.
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-bn254 = { version = "3.2.1" }
 
 [dev-dependencies]
 quasar-svm = { version = "0.1" }

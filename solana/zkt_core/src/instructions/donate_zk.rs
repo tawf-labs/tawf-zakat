@@ -2,6 +2,7 @@ use {
     crate::{
         errors::ZktError,
         events::ZkDonationReceived,
+        groth16::{negate_g1, Groth16Verifier, Groth16Verifyingkey},
         state::{
             Config, NullifierRecord, NullifierRecordInner, Pool, PoolInner, CAMPAIGN_ZAKAT,
             MAX_PROOF_AGE, STATUS_ACTIVE,
@@ -41,15 +42,38 @@ fn campaign_id_from_pool(pool: &Address) -> [u8; 32] {
     id
 }
 
-/// Groth16 verifier seam (ADR-0004), currently **fail-closed**: every ZK
-/// donation is rejected until the verifying key from the trusted-setup ceremony
-/// is embedded and the pairing check is wired (vendor groth16-solana with
-/// thiserror stripped for no_std, or hand-roll over solana-bn254). The guards
-/// in `handler` that run *before* this call (paused, zakat-only, freshness,
-/// deadline, cap) are testable today; the post-verify path (transfer + the
-/// nullifier replay guard) gets its tests when the verifier lands.
-fn verify_eligibility(_proof: &[u8; PROOF_LEN], _signals: &[[u8; 32]; 5]) -> Result<(), ProgramError> {
-    Err(ZktError::ZkVerifierNotWired.into())
+/// The trusted-setup ceremony's verifying key, embedded at build time.
+///
+/// `None` keeps `donate_zk` **fail-closed**: every ZK donation is rejected until
+/// the Phase-2 ceremony runs and its key is pasted here (ADR-0004). The verifier
+/// itself is wired and unit-tested (`crate::groth16`); only the key is missing.
+///
+/// To go live, freeze the circuit, run the ceremony, convert
+/// `verification_key.json` to this byte layout, and replace `None` with:
+/// ```ignore
+/// const VK_IC: [[u8; 64]; 6] = [/* one per public signal + 1 */];
+/// const VERIFYING_KEY: Option<Groth16Verifyingkey<'static>> =
+///     Some(Groth16Verifyingkey { nr_pubinputs: 6, vk_alpha_g1: [..], vk_beta_g2: [..],
+///         vk_gamme_g2: [..], vk_delta_g2: [..], vk_ic: &VK_IC });
+/// ```
+const VERIFYING_KEY: Option<Groth16Verifyingkey<'static>> = None;
+
+/// Groth16 verifier seam (ADR-0004). Fail-closed while `VERIFYING_KEY` is `None`.
+/// Proof layout: A (G1, 64) ++ B (G2, 128) ++ C (G1, 64), big-endian; A is
+/// negated on-chain as Groth16's pairing check requires.
+fn verify_eligibility(proof: &[u8; PROOF_LEN], signals: &[[u8; 32]; 5]) -> Result<(), ProgramError> {
+    let vk = match &VERIFYING_KEY {
+        Some(vk) => vk,
+        None => return Err(ZktError::ZkVerifierNotWired.into()),
+    };
+    let proof_a: [u8; 64] = proof[0..64].try_into().unwrap();
+    let proof_a_neg = negate_g1(&proof_a);
+    let proof_b: [u8; 128] = proof[64..192].try_into().unwrap();
+    let proof_c: [u8; 64] = proof[192..256].try_into().unwrap();
+    let mut verifier = Groth16Verifier::new(&proof_a_neg, &proof_b, &proof_c, signals, vk)
+        .map_err(|_| ZktError::ProofInvalid)?;
+    verifier.verify().map_err(|_| ZktError::ProofInvalid)?;
+    Ok(())
 }
 
 #[derive(Accounts)]

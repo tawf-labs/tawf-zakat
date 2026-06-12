@@ -75,14 +75,24 @@ snarkjs groth16 prove ze_final.zkey witness.wtns proof.json public.json
 snarkjs groth16 verify verification_key.json public.json proof.json   # true
 ```
 
-## On-chain (next steps, not yet built — ADR-0004 Decision 1/2)
+## On-chain (mostly built — ADR-0004 Decision 1/2)
 
-- Convert `verification_key.json` to the byte layout `groth16-solana` expects and
-  embed it in `zkt_core`.
-- Add a `donate_zk` instruction: verify the proof against the public signals,
-  bind `currentTime` to a recent `Clock`, then **burn the nullifier** via a
-  PDA `seeds = [b"nullifier", nullifier_bytes]` opened with `init` — a second use
-  fails because the account already exists.
+- **Verifier: DONE.** `zkt_core/src/groth16.rs` is a vendored no_std Groth16
+  (BN254) verifier running on the `alt_bn128` syscalls (<200k CU). `donate_zk`
+  (disc 11) verifies the proof against the public signals, binds `currentTime` to
+  a recent `Clock`, and **burns the nullifier** via a PDA
+  `seeds = [b"nullifier", nullifier_bytes]` opened with `init` (a second use
+  fails — the account already exists).
+- **Remaining: embed the verifying key.** `donate_zk` is fail-closed
+  (`VERIFYING_KEY = None`) until the Phase-2 ceremony runs. To go live: convert
+  `verification_key.json` to the `Groth16Verifyingkey` byte layout (see
+  `groth16-solana`'s `parse_vk_to_rust.js`) and replace the `None` in
+  `donate_zk.rs`. `nr_pubinputs` = 6 (1 output + 5 public, i.e. `vk_ic.len()`).
+- **Proof wire format** (the `proof: [u8; 256]` instruction arg): uncompressed
+  big-endian `A (G1, 64) ++ B (G2, 128) ++ C (G1, 64)`, exactly as snarkjs emits
+  (the program negates `A` itself — do **not** pre-negate). Public signals are
+  passed as the instruction args (`nullifier`, `nisab`, `currentTime`,
+  `cycleId`) plus the on-chain-derived `campaignId`, in the order below.
 - `campaignId` binds the proof to one pool; `cycleId` is the zakat cycle.
   **Derivation (must match on-chain `campaign_id_from_pool`):** take the target
   pool's PDA address (32 bytes, big-endian), clear the most-significant byte so

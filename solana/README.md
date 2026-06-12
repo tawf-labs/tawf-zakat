@@ -32,7 +32,7 @@ Phase 2+ (ADR-0002).
 ```sh
 cd zkt_core
 quasar build        # SBF build + client codegen (target/client/)
-quasar test         # QuasarSVM test suite (13 tests)
+quasar test         # QuasarSVM + verifier test suite (17 tests)
 quasar deploy -u devnet -k <payer.json>
 ```
 
@@ -43,6 +43,9 @@ quasar deploy -u devnet -k <payer.json>
 - [ ] `init_config` authority + fallback must be Squads vault addresses
 - [ ] Donation mint on mainnet: official IDRX `idrxZcP8xiKkYk6XGD4uz1dxEYCWSgKDHqgjsBbwDur`
       (2 decimals; beware the deprecated old mint and pump.fun fakes)
-- [ ] `donate_zk` is **fail-closed** (`ZkVerifierNotWired`) until the Groth16
-      verifier + ceremony verifying key are wired — do not advertise the ZK
-      donation path until then. Bind a collision-free `campaignId` first (ADR-0004).
+- [ ] `donate_zk` is **fail-closed** (`ZkVerifierNotWired`) until the ceremony
+      verifying key is embedded (`VERIFYING_KEY = None` in `donate_zk.rs`) — do
+      not advertise the ZK donation path until then. The Groth16 verifier itself
+      is vendored + wired + unit-tested (`src/groth16.rs`); `campaignId` is bound
+      to the pool PDA (ADR-0004). Remaining: freeze circuit → run ceremony →
+      paste the key → add the happy-path + nullifier-replay tests.
