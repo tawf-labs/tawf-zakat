@@ -81,10 +81,11 @@ mod zkt_core {
         ctx: Ctx<Withdraw>,
         amount: u64,
         asnaf: u8,
+        recipient_commitment: [u8; 32],
         disbursement_index: u64,
     ) -> Result<(), ProgramError> {
         ctx.accounts
-            .handler(amount, asnaf, disbursement_index, &ctx.bumps)
+            .handler(amount, asnaf, recipient_commitment, disbursement_index, &ctx.bumps)
     }
 
     #[instruction(discriminator = 9)]

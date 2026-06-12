@@ -28,6 +28,11 @@ const NULLIFIER_A: [u8; 32] = [0xA1; 32];
 const ASNAF_FAKIR: u8 = 0;
 const ASNAF_NA: u8 = 255;
 
+// An amil's off-chain recipient commitment hash(recipient || salt) for a zakat
+// disbursement (any 32 bytes in tests). Normal campaigns pass all-zero (ignored).
+const COMMIT_A: [u8; 32] = [0xCC; 32];
+const NO_COMMIT: [u8; 32] = [0u8; 32];
+
 const DAY: i64 = 86_400;
 const T0: i64 = 1_750_000_000;
 // Pool cap policy stand-in (token base units; IDRX has 2 decimals).
@@ -179,7 +184,12 @@ fn disb_pda(index: u64) -> Address {
     find_disbursement_address(&pool, index, &ID).0
 }
 
-fn withdraw_ix(amount: u64, asnaf: u8, disbursement_index: u64) -> Instruction {
+fn withdraw_ix(
+    amount: u64,
+    asnaf: u8,
+    recipient_commitment: [u8; 32],
+    disbursement_index: u64,
+) -> Instruction {
     let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
     WithdrawInstruction {
         organizer: ORGANIZER,
@@ -192,6 +202,7 @@ fn withdraw_ix(amount: u64, asnaf: u8, disbursement_index: u64) -> Instruction {
         system_program: system_program(),
         amount,
         asnaf,
+        recipient_commitment,
         disbursement_index,
     }
     .into()
@@ -351,7 +362,7 @@ fn test_zakat_lifecycle_deadline_extension_redistribution() {
 
     // Within the 30-day window the organizer may withdraw (disbursement #0).
     svm.process_instruction(
-        &withdraw_ix(1_000, ASNAF_FAKIR, 0),
+        &withdraw_ix(1_000, ASNAF_FAKIR, COMMIT_A, 0),
         &[
             token_account(&DEST_TA, &MINT, &ORGANIZER, 0),
             empty(&disb_pda(0)),
@@ -361,7 +372,7 @@ fn test_zakat_lifecycle_deadline_extension_redistribution() {
 
     // Past the deadline: withdraw and donate are blocked.
     svm.warp_to_timestamp(T0 + 31 * DAY);
-    svm.process_instruction(&withdraw_ix(500, ASNAF_FAKIR, 1), &[empty(&disb_pda(1))])
+    svm.process_instruction(&withdraw_ix(500, ASNAF_FAKIR, COMMIT_A, 1), &[empty(&disb_pda(1))])
         .assert_error(ProgramError::Custom(6008)); // WithdrawWindowClosed
     svm.process_instruction(
         &donate_ix(100, 1),
@@ -384,7 +395,7 @@ fn test_zakat_lifecycle_deadline_extension_redistribution() {
     }
     .into();
     svm.process_instruction(&extend, &[]).assert_success();
-    svm.process_instruction(&withdraw_ix(500, ASNAF_FAKIR, 1), &[empty(&disb_pda(1))])
+    svm.process_instruction(&withdraw_ix(500, ASNAF_FAKIR, COMMIT_A, 1), &[empty(&disb_pda(1))])
         .assert_success();
 
     // Second extension is rejected.
@@ -459,15 +470,19 @@ fn test_normal_pool_has_no_deadline() {
         &[empty(&find_receipt_address(&pool, 1, &ID).0)],
     )
     .assert_success();
-    // Normal campaigns disburse with the N/A asnaf sentinel.
-    svm.process_instruction(
-        &withdraw_ix(2_000, ASNAF_NA, 0),
+    // Normal campaigns disburse with the N/A asnaf sentinel and record the RAW
+    // beneficiary (public — no dignity concern), not a commitment.
+    let wd = svm.process_instruction(
+        &withdraw_ix(2_000, ASNAF_NA, NO_COMMIT, 0),
         &[
             token_account(&DEST_TA, &MINT, &ORGANIZER, 0),
             empty(&disb_pda(0)),
         ],
-    )
-    .assert_success();
+    );
+    wd.assert_success();
+    let disb = wd.account(&pk(&disb_pda(0))).unwrap();
+    assert_eq!(&disb.data[33..65], ORGANIZER.as_ref(), "normal records raw owner");
+    assert_eq!(disb.data[81], ASNAF_NA, "normal asnaf = N/A");
 
     // Redistribution never applies to normal campaigns.
     svm.process_instruction(
@@ -494,7 +509,7 @@ fn test_pause_freezes_donate_and_withdraw() {
     )
     .assert_error(ProgramError::Custom(6001)); // Paused
     svm.process_instruction(
-        &withdraw_ix(1_000, ASNAF_FAKIR, 0),
+        &withdraw_ix(1_000, ASNAF_FAKIR, COMMIT_A, 0),
         &[
             token_account(&DEST_TA, &MINT, &ORGANIZER, 0),
             empty(&disb_pda(0)),
@@ -506,7 +521,7 @@ fn test_pause_freezes_donate_and_withdraw() {
     svm.process_instruction(&set_config_ix(false), &[])
         .assert_success();
     svm.process_instruction(
-        &withdraw_ix(1_000, ASNAF_FAKIR, 0),
+        &withdraw_ix(1_000, ASNAF_FAKIR, COMMIT_A, 0),
         &[
             token_account(&DEST_TA, &MINT, &ORGANIZER, 0),
             empty(&disb_pda(0)),
@@ -522,7 +537,7 @@ fn test_only_pool_organizer_can_withdraw() {
 
     // An outsider impersonating the organizer fails the has_one(organizer)
     // constraint — the vault is never touched.
-    let mut ix = withdraw_ix(1_000, ASNAF_FAKIR, 0);
+    let mut ix = withdraw_ix(1_000, ASNAF_FAKIR, COMMIT_A, 0);
     ix.accounts[0].pubkey = OUTSIDER;
     let result = svm.process_instruction(
         &ix,
@@ -641,9 +656,10 @@ fn test_withdraw_records_disbursement_and_validates_asnaf() {
     setup_funded_zakat_pool(&mut svm); // vault holds 4_000
     let pool = find_pool_address(&ORGANIZER, 0, &ID).0;
 
-    // A valid zakat disbursement to a mustahik records recipient + amount + asnaf.
+    // A valid zakat disbursement records the recipient COMMITMENT (not the raw
+    // mustahik wallet — hifz al-nafs, ADR-0006) + amount + asnaf.
     let result = svm.process_instruction(
-        &withdraw_ix(1_000, ASNAF_FAKIR, 0),
+        &withdraw_ix(1_000, ASNAF_FAKIR, COMMIT_A, 0),
         &[
             token_account(&DEST_TA, &MINT, &MUSTAHIK, 0),
             empty(&disb_pda(0)),
@@ -653,7 +669,7 @@ fn test_withdraw_records_disbursement_and_validates_asnaf() {
 
     let disb = result.account(&pk(&disb_pda(0))).unwrap();
     assert_eq!(disb.data[0], 6, "disbursement discriminator");
-    assert_eq!(&disb.data[33..65], MUSTAHIK.as_ref(), "recipient (mustahik)");
+    assert_eq!(&disb.data[33..65], &COMMIT_A, "recipient commitment (not raw wallet)");
     assert_eq!(&disb.data[65..73], &1_000u64.to_le_bytes(), "amount");
     assert_eq!(disb.data[81], ASNAF_FAKIR, "asnaf code");
 
@@ -662,12 +678,15 @@ fn test_withdraw_records_disbursement_and_validates_asnaf() {
     assert_eq!(&pool_data[148..156], &1u64.to_le_bytes(), "disbursement_count");
 
     // An out-of-range asnaf (8 > 7) is rejected for a zakat pool.
-    svm.process_instruction(&withdraw_ix(500, 8, 1), &[empty(&disb_pda(1))])
+    svm.process_instruction(&withdraw_ix(500, 8, COMMIT_A, 1), &[empty(&disb_pda(1))])
         .assert_error(ProgramError::Custom(6022)); // InvalidAsnaf
 
     // A gapped disbursement index is rejected (must follow the counter).
-    svm.process_instruction(&withdraw_ix(500, ASNAF_FAKIR, 5), &[empty(&disb_pda(5))])
-        .assert_error(ProgramError::Custom(6023)); // InvalidDisbursementIndex
+    svm.process_instruction(
+        &withdraw_ix(500, ASNAF_FAKIR, COMMIT_A, 5),
+        &[empty(&disb_pda(5))],
+    )
+    .assert_error(ProgramError::Custom(6023)); // InvalidDisbursementIndex
 }
 
 // --- donate_zk (Phase 2 ZK flow) ---

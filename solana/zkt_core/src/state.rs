@@ -92,16 +92,21 @@ pub struct Receipt {
     pub bump: u8,
 }
 
-/// On-chain record of a single zakat distribution to a mustahik. Mirrors
-/// `Receipt` on the inflow side so the full fund flow is auditable: every
-/// `withdraw` mints one of these, binding the recipient + amount + which of the
-/// eight asnaf was served. This is the transparency primitive ADR-0005 makes the
-/// product's core value, not the (pseudonymous) donor identity.
+/// On-chain record of a single distribution. Mirrors `Receipt` on the inflow
+/// side so the fund flow is auditable end-to-end: every `withdraw` mints one,
+/// binding recipient + amount + which of the eight asnaf was served. The
+/// auditable amount/asnaf/counter serve `hifz al-mal` (ADR-0005); the recipient
+/// form below serves `hifz al-nafs` (ADR-0006).
 #[account(discriminator = 6, set_inner)]
 #[seeds(b"disbursement", pool: Address, index: u64)]
 pub struct Disbursement {
     pub pool: Address,
-    /// The mustahik: owner of the destination token account at withdraw time.
+    /// Normal campaign: the beneficiary's wallet (owner of the destination token
+    /// account) — public, no dignity concern. Zakat pool: an off-chain
+    /// commitment `hash(recipient || salt)` instead of the raw wallet, so the
+    /// durable, queryable receipt set never enumerates mustahik (below-nisab)
+    /// addresses — `hifz al-nafs` (ADR-0006). `asnaf` disambiguates which form
+    /// this holds (a real 0-7 code ⇒ commitment; `ASNAF_NA` ⇒ raw wallet).
     pub recipient: Address,
     pub amount: u64,
     pub timestamp: i64,

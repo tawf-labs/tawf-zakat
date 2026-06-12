@@ -16,7 +16,7 @@ use {
 };
 
 #[derive(Accounts)]
-#[instruction(_amount: u64, _asnaf: u8, disbursement_index: u64)]
+#[instruction(_amount: u64, _asnaf: u8, _recipient_commitment: [u8; 32], disbursement_index: u64)]
 pub struct Withdraw {
     #[account(mut)]
     pub organizer: Signer,
@@ -39,6 +39,7 @@ impl Withdraw {
         &mut self,
         amount: u64,
         asnaf: u8,
+        recipient_commitment: [u8; 32],
         disbursement_index: u64,
         bumps: &WithdrawBumps,
     ) -> Result<(), ProgramError> {
@@ -85,7 +86,20 @@ impl Withdraw {
             .invoke_signed(&seeds)?;
 
         let pool_address = *self.pool.address();
-        let recipient = *self.dest_ta.owner();
+
+        // Recipient form depends on the campaign (ADR-0006). For zakat, store the
+        // amil's off-chain commitment `hash(recipient || salt)` rather than the
+        // mustahik's raw wallet, so the durable receipt set never enumerates
+        // below-nisab addresses (`hifz al-nafs`); the amil can selectively
+        // disclose `(recipient, salt)` to an auditor. (The `dest_ta` transfer
+        // target is still in this tx — full unlinkability needs intermediary
+        // disbursement, future work.) For a normal campaign the beneficiary is
+        // public, so record the raw owner.
+        let recipient = if self.pool.campaign_type == CAMPAIGN_ZAKAT {
+            Address::new_from_array(recipient_commitment)
+        } else {
+            *self.dest_ta.owner()
+        };
 
         // Record the distribution: recipient + amount + which asnaf was served.
         self.disbursement.set_inner(DisbursementInner {

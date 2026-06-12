@@ -17,7 +17,10 @@ external auditor starts from the invariants, not a cold read.
   with the funds it raises; the $300 pool cap bounds blast radius. The recorded
   recipient/asnaf are organizer-asserted — the chain captures the claim for
   audit, it does not verify the recipient is genuinely that asnaf (off-chain /
-  the licensed amil's responsibility — ADR-0005).
+  the licensed amil's responsibility — ADR-0005). For zakat pools the recipient
+  is stored as an off-chain **commitment** `hash(recipient||salt)`, not the raw
+  wallet, so the receipt set does not enumerate mustahik addresses (`hifz
+  al-nafs` — ADR-0006); normal campaigns store the raw beneficiary.
 - **Donor**: transfers tokens into a pool vault, gets a `Receipt` PDA. No
   privileges.
 - **Anyone**: may call `redistribute` once a zakat pool's deadline + grace has
