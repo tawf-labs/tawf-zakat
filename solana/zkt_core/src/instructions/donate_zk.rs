@@ -29,6 +29,18 @@ fn be32_i64(v: i64) -> [u8; 32] {
     b
 }
 
+/// Derive the circuit's `campaignId` public signal from a pool's PDA address.
+/// The pool address is globally unique (PDA of `[b"pool", organizer, index]`),
+/// unlike `pool.index` which repeats across organizers. Clearing the
+/// most-significant byte keeps the big-endian 32-byte value below the BN254
+/// scalar-field modulus (~2^253.6), so it is a valid field element. The
+/// off-chain prover MUST derive `campaignId` identically from the pool address.
+fn campaign_id_from_pool(pool: &Address) -> [u8; 32] {
+    let mut id = *pool.as_array();
+    id[0] = 0;
+    id
+}
+
 /// Groth16 verifier seam (ADR-0004), currently **fail-closed**: every ZK
 /// donation is rejected until the verifying key from the trusted-setup ceremony
 /// is embedded and the pairing check is wired (vendor groth16-solana with
@@ -106,15 +118,16 @@ impl DonateZk {
 
         // Public signals in the order snarkjs emits them (output first):
         //   [nullifier, nisab, currentTime, campaignId, cycleId]
-        // NOTE: campaignId is bound to pool.index, which is unique only per
-        // organizer. Production must bind a collision-free pool identifier (see
-        // ADR-0004) before the verifier goes live.
-        let pool_index = u64::from(self.pool.index);
+        // campaignId binds the proof to THIS pool via its globally-unique PDA
+        // address, so a proof for one organizer's pool cannot be replayed against
+        // another's (pool.index alone is unique only per organizer). Resolves the
+        // provisional binding flagged in ADR-0004.
+        let campaign_id = campaign_id_from_pool(self.pool.address());
         let signals: [[u8; 32]; 5] = [
             nullifier,
             be32_u64(nisab),
             be32_i64(current_time),
-            be32_u64(pool_index),
+            campaign_id,
             be32_u64(cycle_id),
         ];
         verify_eligibility(&proof, &signals)?;
@@ -140,7 +153,7 @@ impl DonateZk {
             organizer: self.pool.organizer,
             mint: self.pool.mint,
             vault: self.pool.vault,
-            index: pool_index,
+            index: u64::from(self.pool.index),
             campaign_type: self.pool.campaign_type,
             status: self.pool.status,
             cap: u64::from(self.pool.cap),

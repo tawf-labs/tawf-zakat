@@ -134,8 +134,9 @@ Discovered while scaffolding `donate_zk` against the Quasar runtime:
   form borrows an account for its lifetime, so it cannot seed on an
   instruction-arg nullifier (the proof's public signal). The `[u8; 32]`
   (`SeedType::Bytes`) seed is by-value and works.
-- **`campaignId` binding is provisional.** It is bound to `pool.index`, which is
-  unique only per organizer. Before the verifier goes live, bind a
-  collision-free pool identifier (e.g. a reduced form of the pool PDA, or a
-  global pool counter) so a proof for one organizer's pool N cannot be replayed
-  against another organizer's pool N.
+- ~~**`campaignId` binding is provisional.**~~ **RESOLVED.** `campaignId` is now
+  derived from the pool's globally-unique PDA address (the 32-byte address with
+  its most-significant byte cleared to stay a valid BN254 field element), via
+  `campaign_id_from_pool` in `donate_zk.rs`. A proof for one organizer's pool can
+  no longer be replayed against another's. The off-chain prover must derive
+  `campaignId` identically (documented in `circuits/README.md`).

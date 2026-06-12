@@ -83,4 +83,10 @@ snarkjs groth16 verify verification_key.json public.json proof.json   # true
   bind `currentTime` to a recent `Clock`, then **burn the nullifier** via a
   PDA `seeds = [b"nullifier", nullifier_bytes]` opened with `init` — a second use
   fails because the account already exists.
-- `campaignId` must equal the target pool; `cycleId` is the zakat cycle.
+- `campaignId` binds the proof to one pool; `cycleId` is the zakat cycle.
+  **Derivation (must match on-chain `campaign_id_from_pool`):** take the target
+  pool's PDA address (32 bytes, big-endian), clear the most-significant byte so
+  the value is a valid BN254 scalar-field element, and use that as the
+  `campaignId` public input. The pool address is globally unique, so a proof for
+  one organizer's pool cannot be replayed against another's — unlike `pool.index`
+  (unique only per organizer; the provisional binding this replaces).
