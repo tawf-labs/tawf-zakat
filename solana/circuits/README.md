@@ -19,6 +19,14 @@ against a real `public.json`):
 
 `nullifier` is the circuit's public output; the rest are public inputs.
 
+This ordering + byte encoding is **proven against a real proof** by
+`groth16::circuit_vector_tests::our_circuit_proof_verifies_end_to_end` in
+`zkt_core`: a genuine proof of this circuit, with its public signals encoded the
+way `donate_zk` reconstructs them (32-byte big-endian), verifies through the
+vendored on-chain verifier. The dev verifying key / proof there are throwaway —
+regenerate and re-embed them (and the production `VERIFYING_KEY`) from the
+ceremony output once the circuit is frozen.
+
 ## Toolchain
 
 - `circom` 2.1.6+

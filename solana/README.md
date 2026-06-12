@@ -32,7 +32,7 @@ Phase 2+ (ADR-0002).
 ```sh
 cd zkt_core
 quasar build        # SBF build + client codegen (target/client/)
-quasar test         # QuasarSVM + verifier test suite (17 tests)
+quasar test         # QuasarSVM + verifier test suite (19 tests)
 quasar deploy -u devnet -k <payer.json>
 ```
 

@@ -10,3 +10,5 @@ verification_key.json
 # proof scratch
 proof.json
 public.json
+# dev test-vector scratch (the proof/vk bytes are embedded in groth16.rs tests)
+tv_*
