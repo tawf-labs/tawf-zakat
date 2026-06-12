@@ -76,6 +76,11 @@ Publish the contribution hashes so anyone can audit the ceremony. Keep
 `ze_final.zkey` (proving) + `verification_key.json` (on-chain) under version
 control or a release artifact; discard intermediate `.zkey`s.
 
+> **Full step-by-step runbook (roles, hand-off, beacon, on-chain wiring,
+> checklist): [`CEREMONY.md`](CEREMONY.md).** After the ceremony, convert the key
+> with `node vk_to_rust.js verification_key.json` and paste the output over the
+> `VERIFYING_KEY = None` line in `donate_zk.rs`.
+
 ## Prove / verify (off-chain sanity)
 
 ```sh
