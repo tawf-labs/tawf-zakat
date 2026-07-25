@@ -34,9 +34,13 @@ export function Header() {
         {/* LEFT */}
         <div className="flex items-center gap-8 lg:gap-10">
           <Link href="/" className="flex items-center gap-1.5">
-            {/* Logo: Serif font, 24px, medium weight per guidelines */}
-            <span className="font-serif text-2xl font-medium text-primary">Tawf</span>
-            <span className="w-2 h-2 rounded-full bg-secondary"></span>
+            {/* Primary brand: ZKT. Serif per guidelines, scaled up from 24px
+                so it leads the hierarchy. Tawf sits below as the ecosystem. */}
+            <span className="font-serif text-3xl font-medium leading-none text-primary">ZKT</span>
+            <span className="w-2 h-2 rounded-full bg-secondary self-start mt-1.5"></span>
+            <span className="hidden sm:inline ml-1.5 text-[10px] font-medium uppercase tracking-wide-label text-muted-foreground leading-none">
+              by Tawf<br />Foundation
+            </span>
           </Link>
 
           {/* Nav links: Uppercase, wide tracking (0.2em), 14px per guidelines */}
@@ -111,7 +115,12 @@ export function Header() {
               <div className="flex flex-col h-full">
                 {/* Mobile Menu Header */}
                 <div className="flex items-center justify-between p-4 border-b border-border">
-                  <span className="font-serif text-lg font-medium text-primary">Tawf</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-serif text-xl font-medium text-primary">ZKT</span>
+                    <span className="text-[10px] font-medium uppercase tracking-wide-label text-muted-foreground">
+                      by Tawf Foundation
+                    </span>
+                  </div>
                   <span className="w-2 h-2 rounded-full bg-secondary"></span>
                 </div>
 

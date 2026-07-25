@@ -131,7 +131,12 @@ export default function PartnersPage() {
 
   const handleSubmit = async () => {
     if (!isConnected) {
-      handleWalletError(new Error("not-connected"), { toast })
+      const msg = handleWalletError(new Error("not-connected"));
+      toast({
+        title: "Wallet Error",
+        description: msg,
+        variant: "destructive",
+      });
       return
     }
 
@@ -215,7 +220,7 @@ This proposal requests the community and Sharia Council to:
         address: CONTRACT_ADDRESSES.ZKTCore,
         abi: ZKTCoreABI,
         functionName: "createProposal",
-        args: [proposalTitle, proposalDescription, votingPeriodSeconds],
+        args: [proposalTitle, proposalDescription, 0n, false, "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`, [], "", []],
       })
 
       toast({
@@ -227,7 +232,12 @@ This proposal requests the community and Sharia Council to:
       setStep(5)
 
     } catch (error) {
-      handleTransactionError(error, { toast, action: "submit organization verification" })
+      const txErrMsg = handleTransactionError(error);
+      toast({
+        title: "Transaction Error",
+        description: txErrMsg,
+        variant: "destructive",
+      });
     } finally {
       setIsSubmitting(false)
     }

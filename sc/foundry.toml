@@ -22,6 +22,9 @@ celo_sepolia = "https://forno.celo-sepolia.celo-testnet.org"
 ethiq_sepolia = "wss://rpc.testethiq.haqq.network"
 
 [etherscan]
+# Ethereum Sepolia (11155111) is the chain this project actually deploys to.
+# Without this key `forge script --verify --rpc-url sepolia` cannot verify.
+sepolia = { key = "${ETHERSCAN_API_KEY}", chain = 11155111, url = "https://api.etherscan.io/v2/api" }
 base_sepolia = { key = "${BASESCAN_API_KEY}", url = "https://api.etherscan.io/v2/api" }
 lisk_sepolia = { key = "${LISKSCAN_API_KEY}", url = "https://api.etherscan.io/v2/api" }
 celo_sepolia = { key = "${CELOSCAN_API_KEY}", url = "https://api.etherscan.io/v2/api" }    

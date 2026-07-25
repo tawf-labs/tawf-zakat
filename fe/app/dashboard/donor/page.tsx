@@ -2,8 +2,11 @@
 
 import React, { useState } from 'react';
 import { Award, FileText, Vote, Wallet, ShieldCheck, Download, ExternalLink, TrendingUp, CheckCircle2, XCircle, Clock, Settings } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { formatUnits } from 'viem';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/components/providers/language-provider';
+import { useDonationReceipts } from '@/hooks/useDonationReceipts';
 
 interface NFTReceipt {
   id: string;
@@ -17,49 +20,46 @@ interface NFTReceipt {
 
 type SidebarTab = 'overview' | 'tax-reports' | 'governance-dao' | 'wallet-settings';
 
+/** IDRX is an 18-decimal ERC-20; receipts store raw token units. */
+const IDRX_DECIMALS = 18;
+
+function formatIdrx(amount: bigint): string {
+  const value = Number(formatUnits(amount, IDRX_DECIMALS));
+  return `Rp ${value.toLocaleString('id-ID', { maximumFractionDigits: 0 })}`;
+}
+
+function shortenAddress(addr: string): string {
+  if (!addr || addr.length < 10) return addr || '—';
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
 const DonorDashboard: React.FC = () => {
   const { t } = useLanguage();
+  const { address, isConnected } = useAccount();
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('overview');
   const [activeTab, setActiveTab] = useState<'receipts' | 'history' | 'governance'>('receipts');
 
-  const receipts: NFTReceipt[] = [
-    {
-      id: '1',
-      receiptNumber: '1001',
-      amount: '$50.00 USD',
-      category: 'Zakat',
-      date: 'Oct 24, 2025',
-      campaign: 'Emergency Relief Fund',
-      address: '0x8a...92b'
-    },
-    {
-      id: '2',
-      receiptNumber: '1002',
-      amount: '$50.00 USD',
-      category: 'Zakat',
-      date: 'Oct 24, 2025',
-      campaign: 'Emergency Relief Fund',
-      address: '0x8a...92b'
-    },
-    {
-      id: '3',
-      receiptNumber: '1003',
-      amount: '$50.00 USD',
-      category: 'Zakat',
-      date: 'Oct 24, 2025',
-      campaign: 'Emergency Relief Fund',
-      address: '0x8a...92b'
-    },
-    {
-      id: '4',
-      receiptNumber: '1004',
-      amount: '$50.00 USD',
-      category: 'Zakat',
-      date: 'Oct 24, 2025',
-      campaign: 'Emergency Relief Fund',
-      address: '0x8a...92b'
-    }
-  ];
+  // Real on-chain DonationReceiptNFT reads (balanceOf -> tokenOfOwnerByIndex ->
+  // getReceiptData). This page previously rendered a hardcoded array, so it
+  // showed four identical "$50.00 USD" receipts regardless of chain state.
+  const { receipts: onChainReceipts, isLoading: isLoadingReceipts, error: receiptsError } =
+    useDonationReceipts();
+
+  const receipts: NFTReceipt[] = onChainReceipts.map((r) => ({
+    id: r.tokenId.toString(),
+    receiptNumber: r.tokenId.toString(),
+    amount: formatIdrx(r.amount),
+    category: 'Zakat',
+    date: r.timestamp
+      ? new Date(Number(r.timestamp) * 1000).toLocaleDateString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        })
+      : '—',
+    campaign: `Pool #${r.poolId.toString()}`,
+    address: shortenAddress(r.donor),
+  }));
 
   return (
     <div className="min-h-screen bg-white">
@@ -187,7 +187,37 @@ const DonorDashboard: React.FC = () => {
 
                 {/* Tab Content */}
                 <div className="pt-4 sm:pt-6">
-                  {activeTab === 'receipts' && (
+                  {activeTab === 'receipts' && !isConnected && (
+                    <div className="rounded-xl border border-black/20 bg-muted/30 p-8 text-center">
+                      <Wallet className="mx-auto h-8 w-8 text-muted-foreground mb-3" />
+                      <p className="text-sm text-muted-foreground">
+                        Connect your wallet to see your donation receipts.
+                      </p>
+                    </div>
+                  )}
+                  {activeTab === 'receipts' && isConnected && isLoadingReceipts && (
+                    <div className="rounded-xl border border-black/20 bg-muted/30 p-8 text-center">
+                      <Clock className="mx-auto h-8 w-8 text-muted-foreground mb-3 animate-pulse" />
+                      <p className="text-sm text-muted-foreground">Loading receipts from chain…</p>
+                    </div>
+                  )}
+                  {activeTab === 'receipts' && isConnected && !isLoadingReceipts && receiptsError && (
+                    <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-8 text-center">
+                      <XCircle className="mx-auto h-8 w-8 text-destructive mb-3" />
+                      <p className="text-sm text-destructive">
+                        Could not read receipts from the DonationReceiptNFT contract.
+                      </p>
+                    </div>
+                  )}
+                  {activeTab === 'receipts' && isConnected && !isLoadingReceipts && !receiptsError && receipts.length === 0 && (
+                    <div className="rounded-xl border border-black/20 bg-muted/30 p-8 text-center">
+                      <FileText className="mx-auto h-8 w-8 text-muted-foreground mb-3" />
+                      <p className="text-sm text-muted-foreground">
+                        No donation receipts yet. Your receipt NFT appears here after your first donation.
+                      </p>
+                    </div>
+                  )}
+                  {activeTab === 'receipts' && receipts.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                       {receipts.map((receipt) => (
                         <div
@@ -710,7 +740,9 @@ const DonorDashboard: React.FC = () => {
                       <div className="flex items-center justify-between mb-4 p-4 bg-accent/30 rounded-lg">
                         <div>
                           <div className="text-sm text-muted-foreground mb-1">{t("dashboard.walletAddress")}</div>
-                          <div className="font-mono font-semibold text-primary">0x71C7656EC7ab88b098defB751B7401B5f6d8976F</div>
+                          <div className="font-mono font-semibold text-primary break-all">
+                            {address ?? 'Not connected'}
+                          </div>
                         </div>
                         <Button variant="outline" className="border-black hover:bg-gray-50">
                           {t("dashboard.disconnect")}

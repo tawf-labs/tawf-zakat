@@ -10,6 +10,8 @@ import "@tawf-gov/protocol/PoolManager.sol";
 import "@tawf-gov/protocol/ZakatEscrowManager.sol";
 import "../src/DAO/core/PrivateDonationPool.sol";
 import "@tawf-gov/governance/ParticipationTracker.sol";
+import "@tawf-gov/identity/TawfPassport.sol";
+import {PassportType} from "@tawf-gov/interfaces/ITawfPassport.sol";
 
 /**
  * @title CoreTeamTest
@@ -102,6 +104,12 @@ contract CoreTeamTest is Test {
         pm.grantRole(pm.VOTING_MANAGER_ROLE(), address(escrow));
         pm.grantRole(pm.MILESTONE_MANAGER_ROLE(), address(mm));
         pm.grantRole(pm.MILESTONE_MANAGER_ROLE(), address(poolMgr));
+
+        // Passport wiring: ProposalManager.createProposal requires an
+        // Organization passport and reverts calling address(0) without one.
+        TawfPassport tawfPassport = new TawfPassport();
+        pm.setTawfPassport(address(tawfPassport));
+        tawfPassport.issuePassport(coreTeam, PassportType.Organization, "ipfs://coreteam");
 
         // Grant ZKTCore-level roles to core team
         dao.grantOrganizerRole(coreTeam);

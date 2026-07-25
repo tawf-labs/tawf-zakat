@@ -119,12 +119,13 @@ export function useFallbackPoolDetails(poolAddress: string) {
         query: { enabled: !!poolAddress }
     });
     
+    const row = data as any;
     const fallbackPool: FallbackPool | null = data ? {
-        pool: data[0],
-        status: data[1],
-        proposedAt: data[2],
-        proposer: data[3],
-        reasoning: data[4]
+        pool: row[0],
+        status: row[1],
+        proposedAt: row[2],
+        proposer: row[3],
+        reasoning: row[4]
     } : null;
 
     return { data: fallbackPool, isLoading };

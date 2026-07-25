@@ -82,7 +82,12 @@ export default function GovernancePage() {
 
   const handleVote = async (proposalId: string, voteType: "for" | "against" | "abstain") => {
     if (!isConnected) {
-      handleWalletError(new Error("not-connected"), { toast })
+      const msg = handleWalletError(new Error("not-connected"));
+      toast({
+        title: "Wallet Error",
+        description: msg,
+        variant: "destructive",
+      });
       return
     }
 
@@ -97,7 +102,12 @@ export default function GovernancePage() {
 
   const handleFinalize = async (proposalId: string) => {
     if (!isConnected) {
-      handleWalletError(new Error("not-connected"), { toast })
+      const msg = handleWalletError(new Error("not-connected"));
+      toast({
+        title: "Wallet Error",
+        description: msg,
+        variant: "destructive",
+      });
       return
     }
 
@@ -107,7 +117,12 @@ export default function GovernancePage() {
 
   const handleSubmitForVote = async (proposalId: string) => {
     if (!isConnected) {
-      handleWalletError(new Error("not-connected"), { toast })
+      const msg = handleWalletError(new Error("not-connected"));
+      toast({
+        title: "Wallet Error",
+        description: msg,
+        variant: "destructive",
+      });
       return
     }
 
@@ -148,6 +163,7 @@ export default function GovernancePage() {
       status: isActive ? "Active" : isPending ? "Pending Review" : isCompleted ? "Approved" : isRejected ? "Rejected" : "Draft",
       statusEnum: p.status,
       type: p.campaignType === CampaignType.ZakatCompliant ? "Sharia Council" : "Community",
+      campaignType: p.campaignType,
       votesFor,
       votesAgainst,
       votesAbstain,

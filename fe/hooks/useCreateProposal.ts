@@ -90,7 +90,7 @@ export const useCreateProposal = (options?: UseCreateProposalOptions) => {
             params.description,
             parseIDRX(params.fundingGoal),
             params.isEmergency,
-            params.mockZKKYCProof || '',
+            (params.mockZKKYCProof || '') as `0x${string}`,
             params.zakatChecklistItems,
             params.metadataURI || '',
             params.milestones?.map(m => ({

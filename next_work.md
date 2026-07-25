@@ -1,8 +1,14 @@
+<!--
+  ⚠️ OUTDATED — This document was generated 2026-01-26, before the V10 ZK-layer
+  redeploy (2026-07-26, block 11350675). Contract addresses, test counts, and
+  architecture descriptions below reflect the V9 state. See README.md for
+  current addresses and fe/lib/abi.ts for the contracts the frontend uses.
+-->
 # zkt.app Analysis & Next Steps Document
 
 ## Executive Summary
 
-The zkt.app project is a **ZK Zakat donation platform** built on Base Sepolia testnet. It combines smart contracts with a Next.js frontend to enable transparent, verifiable charitable donations with dual governance (community + Sharia council) and NFT donation receipts.
+The zkt.app project is a **ZK Zakat donation platform** built on Ethereum Sepolia testnet. It combines smart contracts with a Next.js frontend to enable transparent, verifiable charitable donations with dual governance (community + Sharia council) and NFT donation receipts.
 
 **Current Status: ~70% Complete**
 
@@ -14,7 +20,7 @@ The project has a solid foundation with deployed contracts and a functional fron
 
 ### Smart Contracts (100% Complete & Deployed)
 
-All contracts are deployed on **Base Sepolia Testnet** and verified:
+All contracts are deployed on **Ethereum Sepolia Testnet** (chain 11155111) and verified:
 
 | Contract | Address | Purpose |
 |----------|---------|---------|
@@ -369,5 +375,5 @@ The roadmap above prioritizes security and core functionality to bring the imple
 ---
 
 *Document generated: 2026-01-26*
-*Contract addresses verified on Base Sepolia*
+*Contract addresses verified on Ethereum Sepolia (chain 11155111)*
 *Analysis based on codebase exploration*

@@ -16,6 +16,8 @@ import "@tawf-gov/tokens/MockIDRX.sol";
 import "@tawf-gov/protocol/DonationReceiptNFT.sol";
 import "@tawf-gov/tokens/VotingNFT.sol";
 import "@tawf-gov/interfaces/IProposalManager.sol";
+import "@tawf-gov/identity/TawfPassport.sol";
+import {PassportType} from "@tawf-gov/interfaces/ITawfPassport.sol";
 
 /**
  * @title ShariaZKProofTest
@@ -27,6 +29,7 @@ contract ShariaZKProofTest is Test {
     DonationReceiptNFT receiptNFT;
     VotingNFT votingNFT;
     ParticipationTracker participationTracker;
+    TawfPassport tawfPassport;
 
     // Core contracts
     ProposalManager proposalManager;
@@ -64,6 +67,7 @@ contract ShariaZKProofTest is Test {
         receiptNFT = new DonationReceiptNFT();
         votingNFT = new VotingNFT();
         participationTracker = new ParticipationTracker();
+        tawfPassport = new TawfPassport();
 
         // Deploy verifier
         groth16Verifier = new Groth16Verifier();
@@ -118,6 +122,12 @@ contract ShariaZKProofTest is Test {
     }
 
     function _setupPermissions() internal {
+        // Passport wiring: ProposalManager.createProposal requires the organizer
+        // to hold an Organization passport, and reverts calling address(0)
+        // otherwise. Without this the whole suite fails in _createAndPassProposal.
+        proposalManager.setTawfPassport(address(tawfPassport));
+        tawfPassport.issuePassport(organizer, PassportType.Organization, "ipfs://organizer");
+
         // Grant roles on managers
         proposalManager.grantRole(proposalManager.ORGANIZER_ROLE(), address(dao));
         proposalManager.grantRole(proposalManager.KYC_ORACLE_ROLE(), address(dao));
@@ -158,25 +168,32 @@ contract ShariaZKProofTest is Test {
         dao.grantOrganizerRole(organizer);
         dao.grantShariaCouncilRole(deployer);
         dao.grantKYCOracleRole(deployer);
+
+        // A real council member, for exercising the gated proof entrypoints.
+        shariaReviewManager.grantRole(shariaReviewManager.SHARIA_COUNCIL_ROLE(), councilMember1);
     }
 
     // ============ Proof Submission Tests ============
 
-    function testSubmitShariaReviewProof_ValidProof() public {
-        // Create a proposal and advance it to ShariaReview
+    /**
+     * @notice The verifier is a fail-closed stub, so even an authorised council
+     *         member cannot mark a proposal verified.
+     * @dev This replaces a test that submitted a proof and then asserted
+     *      `assertTrue(true)`, which passed no matter what the contracts did.
+     *      The point of the assertions below is that NO approval state is
+     *      written when verification does not actually happen.
+     */
+    function testSubmitShariaReviewProof_FailsClosedEvenForCouncil() public {
         uint256 proposalId = _createAndPassProposal();
 
-        // Create a bundle
         uint256[] memory proposalIds = new uint256[](1);
         proposalIds[0] = proposalId;
         vm.prank(deployer);
         uint256 bundleId = shariaReviewManager.createShariaReviewBundle(proposalIds);
 
-        // Create a mock valid proof
         Groth16Proof memory proof = _createMockProof();
 
-        // Submit the proof
-        vm.prank(address(0x100)); // Anyone can submit
+        vm.prank(councilMember1);
         bool success = shariaReviewManager.submitShariaReviewProof(
             bundleId,
             proposalId,
@@ -185,11 +202,94 @@ contract ShariaZKProofTest is Test {
             proof
         );
 
-        // Note: This will fail without actual valid proof, but tests the flow
-        // In production, use real circuit-generated proofs
-        assertTrue(true, "Test flow completed");
+        assertFalse(success, "fail-closed verifier must not accept any proof");
+        assertFalse(
+            shariaReviewManager.bundleProofVerified(bundleId, proposalId),
+            "no verification state may be written"
+        );
+        assertFalse(
+            shariaReviewManager.bundleProposalApproved(bundleId, proposalId),
+            "proposal must not reach Sharia-approved"
+        );
+        assertEq(
+            shariaReviewManager.bundleApprovalCount(bundleId, proposalId),
+            0,
+            "approval count must remain zero"
+        );
     }
 
+    /**
+     * @notice Regression test for the forgery hole.
+     * @dev Previously submitShariaReviewProof was permissionless AND the
+     *      verifier returned true unconditionally, so any address could stamp
+     *      bundleProofVerified = true with a caller-chosen approvalCount and
+     *      drive a proposal to ShariaApproved. Submission is now role-gated.
+     */
+    function testSubmitShariaReviewProof_RevertsForNonCouncil() public {
+        uint256 proposalId = _createAndPassProposal();
+
+        uint256[] memory proposalIds = new uint256[](1);
+        proposalIds[0] = proposalId;
+        vm.prank(deployer);
+        uint256 bundleId = shariaReviewManager.createShariaReviewBundle(proposalIds);
+
+        Groth16Proof memory proof = _createMockProof();
+
+        vm.prank(address(0x100)); // not a council member
+        vm.expectRevert();
+        shariaReviewManager.submitShariaReviewProof(
+            bundleId,
+            proposalId,
+            4,
+            IProposalManager.CampaignType.ZakatCompliant,
+            proof
+        );
+
+        assertFalse(
+            shariaReviewManager.bundleProofVerified(bundleId, proposalId),
+            "rejected submission must leave no trace"
+        );
+    }
+
+    /**
+     * @notice ZKTCore must not be usable as a bypass around the manager's gate.
+     * @dev ZKTCore holds SHARIA_COUNCIL_ROLE on ShariaReviewManager, so an
+     *      ungated forwarder on ZKTCore would defeat the manager's own check.
+     */
+    function testZKTCoreSubmitShariaReviewProof_RevertsForNonCouncil() public {
+        uint256 proposalId = _createAndPassProposal();
+
+        uint256[] memory proposalIds = new uint256[](1);
+        proposalIds[0] = proposalId;
+        vm.prank(deployer);
+        uint256 bundleId = shariaReviewManager.createShariaReviewBundle(proposalIds);
+
+        Groth16Proof memory proof = _createMockProof();
+
+        vm.prank(address(0x100));
+        vm.expectRevert();
+        dao.submitShariaReviewProof(
+            bundleId,
+            proposalId,
+            4,
+            IProposalManager.CampaignType.ZakatCompliant,
+            proof
+        );
+
+        assertFalse(
+            shariaReviewManager.bundleProofVerified(bundleId, proposalId),
+            "ZKTCore must not be a bypass"
+        );
+    }
+
+    /**
+     * @notice Replay protection: the proof commitment is burned on first use.
+     * @dev Replaces a test whose entire body was a try/catch with both branches
+     *      empty, so it asserted nothing. The commitment is recorded BEFORE
+     *      verification is attempted, so a second submission of the same
+     *      (proof, bundle, proposal) tuple reverts even though the first
+     *      submission failed verification.
+     */
     function testSubmitShariaReviewProof_ReplayProtection() public {
         uint256 proposalId = _createAndPassProposal();
 
@@ -200,25 +300,26 @@ contract ShariaZKProofTest is Test {
 
         Groth16Proof memory proof = _createMockProof();
 
-        // Try to submit the same proof twice (would fail verification, but tests replay protection)
-        vm.startPrank(address(0x100));
+        vm.prank(councilMember1);
+        shariaReviewManager.submitShariaReviewProof(
+            bundleId, proposalId, 4, IProposalManager.CampaignType.Normal, proof
+        );
 
-        // First attempt (would fail verification without valid proof)
-        try shariaReviewManager.submitShariaReviewProof(
-            bundleId,
-            proposalId,
-            4,
-            IProposalManager.CampaignType.Normal,
-            proof
-        ) {
-            // If proof passes, second should fail due to replay protection
-        } catch {
-            // Expected: proof verification fails
-        }
-
-        vm.stopPrank();
+        // Same proof, same bundle, same proposal -> commitment already burned.
+        vm.prank(councilMember1);
+        vm.expectRevert("Proof already used");
+        shariaReviewManager.submitShariaReviewProof(
+            bundleId, proposalId, 4, IProposalManager.CampaignType.Normal, proof
+        );
     }
 
+    /**
+     * @notice A below-quorum approvalCount must not be accepted.
+     * @dev Note this passes for the RIGHT reason now: the verifier fails
+     *      closed. It used to pass only because of a plaintext
+     *      `approvalCount >= quorumThreshold` comparison on a caller-supplied
+     *      number, with no cryptographic backing whatsoever.
+     */
     function testSubmitShariaReviewProof_InsufficientQuorum() public {
         uint256 proposalId = _createAndPassProposal();
 
@@ -229,9 +330,7 @@ contract ShariaZKProofTest is Test {
 
         Groth16Proof memory proof = _createMockProof();
 
-        vm.prank(address(0x100));
-        // Submit with approvalCount < quorum
-        // Should fail verification (return false)
+        vm.prank(councilMember1);
         bool success = shariaReviewManager.submitShariaReviewProof(
             bundleId,
             proposalId,
@@ -239,14 +338,20 @@ contract ShariaZKProofTest is Test {
             IProposalManager.CampaignType.Normal,
             proof
         );
-        
+
         assertFalse(success, "Should have failed with insufficient quorum");
+        assertFalse(
+            shariaReviewManager.bundleProposalApproved(bundleId, proposalId),
+            "below-quorum submission must not approve"
+        );
     }
 
     function testSubmitShariaReviewProof_InvalidBundle() public {
         Groth16Proof memory proof = _createMockProof();
 
-        vm.prank(address(0x100));
+        // Called by an authorised council member so the bundle check is what
+        // actually fires, rather than the role gate.
+        vm.prank(councilMember1);
         vm.expectRevert("Bundle does not exist");
         shariaReviewManager.submitShariaReviewProof(
             999, // Invalid bundleId
@@ -254,6 +359,24 @@ contract ShariaZKProofTest is Test {
             4,
             IProposalManager.CampaignType.Normal,
             proof
+        );
+    }
+
+    /**
+     * @notice The verifier must self-report as non-functional.
+     * @dev Guards against a future change that makes verification silently
+     *      pass without a real pairing check.
+     */
+    function testGroth16VerifierIsNotOperational() public view {
+        assertFalse(groth16Verifier.isOperational(), "stub verifier must not claim to be operational");
+        assertFalse(
+            groth16Verifier.verifyProof(
+                [uint256(1), uint256(2)],
+                [[uint256(3), uint256(4)], [uint256(5), uint256(6)]],
+                [uint256(7), uint256(8)],
+                [uint256(0), uint256(0), uint256(0), uint256(0), uint256(0), uint256(0)]
+            ),
+            "stub verifier must reject arbitrary bytes"
         );
     }
 

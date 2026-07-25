@@ -44,8 +44,6 @@ export function useCampaigns() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  console.log(demoCampaigns)
-
   // Fetch campaigns using contract client
   const fetchCampaigns = useCallback(async () => {
     setIsLoading(true);

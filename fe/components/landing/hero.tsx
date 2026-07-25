@@ -77,9 +77,11 @@ export function Hero() {
           <CardBody className="relative oval-mask overflow-hidden border border-primary/10 bg-white aspect-[4/3] shadow-2xl shadow-primary/10">
 
             {/* IMAGE with oval mask applied via parent */}
+            {/* Self-hosted: this previously hotlinked globalgiving.org, an
+                uncontrolled third-party origin. */}
             <Image
-              src="https://www.globalgiving.org/pfil/50448/pict_large.jpg"
-              alt="Preview"
+              src="/community-receiving-food-aid-with-dignity.jpg"
+              alt="Community members receiving food aid"
               fill
               className="object-cover w-full h-auto"
             />

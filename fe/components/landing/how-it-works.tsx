@@ -7,7 +7,7 @@ export function HowItWorks() {
           {/* Left Content */}
           <div className="lg:w-1/2 space-y-6">
             {/* Updated H2 size per guidelines: 40px/36px */}
-            <h2 className="font-serif text-[36px] md:text-[40px] font-bold text-foreground">How Tawf Works</h2>
+            <h2 className="font-serif text-[36px] md:text-[40px] font-bold text-foreground">How ZKT Works</h2>
             <p className="text-base lg:text-lg text-muted-foreground">
               Experience the future of giving with our seamless, transparent 4-step process.
             </p>

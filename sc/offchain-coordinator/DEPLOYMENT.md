@@ -9,7 +9,7 @@ This guide covers deploying the ZK Sharia Council coordinator using Docker. The 
 - Docker installed (20.10+)
 - Docker Compose installed (2.0+)
 - Basic Linux server administration knowledge
-- Alchemy API key (for Base Sepolia RPC)
+- Ethereum Sepolia RPC endpoint
 - A server with at least 1GB RAM
 
 ---
@@ -31,7 +31,7 @@ nano .env
 Required environment variables:
 ```bash
 # Blockchain Configuration
-RPC_URL=https://base-sepolia.g.alchemy.com/v2/YOUR_KEY
+RPC_URL=https://ethereum-sepolia.publicnode.com
 PRIVATE_KEY=your_wallet_private_key_here
 DAO_CONTRACT_ADDRESS=0x86ceb44b46681a22ba32f8e8b4c10e50eeb50df6
 
@@ -455,7 +455,7 @@ https://YOUR_PROJECT_ID.supabase.co/functions/vote
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Blockchain Layer                             │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                    ZKTCore (Base Sepolia)                      │  │
+│  │                    ZKTCore (Ethereum Sepolia)                      │  │
 │  │  submitShariaReviewProof() → verifyAndValidate()              │  │
 │  └────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
@@ -538,4 +538,4 @@ This will guide you through:
 - [Docker Documentation](https://docs.docker.com)
 - [Docker Compose Documentation](https://docs.docker.com/compose)
 - [Supabase Edge Functions](https://supabase.com/docs/guides/functions)
-- [Base Sepolia Faucet](https://sepoliafaucet.com)
+- [Ethereum Sepolia Faucet](https://sepoliafaucet.com)

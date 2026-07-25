@@ -9,7 +9,7 @@ import "@tawf-gov/interfaces/IProposalManager.sol";
 /**
  * @title PopulateDemoData
  * @notice Script to populate the ZKT DAO with demo campaigns for testing
- * @dev Run with: forge script script/PopulateDemoData.s.sol --rpc-url base-sepolia --broadcast
+ * @dev Run with: forge script script/PopulateDemoData.s.sol --rpc-url sepolia --broadcast
  */
 contract PopulateDemoData is Script {
     // Contract addresses (update these with your deployed addresses)

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Calculator, Wallet, Heart, Users, Home, Loader2, Info, ChevronDown, Check } from "lucide-react";
 import { useWallet } from "@/components/providers/web3-provider";
 import { useLanguage } from "@/components/providers/language-provider";
-import { campaigns, formatCurrency } from "@/data/campaigns";
+import { formatCurrency } from "@/data/campaigns";
+import { useCampaigns, type Campaign } from "@/hooks/useCampaigns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,11 @@ export default function ZakatPage() {
   const { isConnected, idrxBalance, address, donate } = useWallet();
   const { toast } = useToast();
   const { t } = useLanguage();
+  // Real on-chain campaign pools. This page previously listed the static
+  // @/data/campaigns array and then passed that mock `id` straight into
+  // donate() as a poolId, which could route a real payment at a pool that
+  // does not correspond to the campaign shown.
+  const { campaigns, isLoading: isLoadingCampaigns } = useCampaigns();
   const [selectedTab, setSelectedTab] = useState("maal");
   const [zakatType, setZakatType] = useState("income");
   const [incomeType, setIncomeType] = useState("monthly");
@@ -31,7 +37,7 @@ export default function ZakatPage() {
   // Dialog states
   const [showCampaignDialog, setShowCampaignDialog] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [selectedCampaign, setSelectedCampaign] = useState<typeof campaigns[0] | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentType, setPaymentType] = useState<"maal" | "fitrah">("maal");
 
@@ -66,7 +72,7 @@ export default function ZakatPage() {
     setShowCampaignDialog(true);
   };
 
-  const handleCampaignSelect = (campaign: typeof campaigns[0]) => {
+  const handleCampaignSelect = (campaign: Campaign) => {
     setSelectedCampaign(campaign);
     setShowCampaignDialog(false);
     setShowConfirmDialog(true);
@@ -81,7 +87,9 @@ export default function ZakatPage() {
       const amount = paymentType === "maal" ? calculatedZakat : totalFitrah;
       
       const { txHash } = await donate({
-        poolId: BigInt(selectedCampaign.id),
+        // poolId, not id — the on-chain pool identifier, so funds land in the
+        // pool actually shown to the user.
+        poolId: BigInt(selectedCampaign.poolId),
         campaignTitle: selectedCampaign.title,
         amountIDRX: BigInt(Math.floor(amount * 1e18)), // Convert to wei
       });
@@ -529,6 +537,16 @@ export default function ZakatPage() {
             </DialogHeader>
 
             <div className="grid gap-3 sm:gap-4 py-4">
+              {isLoadingCampaigns && (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  Loading campaigns…
+                </div>
+              )}
+              {!isLoadingCampaigns && campaigns.length === 0 && (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No active campaigns available right now.
+                </div>
+              )}
               {campaigns.map((campaign) => (
                 <Button
                   key={campaign.id}

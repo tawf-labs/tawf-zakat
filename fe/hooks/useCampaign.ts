@@ -34,7 +34,7 @@ export const useCampaign = (poolId?: number | bigint) => {
   }, [refetch]);
 
   // Convert raw contract data to UI-friendly format
-  const campaignData = pool ? poolToCampaignPoolData(pool as CampaignPool) : undefined;
+  const campaignData = pool ? poolToCampaignPoolData(pool as any as CampaignPool) : undefined;
 
   return {
     campaign: campaignData,

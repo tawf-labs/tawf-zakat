@@ -27,19 +27,20 @@ export function useCampaignStatus(poolId: string | number | null) {
     },
   });
 
+  const row = poolData as any;
   const pool: CampaignPool | null = poolData
     ? {
-        poolId: poolData[0] as bigint,
-        proposalId: poolData[1] as bigint,
-        organizer: poolData[2] as string,
-        fundingGoal: poolData[3] as bigint,
-        raisedAmount: poolData[4] as bigint,
-        campaignType: poolData[5] as number,
-        campaignTitle: poolData[6] as string,
-        isActive: poolData[7] as boolean,
-        createdAt: poolData[8] as bigint,
-        donors: poolData[9] as string[],
-        fundsWithdrawn: poolData[10] as boolean,
+        poolId: row[0] as bigint,
+        proposalId: row[1] as bigint,
+        organizer: row[2] as string,
+        fundingGoal: row[3] as bigint,
+        raisedAmount: row[4] as bigint,
+        campaignType: row[5] as number,
+        campaignTitle: row[6] as string,
+        isActive: row[7] as boolean,
+        createdAt: row[8] as bigint,
+        donors: row[9] as string[],
+        fundsWithdrawn: row[10] as boolean,
       }
     : null;
 

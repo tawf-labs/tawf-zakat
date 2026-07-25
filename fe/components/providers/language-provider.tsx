@@ -342,9 +342,6 @@ const translations = {
     "toast.error": "Terjadi kesalahan",
     "toast.paymentFailed": "Pembayaran gagal. Silakan coba lagi.",
 
-    // Footer
-    "footer.description":
-      "Platform donasi transparan berbasis blockchain untuk Indonesia yang lebih baik.",
     "footer.about": "Tentang",
     "footer.aboutUs": "Tentang Kami",
     "footer.howItWorks": "Cara Kerja",
@@ -703,9 +700,6 @@ const translations = {
     "toast.error": "An error occurred",
     "toast.paymentFailed": "Payment failed. Please try again.",
 
-    // Footer
-    "footer.description":
-      "Transparent blockchain-based donation platform for a better Indonesia.",
     "footer.about": "About",
     "footer.aboutUs": "About Us",
     "footer.howItWorks": "How It Works",

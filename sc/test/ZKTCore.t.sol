@@ -11,6 +11,8 @@ import "@tawf-gov/protocol/ZakatEscrowManager.sol";
 import "../src/DAO/core/PrivateDonationPool.sol";
 import "@tawf-gov/governance/ParticipationTracker.sol";
 import "../src/DAO/verifiers/Groth16Verifier.sol";
+import "@tawf-gov/identity/TawfPassport.sol";
+import {PassportType} from "@tawf-gov/interfaces/ITawfPassport.sol";
 
 contract ZKTCoreTest is Test {
     MockIDRX public idrxToken;
@@ -176,6 +178,13 @@ contract ZKTCoreTest is Test {
         // Grant roles to ParticipationTracker
         participationTracker.grantRole(participationTracker.TRACKER_ROLE(), address(dao));
         participationTracker.grantRole(participationTracker.VERIFIER_ROLE(), address(dao));
+
+        // Passport wiring: ProposalManager.createProposal requires the organizer
+        // to hold an Organization passport and reverts calling address(0)
+        // otherwise, which previously failed every proposal-creating test here.
+        TawfPassport tawfPassport = new TawfPassport();
+        proposalManager.setTawfPassport(address(tawfPassport));
+        tawfPassport.issuePassport(organizer, PassportType.Organization, "ipfs://organizer");
 
         // Setup roles (no ADMIN_ROLE - fully decentralized)
         dao.grantOrganizerRole(organizer);
@@ -646,7 +655,7 @@ contract ZKTCoreTest is Test {
 
         // Try to transfer receipt NFT (should fail)
         vm.prank(donor1);
-        vm.expectRevert("DonationReceiptNFT: Non-transferable receipt");
+        vm.expectRevert("DonationReceipt: soulbound");
         receiptNFT.transferFrom(donor1, donor2, tokenId);
     }
 

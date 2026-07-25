@@ -10,7 +10,7 @@ export const getClientConfig = (): Config | null => {
   if (typeof window === "undefined") return null;
 
   return defaultConfig({
-    appName: "Zkt.app",
+    appName: "ZKT",
     walletConnectProjectId,
     xellarAppId,
     xellarEnv,

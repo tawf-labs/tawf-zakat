@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
   }
   const payload = verifyJWT(auth.slice(7));
-  if (!payload || payload.exp < Date.now()) {
+  if (!payload || Number(payload.exp) < Date.now()) {
     return NextResponse.json({ error: "Invalid or expired token" }, { status: 401 });
   }
 

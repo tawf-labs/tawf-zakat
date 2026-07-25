@@ -373,7 +373,11 @@ contract ZKTCore is AccessControl {
     // ============ ZK Proof Functions ============
 
     /**
-     * @notice Submit a ZK proof for Sharia council approval (permissionless)
+     * @notice Submit a ZK proof for Sharia council approval
+     * @dev RESTRICTED to SHARIA_COUNCIL_ROLE. This gate is load-bearing: ZKTCore
+     *      itself holds SHARIA_COUNCIL_ROLE on ShariaReviewManager (granted in
+     *      V10Deploy), so leaving this open would make ZKTCore a bypass around
+     *      the manager's own role check.
      * @param bundleId Bundle being reviewed
      * @param proposalId Proposal being reviewed
      * @param approvalCount Number of approve votes
@@ -387,7 +391,7 @@ contract ZKTCore is AccessControl {
         uint256 approvalCount,
         IProposalManager.CampaignType campaignType,
         Groth16Proof calldata proof
-    ) external returns (bool success) {
+    ) external onlyRole(SHARIA_COUNCIL_ROLE) returns (bool success) {
         return shariaReviewManager.submitShariaReviewProof(
             bundleId,
             proposalId,
@@ -405,6 +409,7 @@ contract ZKTCore is AccessControl {
      * @param campaignTypes Array of campaign types
      * @param proofs Array of Groth16 proofs
      * @return successCount Number of successfully verified proofs
+     * @dev RESTRICTED to SHARIA_COUNCIL_ROLE — see submitShariaReviewProof.
      */
     function batchSubmitShariaReviewProofs(
         uint256 bundleId,
@@ -412,7 +417,7 @@ contract ZKTCore is AccessControl {
         uint256[] calldata approvalCounts,
         IProposalManager.CampaignType[] calldata campaignTypes,
         Groth16Proof[] calldata proofs
-    ) external returns (uint256 successCount) {
+    ) external onlyRole(SHARIA_COUNCIL_ROLE) returns (uint256 successCount) {
         return shariaReviewManager.batchSubmitShariaReviewProofs(
             bundleId,
             proposalIds,

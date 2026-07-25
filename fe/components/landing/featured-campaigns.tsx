@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { campaigns, calculateProgress, formatCurrency } from "@/data/campaigns";
 import { CampaignCard } from "@/components/shared/campaign-card";
+import { useCampaigns } from "@/hooks/useCampaigns";
 
 export function FeaturedCampaigns() {
-  // Ambil hanya 3 campaign pertama untuk featured
+  // Reads real campaign pools from ZKTCore. This previously rendered the
+  // static @/data/campaigns array, so the homepage advertised campaigns that
+  // did not exist on chain.
+  const { campaigns, isLoading, error } = useCampaigns();
   const featuredCampaigns = campaigns.slice(0, 3);
 
   return (
@@ -31,15 +34,37 @@ export function FeaturedCampaigns() {
         </div>
 
         {/* Grid - gap-6 = 24px per guidelines */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {featuredCampaigns.map((campaign, index) => (
-            <CampaignCard
-              key={campaign.id}
-              campaign={campaign}
-              priority  // All featured campaigns are above-the-fold
-            />
-          ))}
-        </div>
+        {isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-80 rounded-xl border border-border bg-muted/40 animate-pulse"
+              />
+            ))}
+          </div>
+        ) : error || featuredCampaigns.length === 0 ? (
+          <div className="rounded-xl border border-border bg-muted/30 p-10 text-center">
+            <p className="text-muted-foreground">
+              {error
+                ? "Could not load campaigns from the network right now."
+                : "No active campaigns yet. Check back soon."}
+            </p>
+            <Link href="/campaigns" className="mt-4 inline-block text-primary hover:underline">
+              Browse all campaigns
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {featuredCampaigns.map((campaign) => (
+              <CampaignCard
+                key={campaign.id}
+                campaign={campaign}
+                priority  // All featured campaigns are above-the-fold
+              />
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

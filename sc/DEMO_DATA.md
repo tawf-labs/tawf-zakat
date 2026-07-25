@@ -19,7 +19,7 @@ address constant VOTING_NFT = 0xA7Ff9FD09eD70c174Ae9CB580FB6b31325869a05;
 ```bash
 # From the sc/ directory
 forge script script/PopulateDemoData.s.sol:PopulateDemoData \
-  --rpc-url base-sepolia \
+  --rpc-url sepolia \
   --account <your-account-name> \
   --sender <your-address> \
   --broadcast \
@@ -29,7 +29,7 @@ forge script script/PopulateDemoData.s.sol:PopulateDemoData \
 **Alternative:** Using private key:
 ```bash
 forge script script/PopulateDemoData.s.sol:PopulateDemoData \
-  --rpc-url https://sepolia.base.org \
+  --rpc-url https://ethereum-sepolia.publicnode.com \
   --private-key $PRIVATE_KEY \
   --broadcast
 ```
@@ -83,21 +83,21 @@ After running the script, you can test these features:
 1. Create a pool for an approved proposal:
    ```bash
    cast send $ZKT_CORE "createCampaignPool(uint256)" <proposalId> \
-     --rpc-url base-sepolia \
+     --rpc-url sepolia \
      --private-key $PRIVATE_KEY
    ```
 
 2. Approve IDRX spending:
    ```bash
    cast send $MOCK_IDRX "approve(address,uint256)" $ZKT_CORE 10000000000000000000000 \
-     --rpc-url base-sepolia \
+     --rpc-url sepolia \
      --private-key $PRIVATE_KEY
    ```
 
 3. Make a donation:
    ```bash
    cast send $ZKT_CORE "donate(uint256,uint256,string)" <poolId> 5000000000000000000000 "ipfs://QmProof" \
-     --rpc-url base-sepolia \
+     --rpc-url sepolia \
      --private-key $PRIVATE_KEY
    ```
 
@@ -157,7 +157,7 @@ To reset and repopulate:
 Set these in your `.env` file:
 
 ```bash
-BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
+SEPOLIA_RPC_URL=https://ethereum-sepolia.publicnode.com
 PRIVATE_KEY=0x...
 ETHERSCAN_API_KEY=...
 ```
@@ -171,22 +171,22 @@ source .env
 
 Check proposal count:
 ```bash
-cast call $ZKT_CORE "proposalCount()" --rpc-url base-sepolia
+cast call $ZKT_CORE "proposalCount()" --rpc-url sepolia
 ```
 
 Get proposal details:
 ```bash
-cast call $ZKT_CORE "getProposal(uint256)" 0 --rpc-url base-sepolia
+cast call $ZKT_CORE "getProposal(uint256)" 0 --rpc-url sepolia
 ```
 
 Check voting power:
 ```bash
-cast call $VOTING_NFT "getVotingPower(address)" <your-address> --rpc-url base-sepolia
+cast call $VOTING_NFT "getVotingPower(address)" <your-address> --rpc-url sepolia
 ```
 
 Check has voted:
 ```bash
-cast call $VOTING_MANAGER "hasVoted(uint256,address)" 1 <your-address> --rpc-url base-sepolia
+cast call $VOTING_MANAGER "hasVoted(uint256,address)" 1 <your-address> --rpc-url sepolia
 ```
 
 ## Need Help?

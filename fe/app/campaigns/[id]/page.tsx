@@ -17,6 +17,7 @@ import { OrganizerMessage } from '@/components/campaigns/organizer-message';
 import { JourneyTimeline } from '@/components/campaigns/journey-timeline';
 import { UrgencyBanner } from '@/components/campaigns/urgency-banner';
 import type { Beneficiary, OrganizerMessage as OrganizerMessageType, ImpactMetrics, ImpactCalculator as ImpactCalculatorItem, JourneyItem, UrgencyInfo } from '@/data/campaigns';
+import { CONTRACT_ADDRESSES } from '@/lib/abi';
 
 const CampaignMap = dynamic(() => import('@/components/campaigns/campaign-map'), {
   loading: () => <div className="w-full h-[400px] bg-muted animate-pulse rounded-xl" />,
@@ -653,11 +654,18 @@ export default function CampaignDetail() {
                       <h4 className="font-semibold">Smart Contract</h4>
                     </div>
                     <div className="font-mono text-xs bg-background p-3 rounded border border-border break-all">
-                      0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb7
+                      {CONTRACT_ADDRESSES.ZKTCore}
                     </div>
-                    <Button variant="outline" className="w-full">
-                      View on Block Explorer
-                    </Button>
+                    <a
+                      href={`https://sepolia.etherscan.io/address/${CONTRACT_ADDRESSES.ZKTCore}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <Button variant="outline" className="w-full">
+                        View on Block Explorer
+                      </Button>
+                    </a>
                   </div>
                 </div>
 

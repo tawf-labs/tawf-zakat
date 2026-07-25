@@ -62,33 +62,40 @@ contract V10Deploy is Script {
         );
 
         // 4. Grant ZKTCore roles on all sub-contracts
+        //
+        // NOTE: these are raw .call()s because the tawf-gov contracts are
+        // consumed as pre-deployed addresses rather than typed instances. Every
+        // one MUST be checked — a silently-failed grantRole produces a
+        // deployment that looks successful and then reverts at runtime, which
+        // is exactly the failure mode that makes a bad deploy hard to diagnose.
+
         // ProposalManager roles
-        (bool pok,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("ORGANIZER_ROLE"), address(dao)));
+        _grant(pmAddr, "ORGANIZER_ROLE", address(dao), "ProposalManager.ORGANIZER_ROLE");
 
         // Receipt NFT minter roles
-        (bool rok,) = receiptNFTAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("MINTER_ROLE"), address(dao)));
+        _grant(receiptNFTAddr, "MINTER_ROLE", address(dao), "DonationReceiptNFT.MINTER_ROLE");
 
         // VotingNFT roles
-        (bool vok,) = votingNFTAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("MINTER_ROLE"), address(dao)));
+        _grant(votingNFTAddr, "MINTER_ROLE", address(dao), "VotingNFT.MINTER_ROLE");
 
         // ShariaReviewManager
         srm.grantRole(srm.SHARIA_COUNCIL_ROLE(), address(dao));
         srm.grantRole(srm.ADMIN_ROLE(), address(dao));
 
         // PoolManager
-        (bool pmgr,) = poolMgrAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("ADMIN_ROLE"), address(dao)));
+        _grant(poolMgrAddr, "ADMIN_ROLE", address(dao), "PoolManager.ADMIN_ROLE");
 
         // ZakatEscrowManager
-        (bool eok,) = escrowAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("ADMIN_ROLE"), address(dao)));
+        _grant(escrowAddr, "ADMIN_ROLE", address(dao), "ZakatEscrowManager.ADMIN_ROLE");
 
         // PrivateDonationPool
         privatePool.grantRole(privatePool.CORE_ROLE(), address(dao));
 
         // MilestoneManager
-        (bool mok,) = mmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("ORGANIZER_ROLE"), address(dao)));
+        _grant(mmAddr, "ORGANIZER_ROLE", address(dao), "MilestoneManager.ORGANIZER_ROLE");
 
         // ParticipationTracker
-        (bool tok,) = trackerAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("TRACKER_ROLE"), address(dao)));
+        _grant(trackerAddr, "TRACKER_ROLE", address(dao), "ParticipationTracker.TRACKER_ROLE");
 
         // Grant core team roles on ZKTCore
         dao.grantOrganizerRole(coreTeam);
@@ -96,11 +103,11 @@ contract V10Deploy is Script {
         dao.grantKYCOracleRole(coreTeam);
 
         // Cross-module permissions
-        (bool p1,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("VOTING_MANAGER_ROLE"), vmgrAddr));
-        (bool p2,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("VOTING_MANAGER_ROLE"), address(srm)));
-        (bool p3,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("VOTING_MANAGER_ROLE"), poolMgrAddr));
-        (bool p4,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("VOTING_MANAGER_ROLE"), escrowAddr));
-        (bool p5,) = pmAddr.call(abi.encodeWithSignature("grantRole(bytes32,address)", keccak256("MILESTONE_MANAGER_ROLE"), mmAddr));
+        _grant(pmAddr, "VOTING_MANAGER_ROLE", vmgrAddr, "ProposalManager.VOTING_MANAGER_ROLE(VotingManager)");
+        _grant(pmAddr, "VOTING_MANAGER_ROLE", address(srm), "ProposalManager.VOTING_MANAGER_ROLE(ShariaReviewManager)");
+        _grant(pmAddr, "VOTING_MANAGER_ROLE", poolMgrAddr, "ProposalManager.VOTING_MANAGER_ROLE(PoolManager)");
+        _grant(pmAddr, "VOTING_MANAGER_ROLE", escrowAddr, "ProposalManager.VOTING_MANAGER_ROLE(ZakatEscrowManager)");
+        _grant(pmAddr, "MILESTONE_MANAGER_ROLE", mmAddr, "ProposalManager.MILESTONE_MANAGER_ROLE(MilestoneManager)");
 
         vm.stopBroadcast();
 
@@ -111,5 +118,32 @@ contract V10Deploy is Script {
         console.log("HonkVerifier:", address(honk));
         console.log("Groth16Verifier:", address(groth16));
         console.log("NullifierRegistry:", address(nullifierReg));
+
+        // Fail loudly if the ZK layer ever silently becomes "operational"
+        // without a real pairing check being generated. See the headers in
+        // HonkVerifier.sol / Groth16Verifier.sol.
+        console.log("");
+        console.log("ZK STATUS: verifiers are fail-closed placeholders.");
+        console.log("  HonkVerifier.isOperational()   =", honk.isOperational());
+        console.log("  Groth16Verifier.isOperational() =", groth16.isOperational());
+        console.log("  donateZK / donateZKPrivate WILL revert. This is expected.");
+    }
+
+    /**
+     * @dev Grant `role` on `target` to `grantee`, reverting with a readable
+     *      label if the call fails. Replaces fire-and-forget .call()s whose
+     *      success bool was captured and then ignored.
+     */
+    function _grant(address target, string memory role, address grantee, string memory label) internal {
+        (bool ok, bytes memory ret) = target.call(
+            abi.encodeWithSignature("grantRole(bytes32,address)", keccak256(bytes(role)), grantee)
+        );
+        if (!ok) {
+            console.log("FAILED grantRole:", label);
+            if (ret.length > 0) {
+                assembly { revert(add(ret, 0x20), mload(ret)) }
+            }
+            revert(string.concat("grantRole failed: ", label));
+        }
     }
 }

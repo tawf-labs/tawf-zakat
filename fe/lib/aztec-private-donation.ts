@@ -109,25 +109,37 @@ export function computeNullifier(
 }
 
 /**
- * Generate ZK proof for eligibility verification
- * 
- * In production, this would:
-}
+ * Whether private (ZK-gated) donation is usable end to end.
+ *
+ * It is NOT, and callers must check this BEFORE offering the option:
+ *
+ *  1. `/api/generate-proof` (fetched below) does not exist in this app. There
+ *     is no route handler for it, so proof generation always 404s.
+ *  2. The on-chain HonkVerifier is a fail-closed stub returning false, so
+ *     ZKTCore.donateZK / donateZKPrivate revert with "Invalid ZK proof" even
+ *     if a proof were produced.
+ *
+ * Flip to true only when BOTH a real proving route and a real deployed
+ * verifier exist. See sc/src/DAO/verifiers/HonkVerifier.sol.
+ */
+export const PRIVATE_DONATION_AVAILABLE = false;
+
+/** Human-readable reason, for surfacing in the UI. */
+export const PRIVATE_DONATION_UNAVAILABLE_REASON =
+  'Private donations are not available yet: on-chain ZK proof verification is not deployed.';
 
 /**
- * Verify eligibility proof on-chain
- * This calls the Groth16Verifier contract on Ethereum Sepolia
+ * Verify an eligibility proof on-chain.
+ *
+ * NOT IMPLEMENTED — returns false rather than pretending to verify. The
+ * previous implementation console.logged and returned true unconditionally,
+ * which made callers believe verification had happened.
  */
 export async function verifyProofOnChain(
-  proof: ZakatEligibilityProof,
-  verifierAddress: string
+  _proof: ZakatEligibilityProof,
+  _verifierAddress: string
 ): Promise<boolean> {
-  // In production: use wagmi/writeContract to call verifier
-  console.log('Verifying proof on-chain at:', verifierAddress);
-  console.log('Proof public inputs:', proof.public_inputs);
-  
-  // Placeholder - would use contract call
-  return true;
+  return false;
 }
 
 /**
@@ -157,6 +169,14 @@ export interface ProofGenerationResult {
 export async function generateEligibilityProof(
   witness: EligibilityWitness
 ): Promise<ProofGenerationResult | null> {
+  if (!PRIVATE_DONATION_AVAILABLE) {
+    // Fail fast and loudly rather than issuing a fetch to a route that does
+    // not exist and surfacing a generic "Proof generation failed" after the
+    // user has already committed to the flow.
+    console.warn(PRIVATE_DONATION_UNAVAILABLE_REASON);
+    return null;
+  }
+
   try {
     // In production: call bb.js UltraHonkBackend.generateProof()
     // For prototype: use pre-generated proof from off-chain pipeline
@@ -257,16 +277,11 @@ export interface UsePrivateDonationReturn {
 export const ZK_PROOF_CONFIG = {
   // Ethereum Sepolia testnet
   ethereum_sepolia: {
-    verifier_address: '0x294F9eF609305a569D22A6602cE585DF4bB1118D',
+    // V10 redeploy 2026-07-26. Fail-closed placeholder — isOperational() == false.
+    verifier_address: '0x7702B20B7302A82E3Cb09aAe7A72bb19A2d5Db84',
     nisab_threshold: 85000000n, // 85M IDR
     cycle_duration_seconds: 354 * 24 * 60 * 60, // One lunar year
   },
-  // Base Mainnet (to be deployed)
-  base_mainnet: {
-    verifier_address: '0x0000000000000000000000000000000000000000',
-    nisab_threshold: 85000000n,
-    cycle_duration_seconds: 354 * 24 * 60 * 60,
-  }
 } as const;
 
 export type NetworkName = keyof typeof ZK_PROOF_CONFIG;

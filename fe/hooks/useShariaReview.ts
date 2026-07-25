@@ -27,7 +27,7 @@ export function useShariaBundle(bundleId: number | bigint) {
   const { data, isLoading, refetch } = useReadContract({
     address: CONTRACT_ADDRESSES.ShariaReviewManager,
     abi: ShariaReviewManagerABI,
-    functionName: 'getBundle',
+    functionName: 'shariaBundles',
     args: [BigInt(bundleId)],
     query: {
       enabled: !!bundleId,
@@ -366,7 +366,7 @@ export const useShariaReview = (options?: UseShariaReviewOptions) => {
           BigInt(proposalId),
           BigInt(approvalCount),
           campaignType,
-          proof,
+          proof as any,
         ],
       });
 
@@ -458,7 +458,7 @@ export const useShariaReview = (options?: UseShariaReviewOptions) => {
           proposalIds.map(id => BigInt(id)),
           approvalCounts.map(c => BigInt(c)),
           campaignTypes,
-          proofs,
+          proofs as any,
         ],
       });
 

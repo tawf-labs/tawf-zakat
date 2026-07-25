@@ -12,6 +12,10 @@ import { useToast } from "@/hooks/use-toast";
 import { parseAmount } from "@/lib/abi";
 import { useCampaignStatus } from "@/hooks/useCampaignStatus";
 import { usePrivateDonation } from "@/hooks/usePrivateDonation";
+import {
+  PRIVATE_DONATION_AVAILABLE,
+  PRIVATE_DONATION_UNAVAILABLE_REASON,
+} from "@/lib/aztec-private-donation";
 import { ZakatCertificateModal } from "@/components/certificates/zakat-certificate-modal";
 
 interface DonationDialogProps {
@@ -232,9 +236,11 @@ export function DonationDialog({
                   {isPrivate ? "Private Donation" : "Public Donation"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {isPrivate
-                    ? "Your donation amount will be hidden using cryptography"
-                    : "Your donation will be publicly visible"}
+                  {!PRIVATE_DONATION_AVAILABLE
+                    ? "Private donations are not available yet"
+                    : isPrivate
+                      ? "Your donation amount will be hidden using cryptography"
+                      : "Your donation will be publicly visible"}
                 </p>
               </div>
             </div>
@@ -243,15 +249,33 @@ export function DonationDialog({
               variant={isPrivate ? "default" : "outline"}
               size="sm"
               onClick={() => setIsPrivate(!isPrivate)}
-              disabled={isProcessing || isDonating}
+              disabled={isProcessing || isDonating || !PRIVATE_DONATION_AVAILABLE}
+              title={!PRIVATE_DONATION_AVAILABLE ? PRIVATE_DONATION_UNAVAILABLE_REASON : undefined}
               className={isPrivate ? "bg-purple-600 hover:bg-purple-700" : ""}
             >
               {isPrivate ? "Private" : "Public"}
             </Button>
           </div>
 
+          {/* Private donation is gated on ZK verification that is not deployed.
+              Say so up front instead of failing after the user commits. */}
+          {!PRIVATE_DONATION_AVAILABLE && (
+            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <Shield className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-amber-800">
+                  Private donations unavailable
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  On-chain ZK proof verification is not deployed yet, so donations are
+                  public for now. Your donation still produces an NFT receipt.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Private Donation Notice */}
-          {isPrivate && (
+          {PRIVATE_DONATION_AVAILABLE && isPrivate && (
             <div className="flex items-start gap-2 p-3 bg-purple-50 border border-purple-200 rounded-lg">
               <Shield className="h-4 w-4 text-purple-600 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
@@ -399,7 +423,7 @@ export function DonationDialog({
           poolId: typeof campaignId === 'string' ? parseInt(campaignId, 10) : campaignId,
           amount: lastDonationTx.amount,
           campaignTitle,
-          campaignType: isPrivate ? 1 : 0,
+          campaignType: isPrivate ? '1' : '0',
           transactionHash: lastDonationTx.hash,
         }}
         onCertificateGenerated={(cert) => {

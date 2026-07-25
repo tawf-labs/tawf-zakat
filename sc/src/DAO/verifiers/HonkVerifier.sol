@@ -22,17 +22,39 @@ interface IHonkVerifier {
 
 /**
  * @title HonkVerifier
- * @notice Deployed UltraHONK verifier. The full implementation is compiled
- *         and deployed separately. This contract serves as a type-safe
- *         wrapper around the deployed verifier's address.
+ * @notice ABI-only stub. Deploying this gives you a NON-FUNCTIONAL verifier.
+ *
+ * @dev  ############################################################
+ *       #  `new HonkVerifier()` DOES NOT DEPLOY A REAL VERIFIER.   #
+ *       #  verify() returns false, so every proof-gated call        #
+ *       #  reverts. This is fail-closed, and it is deliberate.      #
+ *       ############################################################
+ *
+ *       This contract exists to give ZKTCore a type-safe ABI. It is 255 bytes
+ *       of init bytecode; the real Barretenberg verifier is 33,880 bytes of
+ *       deployed bytecode (sc/script/artifacts/HonkVerifier.json), which
+ *       EXCEEDS the EIP-170 limit of 24,576 bytes and therefore cannot be
+ *       deployed as a single contract. Splitting it, or a proxy/delegatecall
+ *       layout, is required before donateZK/donateZKPrivate can work.
+ *
+ *       Consequence today: ZKTCore.donateZK and ZKTCore.donateZKPrivate always
+ *       revert with "Invalid ZK proof". That is the correct failure mode — do
+ *       not "fix" it by making verify() return true.
  */
 contract HonkVerifier is IHonkVerifier {
-    // Full verifier compiled separately via `bb write_solidity_verifier`
-    // Deployed using its precompiled bytecode artifact.
-    // This wrapper is NOT the verifier — it just defines the ABI.
-    function verify(bytes calldata proof, bytes32[] calldata publicInputs)
+    /**
+     * @notice Whether this is a working verifier.
+     * @dev Always false for this stub. Deploy scripts should assert on it
+     *      rather than assuming a deployed address means a usable verifier.
+     */
+    function isOperational() external pure virtual returns (bool) {
+        return false;
+    }
+
+    /// @inheritdoc IHonkVerifier
+    /// @dev Fails closed. Overridden only by a real generated verifier.
+    function verify(bytes calldata, /* proof */ bytes32[] calldata /* publicInputs */)
         external view virtual returns (bool) {
-        // Overridden in the actual deployed verifier
         return false;
     }
 }

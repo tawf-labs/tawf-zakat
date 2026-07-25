@@ -1,15 +1,23 @@
-// Smart Contract ABIs and Configuration for Ethereum Sepolia Network
-// v10 deployment — tawf-gov (DAO) + zkt-hackathon (ZK), wired together on Sepolia
+// Smart Contract ABIs and Configuration for Ethereum Sepolia (chain 11155111)
+//
+// V10 ZK layer redeployed 2026-07-26 at block 11350675, wired to the existing
+// tawf-gov DAO contracts. Verified on-chain: ZKTCore's DAO references and all
+// role grants were read back after deployment.
+//
+// NOTE: HonkVerifier and Groth16Verifier are fail-closed placeholders — both
+// report isOperational() == false and reject every proof. donateZK and
+// donateZKPrivate therefore revert by design. See
+// sc/src/DAO/verifiers/HonkVerifier.sol and PRIVATE_DONATION_AVAILABLE in
+// lib/aztec-private-donation.ts.
 
 export const CONTRACT_ADDRESSES = {
   // ── zkt-hackathon (ZK layer) ──
-  ZKTCore: (process.env.NEXT_PUBLIC_CONTRACT_ZKT_CORE || '0x81D4C8E4E78d365e521a00984DfeFA03d24Ca0Cd') as `0x${string}`,
-  ShariaReviewManager: (process.env.NEXT_PUBLIC_CONTRACT_SHARIA_REVIEW_MANAGER || '0x3749273aC594D0f4C6eE8a53eb5764E877a3578f') as `0x${string}`,
-  PrivateDonationPool: (process.env.NEXT_PUBLIC_CONTRACT_PRIVATE_DONATION_POOL || '0xF10Ce981a94602DAB3FCbeB6ca5114faB8359091') as `0x${string}`,
-  HonkVerifier: (process.env.NEXT_PUBLIC_CONTRACT_HONK_VERIFIER || '0x1870cCB75A8335c7C6Aa119E25d389C853a4ba53') as `0x${string}`,
-  Groth16Verifier: (process.env.NEXT_PUBLIC_CONTRACT_GROTH16_VERIFIER || '0x294F9eF609305a569D22A6602cE585DF4bB1118D') as `0x${string}`,
-  NullifierRegistry: (process.env.NEXT_PUBLIC_CONTRACT_NULLIFIER_REGISTRY || '0x3Bf119C763D64b20B7419AB40059178B8cfDB7F9') as `0x${string}`,
-  ZKVerifier: (process.env.NEXT_PUBLIC_CONTRACT_ZK_VERIFIER || '0x0000000000000000000000000000000000000000') as `0x${string}`,
+  ZKTCore: (process.env.NEXT_PUBLIC_CONTRACT_ZKT_CORE || '0x28Eb1b95dFf00B2f876eaE24024B4e501710A287') as `0x${string}`,
+  ShariaReviewManager: (process.env.NEXT_PUBLIC_CONTRACT_SHARIA_REVIEW_MANAGER || '0x3A968cDc9CFC2f3aDFab4733415943E12B72a953') as `0x${string}`,
+  PrivateDonationPool: (process.env.NEXT_PUBLIC_CONTRACT_PRIVATE_DONATION_POOL || '0xe8908AD46ecC4A7F7e0e634BEB0e696bd497c846') as `0x${string}`,
+  HonkVerifier: (process.env.NEXT_PUBLIC_CONTRACT_HONK_VERIFIER || '0x1696c9e54c425760cF0E46181CE91A57A0ca8369') as `0x${string}`,
+  Groth16Verifier: (process.env.NEXT_PUBLIC_CONTRACT_GROTH16_VERIFIER || '0x7702B20B7302A82E3Cb09aAe7A72bb19A2d5Db84') as `0x${string}`,
+  NullifierRegistry: (process.env.NEXT_PUBLIC_CONTRACT_NULLIFIER_REGISTRY || '0x49a8C624c52A6A3F88Cc0073834dEf9b11326B56') as `0x${string}`,
 
   // ── tawf-gov (DAO layer) ──
   TawfPassport: (process.env.NEXT_PUBLIC_CONTRACT_TAWF_PASSPORT || '0x68A39923A1b80F3d48B4bd60FBe4187Ff2B0a38e') as `0x${string}`,

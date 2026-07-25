@@ -1,6 +1,6 @@
 "use client";
 
-import { Twitter, Linkedin, Github, Instagram } from "lucide-react";
+import { Github } from "lucide-react";
 import Link from "next/link"
 import { useLanguage } from "@/components/providers/language-provider"
 
@@ -11,13 +11,16 @@ export function Footer() {
     <footer className="bg-[#1A1A1A] text-white/80 pt-16 pb-8">
       <div className="container px-4 sm:px-6 mx-auto">
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-8 md:gap-12 mb-12">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-8 md:gap-12 mb-12">
 
           {/* Logo + description */}
           <div className="col-span-2 lg:col-span-2 space-y-6">
-             <Link href="/" className="flex items-center space-x-2">
-            <span className="font-serif text-2xl font-medium text-white">
-              Tawf
+             <Link href="/" className="flex items-baseline gap-2">
+            <span className="font-serif text-3xl font-medium text-white">
+              ZKT
+            </span>
+            <span className="text-[10px] font-medium uppercase tracking-wide-label text-white/60">
+              by Tawf Foundation
             </span>
           </Link>
 
@@ -25,22 +28,18 @@ export function Footer() {
               {t("footer.description")}
             </p>
 
-            {/* Social Icons - Hover to tawf-gold per guidelines */}
+            {/* Social Icons - Hover to tawf-gold per guidelines.
+                Only GitHub has a real destination; Twitter/LinkedIn/Instagram
+                were href="#" placeholders and are omitted until accounts exist. */}
             <div className="flex gap-4">
-              <a href="#" className="text-white/70 hover:text-tawf-gold transition-colors">
-                <Twitter className="h-5 w-5" />
-              </a>
-
-              <a href="#" className="text-white/70 hover:text-tawf-gold transition-colors">
-                <Linkedin className="h-5 w-5" />
-              </a>
-
-              <a href="#" className="text-white/70 hover:text-tawf-gold transition-colors">
+              <a
+                href="https://github.com/tawf-labs/zkt-hackathon"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="ZKT on GitHub"
+                className="text-white/70 hover:text-tawf-gold transition-colors"
+              >
                 <Github className="h-5 w-5" />
-              </a>
-
-              <a href="#" className="text-white/70 hover:text-tawf-gold transition-colors">
-                <Instagram className="h-5 w-5" />
               </a>
             </div>
           </div>
@@ -52,7 +51,9 @@ export function Footer() {
               <li><a href="/campaigns" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.exploreCampaigns")}</a></li>
               <li><a href="/zakat" className="text-white/70 hover:text-tawf-gold transition-colors">{t("header.zakat")}</a></li>
               <li><a href="/governance" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.daoGovernance")}</a></li>
-              <li><a href="/impact" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.impactReports")}</a></li>
+              {/* Impact reports live in the on-chain explorer until a dedicated
+                  /impact page exists — this used to 404. */}
+              <li><a href="/explorer" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.impactReports")}</a></li>
             </ul>
           </div>
 
@@ -61,7 +62,8 @@ export function Footer() {
             <h3 className="font-serif font-bold text-lg text-white">{t("footer.forUsers")}</h3>
             <ul className="space-y-2">
               <li><a href="/dashboard/donor" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.donorDashboard")}</a></li>
-              <li><a href="/my-donations" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.myDonations")}</a></li>
+              {/* /my-donations does not exist; receipts live on the donor dashboard. */}
+              <li><a href="/dashboard/donor" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.myDonations")}</a></li>
             </ul>
           </div>
 
@@ -70,22 +72,16 @@ export function Footer() {
             <h3 className="font-serif font-bold text-lg text-white">{t("footer.forOrganizations")}</h3>
             <ul className="space-y-2">
               <li><a href="/partners" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.becomePartner")}</a></li>
-              <li><a href="/dashboard/organization" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.organizationDashboard")}</a></li>
-              <li><a href="/verification" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.verificationProcess")}</a></li>
-              <li><a href="/resources" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.resourcesColumn")}</a></li>
+              <li><a href="/organizer" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.organizationDashboard")}</a></li>
+              {/* /verification and /resources do not exist; the verification
+                  flow is the partner application itself. */}
+              <li><a href="/organizer/apply" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.verificationProcess")}</a></li>
             </ul>
           </div>
 
-          {/* Legal Column */}
-          <div className="space-y-4">
-            <h3 className="font-serif font-bold text-lg text-white">{t("footer.legalColumn")}</h3>
-            <ul className="space-y-2">
-              <li><a href="/privacy" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.privacyPolicy")}</a></li>
-              <li><a href="/terms" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.termsOfService")}</a></li>
-              <li><a href="/compliance" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.shariaCompliance")}</a></li>
-              <li><a href="/audit" className="text-white/70 hover:text-tawf-gold transition-colors">{t("footer.auditLogs")}</a></li>
-            </ul>
-          </div>
+          {/* Legal column intentionally omitted: /privacy, /terms, /compliance
+              and /audit have no page.tsx and returned 404. Restore this column
+              once those routes exist rather than shipping dead links. */}
 
         </div>
 

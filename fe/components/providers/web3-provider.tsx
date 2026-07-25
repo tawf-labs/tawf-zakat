@@ -2,11 +2,10 @@
 
 import { createContext, useContext, type ReactNode, useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { useSignMessage, WagmiProvider, type Config, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useChainId } from "wagmi";
+import { WagmiProvider, type Config, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useChainId } from "wagmi";
 import { useAccount, useBalance, useDisconnect } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { XellarKitProvider, defaultConfig, darkTheme, useConnectModal } from "@xellar/kit";
-import axios from "axios";
 import { sepolia } from "viem/chains";
 import { createPublicClient, http } from "viem";
 import { getClientConfig } from "@/lib/client-config";
@@ -145,7 +144,6 @@ function WalletStateController({ children }: { children: ReactNode }) {
   const { address: wagmiAddress, isConnected: wagmiIsConnected, status: wagmiStatus } = useAccount();
   const { data: wagmiBalanceData } = useBalance({ address: wagmiAddress });
   const { disconnect: wagmiDisconnect } = useDisconnect();
-  const { signMessageAsync } = useSignMessage();
 
   // Get real IDRX balance from blockchain
   const { balance: idrxBalance, formattedBalance: formattedIdrxBalance, refetch: refetchBalance } = useIDRXBalance();
@@ -159,47 +157,20 @@ function WalletStateController({ children }: { children: ReactNode }) {
 
   const { open } = useConnectModal();
 
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-
-  const signAuthMessage = async () => {
-    // Check if access token already exists
-    const existingToken = localStorage.getItem("access_token");
-    if (existingToken) {
-      return;
-    }
-    try {
-      const response = await axios.post(`${baseUrl}/auth/request-message`, {
-        wallet_address: address,
-      });
-
-      const { message } = response.data;
-      const signature = await signMessageAsync({ message });
-
-      const signatureResponse = await axios.post(`${baseUrl}/auth/verify`, {
-        message: message,
-        signature: signature,
-        wallet_address: address,
-      });
-
-      const { access_token } = signatureResponse.data;
-      localStorage.setItem("access_token", access_token);
-    } catch (error) {
-      console.error("Error requesting or signing message:", error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to authenticate wallet",
-      });
-    }
-  };
-
-  useEffect(() => {
-    if (wagmiStatus === "connected") {
-      // TODO: fix this
-      // signAuthMessage();
-    } else if (wagmiStatus === "disconnected") {
-    }
-  }, [wagmiStatus, address, toast]);
+  // NOTE: wallet signature-based auth was removed rather than re-enabled.
+  // The previous implementation (a commented-out signAuthMessage() behind a
+  // "TODO: fix this") POSTed to `${NEXT_PUBLIC_API_URL}/auth/request-message`
+  // and `/auth/verify`. Neither route exists in this app — there is no
+  // app/api/auth/** — and NEXT_PUBLIC_API_URL is unset, so it defaulted to
+  // http://localhost:3000. Turning it back on would prompt every user for a
+  // signature that then 404s and raises an error toast on each connect.
+  //
+  // Nothing consumes the resulting token either: `access_token` is only ever
+  // removed (connect-wallet-button.tsx:56 and on disconnect below), never read
+  // for authorization. The app authorizes via on-chain roles instead.
+  //
+  // To restore this, first implement app/api/auth/request-message and
+  // app/api/auth/verify, then gate reads/writes on the issued token.
 
   const donate = async (params: DonationParams): Promise<{ txHash: string }> => {
     const { poolId, campaignTitle, amountIDRX, ipfsCID = "" } = params;

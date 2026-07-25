@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
   }
   const payload = verifyJWT(auth.slice(7));
-  if (!payload || payload.exp < Date.now()) {
+  if (!payload || Number(payload.exp) < Date.now()) {
     return NextResponse.json({ error: "Invalid or expired token" }, { status: 401 });
   }
 
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     const data = encodeFunctionData({
       abi: ZKTCoreABI,
       functionName: "reviewProposal",
-      args: [BigInt(bundleId), BigInt(proposalId), approved ? 1n : 0n, campaignType || 0n, proofHash || "0x0000000000000000000000000000000000000000000000000000000000000000"],
+      args: [BigInt(bundleId), BigInt(proposalId), Boolean(approved), Number(campaignType || 0), proofHash || "0x0000000000000000000000000000000000000000000000000000000000000000"],
     });
 
     const hash = await walletClient.sendTransaction({

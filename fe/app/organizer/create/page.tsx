@@ -140,7 +140,7 @@ export default function OrganizerCreatePage() {
       fundingGoal: fundingGoalNum,
       isEmergency: formData.isEmergency,
       mockZKKYCProof: '', // Would be populated by KYC oracle
-      zakatChecklistItems: selectedZakatItems,
+      zakatChecklistItems: selectedZakatItems.map(String),
       metadataURI: formData.metadataURI,
       milestones: milestones.map((m, i) => ({
         description: m.description || `Milestone ${i + 1}`,

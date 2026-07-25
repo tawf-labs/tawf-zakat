@@ -114,7 +114,7 @@ export function ZakatCertificateModal({
               <div className="flex justify-between">
                 <span className="text-primary">Type:</span>
                 <span className="font-semibold text-foreground">
-                  {donationDetails.campaignType === 1 ? 'Zakat Compliant' : 'General Donation'}
+                  {donationDetails.campaignType === '1' ? 'Zakat Compliant' : 'General Donation'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -173,7 +173,7 @@ export function ZakatCertificateModal({
             <Checkbox
               id="certificate-consent"
               checked={hasConsented}
-              onCheckedChange={setHasConsented}
+              onCheckedChange={(checked) => setHasConsented(checked === true)}
               disabled={isGenerating}
               className="mt-1"
             />

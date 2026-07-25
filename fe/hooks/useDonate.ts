@@ -26,7 +26,7 @@ export const useDonate = (options?: UseDonateOptions) => {
     async (params: DonateParams) => {
       try {
         const result = await contextDonate({
-          poolId: params.poolId,
+          poolId: String(params.poolId),
           campaignTitle: params.campaignTitle,
           amountIDRX: params.amountIDRX,
           ipfsCID: params.ipfsCID || '',

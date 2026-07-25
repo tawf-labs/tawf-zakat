@@ -45,7 +45,7 @@ export default function FaucetPage() {
   const { data: lastClaimTime } = useReadContract({
     address: CONTRACT_ADDRESSES.MockIDRX,
     abi: MockIDRXABI,
-    functionName: "lastClaimTime",
+    functionName: "timeUntilNextClaim",
     args: address ? [address] : undefined,
     query: {
       enabled: !!address && !canClaim,
@@ -94,7 +94,12 @@ export default function FaucetPage() {
   // Handle claim
   const handleClaim = async () => {
     if (!isConnected) {
-      handleWalletError(new Error("not-connected"), { toast });
+      const msg = handleWalletError(new Error("not-connected"));
+      toast({
+        title: "Wallet Error",
+        description: msg,
+        variant: "destructive",
+      });
       return;
     }
 
@@ -115,7 +120,12 @@ export default function FaucetPage() {
         args: [],
       });
     } catch (error) {
-      handleTransactionError(error, { toast, action: "claim faucet" });
+      const txErrMsg = handleTransactionError(error);
+      toast({
+        title: "Transaction Error",
+        description: txErrMsg,
+        variant: "destructive",
+      });
     }
   };
 

@@ -3,20 +3,37 @@ pragma solidity ^0.8.31;
 
 /**
  * @title Groth16Verifier
- * @notice Verifier for ShariaVoteAggregator Groth16 ZK proofs
- * @dev This file contains both the verifier interface and a mock verifier for testing
+ * @notice FAIL-CLOSED PLACEHOLDER. This contract does NOT verify anything.
  *
- *      IMPORTANT: For production, replace the MockGroth16Verifier below with the
- *      actual verifier generated from your circuit using:
- *      snarkjs zkey export solidityverifier build/sharia_0000.zkey Groth16Verifier.sol
+ * @dev  ############################################################
+ *       #  THIS IS NOT A WORKING VERIFIER.                         #
+ *       #  Every verification entrypoint returns false.            #
+ *       #  Any flow gated on it is inert by design.                #
+ *       ############################################################
  *
- *      Public inputs order for ShariaVoteAggregator:
- *      1. bundleId
- *      2. proposalId
- *      3. approvalCount
- *      4. quorumThreshold
- *      5. councilRoot
- *      6. nullifierRoot
+ *       History: this file previously returned `true` unconditionally while
+ *       being wired into ShariaReviewManager as the Sharia council's proof
+ *       check. Combined with a permissionless submit entrypoint, that allowed
+ *       anyone to stamp a proposal as Sharia-approved using arbitrary bytes.
+ *       It now fails closed so that "not implemented" can never be mistaken
+ *       for "verified".
+ *
+ *       To make this real:
+ *         1. cd circuits && npx snarkjs zkey export solidityverifier \
+ *              build/sharia_final.zkey Groth16Verifier_Prod.sol
+ *         2. Replace this contract's body with the generated pairing check.
+ *         3. NOTE the arity mismatch that must be resolved first: the compiled
+ *            circuit has nPublic = 7 (see circuits/build/verification_key.json),
+ *            but IShariaVoteAggregatorVerifier below declares uint256[6]. The
+ *            7th signal is the Poseidon bundleProposalHash output. A generated
+ *            verifier will expect uint[7].
+ *         4. verifyAndValidate() currently hardcodes nullifierRoot = 0; the
+ *            circuit treats it as a real public input. That must be plumbed
+ *            through before the pairing check will ever succeed.
+ *
+ *       Public inputs order for ShariaVoteAggregator:
+ *         1. bundleId   2. proposalId  3. approvalCount  4. quorumThreshold
+ *         5. councilRoot  6. nullifierRoot  7. bundleProposalHash (output)
  */
 
 /**
@@ -31,6 +48,8 @@ struct Groth16Proof {
 /**
  * @title IShariaVoteAggregatorVerifier
  * @notice Interface for the Groth16 verifier
+ * @dev The uint256[6] arity here is stale relative to the compiled circuit
+ *      (nPublic = 7). See the note in the file header.
  */
 interface IShariaVoteAggregatorVerifier {
     /**
@@ -50,65 +69,40 @@ interface IShariaVoteAggregatorVerifier {
 }
 
 /**
- * @title MockGroth16Verifier
- * @notice Mock verifier for testing - REPLACE WITH GENERATED VERIFIER FOR PRODUCTION
- * @dev This mock always returns true for testing purposes
- *      In production, use the actual generated verifier from snarkjs
+ * @title Groth16Verifier
+ * @notice Fail-closed stand-in for the Sharia council ZK proof verifier.
+ * @dev Every entrypoint returns false. Callers must treat a false result as
+ *      "verification unavailable", not as "proof rejected" — the two are
+ *      indistinguishable from this contract and will remain so until a real
+ *      pairing check is generated. Use isOperational() to tell them apart.
  */
-contract MockGroth16Verifier is IShariaVoteAggregatorVerifier {
-    /// @notice Mock verification - always returns true for testing
+contract Groth16Verifier is IShariaVoteAggregatorVerifier {
+    /**
+     * @notice Whether this verifier can actually verify proofs.
+     * @dev Always false for this placeholder. A real generated verifier should
+     *      return true. Deployment scripts and monitoring should assert on this
+     *      rather than assuming a deployed verifier is a working one.
+     */
+    function isOperational() external pure returns (bool) {
+        return false;
+    }
+
+    /// @inheritdoc IShariaVoteAggregatorVerifier
     function verifyProof(
         uint256[2] calldata, /* pi_a */
         uint256[2][2] calldata, /* pi_b */
         uint256[2] calldata, /* pi_c */
         uint256[6] calldata /* publicInputs */
     ) external pure returns (bool) {
-        // MOCK: Always return true for testing
-        // In production, this will contain the actual pairing check
-        return true;
+        return false;
     }
 
-    /**
-     * @notice Verify a Sharia review proof with structured inputs
-     * @param proof The Groth16 proof
-     * @param bundleId Bundle being reviewed
-     * @param proposalId Proposal being reviewed
-     * @param approvalCount Number of approve votes
-     * @param quorumThreshold Required votes for approval
-     * @param councilRoot Merkle root of council membership
-     * @param nullifierRoot Merkle root of spent nullifiers
-     * @return True if proof is valid
-     */
-    function verifyShariaReviewProof(
-        Groth16Proof calldata proof,
-        uint256 bundleId,
-        uint256 proposalId,
-        uint256 approvalCount,
-        uint256 quorumThreshold,
-        uint256 councilRoot,
-        uint256 nullifierRoot
-    ) external pure returns (bool) {
-        // MOCK: Always return true for testing
-        // In production, this would use the actual Groth16 pairing check
-        return true;
-    }
-}
-
-/**
- * @title Groth16Verifier
- * @notice Wrapper contract for Sharia council ZK proof verification
- * @dev This contract provides a clean interface for the ShariaReviewManager
- */
-contract Groth16Verifier {
     /**
      * @notice Verify a Sharia review proof with full validation
-     * @param proof The Groth16 proof
-     * @param bundleId Bundle being reviewed
-     * @param proposalId Proposal being reviewed
-     * @param approvalCount Number of approve votes
-     * @param quorumThreshold Required votes for approval
-     * @param councilRoot Merkle root of council membership
-     * @return valid True if proof is valid and quorum is met
+     * @dev Fails closed. The quorum comparison that used to live here was
+     *      operating on a caller-supplied approvalCount with no cryptographic
+     *      backing, so it is deliberately not reachable any more.
+     * @return valid Always false.
      */
     function verifyAndValidate(
         Groth16Proof calldata proof,
@@ -118,34 +112,22 @@ contract Groth16Verifier {
         uint256 quorumThreshold,
         uint256 councilRoot
     ) external pure returns (bool valid) {
-        // First verify the cryptographic proof
-        bool proofValid = _verifyShariaReviewProof(
+        return _verifyShariaReviewProof(
             proof,
             bundleId,
             proposalId,
             approvalCount,
             quorumThreshold,
             councilRoot,
-            0 // nullifierRoot - simplified for MVP
+            0 // nullifierRoot - not plumbed through; see file header
         );
-
-        if (!proofValid) return false;
-
-        // Then validate the quorum requirement
-        // The circuit already ensures approvalCount >= quorumThreshold
-        // This is a double-check for safety
-        return approvalCount >= quorumThreshold;
     }
 
     /**
      * @notice Batch verify multiple Sharia review proofs
-     * @param proofs Array of proofs
-     * @param bundleIds Array of bundle IDs
-     * @param proposalIds Array of proposal IDs
-     * @param approvalCounts Array of approval counts
-     * @param quorumThreshold Quorum threshold (same for all)
-     * @param councilRoot Council Merkle root (same for all)
-     * @return allValid True if all proofs are valid
+     * @dev Fails closed. Length checks are retained so callers still get a
+     *      clear revert on malformed input rather than a bare false.
+     * @return allValid Always false.
      */
     function batchVerify(
         Groth16Proof[] calldata proofs,
@@ -158,25 +140,12 @@ contract Groth16Verifier {
         require(proofs.length == bundleIds.length, "Length mismatch");
         require(proofs.length == proposalIds.length, "Length mismatch");
         require(proofs.length == approvalCounts.length, "Length mismatch");
-
-        for (uint256 i = 0; i < proofs.length; i++) {
-            if (!_verifyShariaReviewProof(
-                proofs[i],
-                bundleIds[i],
-                proposalIds[i],
-                approvalCounts[i],
-                quorumThreshold,
-                councilRoot,
-                0
-            )) {
-                return false;
-            }
-        }
-        return true;
+        return false;
     }
 
     /**
      * @notice Verify a Sharia review proof
+     * @return Always false.
      */
     function verifyShariaReviewProof(
         Groth16Proof calldata proof,
@@ -199,69 +168,20 @@ contract Groth16Verifier {
     }
 
     /**
-     * @notice Internal function to verify Sharia review proof
+     * @notice Internal proof verification.
+     * @dev NOT IMPLEMENTED. Returns false so that no caller can ever mistake
+     *      an unimplemented check for a successful one. Replace with the
+     *      snarkjs-generated pairing check to make this real.
      */
     function _verifyShariaReviewProof(
-        Groth16Proof calldata proof,
-        uint256 bundleId,
-        uint256 proposalId,
-        uint256 approvalCount,
-        uint256 quorumThreshold,
-        uint256 councilRoot,
-        uint256 nullifierRoot
+        Groth16Proof calldata, /* proof */
+        uint256, /* bundleId */
+        uint256, /* proposalId */
+        uint256, /* approvalCount */
+        uint256, /* quorumThreshold */
+        uint256, /* councilRoot */
+        uint256  /* nullifierRoot */
     ) internal pure returns (bool) {
-        // MOCK: Always return true for testing
-        // In production, this would use the actual Groth16 pairing check
-        return true;
+        return false;
     }
-
-    /**
-     * @notice Internal base proof verification
-     */
-    function _verifyProofInternal(
-        uint256[2] calldata, /* pi_a */
-        uint256[2][2] calldata, /* pi_b */
-        uint256[2] calldata, /* pi_c */
-        uint256[6] calldata /* publicInputs */
-    ) internal pure returns (bool) {
-        // MOCK: Always return true for testing
-        return true;
-    }
-}
-
-/**
- * @title ProductionGroth16Verifier
- * @notice TEMPLATE for production verifier - TO BE GENERATED BY SNARKJS
- *
- * @dev After running the circuit compilation and trusted setup:
- *      1. Run: snarkjs zkey export solidityverifier build/sharia_0000.zkey Groth16Verifier_Prod.sol
- *      2. Copy the generated verifier functions here
- *      3. Replace MockGroth16Verifier with the generated contract
- *
- * Example generated structure:
- *
- * contract ProductionGroth16Verifier {
- *     uint256 constant negalpha1_x = 0x1234...;
- *     uint256 constant negalpha1_y = 0x5678...;
- *     // ... more constants ...
- *
- *     function verifyProof(
- *         uint256[2] calldata pi_a,
- *         uint256[2][2] calldata pi_b,
- *         uint256[2] calldata pi_c,
- *         uint256[6] calldata publicInputs
- *     ) external view returns (bool) {
- *         // Actual pairing check using ecmul and ecpairing precompiles
- *         // ... generated code ...
- *     }
- * }
- */
-abstract contract ProductionGroth16Verifier {
-    // This is a template - actual implementation will be generated by snarkjs
-    function verifyProof(
-        uint256[2] calldata pi_a,
-        uint256[2][2] calldata pi_b,
-        uint256[2] calldata pi_c,
-        uint256[6] calldata publicInputs
-    ) external virtual pure returns (bool);
 }

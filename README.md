@@ -8,6 +8,16 @@
 
 Privacy-preserving zakat donations using UltraHONK zero-knowledge proofs on Ethereum Sepolia. Donors contribute zakat with cryptographic anonymity while maintaining verifiable Sharia compliance and institutional accountability.
 
+> **⚠️ ZK verification status — read before evaluating this repo.**
+> The circuits are real, compile, and produce valid proofs off-chain. **On-chain
+> proof verification is not deployed.** The deployed `HonkVerifier` is a
+> fail-closed stub returning `false`, so `donateZK` / `donateZKPrivate` revert;
+> `Groth16Verifier` is likewise a fail-closed placeholder. The blocker is code
+> size: the Barretenberg-generated verifier is 33,880 bytes of deployed
+> bytecode against the EIP-170 limit of 24,576, so it cannot be deployed as a
+> single contract. Donations work; the ZK privacy tier does not yet.
+> See `sc/src/DAO/verifiers/HonkVerifier.sol` and `security-analysis-corrections.md`.
+
 - **Testnet**: [ziswaf.tawf.foundation](https://ziswaf.tawf.foundation)
 - **Paper**: `zk-private-zakat.pdf` (IEEE ICIMTech 2026, 6 pages, 33 references)
 - **Authors**: Muhammad Zidan Fatonie, Alexander Agung Santoso Gunawan (BINUS University)
@@ -39,9 +49,9 @@ ZKT addresses a critical gap in blockchain-based zakat systems: all existing pla
 
 **Key features:**
 - **Noir circuit** (29 ACIR opcodes) encoding nisab + hawl + pedersen nullifier verification
-- **UltraHONK proofs** generated via Barretenberg v5.0.0-nightly (270ms avg)
-- **On-chain verification** through ZKVerifier with nullifier-based double-donation prevention
-- **16 Solidity contracts** deployed on Ethereum Sepolia testnet
+- **UltraHONK proofs** generated via Barretenberg v5.0.0-nightly (270ms avg), off-chain
+- **On-chain verification is NOT live** — see the status note below
+- **Solidity contracts** deployed on Ethereum Sepolia testnet (chain 11155111)
 - **Next.js 16** frontend with wagmi/XellarKit wallet connectivity
 - **Privacy tier toggle** supporting Public and Private donation modes
 
@@ -55,37 +65,59 @@ Off-Chain Proving (Noir + Barretenberg v5.0.0-nightly)
     │  nargo compile → nargo execute → bb prove UltraHONK
     │  29 ACIR opcodes, 270ms avg prove, 10ms avg verify, 8,384 bytes proof
     ▼
-Ethereum Sepolia (15 Solidity contracts)
-    │  ZKVerifier.verify() → ZKTCore.donateZK()
-    │  → NullifierRegistry.spend() → ZakatEscrowManager.donate()
+Ethereum Sepolia (Solidity contracts)
+    │  ZKTCore.donate() → PoolManager.donate()
     │  → DonationReceiptNFT.mint() → receipt SBT to donor
     ▼
 Donor receives soulbound NFT receipt (proof of zakat payment)
 ```
 
-## Deployed Contracts (Sepolia)
+The intended ZK path — `HonkVerifier.verify() → ZKTCore.donateZK() →
+NullifierRegistry.spend()` — is wired end to end in code but **inert**: the
+deployed verifier returns `false`, so `donateZK` reverts. Only the public
+donation path above is functional today.
 
-v9 deployment — all 16 contracts verified onchain.
+## Deployed Contracts (Ethereum Sepolia, chain 11155111)
+
+V10 deployment. These are the addresses the frontend actually uses — they match
+`fe/lib/abi.ts` and `sc/broadcast/V10Deploy.s.sol/11155111/run-latest.json`.
+(The table here previously listed V9 addresses, none of which the app used.)
+
+**ZK layer** — redeployed by `sc/script/V10Deploy.s.sol`:
+
+Redeployed 2026-07-26 at block 11350675 (tx `0xef7cd594…` for ZKTCore).
 
 | Contract | Address |
 |----------|---------|
-| ZKTCore (v9) | `0xf14ca6BA400bc0CE9354C9c00288597987F8F0D5` |
-| ZKVerifier | `0xE3771eC9665094111c8f9b05abea2CE53358d336` |
-| NullifierRegistry | `0xbfCE5C282B2083e1ed31bC32a1cE56E7bf9A4C93` |
-| ProposalManager | `0x7618B6C60C4a06E61dEC45AB49a64fa14E455233` |
-| VotingManager | `0x50E6B6471Afce685cc4351DB9284D9Bd0DA181cc` |
-| ShariaReviewManager | `0xF4eDC53fa4b9B6381A46e268D934c109CD578D03` |
-| PoolManager | `0x6CeE69eF3DE8c53b1946C050c5DB5AD5B9df1506` |
-| ZakatEscrowManager | `0xEb435Bc1003b7A70747aC096c6c8D2ecFde193fE` |
-| PrivateDonationPool | `0xcD80477e372c60659E5D52255e3139a54903c787` |
-| DonationReceiptNFT | `0xac0c50184c13d1319d9e0235273d113b1501081c` |
-| VotingNFT | `0x62AF745f9b7689720129A3A60e2ab0A2892C89B4` |
-| OrganizerNFT | `0x8b9bCFc0a1D2f3d7CEfeD6cb279E61e76Af34F8E` |
-| ParticipationTracker | `0x521Cc9536Ca85eD9404b1444F5541fB134722dbf` |
-| MilestoneManager | `0x5685aeaDAce85819682D28F831321B6e4094Ee75` |
-| Groth16Verifier | `0x3A8fF96D7dB26e0A5E7cd47283761bf77531FcdB` |
+| ZKTCore | `0x28Eb1b95dFf00B2f876eaE24024B4e501710A287` |
+| ShariaReviewManager | `0x3A968cDc9CFC2f3aDFab4733415943E12B72a953` |
+| PrivateDonationPool | `0xe8908AD46ecC4A7F7e0e634BEB0e696bd497c846` |
+| HonkVerifier | `0x1696c9e54c425760cF0E46181CE91A57A0ca8369` |
+| Groth16Verifier | `0x7702B20B7302A82E3Cb09aAe7A72bb19A2d5Db84` |
+| NullifierRegistry | `0x49a8C624c52A6A3F88Cc0073834dEf9b11326B56` |
 
-End-to-end v9 donation verified on Sepolia testnet.
+Both verifiers report `isOperational() == false` and reject every proof.
+
+**DAO layer (tawf-gov)** — deployed separately, unchanged by ZK-layer redeploys:
+
+| Contract | Address |
+|----------|---------|
+| TawfPassport | `0x68A39923A1b80F3d48B4bd60FBe4187Ff2B0a38e` |
+| TawfReputation | `0xEBc9637933575Aa3b047Dc19C4dE3706F03DC32c` |
+| MockIDRX | `0x23A48A17ea36627ACF4Ce349C14d17c7e7F90BCE` |
+| VotingNFT | `0xEb44b1409F34944cd137DD522e8FE9dD41533D33` |
+| DonationReceiptNFT | `0x536a7249113E2f2c06a6E85acDa9B54dc79F5e58` |
+| ProposalManager | `0x37f87a1913a8efAE70a39850f8c9e2C63AeC556B` |
+| VotingManager | `0x4B6600f35592A83770A610a038c012186471143a` |
+| MilestoneManager | `0xb0Fa6d4a2038ed85c9d16664BeeD169858D5f183` |
+| ParticipationTracker | `0xA2313195cB23cC0AeB28E94f43DFBE0Fdc3d2e37` |
+| PoolManager | `0x10bE98A362c18d690BEd51069F8D0c847cf2092A` |
+| ZakatEscrowManager | `0x3534105fD0338dAF5Faa0BC97c760Fe861bd052e` |
+
+Public donations are verified working end to end on Sepolia. The `donateZK`
+benchmark recorded in `benchmarks/sepolia-donatezk-gas.txt` ran against the V9
+`ZKVerifier`, which accepted any input without a pairing check — that
+transaction is real but proves nothing cryptographically.
 
 ## Quick Start
 
@@ -109,7 +141,7 @@ pnpm build     # production build
 ```bash
 cd sc
 forge build
-forge test      # 26 tests passing
+forge test      # 44 tests passing
 ```
 
 ### ZK Circuit
@@ -246,13 +278,15 @@ The private donation flow:
 
 ```bash
 cd sc
-forge test          # 26 tests passing
+forge test          # 44 tests passing
 forge test --gas-report # full gas report
 ```
 
 Key test suites:
-- `ZKTCoreTest` — 17 tests (donation flow, voting, milestone management)
-- `ShariaZKProofTest` — 9 tests (ZK proof submission, quorum verification)
+- `ZKTCoreTest` — 11 tests (donation flow, voting, milestone management)
+- `ShariaZKProofTest` — 22 tests (ZK proof submission, quorum verification, forgery regression)
+- `CoreTeam.t.sol` — 8 tests (role management, access control)
+- `TawfPassport.t.sol` — 3 tests (passport issuance)
 
 ### Noir Circuit
 

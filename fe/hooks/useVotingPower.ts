@@ -44,8 +44,8 @@ export function useVotingPower() {
       const hash = await writeContractAsync({
         address: CONTRACT_ADDRESSES.ZKTCore,
         abi: ZKTCoreABI,
-        functionName: "grantVotingPower",
-        args: [address, amount],
+        functionName: "grantVotingNFT",
+        args: [address as `0x${string}`, `voting_power_${amount.toString()}`],
       });
 
       toast({

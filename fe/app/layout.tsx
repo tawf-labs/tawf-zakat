@@ -28,9 +28,20 @@ import { LanguageProvider } from "@/components/providers/language-provider";
 import { SearchProvider } from "@/components/shared/SearchContext";
 
 export const metadata: Metadata = {
-  title: "zkt.app - Transparent and Traceable donation",
-  description: "Private, verifiable Zakat with ZK proofs",
-  generator: "v0.app",
+  title: "ZKT — Transparent and Traceable Donation",
+  description: "Private, verifiable Zakat with ZK proofs. Built by Tawf Foundation.",
+  applicationName: "ZKT",
+  openGraph: {
+    title: "ZKT — Transparent and Traceable Donation",
+    description: "Private, verifiable Zakat with ZK proofs. Built by Tawf Foundation.",
+    siteName: "ZKT",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ZKT — Transparent and Traceable Donation",
+    description: "Private, verifiable Zakat with ZK proofs. Built by Tawf Foundation.",
+  },
 };
 
 export const viewport: Viewport = {
