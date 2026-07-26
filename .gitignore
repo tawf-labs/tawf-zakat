@@ -439,5 +439,13 @@ circuits/build/sharia_final.zkey
 sc/v7_proof.bin
 sc/v7_public_inputs.bin
 .vercel
-solana/target/
-solana/target/
+node_modules/
+**/node_modules/
+target/
+**/target/
+*.zkey
+*.ptau
+*.wtns
+*.r1cs
+*.wasm
+
