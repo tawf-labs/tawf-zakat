@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { Award, FileText, Vote, Wallet, ShieldCheck, Download, ExternalLink, TrendingUp, CheckCircle2, XCircle, Clock, Settings } from 'lucide-react';
-import { useAccount } from 'wagmi';
+import { useAccount, useDisconnect } from 'wagmi';
 import { formatUnits } from 'viem';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/components/providers/language-provider';
@@ -36,6 +36,7 @@ function shortenAddress(addr: string): string {
 const DonorDashboard: React.FC = () => {
   const { t } = useLanguage();
   const { address, isConnected } = useAccount();
+  const { disconnect } = useDisconnect();
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('overview');
   const [activeTab, setActiveTab] = useState<'receipts' | 'history' | 'governance'>('receipts');
 
@@ -78,9 +79,9 @@ const DonorDashboard: React.FC = () => {
                   </div>
                   <h2 className="font-bold text-lg sm:text-xl">John Doe</h2>
                   <p className="text-sm text-muted-foreground mb-4">@johndoe</p>
-                  <div className="flex items-center gap-2 bg-white/50 px-3 py-1.5 rounded-full text-xs font-mono text-muted-foreground mb-4 sm:mb-6">
-                    <Wallet className="h-3 w-3" />
-                    0x71C...92F
+                  <div className="flex items-center justify-center gap-2 bg-accent/50 px-3 py-1.5 rounded-full text-xs font-mono text-muted-foreground mb-4 sm:mb-6 max-w-full truncate">
+                    <Wallet className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{address ? shortenAddress(address) : t("auditor.notConnected")}</span>
                   </div>
                   <Button variant="outline" className="btn-touch-target w-full">
                     {t("dashboard.editProfile")}
@@ -737,14 +738,19 @@ const DonorDashboard: React.FC = () => {
                       <p className="text-sm text-muted-foreground mt-1">Your currently connected wallet address</p>
                     </div>
                     <div className="p-6">
-                      <div className="flex items-center justify-between mb-4 p-4 bg-accent/30 rounded-lg">
-                        <div>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4 p-4 bg-accent/30 rounded-lg">
+                        <div className="min-w-0 flex-1 pr-2">
                           <div className="text-sm text-muted-foreground mb-1">{t("dashboard.walletAddress")}</div>
-                          <div className="font-mono font-semibold text-primary break-all">
+                          <div className="font-mono font-semibold text-primary text-xs sm:text-sm break-all">
                             {address ?? 'Not connected'}
                           </div>
                         </div>
-                        <Button variant="outline" className="border-black hover:bg-gray-50">
+                        <Button
+                          variant="outline"
+                          onClick={() => disconnect()}
+                          disabled={!address}
+                          className="border-black hover:bg-gray-50 shrink-0 self-start sm:self-auto"
+                        >
                           {t("dashboard.disconnect")}
                         </Button>
                       </div>

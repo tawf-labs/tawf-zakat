@@ -81,14 +81,14 @@ export function ConnectWalletButton() {
   const currentChain = chains.find((c) => c.id === chainId);
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 shrink-0">
       {/* Chain Selector */}
       {currentChain && chains.length > 1 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" className="whitespace-nowrap shrink-0">
               {currentChain.name}
-              <ChevronDown className="ml-2 h-4 w-4" />
+              <ChevronDown className="ml-1.5 h-4 w-4 shrink-0" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
@@ -114,8 +114,8 @@ export function ConnectWalletButton() {
       {/* Account Button */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="default" size="default">
-            <Wallet className="mr-2 h-4 w-4" />
+          <Button variant="default" size="default" className="whitespace-nowrap shrink-0">
+            <Wallet className="mr-2 h-4 w-4 shrink-0" />
             {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : t("wallet.connected")}
           </Button>
         </DropdownMenuTrigger>

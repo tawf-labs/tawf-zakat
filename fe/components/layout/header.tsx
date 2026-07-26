@@ -32,19 +32,19 @@ export function Header() {
       <div className="container mx-auto flex h-20 items-center justify-between px-4 sm:px-6 lg:px-8">
 
         {/* LEFT */}
-        <div className="flex items-center gap-8 lg:gap-10">
-          <Link href="/" className="flex items-center gap-1.5">
+        <div className="flex items-center gap-4 lg:gap-8">
+          <Link href="/" className="flex items-center gap-1.5 shrink-0">
             {/* Primary brand: ZKT. Serif per guidelines, scaled up from 24px
                 so it leads the hierarchy. Tawf sits below as the ecosystem. */}
-            <span className="font-serif text-3xl font-medium leading-none text-primary">ZKT</span>
+            <span className="font-serif text-2xl lg:text-3xl font-medium leading-none text-primary">ZKT</span>
             <span className="w-2 h-2 rounded-full bg-secondary self-start mt-1.5"></span>
-            <span className="hidden sm:inline ml-1.5 text-[10px] font-medium uppercase tracking-wide-label text-muted-foreground leading-none">
+            <span className="hidden sm:inline ml-1 text-[10px] font-medium uppercase tracking-wide-label text-muted-foreground leading-none">
               by Tawf<br />Foundation
             </span>
           </Link>
 
           {/* Nav links: Uppercase, wide tracking (0.2em), 14px per guidelines */}
-          <nav className="hidden md:flex items-center gap-6 lg:gap-8 text-xs font-medium uppercase tracking-wide-label">
+          <nav className="hidden md:flex items-center gap-4 lg:gap-6 text-xs font-medium uppercase tracking-wide-label shrink-0">
             <Link href="/campaigns" className="relative text-foreground hover:text-primary transition-colors after:content-[''] after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-primary after:transition-all hover:after:w-full">{t("header.campaigns")}</Link>
             <Link href="/governance" className="relative text-foreground hover:text-primary transition-colors after:content-[''] after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-primary after:transition-all hover:after:w-full">{t("header.governance")}</Link>
             <Link href="/explorer" className="relative text-foreground hover:text-primary transition-colors after:content-[''] after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-primary after:transition-all hover:after:w-full">{t("header.explorer")}</Link>
@@ -52,10 +52,10 @@ export function Header() {
         </div>
 
         {/* RIGHT */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
 
-          {/* SEARCH BAR */}
-          <div className="relative hidden lg:block w-64">
+          {/* SEARCH BAR - Only on XL screens to prevent overcrowding */}
+          <div className="relative hidden xl:block w-48 2xl:w-60">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 
             <input
@@ -67,7 +67,7 @@ export function Header() {
                 setIsSearchOpen(true);
               }}
               onKeyDown={handleEnter}
-              className="w-full pl-10 pr-4 h-10 bg-white/70 border border-primary/20 rounded-full outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 transition-all text-sm"
+              className="w-full pl-9 pr-3 h-9 bg-white/70 border border-primary/20 rounded-full outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 transition-all text-xs"
             />
 
             {/* DROPDOWN */}
@@ -75,10 +75,10 @@ export function Header() {
           </div>
 
           {/* Language Toggle */}
-          <div className="hidden sm:flex items-center gap-1 border border-primary/10 rounded-full p-1 bg-white/50">
+          <div className="hidden md:flex items-center gap-0.5 border border-primary/10 rounded-full p-0.5 bg-white/50 shrink-0">
             <button
               onClick={() => setLanguage("id")}
-              className={`btn-touch-target px-4 py-2 rounded-full text-xs font-medium uppercase tracking-wide-label transition-all ${
+              className={`btn-touch-target px-2.5 py-1 rounded-full text-[11px] font-medium uppercase tracking-wide-label transition-all ${
                 language === "id"
                   ? "bg-primary text-primary-foreground shadow-sm"
                   : "text-foreground/60 hover:text-foreground hover:bg-white/50"
@@ -88,7 +88,7 @@ export function Header() {
             </button>
             <button
               onClick={() => setLanguage("en")}
-              className={`btn-touch-target px-4 py-2 rounded-full text-xs font-medium uppercase tracking-wide-label transition-all ${
+              className={`btn-touch-target px-2.5 py-1 rounded-full text-[11px] font-medium uppercase tracking-wide-label transition-all ${
                 language === "en"
                   ? "bg-primary text-primary-foreground shadow-sm"
                   : "text-foreground/60 hover:text-foreground hover:bg-white/50"
@@ -98,7 +98,8 @@ export function Header() {
             </button>
           </div>
 
-          <Link href="/organizer" className="hidden sm:flex items-center gap-2 border border-primary/20 h-10 px-6 rounded-full hover:bg-primary hover:text-primary-foreground transition-all text-xs font-medium uppercase tracking-wide-label">
+          {/* Start Campaign - Show on XL screens */}
+          <Link href="/organizer" className="hidden xl:flex items-center gap-1.5 border border-primary/20 h-9 px-4 rounded-full hover:bg-primary hover:text-primary-foreground transition-all text-xs font-medium uppercase tracking-wide-label whitespace-nowrap shrink-0">
             {t("header.start_campaign")}
           </Link>
 
