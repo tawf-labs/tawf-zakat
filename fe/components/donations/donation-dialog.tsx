@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, AlertCircle, Lock, Shield, Eye, EyeOff } from "lucide-react";
+import { Loader2, AlertCircle, Lock, Shield, Eye, EyeOff, Sparkles } from "lucide-react";
 import { useWallet } from "@/components/providers/web3-provider";
 import { useToast } from "@/hooks/use-toast";
 import { parseAmount } from "@/lib/abi";
@@ -188,19 +188,43 @@ export function DonationDialog({
     }
   };
 
+  const handleDemoDonate = async () => {
+    const demoAmount = amount && parseFloat(amount) > 0 ? parseFloat(amount) : 100000;
+    setIsProcessing(true);
+
+    setTimeout(() => {
+      const mockTxHash = `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`;
+      setIsProcessing(false);
+      setLastDonationTx({
+        hash: mockTxHash,
+        amount: demoAmount,
+      });
+      setShowCertificateModal(true);
+
+      toast({
+        title: "🎉 Demo Donasi Berhasil!",
+        description: `Simulasi donasi ${demoAmount.toLocaleString('id-ID')} IDRX ke ${campaignTitle} sukses terverifikasi.`,
+      });
+
+      if (onSuccess) {
+        onSuccess();
+      }
+    }, 1000);
+  };
+
   const quickAmounts = [10000, 50000, 100000, 500000];
   const remaining = campaignGoal - campaignRaised;
 
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto p-4 sm:p-6">
+        <DialogHeader className="pb-1">
           <DialogTitle>Donate to Campaign</DialogTitle>
-          <DialogDescription>{campaignTitle}</DialogDescription>
+          <DialogDescription className="line-clamp-1">{campaignTitle}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
+        <div className="space-y-4 py-1">
           {/* Campaign Progress */}
           <div className="bg-muted/50 rounded-lg p-4 space-y-2">
             <div className="flex justify-between text-sm">
@@ -403,12 +427,29 @@ export function DonationDialog({
               )}
             </Button>
           </div>
+
+          {/* DEMO MODE BUTTON */}
+          <div className="pt-3 border-t border-border space-y-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleDemoDonate}
+              disabled={isProcessing}
+              className="w-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30 font-semibold gap-2"
+            >
+              <Sparkles className="h-4 w-4 text-amber-600" />
+              ⚡ Simulasi Donasi Demo (Instant Test)
+            </Button>
+            <p className="text-[11px] text-center text-muted-foreground">
+              Uji coba seluruh alur donasi & pembuatan sertifikat Zakat tanpa wallet asli.
+            </p>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
 
     {/* Zakat Certificate Modal - shown after successful donation */}
-    {lastDonationTx && isConnected && address && (
+    {lastDonationTx && (
       <ZakatCertificateModal
         open={showCertificateModal}
         onOpenChange={(open) => {
@@ -420,7 +461,7 @@ export function DonationDialog({
           }
         }}
         donationDetails={{
-          donorAddress: address,
+          donorAddress: address || "0x71C839A2e8419F23a0781D92F3918a2879F492F1",
           poolId: typeof campaignId === 'string' ? parseInt(campaignId, 10) : campaignId,
           amount: lastDonationTx.amount,
           campaignTitle,

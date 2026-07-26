@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Clock, CircleCheck, Share2, Heart, MapPin, Calendar, Target, TrendingUp, Shield, FileText, Loader2, AlertTriangle, Timer, ExternalLink, Vote, CheckCircle2, XCircle, MinusCircle } from 'lucide-react';
+import { ArrowLeft, Clock, CircleCheck, Share2, Heart, MapPin, Calendar, Target, TrendingUp, Shield, FileText, Loader2, AlertTriangle, Timer, ExternalLink, Vote, CheckCircle2, XCircle, MinusCircle, Sparkles } from 'lucide-react';
 import { DonationDialog } from '@/components/donations/donation-dialog';
 import { Button } from '@/components/ui/button';
 import dynamic from 'next/dynamic';
@@ -770,6 +770,16 @@ export default function CampaignDetail() {
                   size="lg"
                 >
                   {t('campaignDetail.donateNow')}
+                </Button>
+
+                {/* DEMO DONATION BUTTON */}
+                <Button
+                  variant="outline"
+                  onClick={() => setShowDonationDialog(true)}
+                  className="w-full mt-3 border-amber-500/40 bg-amber-50/50 hover:bg-amber-100 text-amber-900 dark:text-amber-200 font-semibold gap-2"
+                >
+                  <Sparkles className="h-4 w-4 text-amber-600" />
+                  ⚡ Donasi Demo (Instant Test)
                 </Button>
               </div>
 

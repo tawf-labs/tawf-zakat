@@ -88,73 +88,69 @@ export function useCampaigns() {
     try {
       const contractCampaigns = await getAllCampaignPools();
 
-      const convertedCampaigns: Campaign[] = contractCampaigns.map((c) => ({
-        id: c.poolId,
-        poolId: c.poolId,
-        title: c.title,
-        description: c.description,
-        imageUrl: c.imageUrl,
-        image: c.imageUrl,
-        organizationName: c.organizationName,
-        organizationAddress: c.organizer,
-        category: c.category,
-        location: c.location,
-        raised: c.raised,
-        goal: c.goal,
-        donors: c.donors,
-        daysLeft: calculateDaysLeft(c.endTime),
-        isActive: c.isActive,
-        isVerified: c.isVerified,
-        startDate: c.createdAt,
-        endDate: c.endTime,
-        campaignType: c.campaignType,
-        imageUrls: c.imageUrls,
-        tags: c.tags,
-        metadataURI: c.metadataURI,
-      }));
-
-      setCampaigns(convertedCampaigns);
-    } catch (err) {
-      // If contract fetch fails, fall back to demo data when available
-      console.error("Error fetching campaigns, falling back to demo data:", err);
-      try {
-        const converted: Campaign[] = demoCampaigns.map((d) => ({
-          id: d.id,
-          poolId: d.id,
-          title: d.title,
-          description: "",
-          imageUrl: d.image,
-          image: d.image,
-          organizationName: d.organizationName,
-          organizationAddress: "",
-          category: d.category,
-          location: d.location || "",
-          raised: d.raised,
-          goal: d.goal,
-          donors: d.donors,
-          daysLeft: d.daysLeft,
-          isActive: true,
-          isVerified: d.isVerified ?? false,
-          startDate: Date.now(),
-          endDate: Date.now() + (d.daysLeft || 0) * 24 * 60 * 60 * 1000,
-          campaignType: 0,
-          imageUrls: d.image ? [d.image] : [],
-          tags: [],
-          familiesHelped: d.familiesHelped,
-          slug: d.slug,
+      if (contractCampaigns && contractCampaigns.length > 0) {
+        const convertedCampaigns: Campaign[] = contractCampaigns.map((c) => ({
+          id: c.poolId,
+          poolId: c.poolId,
+          title: c.title,
+          description: c.description,
+          imageUrl: c.imageUrl,
+          image: c.imageUrl,
+          organizationName: c.organizationName,
+          organizationAddress: c.organizer,
+          category: c.category,
+          location: c.location,
+          raised: c.raised,
+          goal: c.goal,
+          donors: c.donors,
+          daysLeft: calculateDaysLeft(c.endTime),
+          isActive: c.isActive,
+          isVerified: c.isVerified,
+          startDate: c.createdAt,
+          endDate: c.endTime,
+          campaignType: c.campaignType,
+          imageUrls: c.imageUrls,
+          tags: c.tags,
+          metadataURI: c.metadataURI,
         }));
 
-        setCampaigns(converted);
-      } catch (fallbackErr) {
-        const error = err instanceof Error ? err : new Error("Unknown error");
-        setError(error);
-        console.error("Error fetching campaigns and fallback failed:", fallbackErr);
+        setCampaigns(convertedCampaigns);
+        setIsLoading(false);
+        return;
       }
-      const error = err instanceof Error ? err : new Error("Unknown error");
-      setError(error);
-    } finally {
-      setIsLoading(false);
+    } catch (err) {
+      console.warn("Contract campaigns fetch error, falling back to demo data:", err);
     }
+
+    // Fallback to local demo data when contract pools are empty or unavailable
+    const converted: Campaign[] = demoCampaigns.map((d) => ({
+      id: d.id,
+      poolId: d.id,
+      title: d.title,
+      description: `${d.title} - Campaign by ${d.organizationName}.`,
+      imageUrl: d.image,
+      image: d.image,
+      organizationName: d.organizationName,
+      organizationAddress: "0x71C839A2e8419F23a0781D92F3918a2879F492F1",
+      category: d.category,
+      location: d.location || "Indonesia",
+      raised: d.raised,
+      goal: d.goal,
+      donors: d.donors,
+      daysLeft: d.daysLeft,
+      isActive: true,
+      isVerified: d.isVerified ?? true,
+      startDate: Date.now(),
+      endDate: Date.now() + (d.daysLeft || 0) * 24 * 60 * 60 * 1000,
+      campaignType: 0,
+      imageUrls: d.image ? [d.image] : [],
+      tags: [d.category],
+      familiesHelped: d.familiesHelped,
+      slug: d.slug,
+    }));
+
+    setCampaigns(converted);
+    setIsLoading(false);
   }, []);
 
   useEffect(() => {
