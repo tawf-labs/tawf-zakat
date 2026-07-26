@@ -4,8 +4,8 @@ import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState } from "react";
+import { useLanguage } from "@/components/providers/language-provider";
 
-// Fix for default marker icon not showing
 const icon = L.icon({
     iconUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png",
     iconRetinaUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png",
@@ -31,9 +31,10 @@ interface CampaignMapProps {
 
 const CampaignMap = ({
     locations = [],
-    center = [-6.2088, 106.8456], // Default to Jakarta
+    center = [-6.2088, 106.8456],
     zoom = 13
 }: CampaignMapProps) => {
+    const { t } = useLanguage();
     const [isMounted, setIsMounted] = useState(false);
 
     useEffect(() => {
@@ -43,7 +44,7 @@ const CampaignMap = ({
     if (!isMounted) {
         return (
             <div className="w-full h-[400px] bg-muted animate-pulse rounded-xl flex items-center justify-center">
-                <span className="text-muted-foreground">Loading map...</span>
+                <span className="text-muted-foreground">{t("map.loading")}</span>
             </div>
         );
     }

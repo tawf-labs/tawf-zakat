@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Loader2, FileText, Shield, Download, Calendar, Hash } from "lucide-react";
 import { useZakatCertificate } from "@/hooks/useZakatCertificate";
+import { useLanguage } from "@/components/providers/language-provider";
 import { formatAddress } from "@/lib/abi";
 
 interface ZakatCertificateModalProps {
@@ -31,6 +32,7 @@ export function ZakatCertificateModal({
 }: ZakatCertificateModalProps) {
   const [hasConsented, setHasConsented] = useState(false);
   const [hasReadNotice, setHasReadNotice] = useState(false);
+  const { t } = useLanguage();
 
   const { generateCertificate, isGenerating, certificate } = useZakatCertificate();
 
@@ -114,7 +116,7 @@ export function ZakatCertificateModal({
               <div className="flex justify-between">
                 <span className="text-primary">Type:</span>
                 <span className="font-semibold text-foreground">
-                  {donationDetails.campaignType === '1' ? 'Zakat Compliant' : 'General Donation'}
+                  {donationDetails.campaignType === '1' ? t('certificate.zakatCompliant') : t('certificate.generalDonation')}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -132,7 +134,7 @@ export function ZakatCertificateModal({
                         month: 'long',
                         day: 'numeric',
                       })
-                    : '1 Year from Issue'}
+                    : t('certificate.oneYearFromIssue')}
                 </span>
               </div>
             </div>
@@ -150,10 +152,10 @@ export function ZakatCertificateModal({
                   To generate this certificate, the following information will be stored in a secure database:
                 </p>
                 <ul className="list-disc list-inside text-xs text-muted-foreground mt-1 space-y-0.5 ml-4">
-                  <li>Your wallet address ({formatAddress(donationDetails.donorAddress)})</li>
-                  <li>Donation amount and campaign details</li>
-                  <li>Transaction hash for verification</li>
-                  <li>Certificate generation timestamp</li>
+                  <li>{t('certificate.privacyItem1')} ({formatAddress(donationDetails.donorAddress)})</li>
+                  <li>{t('certificate.privacyItem2')}</li>
+                  <li>{t('certificate.privacyItem3')}</li>
+                  <li>{t('certificate.privacyItem4')}</li>
                 </ul>
               </div>
             </div>
@@ -162,9 +164,7 @@ export function ZakatCertificateModal({
           {/* Purpose Notice */}
           <div className="bg-accent border border-primary/20 rounded-lg p-3">
             <p className="text-xs text-muted-foreground">
-              <strong>Why this data?</strong> Zakat certificates may be used for tax purposes
-              or official documentation. Your data is only stored when you explicitly consent
-              to certificate generation.
+              <strong>{t('certificate.purposeNotice').split('. ')[0] + '? '}</strong>{t('certificate.purposeNotice').split('. ').slice(1).join('. ')}
             </p>
           </div>
 
@@ -182,10 +182,10 @@ export function ZakatCertificateModal({
                 htmlFor="certificate-consent"
                 className="text-sm font-medium cursor-pointer"
               >
-                I consent to storing my donation information for Zakat certificate generation
+                {t('certificate.consentLabel')}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                This information will only be used to generate and verify your official Zakat certificate.
+                {t('certificate.consentHint')}
               </p>
             </div>
           </div>
@@ -230,11 +230,11 @@ export function ZakatCertificateModal({
               <Shield className="h-5 w-5 text-primary flex-shrink-0" />
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  Certificate Generated Successfully!
+                  {t('certificate.success')}
                 </p>
                 <p className="text-xs text-primary mt-1">
-                  Your certificate ID is <span className="font-mono">{certificate.id}</span>.
-                  Keep this for your tax records.
+                  {t('certificate.successDesc')} <span className="font-mono">{certificate.id}</span>.
+                  {t('certificate.keepForTax')}
                 </p>
               </div>
             </div>

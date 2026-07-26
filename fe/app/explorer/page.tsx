@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Search, ExternalLink, Filter, TrendingUp, Users, Coins, Vote, Calendar, RefreshCw } from 'lucide-react';
 import { CONTRACT_ADDRESSES, formatAddress, formatTimestamp, formatIDRX } from '@/lib/abi';
 import { useExplorerTransactions, TransactionType } from '@/hooks/useExplorerTransactions';
+import { useLanguage } from "@/components/providers/language-provider";
 
 const ExplorerPage: React.FC = () => {
+  const { t } = useLanguage()
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<TransactionType>('all');
 
@@ -27,6 +29,17 @@ const ExplorerPage: React.FC = () => {
     }
   };
 
+  const getBadgeLabel = (type: TransactionType): string => {
+    switch(type) {
+      case 'donation': return t('explorer.badge.donation');
+      case 'campaign': return t('explorer.badge.campaign');
+      case 'proposal': return t('explorer.badge.proposal');
+      case 'vote': return t('explorer.badge.vote');
+      case 'pool': return t('explorer.badge.poolCreated');
+      default: return t('explorer.badge.all');
+    }
+  };
+
   const getTypeBadge = (type: TransactionType) => {
     const styles: Record<TransactionType, string> = {
       donation: 'bg-green-100 text-green-700 border-green-200',
@@ -37,19 +50,10 @@ const ExplorerPage: React.FC = () => {
       all: ''
     };
 
-    const labelMap: Record<TransactionType, string> = {
-      donation: 'Donation',
-      campaign: 'Campaign',
-      proposal: 'Proposal',
-      vote: 'Vote',
-      pool: 'Pool Created',
-      all: 'All'
-    };
-
     return (
       <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${styles[type]}`}>
         {getTypeIcon(type)}
-        {labelMap[type] || type.charAt(0).toUpperCase() + type.slice(1)}
+        {getBadgeLabel(type)}
       </span>
     );
   };
@@ -61,9 +65,9 @@ const ExplorerPage: React.FC = () => {
           {/* Header */}
           <div className="mb-8 flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold mb-2">Blockchain Explorer</h1>
+              <h1 className="text-3xl font-bold mb-2">{t('explorer.title')}</h1>
               <p className="text-muted-foreground">
-                Explore all transactions on the ZKT platform • Ethereum Sepolia
+                {t('explorer.subtitle')}
               </p>
             </div>
             <button
@@ -72,7 +76,7 @@ const ExplorerPage: React.FC = () => {
               disabled={isLoading}
             >
               <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-              Refresh
+              {t('explorer.refresh')}
             </button>
           </div>
 
@@ -84,7 +88,7 @@ const ExplorerPage: React.FC = () => {
                   <Coins className="h-5 w-5 text-green-600" />
                 </div>
                 <div>
-                  <div className="text-sm text-muted-foreground">Total Donated</div>
+                  <div className="text-sm text-muted-foreground">{t('explorer.stats.totalDonated')}</div>
                   <div className="text-xl font-bold">{formatIDRX(stats.totalDonated)} IDRX</div>
                 </div>
               </div>
@@ -96,7 +100,7 @@ const ExplorerPage: React.FC = () => {
                   <TrendingUp className="h-5 w-5 text-blue-600" />
                 </div>
                 <div>
-                  <div className="text-sm text-muted-foreground">Active Campaigns</div>
+                  <div className="text-sm text-muted-foreground">{t('explorer.stats.activeCampaigns')}</div>
                   <div className="text-xl font-bold">{stats.activeCampaigns}</div>
                 </div>
               </div>
@@ -108,7 +112,7 @@ const ExplorerPage: React.FC = () => {
                   <Vote className="h-5 w-5 text-purple-600" />
                 </div>
                 <div>
-                  <div className="text-sm text-muted-foreground">Total Proposals</div>
+                  <div className="text-sm text-muted-foreground">{t('explorer.stats.totalProposals')}</div>
                   <div className="text-xl font-bold">{stats.totalProposals}</div>
                 </div>
               </div>
@@ -120,7 +124,7 @@ const ExplorerPage: React.FC = () => {
                   <Calendar className="h-5 w-5 text-orange-600" />
                 </div>
                 <div>
-                  <div className="text-sm text-muted-foreground">Transactions</div>
+                  <div className="text-sm text-muted-foreground">{t('explorer.stats.transactions')}</div>
                   <div className="text-xl font-bold">{stats.totalTransactions}</div>
                 </div>
               </div>
@@ -135,7 +139,7 @@ const ExplorerPage: React.FC = () => {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <input
                   type="text"
-                  placeholder="Search by transaction hash, address, or description..."
+                  placeholder={t('explorer.search.placeholder')}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 pl-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
@@ -150,11 +154,11 @@ const ExplorerPage: React.FC = () => {
                   onChange={(e) => setFilterType(e.target.value as TransactionType)}
                   className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
-                  <option value="all">All Types</option>
-                  <option value="donation">Donations</option>
-                  <option value="pool">Campaigns</option>
-                  <option value="proposal">Proposals</option>
-                  <option value="vote">Votes</option>
+                  <option value="all">{t('explorer.filter.all')}</option>
+                  <option value="donation">{t('explorer.filter.donations')}</option>
+                  <option value="pool">{t('explorer.filter.campaigns')}</option>
+                  <option value="proposal">{t('explorer.filter.proposals')}</option>
+                  <option value="vote">{t('explorer.filter.votes')}</option>
                 </select>
               </div>
             </div>
@@ -164,25 +168,25 @@ const ExplorerPage: React.FC = () => {
           <div className="bg-white text-card-foreground rounded-xl border border-black shadow-sm">
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="font-semibold text-lg">Recent Transactions</h2>
+                <h2 className="font-semibold text-lg">{t('explorer.transactions.title')}</h2>
                 {isLoading && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <RefreshCw className="h-4 w-4 animate-spin" />
-                    Loading...
+                    {t('explorer.transactions.loading')}
                   </div>
                 )}
               </div>
 
               {error && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-                  <p className="text-sm text-red-700">Error loading transactions: {error.message}</p>
+                  <p className="text-sm text-red-700">{t('explorer.transactions.error')}{error.message}</p>
                 </div>
               )}
 
               {!isLoading && transactions.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No transactions found matching your search criteria</p>
+                  <p>{t('explorer.transactions.empty')}</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -216,7 +220,7 @@ const ExplorerPage: React.FC = () => {
                           {/* From/To Addresses */}
                           <div className="flex flex-col sm:flex-row gap-2 text-xs text-muted-foreground">
                             <div className="flex items-center gap-1">
-                              <span>From:</span>
+                              <span>{t('explorer.transactions.from')}:</span>
                               <a
                                 href={`https://sepolia.etherscan.io/address/${tx.from}`}
                                 target="_blank"
@@ -231,7 +235,7 @@ const ExplorerPage: React.FC = () => {
                               <>
                                 <span className="hidden sm:inline">→</span>
                                 <div className="flex items-center gap-1">
-                                  <span>To:</span>
+                                  <span>{t('explorer.transactions.to')}:</span>
                                   <a
                                     href={`https://sepolia.etherscan.io/address/${tx.to}`}
                                     target="_blank"
@@ -258,7 +262,7 @@ const ExplorerPage: React.FC = () => {
                           )}
                           <div className="text-xs text-muted-foreground text-right">
                             <div>{formatTimestamp(tx.timestamp)}</div>
-                            <div className="font-mono">Block #{tx.blockNumber.toLocaleString()}</div>
+                            <div className="font-mono">{t('explorer.block')} #{tx.blockNumber.toLocaleString()}</div>
                           </div>
                         </div>
                       </div>
@@ -271,10 +275,10 @@ const ExplorerPage: React.FC = () => {
 
           {/* Contract Information */}
           <div className="mt-6 bg-gray-50 text-card-foreground rounded-xl border border-gray-200 p-6">
-            <h3 className="font-semibold mb-3">Smart Contract Addresses</h3>
+            <h3 className="font-semibold mb-3">{t('explorer.contracts.title')}</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
               <div>
-                <div className="text-muted-foreground mb-1">ZKTCore</div>
+                <div className="text-muted-foreground mb-1">{t('explorer.contracts.zkcore')}</div>
                 <a
                   href={`https://sepolia.etherscan.io/address/${CONTRACT_ADDRESSES.ZKTCore}`}
                   target="_blank"
@@ -286,7 +290,7 @@ const ExplorerPage: React.FC = () => {
                 </a>
               </div>
               <div>
-                <div className="text-muted-foreground mb-1">MockIDRX Token</div>
+                <div className="text-muted-foreground mb-1">{t('explorer.contracts.mockidrx')}</div>
                 <a
                   href={`https://sepolia.etherscan.io/address/${CONTRACT_ADDRESSES.MockIDRX}`}
                   target="_blank"
@@ -298,7 +302,7 @@ const ExplorerPage: React.FC = () => {
                 </a>
               </div>
               <div>
-                <div className="text-muted-foreground mb-1">Receipt NFT</div>
+                <div className="text-muted-foreground mb-1">{t('explorer.contracts.receiptNft')}</div>
                 <a
                   href={`https://sepolia.etherscan.io/address/${CONTRACT_ADDRESSES.DonationReceiptNFT}`}
                   target="_blank"

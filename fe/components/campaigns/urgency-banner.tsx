@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, Clock, Flame, Users } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface UrgencyInfo {
   type: 'families-waiting' | 'deadline' | 'limited-spots';
@@ -13,20 +14,19 @@ interface UrgencyBannerProps {
   urgency: UrgencyInfo;
 }
 
-// Simulated recent donations for live feed
 const recentDonations = [
-  { amount: 50000, time: 'just now' },
-  { amount: 25000, time: '2 mins ago' },
-  { amount: 100000, time: '5 mins ago' },
-  { amount: 75000, time: '8 mins ago' },
-  { amount: 50000, time: '12 mins ago' },
+  { amount: 50000, minsAgo: 0 },
+  { amount: 25000, minsAgo: 2 },
+  { amount: 100000, minsAgo: 5 },
+  { amount: 75000, minsAgo: 8 },
+  { amount: 50000, minsAgo: 12 },
 ];
 
 export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
+  const { t } = useLanguage();
   const [currentDonation, setCurrentDonation] = useState(recentDonations[0]);
   const [isVisible, setIsVisible] = useState(true);
 
-  // Cycle through recent donations
   useEffect(() => {
     if (!isVisible) return;
 
@@ -38,6 +38,11 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
     return () => clearInterval(interval);
   }, [isVisible]);
 
+  const formatTime = (minsAgo: number) => {
+    if (minsAgo === 0) return t("urgency.justNow");
+    return t("urgency.minutesAgo").replace("{n}", String(minsAgo));
+  };
+
   const getUrgencyConfig = () => {
     switch (urgency.type) {
       case 'families-waiting':
@@ -46,7 +51,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
           bgColor: 'bg-orange-500/10',
           borderColor: 'border-orange-500/30',
           textColor: 'text-orange-600',
-          title: 'Families Waiting for Help',
+          title: t("urgency.familiesWaiting"),
         };
       case 'deadline':
         return {
@@ -54,7 +59,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
           bgColor: 'bg-red-500/10',
           borderColor: 'border-red-500/30',
           textColor: 'text-red-600',
-          title: 'Deadline Approaching',
+          title: t("urgency.deadlineApproaching"),
         };
       case 'limited-spots':
         return {
@@ -62,7 +67,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
           bgColor: 'bg-amber-500/10',
           borderColor: 'border-amber-500/30',
           textColor: 'text-amber-600',
-          title: 'Limited Impact Spots',
+          title: t("urgency.limitedImpactSpots"),
         };
       default:
         return {
@@ -70,7 +75,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
           bgColor: 'bg-primary/10',
           borderColor: 'border-primary/30',
           textColor: 'text-primary',
-          title: 'Act Now',
+          title: t("urgency.actNow"),
         };
     }
   };
@@ -107,7 +112,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
               </span>
             </div>
-            <span className="text-sm font-medium text-foreground">Live donations</span>
+            <span className="text-sm font-medium text-foreground">{t("urgency.liveDonations")}</span>
           </div>
 
           <div className={`transition-all duration-500 ${isVisible ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'}`}>
@@ -115,7 +120,7 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
               <span className="font-semibold text-primary">
                 {currentDonation.amount.toLocaleString('id-ID')} IDRX
               </span>
-              <span className="text-muted-foreground"> {currentDonation.time}</span>
+              <span className="text-muted-foreground"> {formatTime(currentDonation.minsAgo)}</span>
             </p>
           </div>
         </div>
@@ -126,10 +131,10 @@ export function UrgencyBanner({ urgency }: UrgencyBannerProps) {
         <Flame className="h-5 w-5 text-primary flex-shrink-0" />
         <div className="flex-1">
           <p className="text-sm font-medium text-foreground">
-            Your donation has immediate impact
+            {t("urgency.immediateImpact")}
           </p>
           <p className="text-xs text-muted-foreground">
-            Funds go directly to beneficiaries - transparently on-chain
+            {t("urgency.fundsDirectly")}
           </p>
         </div>
       </div>

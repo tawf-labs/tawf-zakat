@@ -18,6 +18,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { CONTRACT_ADDRESSES, ZKTCoreABI } from "@/lib/abi"
 import { handleTransactionError, handleWalletError } from "@/lib/errors"
+import { useLanguage } from "@/components/providers/language-provider"
 
 interface OrganizationFormData {
   // Basic Information
@@ -62,6 +63,7 @@ export default function PartnersPage() {
   const { address, isConnected } = useAccount()
   const { toast } = useToast()
   const { writeContractAsync, isPending } = useWriteContract()
+  const { t } = useLanguage()
   
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -122,8 +124,8 @@ export default function PartnersPage() {
       setStep(prev => prev + 1)
     } else {
       toast({
-        title: "Incomplete Information",
-        description: "Please fill in all required fields before proceeding.",
+        title: t('partners.incompleteInfo'),
+        description: t('partners.fillRequiredFields'),
         variant: "destructive"
       })
     }
@@ -133,7 +135,7 @@ export default function PartnersPage() {
     if (!isConnected) {
       const msg = handleWalletError(new Error("not-connected"));
       toast({
-        title: "Wallet Error",
+        title: t('partners.walletError'),
         description: msg,
         variant: "destructive",
       });
@@ -142,8 +144,8 @@ export default function PartnersPage() {
 
     if (!validateStep(4)) {
       toast({
-        title: "Incomplete Information",
-        description: "Please fill in all required fields.",
+        title: t('partners.incompleteInfo'),
+        description: t('partners.fillAllRequired'),
         variant: "destructive"
       })
       return
@@ -224,8 +226,8 @@ This proposal requests the community and Sharia Council to:
       })
 
       toast({
-        title: "Organization Verification Proposal Submitted",
-        description: "Your application has been submitted for community and Sharia Council review.",
+        title: t('partners.proposalSubmitted'),
+        description: t('partners.proposalSubmittedDesc'),
       })
 
       // Move to success step
@@ -234,7 +236,7 @@ This proposal requests the community and Sharia Council to:
     } catch (error) {
       const txErrMsg = handleTransactionError(error);
       toast({
-        title: "Transaction Error",
+        title: t('partners.transactionError'),
         description: txErrMsg,
         variant: "destructive",
       });
@@ -251,9 +253,9 @@ This proposal requests the community and Sharia Council to:
           <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-4">
             <Building2 className="h-8 w-8 text-primary" />
           </div>
-          <h1 className="text-4xl font-bold mb-3">Become a Verified Partner Organization</h1>
+          <h1 className="text-4xl font-bold mb-3">{t('partners.becomePartner')}</h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Join our network of trusted charitable organizations. Complete KYC verification and submit your proposal for community approval.
+            {t('partners.becomePartnerDesc')}
           </p>
         </div>
 
@@ -261,11 +263,11 @@ This proposal requests the community and Sharia Council to:
         <div className="mb-8">
           <div className="flex items-center justify-between max-w-2xl mx-auto">
             {[
-              { num: 1, label: "Basic Info" },
-              { num: 2, label: "Documents" },
-              { num: 3, label: "Details" },
-              { num: 4, label: "Proposal" },
-              { num: 5, label: "Submit" }
+              { num: 1, label: t('partners.basicInfo') },
+              { num: 2, label: t('partners.documents') },
+              { num: 3, label: t('partners.details') },
+              { num: 4, label: t('partners.proposal') },
+              { num: 5, label: t('partners.submit') }
             ].map((s, idx) => (
               <div key={s.num} className="flex items-center">
                 <div className={`flex flex-col items-center ${s.num < 5 ? 'flex-1' : ''}`}>
@@ -294,54 +296,54 @@ This proposal requests the community and Sharia Council to:
           {step === 1 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Basic Information</h2>
-                <p className="text-muted-foreground">Tell us about your organization</p>
+                <h2 className="text-2xl font-bold mb-2">{t('partners.basicInformation')}</h2>
+                <p className="text-muted-foreground">{t('partners.tellAboutOrg')}</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="orgName">Organization Name *</Label>
+                  <Label htmlFor="orgName">{t('partners.orgName')}</Label>
                   <Input
                     id="orgName"
-                    placeholder="e.g., Baznas Indonesia"
+                    placeholder={t('partners.orgNamePlaceholder')}
                     value={formData.organizationName}
                     onChange={(e) => handleInputChange("organizationName", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="legalName">Legal Registered Name *</Label>
+                  <Label htmlFor="legalName">{t('partners.legalName')}</Label>
                   <Input
                     id="legalName"
-                    placeholder="Official legal name"
+                    placeholder={t('partners.legalNamePlaceholder')}
                     value={formData.legalName}
                     onChange={(e) => handleInputChange("legalName", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="regNumber">Registration Number *</Label>
+                  <Label htmlFor="regNumber">{t('partners.regNumber')}</Label>
                   <Input
                     id="regNumber"
-                    placeholder="Official registration number"
+                    placeholder={t('partners.regNumberPlaceholder')}
                     value={formData.registrationNumber}
                     onChange={(e) => handleInputChange("registrationNumber", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="year">Year Established</Label>
+                  <Label htmlFor="year">{t('partners.yearEstablished')}</Label>
                   <Input
                     id="year"
                     type="number"
-                    placeholder="2010"
+                    placeholder={t('partners.yearPlaceholder')}
                     value={formData.yearEstablished}
                     onChange={(e) => handleInputChange("yearEstablished", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="country">Country</Label>
+                  <Label htmlFor="country">{t('partners.country')}</Label>
                   <Input
                     id="country"
                     value={formData.country}
@@ -350,10 +352,10 @@ This proposal requests the community and Sharia Council to:
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="city">City</Label>
+                  <Label htmlFor="city">{t('partners.city')}</Label>
                   <Input
                     id="city"
-                    placeholder="Jakarta"
+                    placeholder={t('partners.cityPlaceholder')}
                     value={formData.city}
                     onChange={(e) => handleInputChange("city", e.target.value)}
                   />
@@ -361,10 +363,10 @@ This proposal requests the community and Sharia Council to:
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="address">Physical Address</Label>
+                <Label htmlFor="address">{t('partners.physicalAddress')}</Label>
                 <Textarea
                   id="address"
-                  placeholder="Complete address"
+                  placeholder={t('partners.addressPlaceholder')}
                   value={formData.address}
                   onChange={(e) => handleInputChange("address", e.target.value)}
                   rows={2}
@@ -373,33 +375,33 @@ This proposal requests the community and Sharia Council to:
 
               <div className="grid md:grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email Address *</Label>
+                  <Label htmlFor="email">{t('partners.emailAddress')}</Label>
                   <Input
                     id="email"
                     type="email"
-                    placeholder="contact@organization.org"
+                    placeholder={t('partners.emailPlaceholder')}
                     value={formData.email}
                     onChange={(e) => handleInputChange("email", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="phone">Phone Number</Label>
+                  <Label htmlFor="phone">{t('partners.phoneNumber')}</Label>
                   <Input
                     id="phone"
                     type="tel"
-                    placeholder="+62 xxx xxxx xxxx"
+                    placeholder={t('partners.phonePlaceholder')}
                     value={formData.phone}
                     onChange={(e) => handleInputChange("phone", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="website">Website</Label>
+                  <Label htmlFor="website">{t('partners.website')}</Label>
                   <Input
                     id="website"
                     type="url"
-                    placeholder="https://..."
+                    placeholder={t('partners.websitePlaceholder')}
                     value={formData.website}
                     onChange={(e) => handleInputChange("website", e.target.value)}
                   />
@@ -418,16 +420,16 @@ This proposal requests the community and Sharia Council to:
           {step === 2 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">KYC Documents</h2>
-                <p className="text-muted-foreground">Upload required verification documents</p>
+                <h2 className="text-2xl font-bold mb-2">{t('partners.kycDocuments')}</h2>
+                <p className="text-muted-foreground">{t('partners.uploadDocs')}</p>
               </div>
 
               <div className="space-y-4">
                 {[
-                  { key: "registrationDocument", label: "Organization Registration Certificate *", required: true },
-                  { key: "taxDocument", label: "Tax Registration Document *", required: true },
-                  { key: "bankStatement", label: "Bank Statement (Last 3 months)", required: false },
-                  { key: "proofOfAddress", label: "Proof of Address", required: false },
+                  { key: "registrationDocument", label: t('partners.registrationCert'), required: true },
+                  { key: "taxDocument", label: t('partners.taxDocument'), required: true },
+                  { key: "bankStatement", label: t('partners.bankStatement'), required: false },
+                  { key: "proofOfAddress", label: t('partners.proofOfAddress'), required: false },
                 ].map((doc) => (
                   <div key={doc.key} className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
                     <Label htmlFor={doc.key} className="block mb-2 font-semibold">
@@ -446,7 +448,7 @@ This proposal requests the community and Sharia Council to:
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Accepted formats: PDF, JPG, PNG (Max 10MB)
+                      {t('partners.acceptedFormats')}
                     </p>
                   </div>
                 ))}
@@ -455,9 +457,9 @@ This proposal requests the community and Sharia Council to:
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
                 <Shield className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
                 <div className="text-sm">
-                  <p className="font-semibold text-blue-900 mb-1">Document Security</p>
+                  <p className="font-semibold text-blue-900 mb-1">{t('partners.documentSecurity')}</p>
                   <p className="text-blue-800">
-                    Your documents are encrypted and stored securely. They will only be reviewed by authorized verifiers and Sharia Council members.
+                    {t('partners.documentSecurityDesc')}
                   </p>
                 </div>
               </div>
@@ -477,36 +479,36 @@ This proposal requests the community and Sharia Council to:
           {step === 3 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Organization Details</h2>
-                <p className="text-muted-foreground">Provide detailed information about your organization</p>
+                <h2 className="text-2xl font-bold mb-2">{t('partners.organizationDetails')}</h2>
+                <p className="text-muted-foreground">{t('partners.provideDetails')}</p>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="orgType">Organization Type *</Label>
+                <Label htmlFor="orgType">{t('partners.orgType')}</Label>
                 <Select
                   value={formData.organizationType}
                   onValueChange={(value) => handleInputChange("organizationType", value)}
                 >
                   <SelectTrigger id="orgType" className="w-full">
-                    <SelectValue placeholder="Select type..." />
+                    <SelectValue placeholder={t('partners.orgTypePlaceholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="NGO">Non-Governmental Organization (NGO)</SelectItem>
-                    <SelectItem value="Foundation">Foundation</SelectItem>
-                    <SelectItem value="Religious">Religious Organization</SelectItem>
-                    <SelectItem value="Community">Community Organization</SelectItem>
-                    <SelectItem value="Healthcare">Healthcare Organization</SelectItem>
-                    <SelectItem value="Education">Educational Institution</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
+                    <SelectItem value="NGO">{t('partners.typeNGO')}</SelectItem>
+                    <SelectItem value="Foundation">{t('partners.typeFoundation')}</SelectItem>
+                    <SelectItem value="Religious">{t('partners.typeReligious')}</SelectItem>
+                    <SelectItem value="Community">{t('partners.typeCommunity')}</SelectItem>
+                    <SelectItem value="Healthcare">{t('partners.typeHealthcare')}</SelectItem>
+                    <SelectItem value="Education">{t('partners.typeEducation')}</SelectItem>
+                    <SelectItem value="Other">{t('partners.typeOther')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="mission">Mission Statement *</Label>
+                <Label htmlFor="mission">{t('partners.missionStatement')}</Label>
                 <Textarea
                   id="mission"
-                  placeholder="Describe your organization's mission and values..."
+                  placeholder={t('partners.missionPlaceholder')}
                   value={formData.missionStatement}
                   onChange={(e) => handleInputChange("missionStatement", e.target.value)}
                   rows={4}
@@ -514,10 +516,10 @@ This proposal requests the community and Sharia Council to:
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="pastProjects">Past Projects & Achievements</Label>
+                <Label htmlFor="pastProjects">{t('partners.pastProjects')}</Label>
                 <Textarea
                   id="pastProjects"
-                  placeholder="Describe your major projects and achievements..."
+                  placeholder={t('partners.pastProjectsPlaceholder')}
                   value={formData.pastProjects}
                   onChange={(e) => handleInputChange("pastProjects", e.target.value)}
                   rows={4}
@@ -526,21 +528,21 @@ This proposal requests the community and Sharia Council to:
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="beneficiaries">Total Beneficiaries Served *</Label>
+                  <Label htmlFor="beneficiaries">{t('partners.totalBeneficiaries')}</Label>
                   <Input
                     id="beneficiaries"
                     type="number"
-                    placeholder="e.g., 10000"
+                    placeholder={t('partners.beneficiariesPlaceholder')}
                     value={formData.beneficiaryCount}
                     onChange={(e) => handleInputChange("beneficiaryCount", e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="budget">Annual Budget (IDRX)</Label>
+                  <Label htmlFor="budget">{t('partners.annualBudget')}</Label>
                   <Input
                     id="budget"
-                    placeholder="e.g., 1000000"
+                    placeholder={t('partners.budgetPlaceholder')}
                     value={formData.annualBudget}
                     onChange={(e) => handleInputChange("annualBudget", e.target.value)}
                   />
@@ -548,10 +550,10 @@ This proposal requests the community and Sharia Council to:
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="certifications">Certifications & Accreditations</Label>
+                <Label htmlFor="certifications">{t('partners.certifications')}</Label>
                 <Textarea
                   id="certifications"
-                  placeholder="List any relevant certifications, awards, or accreditations..."
+                  placeholder={t('partners.certificationsPlaceholder')}
                   value={formData.certifications}
                   onChange={(e) => handleInputChange("certifications", e.target.value)}
                   rows={3}
@@ -559,10 +561,10 @@ This proposal requests the community and Sharia Council to:
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="board">Board Members / Leadership Team</Label>
+                <Label htmlFor="board">{t('partners.boardMembers')}</Label>
                 <Textarea
                   id="board"
-                  placeholder="List key board members and their roles..."
+                  placeholder={t('partners.boardMembersPlaceholder')}
                   value={formData.boardMembers}
                   onChange={(e) => handleInputChange("boardMembers", e.target.value)}
                   rows={3}
@@ -584,53 +586,53 @@ This proposal requests the community and Sharia Council to:
           {step === 4 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Verification Proposal</h2>
+                <h2 className="text-2xl font-bold mb-2">{t('partners.verificationProposal')}</h2>
                 <p className="text-muted-foreground">
-                  Create a proposal for the community and Sharia Council to review
+                  {t('partners.verificationProposalDesc')}
                 </p>
               </div>
 
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
                 <div className="text-sm">
-                  <p className="font-semibold text-yellow-900 mb-1">Two-Layer Governance</p>
+                  <p className="font-semibold text-yellow-900 mb-1">{t('partners.twoLayerGovernance')}</p>
                   <p className="text-yellow-800">
-                    Your application will be reviewed by:
+                    {t('partners.twoLayerDesc1')}
                     <br />
-                    <strong>1. Community DAO</strong> - Donors vote based on your credentials
+                    {t('partners.twoLayerDesc2')}
                     <br />
-                    <strong>2. Sharia Council</strong> - Final review for Islamic compliance
+                    {t('partners.twoLayerDesc3')}
                   </p>
                 </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="proposalTitle">Proposal Title *</Label>
+                <Label htmlFor="proposalTitle">{t('partners.proposalTitle')}</Label>
                 <Input
                   id="proposalTitle"
-                  placeholder="e.g., Emergency Relief Operations 2024"
+                  placeholder={t('partners.proposalTitlePlaceholder')}
                   value={formData.proposalTitle}
                   onChange={(e) => handleInputChange("proposalTitle", e.target.value)}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="proposalDesc">Proposal Description *</Label>
+                <Label htmlFor="proposalDesc">{t('partners.proposalDescription')}</Label>
                 <Textarea
                   id="proposalDesc"
-                  placeholder="Describe why you want to become a verified partner and what campaigns you plan to run..."
+                  placeholder={t('partners.proposalDescriptionPlaceholder')}
                   value={formData.proposalDescription}
                   onChange={(e) => handleInputChange("proposalDescription", e.target.value)}
                   rows={6}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Explain your organization's goals, the campaigns you plan to create, and how you'll ensure transparency
+                  {t('partners.proposalDescriptionHint')}
                 </p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="amount">Initial Campaign Budget (IDRX) *</Label>
+                  <Label htmlFor="amount">{t('partners.initialBudget')}</Label>
                   <Input
                     id="amount"
                     type="number"
@@ -639,12 +641,12 @@ This proposal requests the community and Sharia Council to:
                     onChange={(e) => handleInputChange("requestedAmount", e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Estimated budget for your first campaign
+                    {t('partners.budgetHint')}
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="duration">Voting Period (days)</Label>
+                  <Label htmlFor="duration">{t('partners.votingPeriod')}</Label>
                   <Input
                     id="duration"
                     type="number"
@@ -652,33 +654,33 @@ This proposal requests the community and Sharia Council to:
                     onChange={(e) => handleInputChange("projectDuration", e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    How long should voting be open?
+                    {t('partners.votingPeriodHint')}
                   </p>
                 </div>
               </div>
 
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <h4 className="font-semibold mb-3">Proposal Summary</h4>
+                <h4 className="font-semibold mb-3">{t('partners.proposalSummary')}</h4>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Organization:</span>
+                    <span className="text-muted-foreground">{t('partners.summaryOrganization')}</span>
                     <span className="font-medium">{formData.organizationName || "N/A"}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Type:</span>
+                    <span className="text-muted-foreground">{t('partners.summaryType')}</span>
                     <span className="font-medium">{formData.organizationType || "N/A"}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Beneficiaries:</span>
+                    <span className="text-muted-foreground">{t('partners.summaryBeneficiaries')}</span>
                     <span className="font-medium">{formData.beneficiaryCount || "N/A"}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Initial Budget:</span>
+                    <span className="text-muted-foreground">{t('partners.summaryBudget')}</span>
                     <span className="font-medium">{formData.requestedAmount || "N/A"} IDRX</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Your Wallet:</span>
-                    <span className="font-mono text-xs">{address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "Not connected"}</span>
+                    <span className="text-muted-foreground">{t('partners.summaryWallet')}</span>
+                    <span className="font-mono text-xs">{address ? `${address.slice(0, 6)}...${address.slice(-4)}` : t('partners.notConnected')}</span>
                   </div>
                 </div>
               </div>
@@ -716,41 +718,41 @@ This proposal requests the community and Sharia Council to:
               </div>
               
               <div>
-                <h2 className="text-3xl font-bold mb-3">Proposal Submitted Successfully!</h2>
+                <h2 className="text-3xl font-bold mb-3">{t('partners.proposalSuccess')}</h2>
                 <p className="text-lg text-muted-foreground max-w-xl mx-auto">
-                  Your organization verification proposal has been submitted to the blockchain and is now under community review.
+                  {t('partners.proposalSuccessDesc')}
                 </p>
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 max-w-2xl mx-auto text-left">
-                <h3 className="font-semibold text-blue-900 mb-3">What happens next?</h3>
+                <h3 className="font-semibold text-blue-900 mb-3">{t('partners.whatHappensNext')}</h3>
                 <ol className="space-y-3 text-sm text-blue-800">
                   <li className="flex items-start gap-3">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-blue-200 text-blue-900 font-semibold flex-shrink-0">1</span>
-                    <span><strong>Community Voting:</strong> Donors with voting power will review your application and vote (For/Against) during the voting period.</span>
+                    <span>{t('partners.whatNext1')}</span>
                   </li>
                   <li className="flex items-start gap-3">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-blue-200 text-blue-900 font-semibold flex-shrink-0">2</span>
-                    <span><strong>Quorum Check:</strong> The proposal must reach the minimum quorum for voting to be valid.</span>
+                    <span>{t('partners.whatNext2')}</span>
                   </li>
                   <li className="flex items-start gap-3">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-blue-200 text-blue-900 font-semibold flex-shrink-0">3</span>
-                    <span><strong>Sharia Council Review:</strong> If approved by the community, the Sharia Council will conduct a final review to ensure Islamic compliance.</span>
+                    <span>{t('partners.whatNext3')}</span>
                   </li>
                   <li className="flex items-start gap-3">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-blue-200 text-blue-900 font-semibold flex-shrink-0">4</span>
-                    <span><strong>Verification:</strong> Upon approval, your organization will be verified and can start creating campaigns on the platform.</span>
+                    <span>{t('partners.whatNext4')}</span>
                   </li>
                 </ol>
               </div>
 
               <div className="space-y-3 pt-4">
                 <Button asChild size="lg" className="w-full max-w-xs">
-                  <a href="/governance">View Your Proposal</a>
+                  <a href="/governance">{t('partners.viewYourProposal')}</a>
                 </Button>
                 <div>
                   <Button asChild variant="outline" size="lg" className="w-full max-w-xs">
-                    <a href="/dashboard/organization">Go to Dashboard</a>
+                    <a href="/dashboard/organization">{t('partners.goToDashboard')}</a>
                   </Button>
                 </div>
               </div>
@@ -763,25 +765,25 @@ This proposal requests the community and Sharia Council to:
           <div className="grid md:grid-cols-3 gap-4 mt-8">
             <Card className="p-4 bg-white/50">
               <Shield className="h-8 w-8 text-primary mb-2" />
-              <h3 className="font-semibold mb-1">Secure & Transparent</h3>
+              <h3 className="font-semibold mb-1">{t('partners.secureTransparent')}</h3>
               <p className="text-sm text-muted-foreground">
-                All verification data is stored on-chain for complete transparency
+                {t('partners.secureTransparentDesc')}
               </p>
             </Card>
             
             <Card className="p-4 bg-white/50">
               <Users className="h-8 w-8 text-primary mb-2" />
-              <h3 className="font-semibold mb-1">Community Governed</h3>
+              <h3 className="font-semibold mb-1">{t('partners.communityGoverned')}</h3>
               <p className="text-sm text-muted-foreground">
-                Donors vote on organization approvals using their voting power
+                {t('partners.communityGovernedDesc')}
               </p>
             </Card>
             
             <Card className="p-4 bg-white/50">
               <FileText className="h-8 w-8 text-primary mb-2" />
-              <h3 className="font-semibold mb-1">Sharia Compliant</h3>
+              <h3 className="font-semibold mb-1">{t('partners.shariaCompliant')}</h3>
               <p className="text-sm text-muted-foreground">
-                Final review by Sharia Council ensures Islamic compliance
+                {t('partners.shariaCompliantDesc')}
               </p>
             </Card>
           </div>

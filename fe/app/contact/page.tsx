@@ -3,8 +3,11 @@
 import React from 'react'
 import { Mail, ArrowRight } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { useLanguage } from "@/components/providers/language-provider"
 
 export default function ContactUsPage() {
+  const { t } = useLanguage()
+
   return (
     <main className="min-h-dvh relative overflow-hidden bg-accent">
       {/* Background Grid */}
@@ -16,10 +19,10 @@ export default function ContactUsPage() {
           <div className="max-w-3xl mx-auto text-center space-y-8">
             <div className="space-y-4">
               <h1 className="text-5xl lg:text-6xl font-extrabold tracking-tight text-foreground">
-                Let's <span className="text-primary">Connect</span>
+                {t('contact.hero.titlePrefix')} <span className="text-primary">{t('contact.hero.titleHighlight')}</span>
               </h1>
               <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-                Have questions or need assistance? We're just an email away.
+                {t('contact.hero.subtitle')}
               </p>
             </div>
           </div>
@@ -44,9 +47,9 @@ export default function ContactUsPage() {
                     </div>
                     
                     <div>
-                      <h3 className="text-2xl font-bold text-foreground mb-2">Get in Touch</h3>
+                      <h3 className="text-2xl font-bold text-foreground mb-2">{t('contact.getInTouch')}</h3>
                       <p className="text-muted-foreground">
-                        Have questions about campaigns, partnerships, or technical support? We're here to help.
+                        {t('contact.helpText')}
                       </p>
                     </div>
                   </div>
@@ -64,7 +67,7 @@ export default function ContactUsPage() {
                   {/* Response Time */}
                   <div className="text-center pt-2">
                     <p className="text-sm text-muted-foreground">
-                      We typically respond within 24-48 hours
+                      {t('contact.responseTime')}
                     </p>
                   </div>
                 </div>

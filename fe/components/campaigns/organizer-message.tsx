@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { Quote, Shield } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface OrganizerMessageProps {
   name: string;
@@ -20,6 +21,8 @@ export function OrganizerMessage({
   verified,
   organizationName,
 }: OrganizerMessageProps) {
+  const { t } = useLanguage();
+
   return (
     <div className="bg-card border border-primary/20 rounded-xl p-6 lg:p-8">
       <div className="flex flex-col lg:flex-row gap-6">
@@ -41,18 +44,18 @@ export function OrganizerMessage({
           {/* Header */}
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-xl font-bold text-foreground">A Message from the Organizer</h3>
+              <h3 className="text-xl font-bold text-foreground">{t("organizer.message")}</h3>
               {verified && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-600 text-xs font-medium">
                   <Shield className="h-3 w-3" />
-                  Verified
+                  {t("campaign.verified")}
                 </span>
               )}
             </div>
             <div>
               <p className="font-semibold text-foreground">{name}</p>
               <p className="text-sm text-muted-foreground">
-                {role} • {organizationName}
+                {role} &bull; {organizationName}
               </p>
             </div>
           </div>

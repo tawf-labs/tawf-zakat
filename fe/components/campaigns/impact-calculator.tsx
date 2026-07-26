@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Heart, Gift } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface ImpactCalculatorProps {
   impactCalculator: Array<{
@@ -13,6 +14,7 @@ interface ImpactCalculatorProps {
 }
 
 export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCalculatorProps) {
+  const { t } = useLanguage();
   const [hoveredAmount, setHoveredAmount] = useState<number | null>(null);
 
   const currentImpact = hoveredAmount
@@ -23,7 +25,7 @@ export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCal
     <div className="bg-card border border-border rounded-xl p-5 space-y-4">
       <div className="flex items-center gap-2 mb-4">
         <Gift className="h-5 w-5 text-primary" />
-        <h3 className="font-bold text-lg">Your Donation Impact</h3>
+        <h3 className="font-bold text-lg">{t("impact.title")}</h3>
       </div>
 
       {/* Impact Preview */}
@@ -31,7 +33,7 @@ export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCal
         <div className="flex items-center gap-3">
           <span className="text-4xl">{currentImpact?.icon || "♥"}</span>
           <div>
-            <p className="text-sm text-muted-foreground">Your donation provides</p>
+            <p className="text-sm text-muted-foreground">{t("impact.donationProvides")}</p>
             <p className="text-lg font-semibold text-foreground">
               {currentImpact?.impact || "Support for families"}
             </p>
@@ -41,7 +43,7 @@ export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCal
 
       {/* Impact Options */}
       <div className="space-y-2">
-        <p className="text-sm font-medium text-foreground">Select amount to see impact:</p>
+        <p className="text-sm font-medium text-foreground">{t("impact.selectAmount")}</p>
         <div className="grid grid-cols-2 gap-2">
           {impactCalculator.map((item) => (
             <button
@@ -75,8 +77,8 @@ export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCal
       {hoveredAmount && (
         <div className="pt-3 border-t border-border">
           <div className="flex items-center justify-between text-sm mb-1">
-            <span className="text-muted-foreground">Progress to next tier</span>
-            <span className="font-medium text-primary">Almost there!</span>
+            <span className="text-muted-foreground">{t("impact.progressToNextTier")}</span>
+            <span className="font-medium text-primary">{t("impact.almostThere")}</span>
           </div>
           <div className="w-full h-2 bg-secondary/50 rounded-full overflow-hidden">
             <div className="h-full bg-gradient-to-r from-primary/50 to-primary rounded-full w-3/4 animate-pulse" />
@@ -88,7 +90,7 @@ export function ImpactCalculator({ impactCalculator, formatCurrency }: ImpactCal
       <div className="pt-3 border-t border-border">
         <p className="text-xs text-center text-muted-foreground">
           <Heart className="h-3 w-3 inline fill-red-500 text-red-500 mx-1" />
-          Every donation makes a real difference
+          {t("impact.everyDonation")}
         </p>
       </div>
     </div>

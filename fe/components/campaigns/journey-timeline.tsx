@@ -1,6 +1,7 @@
 "use client";
 
 import { Circle, CheckCircle2, Clock, Calendar } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface JourneyItem {
   date: string;
@@ -14,12 +15,14 @@ interface JourneyTimelineProps {
 }
 
 export function JourneyTimeline({ journey }: JourneyTimelineProps) {
+  const { t } = useLanguage();
+
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-foreground">The Journey So Far</h2>
+        <h2 className="text-2xl font-bold text-foreground">{t("journey.title")}</h2>
         <p className="text-muted-foreground mt-1">
-          Follow the campaign's progress from launch to impact
+          {t("journey.subtitle")}
         </p>
       </div>
 
@@ -66,12 +69,12 @@ export function JourneyTimeline({ journey }: JourneyTimelineProps) {
                   <span className="text-sm font-medium text-muted-foreground">{item.date}</span>
                   {item.status === 'current' && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-medium">
-                      Current
+                      {t("journey.current")}
                     </span>
                   )}
                   {item.status === 'upcoming' && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-secondary text-muted-foreground text-xs font-medium">
-                      Upcoming
+                      {t("journey.upcoming")}
                     </span>
                   )}
                 </div>
@@ -96,10 +99,12 @@ export function JourneyTimeline({ journey }: JourneyTimelineProps) {
       {/* Progress Indicator */}
       <div className="flex items-center justify-between text-sm pt-4 border-t border-border">
         <span className="text-muted-foreground">
-          {journey.filter(j => j.status === 'completed').length} of {journey.length} milestones completed
+          {t("journey.milestonesCompleted")
+            .replace("{completed}", String(journey.filter(j => j.status === 'completed').length))
+            .replace("{total}", String(journey.length))}
         </span>
         <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">Progress:</span>
+          <span className="text-muted-foreground">{t("journey.progress")}</span>
           <span className="font-bold text-primary">
             {Math.round((journey.filter(j => j.status === 'completed').length / journey.length) * 100)}%
           </span>

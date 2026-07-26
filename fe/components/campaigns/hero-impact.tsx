@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { Heart, ArrowRight } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface HeroImpactProps {
   beneficiaryName: string;
@@ -27,6 +28,7 @@ export function HeroImpact({
   formatCurrency,
   onDonateClick,
 }: HeroImpactProps) {
+  const { t } = useLanguage();
   const progress = Math.min((raised / goal) * 100, 100);
 
   return (
@@ -36,17 +38,17 @@ export function HeroImpact({
         <div className="relative aspect-[4/3] rounded-xl overflow-hidden">
           <Image
             src={beneficiaryPhoto}
-            alt={`Photo of ${beneficiaryName}`}
+            alt={t("impact.beneficiaryPhotoAlt").replace("{name}", beneficiaryName)}
             fill
             className="object-cover"
             sizes="(max-width: 768px) 100vw, 50vw"
-            priority  // This is above-the-fold content, should load immediately
+            priority
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
           <div className="absolute bottom-4 left-4 right-4">
             <div className="flex items-center gap-2 text-white">
               <Heart className="h-4 w-4 fill-red-500 text-red-500" />
-              <span className="text-sm font-medium">Beneficiary Story</span>
+              <span className="text-sm font-medium">{t("impact.beneficiaryStory")}</span>
             </div>
           </div>
         </div>
@@ -58,7 +60,7 @@ export function HeroImpact({
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
               <Heart className="h-4 w-4 text-primary fill-primary/20" />
               <span className="text-sm font-semibold text-primary uppercase tracking-wide">
-                Your Impact in Action
+                {t("impact.yourImpactInAction")}
               </span>
             </div>
 
@@ -68,7 +70,7 @@ export function HeroImpact({
                   {impactMetrics.familiesHelped.toLocaleString()}
                 </span>
                 <span className="text-lg text-muted-foreground">
-                  families impacted
+                  {t("impact.familiesImpacted")}
                 </span>
               </div>
               <div className="flex items-baseline gap-2">
@@ -76,7 +78,7 @@ export function HeroImpact({
                   {impactMetrics.peopleReached.toLocaleString()}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  people reached
+                  {t("impact.peopleReached")}
                 </span>
               </div>
             </div>
@@ -88,7 +90,7 @@ export function HeroImpact({
                   {formatCurrency(raised)}
                 </span>
                 <span className="text-muted-foreground">
-                  of {formatCurrency(goal)}
+                  {t("campaigns.of")} {formatCurrency(goal)}
                 </span>
               </div>
               <div className="w-full h-3 bg-secondary/50 rounded-full overflow-hidden">
@@ -101,7 +103,7 @@ export function HeroImpact({
                 <span className="text-2xl font-bold text-primary">
                   {Math.round(progress)}%
                 </span>
-                <span className="text-sm text-muted-foreground ml-1">funded</span>
+                <span className="text-sm text-muted-foreground ml-1">{t("impact.funded")}</span>
               </div>
             </div>
           </div>
@@ -109,7 +111,7 @@ export function HeroImpact({
           {/* Quote */}
           {beneficiaryQuote && (
             <div className="relative">
-              <div className="absolute -top-2 -left-2 text-6xl text-primary/20 font-serif">"</div>
+              <div className="absolute -top-2 -left-2 text-6xl text-primary/20 font-serif">&ldquo;</div>
               <blockquote className="relative pl-6 italic text-foreground/90 leading-relaxed">
                 {beneficiaryQuote}
               </blockquote>
@@ -127,7 +129,7 @@ export function HeroImpact({
               onClick={onDonateClick}
               className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-all shadow-lg hover:shadow-xl"
             >
-              Donate Now
+              {t("campaign.donate")}
               <ArrowRight className="h-4 w-4" />
             </button>
           )}

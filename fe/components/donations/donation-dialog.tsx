@@ -17,6 +17,7 @@ import {
   PRIVATE_DONATION_UNAVAILABLE_REASON,
 } from "@/lib/aztec-private-donation";
 import { ZakatCertificateModal } from "@/components/certificates/zakat-certificate-modal";
+import { useLanguage } from "@/components/providers/language-provider";
 
 interface DonationDialogProps {
   open: boolean;
@@ -52,6 +53,7 @@ export function DonationDialog({
   const { donateZK, isLoading: isPrivateDonating } = usePrivateDonation();
   const { toast } = useToast();
   const { address } = useAccount();
+  const { t } = useLanguage();
 
   // Fetch campaign status to check if donations are allowed
   const { statusInfo, canDonate, isLoading: isLoadingStatus } = useCampaignStatus(
@@ -63,8 +65,8 @@ export function DonationDialog({
     if (!canDonate && statusInfo) {
       toast({
         variant: "destructive",
-        title: "Campaign Not Ready",
-        description: statusInfo.description || "This campaign is not yet accepting donations",
+        title: t('donation.campaignNotReady'),
+        description: statusInfo.description || t('donation.campaignNotReadyDesc'),
       });
       return;
     }
@@ -72,8 +74,8 @@ export function DonationDialog({
     if (!isConnected) {
       toast({
         variant: "destructive",
-        title: "Wallet Not Connected",
-        description: "Please connect your wallet to donate",
+        title: t('donation.walletNotConnected'),
+        description: t('donation.connectWalletToDonate'),
       });
       return;
     }
@@ -81,8 +83,8 @@ export function DonationDialog({
     if (!amount || amount.trim() === "") {
       toast({
         variant: "destructive",
-        title: "Amount Required",
-        description: "Please enter a donation amount",
+        title: t('donation.amountRequired'),
+        description: t('donation.enterAmount'),
       });
       return;
     }
@@ -91,8 +93,8 @@ export function DonationDialog({
     if (!donationAmount || isNaN(donationAmount) || donationAmount <= 0) {
       toast({
         variant: "destructive",
-        title: "Invalid Amount",
-        description: "Please enter a valid donation amount greater than 0",
+        title: t('donation.invalidAmount'),
+        description: t('donation.validAmountRequired'),
       });
       return;
     }
@@ -102,7 +104,7 @@ export function DonationDialog({
     if (donationAmount > balance) {
       toast({
         variant: "destructive",
-        title: "Insufficient Balance",
+        title: t('donation.insufficientBalance'),
         description: `You have ${balance.toLocaleString('id-ID')} IDRX available`,
       });
       return;
@@ -134,7 +136,7 @@ export function DonationDialog({
           setShowCertificateModal(true);
 
           toast({
-            title: "Private Donation Successful",
+            title: t('donation.privateDonationSuccess'),
             description: `Your private donation of ${donationAmount.toLocaleString('id-ID')} IDRX to ${campaignTitle} is complete.`,
           });
         }
@@ -154,7 +156,7 @@ export function DonationDialog({
           setShowCertificateModal(true);
 
           toast({
-            title: "Donation Successful",
+            title: t('donation.donationSuccess'),
             description: `You donated ${donationAmount.toLocaleString('id-ID')} IDRX to ${campaignTitle}`,
           });
         }
@@ -178,8 +180,8 @@ export function DonationDialog({
 
       toast({
         variant: "destructive",
-        title: "Donation Failed",
-        description: error?.reason || error?.message || "Transaction failed. Please try again.",
+        title: t('donation.donationFailed'),
+        description: error?.reason || error?.message || t('donation.transactionFailed'),
       });
     } finally {
       setIsProcessing(false);
@@ -233,14 +235,14 @@ export function DonationDialog({
               )}
               <div>
                 <p className="font-medium text-sm">
-                  {isPrivate ? "Private Donation" : "Public Donation"}
+                  {isPrivate ? t('donation.privateDonation') : t('donation.publicDonation')}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {!PRIVATE_DONATION_AVAILABLE
-                    ? "Private donations are not available yet"
+                    ? t('donation.privateUnavailableDesc')
                     : isPrivate
-                      ? "Your donation amount will be hidden using cryptography"
-                      : "Your donation will be publicly visible"}
+                      ? t('donation.privateDesc')
+                      : t('donation.publicDesc')}
                 </p>
               </div>
             </div>
@@ -253,7 +255,7 @@ export function DonationDialog({
               title={!PRIVATE_DONATION_AVAILABLE ? PRIVATE_DONATION_UNAVAILABLE_REASON : undefined}
               className={isPrivate ? "bg-purple-600 hover:bg-purple-700" : ""}
             >
-              {isPrivate ? "Private" : "Public"}
+              {isPrivate ? t('donation.private') : t('donation.public')}
             </Button>
           </div>
 
@@ -264,11 +266,10 @@ export function DonationDialog({
               <Shield className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-sm font-semibold text-amber-800">
-                  Private donations unavailable
+                  {t('donation.privateUnavailableTitle')}
                 </p>
                 <p className="text-xs text-amber-700 mt-1">
-                  On-chain ZK proof verification is not deployed yet, so donations are
-                  public for now. Your donation still produces an NFT receipt.
+                  {t('donation.privateUnavailableBody')}
                 </p>
               </div>
             </div>
@@ -280,7 +281,7 @@ export function DonationDialog({
               <Shield className="h-4 w-4 text-purple-600 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-sm font-semibold text-purple-800">
-                  Privacy Mode Enabled
+                  {t('donation.privacyModeEnabled')}
                 </p>
                 <p className="text-xs text-purple-700 mt-1">
                   Your donation will use Pedersen commitments to hide the amount. You'll still receive an NFT receipt for your records.
@@ -295,7 +296,7 @@ export function DonationDialog({
             <Input
               id="amount"
               type="number"
-              placeholder="Enter amount in IDRX"
+              placeholder={t('donation.enterAmountIdrx')}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               className="text-lg"
@@ -327,7 +328,7 @@ export function DonationDialog({
             <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
               <AlertCircle className="h-4 w-4 text-yellow-600 mt-0.5 flex-shrink-0" />
               <p className="text-sm text-yellow-800">
-                Please connect your wallet to make a donation
+                {t('donation.connectWalletNotice')}
               </p>
             </div>
           )}
@@ -338,7 +339,7 @@ export function DonationDialog({
               <Lock className="h-4 w-4 text-orange-600 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-sm font-semibold text-orange-800">
-                  Campaign Not Ready
+                  {t('donation.campaignNotReady')}
                 </p>
                 <p className="text-xs text-orange-700 mt-1">
                   {statusInfo.description}
@@ -354,7 +355,7 @@ export function DonationDialog({
               : "bg-blue-50 border-blue-200"
           }`}>
             <p className={`font-semibold ${isPrivate ? "text-purple-900" : "text-blue-900"}`}>
-              {isPrivate ? "🔒 Private Transaction Details" : "ℹ️ Transaction Details"}
+              {isPrivate ? t('donation.privateTransactionDetails') : t('donation.transactionDetails')}
             </p>
             <ul className={`list-disc list-inside space-y-0.5 text-xs ${
               isPrivate ? "text-purple-800" : "text-blue-800"
@@ -398,7 +399,7 @@ export function DonationDialog({
               ) : !canDonate ? (
                 "Campaign Not Ready"
               ) : (
-                `Confirm ${isPrivate ? "Private " : ""}Donation`
+                isPrivate ? t('donation.confirmPrivateDonation') : t('donation.confirmDonation')
               )}
             </Button>
           </div>

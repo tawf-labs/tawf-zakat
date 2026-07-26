@@ -18,6 +18,7 @@ import { JourneyTimeline } from '@/components/campaigns/journey-timeline';
 import { UrgencyBanner } from '@/components/campaigns/urgency-banner';
 import type { Beneficiary, OrganizerMessage as OrganizerMessageType, ImpactMetrics, ImpactCalculator as ImpactCalculatorItem, JourneyItem, UrgencyInfo } from '@/data/campaigns';
 import { CONTRACT_ADDRESSES } from '@/lib/abi';
+import { useLanguage } from "@/components/providers/language-provider";
 
 const CampaignMap = dynamic(() => import('@/components/campaigns/campaign-map'), {
   loading: () => <div className="w-full h-[400px] bg-muted animate-pulse rounded-xl" />,
@@ -74,6 +75,7 @@ interface CampaignDetailData {
 export default function ZakatCampaignPage() {
   const params = useParams();
   const slug = params.slug as string;
+  const { t } = useLanguage();
 
   const [campaignDetail, setCampaignDetail] = useState<CampaignDetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -153,7 +155,7 @@ export default function ZakatCampaignPage() {
         <div className="container px-4 mx-auto max-w-7xl flex items-center justify-center min-h-96">
           <div className="flex flex-col items-center gap-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-muted-foreground">Loading campaign details...</p>
+            <p className="text-muted-foreground">{t('zakatDetail.loading')}</p>
           </div>
         </div>
       </main>
@@ -172,7 +174,7 @@ export default function ZakatCampaignPage() {
         {/* Back Button */}
         <Link href="/campaigns" className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground mb-6 transition-colors">
           <ArrowLeft className="h-4 w-4" />
-          Back to Campaigns
+          {t('zakatDetail.backToCampaigns')}
         </Link>
 
         {/* Hero Impact Section */}
@@ -211,7 +213,7 @@ export default function ZakatCampaignPage() {
                   {campaignDetail.isZakat && (
                     <span className="inline-flex items-center gap-1 px-3 py-1 text-sm font-medium bg-emerald-600/90 backdrop-blur-sm text-white rounded-md border border-emerald-500">
                       <Shield className="h-4 w-4" />
-                      Zakat
+                      {t('zakatDetail.zakatBadge')}
                     </span>
                   )}
                 </div>
@@ -220,7 +222,7 @@ export default function ZakatCampaignPage() {
                 <div className="absolute top-4 right-4">
                   <span className="inline-flex items-center gap-1 px-3 py-1 text-sm font-medium bg-background/90 backdrop-blur-sm rounded-md border border-border">
                     <CircleCheck className="h-4 w-4 text-green-600" />
-                    Verified Campaign
+                    {t('zakatDetail.verifiedCampaign')}
                   </span>
                 </div>
               </div>
@@ -249,7 +251,7 @@ export default function ZakatCampaignPage() {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                    <span>by</span>
+                    <span>{t('zakatDetail.by')}</span>
                     <span className="text-primary font-semibold hover:underline cursor-pointer">
                       {campaignDetail.organization.name}
                     </span>
@@ -264,7 +266,7 @@ export default function ZakatCampaignPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       <Calendar className="h-4 w-4" />
-                      <span>Started {campaignDetail.createdDate}</span>
+                      <span>{t('zakatDetail.started')} {campaignDetail.createdDate}</span>
                     </div>
                   </div>
                 </div>
@@ -286,10 +288,10 @@ export default function ZakatCampaignPage() {
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                       <Target className="h-5 w-5" />
-                      <h3 className="font-bold text-lg">Milestones (On-Chain)</h3>
+                      <h3 className="font-bold text-lg">{t('zakatDetail.milestones')}</h3>
                     </div>
                     <span className="text-xs text-muted-foreground bg-secondary px-2 py-1 rounded">
-                      {onChainMilestones.filter(m => m.status === MilestoneStatus.Completed).length} / {onChainMilestones.length} completed
+                      {onChainMilestones.filter(m => m.status === MilestoneStatus.Completed).length} / {onChainMilestones.length} {t('zakatDetail.completed')}
                     </span>
                   </div>
                   <div className="space-y-4">
@@ -299,7 +301,7 @@ export default function ZakatCampaignPage() {
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-semibold">Milestone {idx + 1}</span>
+                              <span className="text-sm font-semibold">{t('zakatDetail.milestone')} {idx + 1}</span>
                               <span className={`text-xs px-2 py-0.5 rounded-full border ${getMilestoneStatusColor(milestone.status)}`}>
                                 {milestone.statusLabel}
                               </span>
@@ -321,7 +323,7 @@ export default function ZakatCampaignPage() {
                               rel="noopener noreferrer"
                               className="text-primary hover:underline flex items-center gap-1"
                             >
-                              View Proof <ExternalLink className="h-3 w-3" />
+                              {t('zakatDetail.viewProof')} <ExternalLink className="h-3 w-3" />
                             </a>
                           </div>
                         )}
@@ -330,8 +332,8 @@ export default function ZakatCampaignPage() {
                         {milestone.status === MilestoneStatus.Voting && (
                           <div className="bg-secondary/50 rounded-lg p-3 space-y-2">
                             <div className="flex items-center justify-between text-sm">
-                              <span className="font-medium">Community Vote</span>
-                              <span className="text-muted-foreground">Ends: {milestone.voteEnd}</span>
+                              <span className="font-medium">{t('zakatDetail.communityVote')}</span>
+                              <span className="text-muted-foreground">{t('zakatDetail.ends')} {milestone.voteEnd}</span>
                             </div>
                             <div className="flex gap-4 text-sm">
                               <div className="flex items-center gap-1">
@@ -356,21 +358,21 @@ export default function ZakatCampaignPage() {
                                   disabled={votingLoading}
                                   className="flex-1 text-xs py-2 px-3 rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
                                 >
-                                  <CheckCircle2 className="h-3 w-3" /> Approve
+                                  <CheckCircle2 className="h-3 w-3" /> {t('zakatDetail.approve')}
                                 </button>
                                 <button
                                   onClick={() => voteMilestone(campaignDetail.proposalId!, idx, VoteSupport.Against)}
                                   disabled={votingLoading}
                                   className="flex-1 text-xs py-2 px-3 rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
                                 >
-                                  <XCircle className="h-3 w-3" /> Reject
+                                  <XCircle className="h-3 w-3" /> {t('zakatDetail.reject')}
                                 </button>
                                 <button
                                   onClick={() => voteMilestone(campaignDetail.proposalId!, idx, VoteSupport.Abstain)}
                                   disabled={votingLoading}
                                   className="text-xs py-2 px-3 rounded-md border border-border hover:bg-accent disabled:opacity-50 transition-colors"
                                 >
-                                  Abstain
+                                  {t('zakatDetail.abstain')}
                                 </button>
                               </div>
                             )}
@@ -381,7 +383,7 @@ export default function ZakatCampaignPage() {
                         {milestone.status === MilestoneStatus.Completed && (
                           <div className="flex items-center gap-2 text-sm text-green-600">
                             <CircleCheck className="h-4 w-4" />
-                            <span>Completed on {milestone.releasedAt}</span>
+                            <span>{t('zakatDetail.completedOn')} {milestone.releasedAt}</span>
                           </div>
                         )}
                       </div>
@@ -401,7 +403,7 @@ export default function ZakatCampaignPage() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                 >
-                  Campaign Story
+                  {t('zakatDetail.tab.story')}
                 </button>
                 <button
                   onClick={() => setActiveTab('updates')}
@@ -410,7 +412,7 @@ export default function ZakatCampaignPage() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                 >
-                  Updates ({campaignDetail.updates.length})
+                  {t('zakatDetail.tab.updates')} ({campaignDetail.updates.length})
                 </button>
                 <button
                   onClick={() => setActiveTab('donors')}
@@ -419,7 +421,7 @@ export default function ZakatCampaignPage() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                 >
-                  Donors
+                  {t('zakatDetail.tab.donors')}
                 </button>
                 <button
                   onClick={() => setActiveTab('blockchain')}
@@ -428,7 +430,7 @@ export default function ZakatCampaignPage() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                 >
-                  Blockchain
+                  {t('zakatDetail.tab.blockchain')}
                 </button>
                 <button
                   onClick={() => setActiveTab('distribution')}
@@ -437,7 +439,7 @@ export default function ZakatCampaignPage() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                 >
-                  Distribution
+                  {t('zakatDetail.tab.distribution')}
                 </button>
               </div>
             </div>
@@ -497,7 +499,7 @@ export default function ZakatCampaignPage() {
 
             {activeTab === 'donors' && (
               <div className="space-y-4">
-                <p className="text-sm text-muted-foreground mb-2">Recent donors supporting this campaign</p>
+                <p className="text-sm text-muted-foreground mb-2">{t('zakatDetail.recentDonors')}</p>
                 {Array.from({ length: 10 }, (_, i) => (
                   <div key={i} className="bg-card border border-border rounded-xl p-4">
                     <div className="flex items-center justify-between">
@@ -506,9 +508,9 @@ export default function ZakatCampaignPage() {
                           {String.fromCharCode(65 + i)}
                         </div>
                         <div>
-                          <div className="font-medium">Anonymous Donor</div>
+                          <div className="font-medium">{t('zakatDetail.anonymousDonor')}</div>
                           <div className="text-sm text-muted-foreground">
-                            {i === 0 ? '2 mins ago' : `${Math.floor(Math.random() * 24) + 1} hours ago`}
+                            {i === 0 ? `2 ${t('zakatDetail.minsAgo')}` : `${Math.floor(Math.random() * 24) + 1} ${t('zakatDetail.hoursAgo')}`}
                           </div>
                         </div>
                       </div>
@@ -528,7 +530,7 @@ export default function ZakatCampaignPage() {
                   <div className="space-y-4">
                     <div className="flex items-center gap-2">
                       <FileText className="h-5 w-5 text-primary" />
-                      <h4 className="font-semibold">Smart Contract</h4>
+                      <h4 className="font-semibold">{t('zakatDetail.smartContract')}</h4>
                     </div>
                     <div className="font-mono text-xs bg-background p-3 rounded border border-border break-all">
                       {CONTRACT_ADDRESSES.ZKTCore}
@@ -539,7 +541,7 @@ export default function ZakatCampaignPage() {
                       rel="noopener noreferrer"
                       className="block w-full border border-border rounded-md h-9 px-4 text-sm font-semibold hover:bg-accent transition-all leading-9 text-center"
                     >
-                      View on Block Explorer
+                      {t('zakatDetail.viewOnBlockExplorer')}
                     </a>
                   </div>
                 </div>
@@ -547,18 +549,18 @@ export default function ZakatCampaignPage() {
                 {/* Chain Info */}
                 <div className="bg-muted/50 border border-border rounded-xl p-6">
                   <div className="space-y-3">
-                    <h4 className="font-semibold text-lg">Chain: Ethereum Sepolia</h4>
+                    <h4 className="font-semibold text-lg">{t('zakatDetail.chainEthereumSepolia')}</h4>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Total Transactions</span>
+                        <span className="text-muted-foreground">{t('zakatDetail.totalTransactions')}</span>
                         <span className="font-semibold">2,500</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Last Update</span>
+                        <span className="text-muted-foreground">{t('zakatDetail.lastUpdate')}</span>
                         <span className="font-semibold">2 mins ago</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Gas Used</span>
+                        <span className="text-muted-foreground">{t('zakatDetail.gasUsed')}</span>
                         <span className="font-semibold">0.0045 ETH</span>
                       </div>
                     </div>
@@ -570,9 +572,9 @@ export default function ZakatCampaignPage() {
                   <div className="flex items-start gap-3">
                     <Shield className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
                     <div className="space-y-1">
-                      <div className="font-semibold">100% Transparent</div>
+                      <div className="font-semibold">{t('zakatDetail.transparent100')}</div>
                       <p className="text-sm text-muted-foreground">
-                        Every donation and fund distribution is recorded on the blockchain, ensuring complete transparency and accountability.
+                        {t('zakatDetail.transparentDescription')}
                       </p>
                     </div>
                   </div>
@@ -585,39 +587,39 @@ export default function ZakatCampaignPage() {
                 <div className="bg-card border border-border rounded-xl p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <MapPin className="h-5 w-5 text-primary" />
-                    <h3 className="font-bold text-lg">Distribution Locations</h3>
+                    <h3 className="font-bold text-lg">{t('zakatDetail.distributionLocations')}</h3>
                   </div>
                   <p className="text-sm text-muted-foreground mb-6">
-                    See where the funds and aid are being distributed to the beneficiaries.
+                    {t('zakatDetail.distributionDescription')}
                   </p>
 
                   <CampaignMap
                     center={[-6.2088, 106.8456]}
                     zoom={12}
                     locations={[
-                      { lat: -6.2088, lng: 106.8456, name: "Main Distribution Center", description: "Central warehouse for aid collection" },
-                      { lat: -6.1751, lng: 106.8650, name: "North Jakarta Relief Post", description: "Distribution point for flood victims" },
-                      { lat: -6.2251, lng: 106.8000, name: "South Jakarta Community Hall", description: "Food package distribution center" }
+                      { lat: -6.2088, lng: 106.8456, name: t('zakatDetail.mainDistributionCenter'), description: t('zakatDetail.mainDistributionDesc') },
+                      { lat: -6.1751, lng: 106.8650, name: t('zakatDetail.northJakartaPost'), description: t('zakatDetail.northJakartaDesc') },
+                      { lat: -6.2251, lng: 106.8000, name: t('zakatDetail.southJakartaHall'), description: t('zakatDetail.southJakartaDesc') }
                     ]}
                   />
 
                   <div className="mt-6 space-y-4">
-                    <h4 className="font-semibold text-sm text-foreground">Distribution Activity</h4>
+                    <h4 className="font-semibold text-sm text-foreground">{t('zakatDetail.distributionActivity')}</h4>
                     <div className="space-y-3">
                       <div className="flex items-start gap-3 text-sm">
                         <div className="h-2 w-2 rounded-full bg-green-500 mt-2"></div>
                         <div>
-                          <p className="font-medium">North Jakarta Relief Post</p>
-                          <p className="text-muted-foreground">distributed 500 food packages</p>
-                          <p className="text-xs text-muted-foreground mt-1">2 hours ago</p>
+                          <p className="font-medium">{t('zakatDetail.northJakartaPost')}</p>
+                          <p className="text-muted-foreground">{t('zakatDetail.distributedFoodPackages')}</p>
+                          <p className="text-xs text-muted-foreground mt-1">2 {t('zakatDetail.hoursAgo')}</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3 text-sm">
                         <div className="h-2 w-2 rounded-full bg-green-500 mt-2"></div>
                         <div>
-                          <p className="font-medium">South Jakarta Community Hall</p>
-                          <p className="text-muted-foreground">distributed medical supplies</p>
-                          <p className="text-xs text-muted-foreground mt-1">5 hours ago</p>
+                          <p className="font-medium">{t('zakatDetail.southJakartaHall')}</p>
+                          <p className="text-muted-foreground">{t('zakatDetail.distributedMedicalSupplies')}</p>
+                          <p className="text-xs text-muted-foreground mt-1">5 {t('zakatDetail.hoursAgo')}</p>
                         </div>
                       </div>
                     </div>
@@ -631,9 +633,9 @@ export default function ZakatCampaignPage() {
           <div className="lg:col-span-1">
             <div className="sticky top-8">
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-                <h3 className="font-bold text-xl mb-4">Make a Donation</h3>
+                <h3 className="font-bold text-xl mb-4">{t('zakatDetail.makeDonation')}</h3>
                 <p className="text-sm text-muted-foreground mb-6">
-                  Your support helps families in need. All donations go directly to the campaign.
+                  {t('zakatDetail.donationDescription')}
                 </p>
 
                 {/* Donate Button - Opens Dialog Directly */}
@@ -641,7 +643,7 @@ export default function ZakatCampaignPage() {
                   onClick={() => setShowDonationDialog(true)}
                   className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border border-transparent rounded-md h-11 px-4 text-sm font-bold transition-all shadow-sm"
                 >
-                  Donate Now
+                  {t('zakatDetail.donateNow')}
                 </button>
               </div>
 
@@ -666,7 +668,7 @@ export default function ZakatCampaignPage() {
 
               {/* Organization Info */}
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm mt-6">
-                <h3 className="font-bold text-lg mb-4">About Organization</h3>
+                <h3 className="font-bold text-lg mb-4">{t('zakatDetail.aboutOrganization')}</h3>
                 <div className="flex items-start gap-3 mb-4">
                   <div className="h-12 w-12 rounded-full bg-secondary flex items-center justify-center font-bold text-primary">
                     {campaignDetail.organization.name.charAt(0)}
@@ -675,11 +677,11 @@ export default function ZakatCampaignPage() {
                     <div className="flex items-center gap-1 mb-1">
                       <span className="font-semibold">{campaignDetail.organization.name}</span>
                     </div>
-                    <p className="text-sm text-muted-foreground">Verified Organization</p>
+                    <p className="text-sm text-muted-foreground">{t('zakatDetail.verifiedOrganization')}</p>
                   </div>
                 </div>
                 <button className="w-full border border-border rounded-md h-9 px-4 text-sm font-semibold hover:bg-accent transition-all">
-                  View Profile
+                  {t('zakatDetail.viewProfile')}
                 </button>
               </div>
             </div>

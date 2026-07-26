@@ -3,9 +3,9 @@
 import { useState } from "react";
 import Image from "next/image";
 import { MapPin, Calendar, ChevronDown, ChevronUp } from "lucide-react";
+import { useLanguage } from "@/components/providers/language-provider";
 
-// Blur placeholder for smoother image loading
-const BLUR_PLACEHOLDER = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAhEAACAQMDBQAAAAAAAAAAAAABAgMABAUGIWGRkqGx0f/EABUBAQEAAAAAAAAAAAAAAAAAAAMF/8QAGhEAAgIDAAAAAAAAAAAAAAAAAAECEgMRMv/aAAwDAQACEQMRAD8AltJagyeH0AthI5xdrLcNM91BF5pX2HaH9bcfaSXWGaRmknyJckliyjqTzSlT54b6bk+h0R+xOJPrsHn1lkfU+nBlpWEXii0PH/iH8WIa/SPzH5IVeVP/xPF";
+const BLUR_PLACEHOLDER = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAhEAACAQMDBQAAAAAAAAAAAAABAgMABAUGIWGRkqGx0f/EABUBAQEAAAAAAAAAAAAAAAAAAAMF/8QAGhEAAgIDAAAAAAAAAAAAAAAAAAECEgMRMv/aAAwDAQACEQMRAD8AltJagyeH0AthI5xdrLcNM91BF5pX2HaH9bcfaSXWGaRnkkyJckliyjqTzSlT54b6bk+h0R+xOJPrsHn1lkfU+nBlpWEXii0PH/iH8WIa/SPzH5IVeVP/xPF";
 
 interface Beneficiary {
   name: string;
@@ -22,6 +22,7 @@ interface BeneficiaryStoriesProps {
 }
 
 export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
+  const { t } = useLanguage();
   const [expandedIndex, setExpandedIndex] = useState<number | null>(0);
   const [showAll, setShowAll] = useState(false);
 
@@ -35,9 +36,9 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Meet the People You're Helping</h2>
+          <h2 className="text-2xl font-bold text-foreground">{t("beneficiaries.title")}</h2>
           <p className="text-muted-foreground mt-1">
-            Real stories from real beneficiaries whose lives have been changed
+            {t("beneficiaries.subtitle")}
           </p>
         </div>
       </div>
@@ -64,14 +65,14 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
                 sizes="(max-width: 768px) 100vw, 33vw"
                 placeholder="blur"
                 blurDataURL={BLUR_PLACEHOLDER}
-                priority={index < 3}  // Priority for first 3 images
+                priority={index < 3}
               />
               <div className="absolute inset-0 bg-black/60" />
 
               {/* Name overlay */}
               <div className="absolute bottom-4 left-4 right-4">
                 <h3 className="text-xl font-bold text-white">{beneficiary.name}</h3>
-                <p className="text-white/90 text-sm">Age {beneficiary.age}</p>
+                <p className="text-white/90 text-sm">{t("beneficiaries.age").replace("{age}", String(beneficiary.age))}</p>
               </div>
             </div>
 
@@ -87,7 +88,7 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
                     text-sm leading-relaxed
                     ${expandedIndex === index ? '' : 'line-clamp-3'}
                   `}>
-                    "{beneficiary.story}"
+                    &ldquo;{beneficiary.story}&rdquo;
                   </p>
                 </button>
               </div>
@@ -96,7 +97,7 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
               {expandedIndex === index && (
                 <div className="pt-2 border-t border-border space-y-2 animate-in fade-in slide-in-from-top-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Received
+                    {t("beneficiaries.received")}
                   </p>
                   <div className="flex flex-wrap gap-1.5">
                     {beneficiary.received.map((item, i) => (
@@ -131,12 +132,12 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
                 {expandedIndex === index ? (
                   <>
                     <ChevronUp className="h-4 w-4" />
-                    Show less
+                    {t("beneficiaries.showLess")}
                   </>
                 ) : (
                   <>
                     <ChevronDown className="h-4 w-4" />
-                    Read full story
+                    {t("beneficiaries.readFullStory")}
                   </>
                 )}
               </button>
@@ -153,9 +154,9 @@ export function BeneficiaryStories({ beneficiaries }: BeneficiaryStoriesProps) {
             className="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-all font-medium text-primary"
           >
             {showAll ? (
-              <>Show less</>
+              <>{t("beneficiaries.showLess")}</>
             ) : (
-              <>View all {beneficiaries.length} stories</>
+              <>{t("beneficiaries.viewAllStories").replace("{count}", String(beneficiaries.length))}</>
             )}
           </button>
         </div>

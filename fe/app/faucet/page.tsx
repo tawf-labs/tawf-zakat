@@ -10,9 +10,11 @@ import { useIDRXBalance } from "@/hooks/useIDRXBalance";
 import { useVotingPower } from "@/hooks/useVotingPower";
 import { handleTransactionError, handleWalletError } from "@/lib/errors";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/components/providers/language-provider";
 import { useEffect, useState } from "react";
 
 export default function FaucetPage() {
+  const { t } = useLanguage()
   const { address, isConnected } = useAccount();
   const { balance, formattedBalance, refetch: refetchBalance } = useIDRXBalance();
   const { 
@@ -106,7 +108,7 @@ export default function FaucetPage() {
     if (!canClaim) {
       toast({
         title: "Cannot Claim",
-        description: "You must wait 24 hours between claims",
+        description: t('faucet.notEligibleMessage'),
         variant: "destructive",
       });
       return;
@@ -162,16 +164,16 @@ export default function FaucetPage() {
           <div className="mx-auto mb-4 w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
             <Droplet className="w-8 h-8 text-primary" />
           </div>
-          <CardTitle className="text-3xl">MockIDRX Faucet</CardTitle>
+          <CardTitle className="text-3xl">{t('faucet.title')}</CardTitle>
           <CardDescription>
-            Get free testnet MockIDRX tokens for testing donations on Ethereum Sepolia
+            {t('faucet.description')}
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
           {/* Current Balance */}
           <div className="bg-muted/50 rounded-lg p-4 text-center">
-            <p className="text-sm text-muted-foreground mb-1">Your Balance</p>
+            <p className="text-sm text-muted-foreground mb-1">{t('faucet.yourBalance')}</p>
             <p className="text-2xl font-bold">{formattedBalance} IDRX</p>
           </div>
 
@@ -185,15 +187,15 @@ export default function FaucetPage() {
               )}
               <AlertDescription>
                 {isCheckingEligibility ? (
-                  "Checking eligibility..."
+                  t('faucet.checkingEligibility')
                 ) : canClaim ? (
-                  "You can claim from the faucet"
+                  t('faucet.eligibleMessage')
                 ) : countdown !== null ? (
                   <>
-                    Next claim available in: <strong>{formatCountdown(countdown)}</strong>
+                    {t('faucet.nextClaimIn')} <strong>{formatCountdown(countdown)}</strong>
                   </>
                 ) : (
-                  "You must wait 24 hours between claims"
+                  t('faucet.notEligibleMessage')
                 )}
               </AlertDescription>
             </Alert>
@@ -201,7 +203,7 @@ export default function FaucetPage() {
             <Alert variant="destructive">
               <XCircle className="h-4 w-4" />
               <AlertDescription>
-                Please connect your wallet to use the faucet
+                {t('faucet.notConnected')}
               </AlertDescription>
             </Alert>
           )}
@@ -216,22 +218,22 @@ export default function FaucetPage() {
             {isClaimPending || isConfirming ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {isClaimPending ? "Claiming..." : "Confirming..."}
+                {isClaimPending ? t('faucet.claiming') : t('faucet.confirming')}
               </>
             ) : isConfirmed ? (
               <>
                 <CheckCircle2 className="mr-2 h-4 w-4" />
-                Claimed Successfully!
+                {t('faucet.claimedSuccess')}
               </>
             ) : (
-              "Claim MockIDRX"
+              t('faucet.claimButton')
             )}
           </Button>
 
           {/* Transaction Hash */}
           {txHash && (
             <div className="text-center text-sm">
-              <p className="text-muted-foreground mb-1">Transaction Hash:</p>
+              <p className="text-muted-foreground mb-1">{t('faucet.transactionHash')}</p>
               <a
                 href={`https://sepolia.etherscan.io/tx/${txHash}`}
                 target="_blank"
@@ -248,7 +250,7 @@ export default function FaucetPage() {
             <Alert variant="destructive">
               <XCircle className="h-4 w-4" />
               <AlertDescription>
-                {claimError.message || "Failed to claim from faucet"}
+                {claimError.message || t('faucet.claimFailed')}
               </AlertDescription>
             </Alert>
           )}
@@ -261,21 +263,21 @@ export default function FaucetPage() {
           <div className="mx-auto mb-4 w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center">
             <Vote className="w-8 h-8 text-purple-600" />
           </div>
-          <CardTitle className="text-3xl">Governance Faucet</CardTitle>
+          <CardTitle className="text-3xl">{t('faucet.governanceTitle')}</CardTitle>
           <CardDescription>
-            Get vZKT tokens to participate in DAO voting and proposals
+            {t('faucet.governanceDescription')}
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
           {/* Current Balance */}
           <div className="bg-purple-50 rounded-lg p-4 text-center">
-            <p className="text-sm text-purple-700 mb-1">Your Voting Power</p>
+            <p className="text-sm text-purple-700 mb-1">{t('faucet.yourVotingPower')}</p>
             <p className="text-2xl font-bold text-purple-900">{formattedVotingPower} vZKT</p>
           </div>
 
           <div className="text-sm text-muted-foreground text-center">
-            You need at least 100 vZKT to create proposals. Voting power is usually earned by donating, but you can claim some here for testing.
+            {t('faucet.votingPowerInfo')}
           </div>
 
           <Button
@@ -287,10 +289,10 @@ export default function FaucetPage() {
             {isRequestingVotingPower ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Requesting...
+                {t('faucet.requesting')}
               </>
             ) : (
-              "Request 100 vZKT"
+              t('faucet.requestButton')
             )}
           </Button>
         </CardContent>
@@ -298,12 +300,12 @@ export default function FaucetPage() {
 
       {/* Info */}
       <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm space-y-2">
-        <p className="font-semibold text-blue-900 dark:text-blue-100">ℹ️ Faucet Information</p>
+        <p className="font-semibold text-blue-900 dark:text-blue-100">{t('faucet.info')}</p>
         <ul className="list-disc list-inside text-blue-800 dark:text-blue-200 space-y-1">
-          <li>Claim limit: Once every 24 hours per address (MockIDRX)</li>
-          <li>Network: Ethereum Sepolia</li>
-          <li>Tokens are for testing purposes only</li>
-          <li>Use tokens to donate to campaigns and test governance</li>
+          <li>{t('faucet.infoLine1')}</li>
+          <li>{t('faucet.infoLine2')}</li>
+          <li>{t('faucet.infoLine3')}</li>
+          <li>{t('faucet.infoLine4')}</li>
         </ul>
       </div>
     </div>

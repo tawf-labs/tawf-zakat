@@ -33,8 +33,8 @@ export function ConnectWalletButton() {
     if (address) {
       navigator.clipboard.writeText(address);
       toast({
-        title: "Address Copied",
-        description: "Wallet address copied to clipboard",
+        title: t("wallet.addressCopied"),
+        description: t("wallet.addressCopiedDesc"),
       });
     }
   };
@@ -56,7 +56,7 @@ export function ConnectWalletButton() {
     localStorage.removeItem("access_token");
     toast({
       title: t("header.disconnect"),
-      description: "Your wallet has been disconnected successfully",
+      description: t("wallet.disconnectedDesc"),
     });
   };
 
@@ -116,12 +116,12 @@ export function ConnectWalletButton() {
         <DropdownMenuTrigger asChild>
           <Button variant="default" size="default">
             <Wallet className="mr-2 h-4 w-4" />
-            {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "Connected"}
+            {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : t("wallet.connected")}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
           <div className="px-2 py-2">
-            <p className="text-xs text-gray-500 mb-1">Connected Wallet</p>
+            <p className="text-xs text-gray-500 mb-1">{t("dashboard.connectedWallet")}</p>
             <p className="text-sm font-mono">
               {address ? `${address.slice(0, 10)}...${address.slice(-8)}` : ""}
             </p>
@@ -131,13 +131,13 @@ export function ConnectWalletButton() {
 
           <DropdownMenuItem onClick={handleCopyAddress} className="cursor-pointer">
             <Copy className="mr-2 h-4 w-4" />
-            Copy Address
+            {t("wallet.copyAddress")}
           </DropdownMenuItem>
 
           {currentChain?.blockExplorers?.default && (
             <DropdownMenuItem onClick={handleViewExplorer} className="cursor-pointer">
               <ExternalLink className="mr-2 h-4 w-4" />
-              View on Explorer
+              {t("wallet.viewOnExplorer")}
             </DropdownMenuItem>
           )}
 

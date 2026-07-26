@@ -1,4 +1,10 @@
+"use client";
+
+import { useLanguage } from "@/components/providers/language-provider";
+
 export function HowItWorks() {
+  const { t } = useLanguage();
+
   return (
     <section className="py-16 md:py-24 px-4 sm:px-6 bg-accent">
       <div className="container mx-auto">
@@ -6,10 +12,9 @@ export function HowItWorks() {
 
           {/* Left Content */}
           <div className="lg:w-1/2 space-y-6">
-            {/* Updated H2 size per guidelines: 40px/36px */}
-            <h2 className="font-serif text-[36px] md:text-[40px] font-bold text-foreground">How ZKT Works</h2>
+            <h2 className="font-serif text-[36px] md:text-[40px] font-bold text-foreground">{t("howItWorks.heading")}</h2>
             <p className="text-base lg:text-lg text-muted-foreground">
-              Experience the future of giving with our seamless, transparent 4-step process.
+              {t("howItWorks.description")}
             </p>
 
             <div className="space-y-6 pt-4">
@@ -20,9 +25,9 @@ export function HowItWorks() {
                   1
                 </div>
                 <div>
-                  <h3 className="font-semibold text-lg font-serif">Connect & Verify</h3>
+                  <h3 className="font-semibold text-lg font-serif">{t("howItWorks.step1.title")}</h3>
                   <p className="text-muted-foreground">
-                    Login easily and get your identity verified automatically.
+                    {t("howItWorks.step1.desc")}
                   </p>
                 </div>
               </div>
@@ -33,9 +38,9 @@ export function HowItWorks() {
                   2
                 </div>
                 <div>
-                  <h3 className="font-semibold text-lg font-serif">Choose Your Cause</h3>
+                  <h3 className="font-semibold text-lg font-serif">{t("howItWorks.step2.title")}</h3>
                   <p className="text-muted-foreground">
-                    Browse verified campaigns for Zakat, Infaq, or Sodaqah.
+                    {t("howItWorks.step2.desc")}
                   </p>
                 </div>
               </div>
@@ -46,9 +51,9 @@ export function HowItWorks() {
                   3
                 </div>
                 <div>
-                  <h3 className="font-semibold text-lg font-serif">Donate Securely</h3>
+                  <h3 className="font-semibold text-lg font-serif">{t("howItWorks.step3.title")}</h3>
                   <p className="text-muted-foreground">
-                    Pay via Xellar embedded wallet with one click.
+                    {t("howItWorks.step3.desc")}
                   </p>
                 </div>
               </div>
@@ -59,9 +64,9 @@ export function HowItWorks() {
                   4
                 </div>
                 <div>
-                  <h3 className="font-semibold text-lg font-serif">Track Impact</h3>
+                  <h3 className="font-semibold text-lg font-serif">{t("howItWorks.step4.title")}</h3>
                   <p className="text-muted-foreground">
-                    Receive an NFT receipt and track your funds on-chain.
+                    {t("howItWorks.step4.desc")}
                   </p>
                 </div>
               </div>
@@ -74,8 +79,8 @@ export function HowItWorks() {
             <div className="space-y-4">
 
               <div className="bg-background p-5 rounded-2xl border border-primary/10 flex items-center justify-between">
-                <span className="font-medium">Donation Sent</span>
-                <span className="text-primary font-mono font-bold">Confirmed</span>
+                <span className="font-medium">{t("howItWorks.donationSent")}</span>
+                <span className="text-primary font-mono font-bold">{t("howItWorks.confirmed")}</span>
               </div>
 
               <div className="flex justify-center">
@@ -83,9 +88,9 @@ export function HowItWorks() {
               </div>
 
               <div className="bg-background p-5 rounded-2xl border border-primary/10 flex items-center justify-between">
-                <span className="font-medium">Smart Contract</span>
+                <span className="font-medium">{t("howItWorks.smartContract")}</span>
                 <span className="text-xs bg-primary/10 text-primary px-3 py-1.5 rounded-full font-medium uppercase tracking-wide-label">
-                  Processing
+                  {t("howItWorks.processing")}
                 </span>
               </div>
 
@@ -94,7 +99,7 @@ export function HowItWorks() {
               </div>
 
               <div className="bg-background p-5 rounded-2xl border border-primary/10 flex items-center justify-between">
-                <span className="font-medium">NFT Receipt Minted</span>
+                <span className="font-medium">{t("howItWorks.nftReceiptMinted")}</span>
                 <span className="text-xs bg-secondary/20 text-secondary-foreground px-3 py-1.5 rounded-full font-medium font-mono uppercase tracking-wide-label">
                   0x83...29a
                 </span>

@@ -24,8 +24,10 @@ import { handleWalletError } from "@/lib/errors"
 import { useToast } from "@/hooks/use-toast"
 import { ProposalStatus, CampaignType, VoteSupport } from "@/lib/types"
 import { CONTRACT_ADDRESSES, VotingManagerABI } from "@/lib/abi"
+import { useLanguage } from "@/components/providers/language-provider"
 
 export default function GovernancePage() {
+  const { t } = useLanguage()
   const { toast } = useToast()
   const { address, isConnected } = useAccount()
   const [activeLayer, setActiveLayer] = useState<"community" | "sharia">("community")
@@ -202,42 +204,42 @@ export default function GovernancePage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Governance Portal</h1>
-            <p className="text-black">Participate in ZKT.app's dual-layer DAO governance system</p>
+            <h1 className="text-3xl font-bold tracking-tight">{t('governance.title')}</h1>
+            <p className="text-black">{t('governance.subtitle')}</p>
           </div>
           <div className="flex items-center gap-3">
             <Dialog>
               <DialogTrigger asChild>
                 <Button className="bg-white text-black shadow-md border border-black hover:bg-gray-50">
                   <Plus className="h-4 w-4 mr-2" />
-                  New Proposal
+                  {t('governance.newProposal')}
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-[600px]">
                 <DialogHeader>
-                  <DialogTitle>Create New Proposal</DialogTitle>
+                  <DialogTitle>{t('governance.createProposal.title')}</DialogTitle>
                   <DialogDescription>
-                    Submit a proposal for community voting. Requires minimum 100 voting power.
+                    {t('governance.createProposal.description')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="title">Proposal Title</Label>
-                    <Input id="title" placeholder="Brief, descriptive title" />
+                    <Label htmlFor="title">{t('governance.createProposal.titleLabel')}</Label>
+                    <Input id="title" placeholder={t('governance.createProposal.titlePlaceholder')} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="description">Description</Label>
-                    <Textarea id="description" placeholder="Detailed explanation of your proposal..." rows={6} />
+                    <Label htmlFor="description">{t('governance.createProposal.descriptionLabel')}</Label>
+                    <Textarea id="description" placeholder={t('governance.createProposal.descriptionPlaceholder')} rows={6} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="fundingGoal">Funding Goal (IDRX)</Label>
-                    <Input id="fundingGoal" type="number" placeholder="10000" />
+                    <Label htmlFor="fundingGoal">{t('governance.createProposal.fundingGoalLabel')}</Label>
+                    <Input id="fundingGoal" type="number" placeholder={t('governance.createProposal.fundingGoalPlaceholder')} />
                   </div>
                   <div className="space-y-2">
-                    <Label>Your Voting Power</Label>
+                    <Label>{t('governance.createProposal.votingPowerLabel')}</Label>
                     <div className="text-2xl font-bold text-black">{userVotingPower}</div>
                   </div>
-                  <Button className="w-full">Submit Proposal</Button>
+                  <Button className="w-full">{t('governance.createProposal.submit')}</Button>
                 </div>
               </DialogContent>
             </Dialog>
@@ -248,7 +250,7 @@ export default function GovernancePage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <div className="bg-white rounded-xl border border-black p-6 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-black">Your Voting Power</div>
+              <div className="text-sm font-medium text-black">{t('governance.stats.votingPower')}</div>
               <Vote className="h-4 w-4 text-gray-600" />
             </div>
             <div className="text-2xl font-bold">
@@ -258,34 +260,34 @@ export default function GovernancePage() {
                 formattedVotingPower
               )}
             </div>
-            <div className="text-xs text-black mt-1">From donations</div>
+            <div className="text-xs text-black mt-1">{t('governance.stats.fromDonations')}</div>
           </div>
 
           <div className="bg-white rounded-xl border border-black p-6 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-black">Active Proposals</div>
+              <div className="text-sm font-medium text-black">{t('governance.stats.activeProposals')}</div>
               <Clock className="h-4 w-4 text-gray-600" />
             </div>
             <div className="text-2xl font-bold">{proposals.filter((p) => p.status === "Active").length}</div>
-            <div className="text-xs text-black mt-1">Open for voting</div>
+            <div className="text-xs text-black mt-1">{t('governance.stats.openForVoting')}</div>
           </div>
 
           <div className="bg-white rounded-xl border border-black p-6 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-black">Total Voters</div>
+              <div className="text-sm font-medium text-black">{t('governance.stats.totalVoters')}</div>
               <Users className="h-4 w-4 text-gray-600" />
             </div>
             <div className="text-2xl font-bold">3,421</div>
-            <div className="text-xs text-black mt-1">vZKT holders</div>
+            <div className="text-xs text-black mt-1">{t('governance.stats.vzktHolders')}</div>
           </div>
 
           <div className="bg-white rounded-xl border border-black p-6 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-black">Proposals Passed</div>
+              <div className="text-sm font-medium text-black">{t('governance.stats.proposalsPassed')}</div>
               <CheckCircle2 className="h-4 w-4 text-gray-600" />
             </div>
             <div className="text-2xl font-bold">{proposals.filter((p) => p.status === "Approved").length}</div>
-            <div className="text-xs text-black mt-1">All-time</div>
+            <div className="text-xs text-black mt-1">{t('governance.stats.allTime')}</div>
           </div>
         </div>
 
@@ -295,22 +297,22 @@ export default function GovernancePage() {
             <div className="p-6 border-b border-black">
               <div className="flex items-center gap-2">
                 <Users className="h-5 w-5 text-black" />
-                <h2 className="font-semibold">Layer 1: Community DAO</h2>
+                <h2 className="font-semibold">{t('governance.layer1.title')}</h2>
               </div>
-              <p className="text-sm text-black mt-1">Donors with vZKT tokens vote on platform proposals</p>
+              <p className="text-sm text-black mt-1">{t('governance.layer1.description')}</p>
             </div>
             <div className="p-6 space-y-2 text-sm">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Vote on campaign proposals</span>
+                <span>{t('governance.layer1.voteOnProposals')}</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Approve funding goals</span>
+                <span>{t('governance.layer1.approveFunding')}</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Platform governance</span>
+                <span>{t('governance.layer1.platformGovernance')}</span>
               </div>
             </div>
           </div>
@@ -319,22 +321,22 @@ export default function GovernancePage() {
             <div className="p-6 border-b border-black">
               <div className="flex items-center gap-2">
                 <Shield className="h-5 w-5 text-black" />
-                <h2 className="font-semibold">Layer 2: Sharia Council</h2>
+                <h2 className="font-semibold">{t('governance.layer2.title')}</h2>
               </div>
-              <p className="text-sm text-black mt-1">Final review to ensure Sharia compliance</p>
+              <p className="text-sm text-black mt-1">{t('governance.layer2.description')}</p>
             </div>
             <div className="p-6 space-y-2 text-sm">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Review community-approved proposals</span>
+                <span>{t('governance.layer2.reviewProposals')}</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Ensure Zakat compliance</span>
+                <span>{t('governance.layer2.ensureCompliance')}</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Protect donor interests</span>
+                <span>{t('governance.layer2.protectDonors')}</span>
               </div>
             </div>
           </div>
@@ -343,35 +345,35 @@ export default function GovernancePage() {
         {/* Dual-Layer Proposals Section */}
         <div className="bg-white rounded-xl border border-black shadow-sm">
           <div className="p-6 border-b border-black">
-            <h2 className="font-semibold">Governance Proposals</h2>
-            <p className="text-sm text-black mt-1">Navigate between Community DAO and Sharia Council layers</p>
+            <h2 className="font-semibold">{t('governance.proposals.title')}</h2>
+            <p className="text-sm text-black mt-1">{t('governance.proposals.subtitle')}</p>
           </div>
 
           <Tabs value={activeLayer} onValueChange={(v) => setActiveLayer(v as "community" | "sharia")} className="p-6">
             <TabsList className="mb-6 grid w-full max-w-md grid-cols-2">
               <TabsTrigger value="community" className="gap-2">
                 <Users className="h-4 w-4" />
-                Community DAO
+                {t('governance.tabs.community')}
               </TabsTrigger>
               <TabsTrigger value="sharia" className="gap-2">
                 <Shield className="h-4 w-4" />
-                Sharia Council
+                {t('governance.tabs.sharia')}
               </TabsTrigger>
             </TabsList>
 
             {/* Community DAO Tab */}
             <TabsContent value="community" className="space-y-4 mt-0">
               <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-2">Community DAO Proposals</h3>
+                <h3 className="text-lg font-semibold mb-2">{t('governance.community.title')}</h3>
                 <p className="text-sm text-muted-foreground">
-                  All vZKT holders can vote on these proposals. Vote weight is proportional to your voting power.
+                  {t('governance.community.description')}
                 </p>
               </div>
 
               {communityProposals.length === 0 && !isLoading ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No community proposals found. Create one to get started!</p>
+                  <p>{t('governance.community.empty')}</p>
                 </div>
               ) : (
                 communityProposals.map((proposal) => (
@@ -391,10 +393,9 @@ export default function GovernancePage() {
             {/* Sharia Council Tab */}
             <TabsContent value="sharia" className="space-y-4 mt-0">
               <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-2">Sharia Council Review</h3>
+                <h3 className="text-lg font-semibold mb-2">{t('governance.sharia.title')}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Zakat-compliant proposals that passed community vote require Sharia Council approval.
-                  Only authorized council members can review these proposals.
+                  {t('governance.sharia.description')}
                 </p>
               </div>
 
@@ -402,10 +403,9 @@ export default function GovernancePage() {
                 <div className="flex items-start gap-3">
                   <BookOpen className="h-5 w-5 text-amber-600 mt-0.5" />
                   <div>
-                    <h4 className="font-semibold text-amber-900">Sharia Council Access</h4>
+                    <h4 className="font-semibold text-amber-900">{t('governance.sharia.accessTitle')}</h4>
                     <p className="text-sm text-amber-800 mt-1">
-                      Only authorized Sharia Council members can vote on proposals in this tab.
-                      Contact the DAO administrator if you believe you should have access.
+                      {t('governance.sharia.accessDescription')}
                     </p>
                   </div>
                 </div>
@@ -414,7 +414,7 @@ export default function GovernancePage() {
               {shariaProposals.length === 0 && !isLoading ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No proposals pending Sharia Council review.</p>
+                  <p>{t('governance.sharia.empty')}</p>
                 </div>
               ) : (
                 shariaProposals.map((proposal) => (
@@ -449,6 +449,7 @@ function ProposalCard({
   onSubmitForVote: () => void
   isLoading: boolean
 }) {
+  const { t } = useLanguage()
   const quorumPercentage = proposal.totalVotes > 0 ? (proposal.totalVotes / proposal.quorum) * 100 : 0
 
   return (
@@ -469,7 +470,7 @@ function ProposalCard({
               proposal.status === "Rejected" ? "bg-red-100 text-red-700 border-red-300" :
               "bg-gray-100 text-gray-700 border-gray-300"
             }`}>
-              {proposal.status}
+              {t(proposal.status === "Active" ? "governance.status.active" : proposal.status === "Pending Review" ? "governance.status.pendingReview" : proposal.status === "Approved" ? "governance.status.approved" : proposal.status === "Rejected" ? "governance.status.rejected" : "governance.status.draft")}
             </span>
             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border border-black">
               {proposal.type}
@@ -477,7 +478,7 @@ function ProposalCard({
             {proposal.isShariaApproved && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border border-black gap-1">
                 <Shield className="h-3 w-3" />
-                Sharia Compliant
+                {t('governance.badge.shariaCompliant')}
               </span>
             )}
           </div>
@@ -491,9 +492,9 @@ function ProposalCard({
         <>
           <div className="space-y-3 mb-4">
             <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Total Votes</span>
+              <span className="text-gray-600">{t('governance.votes.total')}</span>
               <span className="font-medium">
-                {proposal.totalVotes.toLocaleString()} / {proposal.quorum.toLocaleString()} (quorum)
+                {proposal.totalVotes.toLocaleString()} / {proposal.quorum.toLocaleString()} ({t('governance.votes.quorum')})
               </span>
             </div>
             <Progress value={Math.min(quorumPercentage, 100)} className="h-2" />
@@ -502,7 +503,7 @@ function ProposalCard({
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-green-600 font-medium flex items-center gap-1">
-                    <ThumbsUp className="h-3 w-3" /> For
+                    <ThumbsUp className="h-3 w-3" /> {t('governance.votes.for')}
                   </span>
                   <span className="font-bold">{proposal.votesFor.toLocaleString()}</span>
                 </div>
@@ -511,7 +512,7 @@ function ProposalCard({
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-red-600 font-medium flex items-center gap-1">
-                    <ThumbsDown className="h-3 w-3" /> Against
+                    <ThumbsDown className="h-3 w-3" /> {t('governance.votes.against')}
                   </span>
                   <span className="font-bold">{proposal.votesAgainst.toLocaleString()}</span>
                 </div>
@@ -519,7 +520,7 @@ function ProposalCard({
               </div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-600 font-medium">Abstain</span>
+                  <span className="text-gray-600 font-medium">{t('governance.votes.abstain')}</span>
                   <span className="font-bold">{proposal.votesAbstain.toLocaleString()}</span>
                 </div>
                 <Progress value={proposal.totalVotes > 0 ? (proposal.votesAbstain / proposal.totalVotes) * 100 : 0} className="h-1.5 [&>div]:bg-gray-400" />
@@ -543,7 +544,7 @@ function ProposalCard({
               onClick={onSubmitForVote}
               disabled={isLoading}
             >
-              Submit for Vote
+              {t('governance.action.submitForVote')}
             </Button>
           )}
 
@@ -558,7 +559,7 @@ function ProposalCard({
                 disabled={isLoading}
               >
                 <ThumbsUp className="h-3 w-3 mr-1" />
-                Vote For
+                {t('governance.action.voteFor')}
               </Button>
               <Button
                 size="sm"
@@ -568,7 +569,7 @@ function ProposalCard({
                 disabled={isLoading}
               >
                 <ThumbsDown className="h-3 w-3 mr-1" />
-                Against
+                {t('governance.action.against')}
               </Button>
               <Button
                 size="sm"
@@ -576,7 +577,7 @@ function ProposalCard({
                 onClick={() => onVote("abstain")}
                 disabled={isLoading}
               >
-                Abstain
+                {t('governance.action.abstain')}
               </Button>
             </>
           )}
@@ -585,7 +586,7 @@ function ProposalCard({
           {proposal.status === "Active" && hasVoted && (
             <span className="inline-flex items-center px-3 py-1 rounded-md text-xs font-medium bg-green-100 border border-green-600 text-green-700 gap-1">
               <CheckCircle2 className="h-3 w-3" />
-              Voted
+              {t('governance.action.voted')}
             </span>
           )}
 
@@ -597,7 +598,7 @@ function ProposalCard({
               onClick={onFinalize}
               disabled={isLoading}
             >
-              Finalize Vote
+              {t('governance.action.finalize')}
             </Button>
           )}
         </div>
@@ -614,16 +615,18 @@ function ShariaReviewCard({
   proposal: any
   isLoading: boolean
 }) {
+  const { t } = useLanguage()
+
   return (
     <div className="border border-amber-300 rounded-lg p-6 hover:shadow-md transition-shadow bg-amber-50">
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border border-amber-600 bg-amber-100 text-amber-700">
-              Pending Sharia Review
+              {t('governance.shariaBadge.pendingReview')}
             </span>
             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border border-black">
-              Zakat Compliant
+              {t('governance.shariaBadge.zakatCompliant')}
             </span>
           </div>
           <h3 className="text-lg font-bold mb-2">{proposal.title}</h3>
@@ -634,14 +637,14 @@ function ShariaReviewCard({
       {/* Voting Stats - Read Only */}
       <div className="space-y-3 mb-4">
         <div className="flex justify-between text-sm">
-          <span className="text-gray-600">Community Vote Result</span>
-          <span className="font-medium text-green-600">Passed</span>
+          <span className="text-gray-600">{t('governance.shariaCard.communityResult')}</span>
+          <span className="font-medium text-green-600">{t('governance.shariaCard.passed')}</span>
         </div>
         <div className="grid grid-cols-3 gap-4 pt-2">
           <div className="space-y-1">
             <div className="flex items-center justify-between text-sm">
               <span className="text-green-600 font-medium flex items-center gap-1">
-                <ThumbsUp className="h-3 w-3" /> For
+                <ThumbsUp className="h-3 w-3" /> {t('governance.votes.for')}
               </span>
               <span className="font-bold">{proposal.votesFor.toLocaleString()}</span>
             </div>
@@ -650,7 +653,7 @@ function ShariaReviewCard({
           <div className="space-y-1">
             <div className="flex items-center justify-between text-sm">
               <span className="text-red-600 font-medium flex items-center gap-1">
-                <ThumbsDown className="h-3 w-3" /> Against
+                <ThumbsDown className="h-3 w-3" /> {t('governance.votes.against')}
               </span>
               <span className="font-bold">{proposal.votesAgainst.toLocaleString()}</span>
             </div>
@@ -658,7 +661,7 @@ function ShariaReviewCard({
           </div>
           <div className="space-y-1">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600 font-medium">Abstain</span>
+              <span className="text-gray-600 font-medium">{t('governance.votes.abstain')}</span>
               <span className="font-bold">{proposal.votesAbstain.toLocaleString()}</span>
             </div>
             <Progress value={proposal.totalVotes > 0 ? (proposal.votesAbstain / proposal.totalVotes) * 100 : 0} className="h-1.5 [&>div]:bg-gray-400" />
@@ -670,7 +673,7 @@ function ShariaReviewCard({
       <div className="flex items-center justify-between pt-4 border-t border-amber-200">
         <div className="text-sm text-gray-600">
           <Shield className="inline h-3 w-3 mr-1" />
-          Requires Sharia Council approval
+          {t('governance.shariaCard.requiresApproval')}
         </div>
         <div className="flex gap-2">
           <Button
@@ -680,7 +683,7 @@ function ShariaReviewCard({
             disabled={isLoading}
           >
             <ThumbsUp className="h-3 w-3 mr-1" />
-            Approve
+            {t('governance.shariaCard.approve')}
           </Button>
           <Button
             size="sm"
@@ -689,7 +692,7 @@ function ShariaReviewCard({
             disabled={isLoading}
           >
             <ThumbsDown className="h-3 w-3 mr-1" />
-            Reject
+            {t('governance.shariaCard.reject')}
           </Button>
         </div>
       </div>
