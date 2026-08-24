@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+:root {
+  --tawf-green: #0F3D30;
+  --tawf-green-light: #1A5242;
+  --tawf-gold: #C5A869;
+  --tawf-gold-dark: #A68B4F;
+  --tawf-sand: #F9F6F0;
+  --tawf-ink: #1A1A1A;
+  --tawf-muted: #555555;
+
+  --background: #F9F6F0;
+  --foreground: #1A1A1A;
+}
+
+body {
+  background-color: var(--tawf-sand);
+  color: var(--tawf-ink);
+  font-family: 'Inter', sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6, .font-serif {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.bg-tawf-green {
+  background-color: var(--tawf-green);
+}
+.bg-tawf-green-light {
+  background-color: var(--tawf-green-light);
+}
+.bg-tawf-gold {
+  background-color: var(--tawf-gold);
+}
+.bg-tawf-sand {
+  background-color: var(--tawf-sand);
+}
+.text-tawf-green {
+  color: var(--tawf-green);
+}
+.text-tawf-gold {
+  color: var(--tawf-gold);
+}
+.text-tawf-sand {
+  color: var(--tawf-sand);
+}
+.text-tawf-ink {
+  color: var(--tawf-ink);
+}
+.text-tawf-muted {
+  color: var(--tawf-muted);
+}
+.border-tawf-green-10 {
+  border-color: rgba(15, 61, 48, 0.1);
+}
+.border-tawf-gold-20 {
+  border-color: rgba(197, 168, 105, 0.2);
+}
