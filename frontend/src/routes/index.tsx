@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { DonateSection } from "../components/donation/DonateSection";
 import { MerkleVerifier } from "../components/verification/MerkleVerifier";
-import { ShieldCheck, Lock, Eye, CheckCircle2, ArrowDown } from "lucide-react";
+import { TransparencyDashboard } from "../components/dashboard/TransparencyDashboard";
+import { GovernanceSection } from "../components/governance/GovernanceSection";
+import { ShieldCheck, Lock, Eye, CheckCircle2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 
 export const Route = createFileRoute("/")({ component: HomePage });
@@ -77,11 +79,17 @@ function HomePage() {
         </div>
       </section>
 
-      {/* Inflow Section */}
+      {/* 1. Inflow Donation Section */}
       <DonateSection />
 
-      {/* Verification Section */}
+      {/* 2. Muzakki Merkle Verification Section */}
       <MerkleVerifier />
+
+      {/* 3. Public Transparency Dashboard Section */}
+      <TransparencyDashboard />
+
+      {/* 4. Multi-Sig Governance Section */}
+      <GovernanceSection />
     </main>
   );
 }
