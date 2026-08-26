@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { useAccount, useDisconnect, useBalance, useChainId, useSwitchChain } from "wagmi";
 import { sepolia } from "wagmi/chains";
 
+import { formatUnits } from "viem";
+
 interface WalletContextType {
   address: string | null;
   formattedAddress: string | null;
@@ -34,7 +36,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : null;
 
-  const balance = balanceData ? parseFloat(balanceData.formatted).toFixed(4) : null;
+  const balance = balanceData
+    ? parseFloat(formatUnits(balanceData.value, balanceData.decimals)).toFixed(4)
+    : null;
 
   return (
     <WalletContext.Provider

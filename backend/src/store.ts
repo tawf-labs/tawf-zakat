@@ -30,15 +30,36 @@ export interface ProposalRecord {
 }
 
 class ProtocolDataStore {
-  public donations: Map<string, DonationRecord & { batchId: number }> = new Map();
+  public donations: Map<string, DonationRecord & { batchId?: number }> = new Map();
   public batches: Map<number, SettledBatch> = new Map();
   public batchTrees: Map<number, MerkleTree> = new Map();
   public proposals: Map<number, ProposalRecord> = new Map();
 
   constructor() {}
 
-  public recordDonation(donation: DonationRecord, batchId: number = 1) {
-    this.donations.set(donation.trxId, { ...donation, batchId });
+  public recordDonation(donation: DonationRecord, batchId?: number) {
+    this.donations.set(donation.trxId, {
+      status: "PENDING",
+      ...donation,
+      batchId,
+    });
+  }
+
+  public getDonation(trxId: string) {
+    return this.donations.get(trxId) || null;
+  }
+
+  public updateDonationStatus(trxId: string, status: "PENDING" | "PAID" | "BATCHED", paidAt?: string) {
+    const existing = this.donations.get(trxId);
+    if (existing) {
+      existing.status = status;
+      if (paidAt) {
+        existing.paidAt = paidAt;
+      }
+      this.donations.set(trxId, existing);
+      return existing;
+    }
+    return null;
   }
 
   public settleBatch(batchId: number, donationList: DonationRecord[], txHash?: string): SettledBatch {
@@ -68,7 +89,7 @@ class ProtocolDataStore {
 
   public getProofForTrx(trxId: string, salt: string, amountIDR: number) {
     const record = this.donations.get(trxId);
-    if (!record) {
+    if (!record || record.batchId === undefined) {
       return null;
     }
 

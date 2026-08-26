@@ -1,4 +1,3 @@
-import React from "react";
 import { ShieldCheck, HeartHandshake, FileCode2 } from "lucide-react";
 
 export function Footer() {

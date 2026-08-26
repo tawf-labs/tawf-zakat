@@ -20,8 +20,13 @@ export const donations = pgTable("donations", {
   isAnonymous: boolean("is_anonymous").notNull().default(false),
   amountIDR: bigint("amount_idr", { mode: "number" }).notNull(),
   salt: text("salt").notNull(),
-  batchId: integer("batch_id").references(() => merkleBatches.id),
+  status: text("status").notNull().default("PENDING"), // 'PENDING' | 'PAID' | 'BATCHED'
+  paymentMethod: text("payment_method").notNull().default("QRIS"),
+  qrString: text("qr_string"),
+  qrUrl: text("qr_url"),
+  batchId: integer("batch_id"),
   createdAt: timestamp("created_at").defaultNow(),
+  paidAt: timestamp("paid_at"),
 });
 
 // 3. Disbursement Proposals Table

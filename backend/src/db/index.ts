@@ -24,7 +24,7 @@ export const db = dbInstance;
 
 // Helper DB Services
 export const dbService = {
-  async recordDonation(record: DonationRecord, batchNumber: number = 1) {
+  async recordDonation(record: DonationRecord, batchNumber?: number) {
     // In-memory update
     dataStore.recordDonation(record, batchNumber);
 
@@ -37,13 +37,142 @@ export const dbService = {
           isAnonymous: record.isAnonymous,
           amountIDR: record.amountIDR,
           salt: record.salt,
-        }).onConflictDoNothing();
+          status: record.status || "PENDING",
+          paymentMethod: record.paymentMethod || "QRIS",
+          qrString: record.qrString || null,
+          qrUrl: record.qrUrl || null,
+          batchId: batchNumber || null,
+        }).onConflictDoUpdate({
+          target: schema.donations.trxId,
+          set: {
+            status: record.status || "PENDING",
+            qrString: record.qrString || null,
+            qrUrl: record.qrUrl || null,
+          },
+        });
       } catch (err) {
         console.error("Failed to insert donation to DB:", err);
       }
     }
 
     return record;
+  },
+
+  async getDonationByTrxId(trxId: string): Promise<(DonationRecord & { batchId?: number }) | null> {
+    if (db) {
+      try {
+        const rows = await db
+          .select()
+          .from(schema.donations)
+          .where(eq(schema.donations.trxId, trxId))
+          .limit(1);
+        if (rows.length > 0) {
+          const row = rows[0];
+          return {
+            trxId: row.trxId,
+            donorName: row.donorName,
+            isAnonymous: row.isAnonymous,
+            amountIDR: row.amountIDR,
+            salt: row.salt,
+            status: (row.status as any) || "PENDING",
+            paymentMethod: row.paymentMethod,
+            qrString: row.qrString || undefined,
+            qrUrl: row.qrUrl || undefined,
+            timestamp: row.createdAt ? row.createdAt.toISOString() : new Date().toISOString(),
+            paidAt: row.paidAt ? row.paidAt.toISOString() : undefined,
+            batchId: row.batchId || undefined,
+          };
+        }
+      } catch (err) {
+        console.error("Failed to query donation from DB:", err);
+      }
+    }
+
+    return (dataStore.getDonation(trxId) as any) || null;
+  },
+
+  async markDonationAsPaid(trxId: string, paidAt?: string): Promise<DonationRecord | null> {
+    const timeStr = paidAt || new Date().toISOString();
+    
+    // In-memory update
+    const memoryRecord = dataStore.updateDonationStatus(trxId, "PAID", timeStr);
+
+    // DB update
+    if (db) {
+      try {
+        await db
+          .update(schema.donations)
+          .set({
+            status: "PAID",
+            paidAt: new Date(timeStr),
+          })
+          .where(eq(schema.donations.trxId, trxId));
+      } catch (err) {
+        console.error("Failed to update donation to PAID in DB:", err);
+      }
+    }
+
+    return memoryRecord;
+  },
+
+  async getUnbatchedPaidDonations(): Promise<DonationRecord[]> {
+    if (db) {
+      try {
+        const rows = await db
+          .select()
+          .from(schema.donations)
+          .where(eq(schema.donations.status, "PAID"));
+        
+        const unbatched = rows.filter((r) => r.batchId === null || r.batchId === undefined);
+        if (unbatched.length > 0) {
+          return unbatched.map((row) => ({
+            trxId: row.trxId,
+            donorName: row.donorName,
+            isAnonymous: row.isAnonymous,
+            amountIDR: row.amountIDR,
+            salt: row.salt,
+            status: "PAID",
+            paymentMethod: row.paymentMethod,
+            qrString: row.qrString || undefined,
+            qrUrl: row.qrUrl || undefined,
+            timestamp: row.createdAt ? row.createdAt.toISOString() : new Date().toISOString(),
+            paidAt: row.paidAt ? row.paidAt.toISOString() : undefined,
+          }));
+        }
+      } catch (err) {
+        console.error("Failed to fetch unbatched paid donations from DB:", err);
+      }
+    }
+
+    return Array.from(dataStore.donations.values()).filter(
+      (d) => d.status === "PAID" && (!d.batchId || d.batchId === 0)
+    );
+  },
+
+  async markDonationsBatched(trxIds: string[], batchNumber: number) {
+    for (const trxId of trxIds) {
+      dataStore.updateDonationStatus(trxId, "BATCHED");
+      const record = dataStore.donations.get(trxId);
+      if (record) {
+        record.batchId = batchNumber;
+      }
+    }
+
+    if (db) {
+      try {
+        for (const trxId of trxIds) {
+          await db
+            .update(schema.donations)
+            .set({
+              status: "BATCHED",
+              batchId: batchNumber,
+            })
+            .where(eq(schema.donations.trxId, trxId));
+        }
+      } catch (err) {
+        console.error("Failed to update donations to BATCHED in DB:", err);
+      }
+    }
   },
 
   async recordBatchSettlement(

@@ -5,7 +5,6 @@ import {
   http,
   type Hex,
   parseUnits,
-  formatUnits,
 } from "viem";
 import { sepolia } from "viem/chains";
 import { getAccount } from "@wagmi/core";
@@ -15,7 +14,6 @@ import {
   SEPOLIA_USDC_ADDRESS,
   ZAKAT_PROTOCOL_ABI,
   ERC20_ABI,
-  SEPOLIA_CHAIN_ID,
   SEPOLIA_EXPLORER_URL,
 } from "./contracts";
 

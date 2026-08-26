@@ -7,6 +7,7 @@ import { computeBeneficiaryHash, uploadDisbursementProofToIPFS, type Disbursemen
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
 import { type Hex } from "viem";
+import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
 
 // Auto-seed demo data on startup
 runSeeder();
@@ -24,7 +25,7 @@ app.get("/health", (c) => {
   });
 });
 
-// 1. Inflow: Simulate/Record Fiat QRIS Donation & Generate Receipt with Secret Salt
+// 1. Inflow: Create Fiat QRIS Invoice (Status: PENDING)
 app.post("/api/donations/fiat", async (c) => {
   try {
     const body = await c.req.json();
@@ -39,33 +40,208 @@ app.post("/api/donations/fiat", async (c) => {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const trxId = `TRX-${dateStr}-${randomSuffix}`;
     const salt = `salt_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+    const finalDonorName = isAnonymous ? "Hamba Allah" : donorName || "Muzakki";
+
+    // Create single clean Snap Transaction on Midtrans to avoid order_id session collision
+    const snapResult = await createSnapTransaction(trxId, Number(amountIDR), finalDonorName);
+
+    const qrString = `00020101021226500016ID.CO.MIDTRANS.WWW01189360099900000000000215${trxId}520453995303360540${amountIDR}5802ID5910TAWF ZAKAT6007JAKARTA6304`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrString)}`;
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
     const record: DonationRecord = {
       trxId,
-      donorName: isAnonymous ? "Hamba Allah" : donorName || "Muzakki",
+      donorName: finalDonorName,
       isAnonymous: Boolean(isAnonymous),
       salt,
       amountIDR: Number(amountIDR),
       timestamp,
+      status: "PENDING",
+      paymentMethod: "QRIS",
+      qrString,
+      qrUrl,
     };
 
-    await dbService.recordDonation(record, 1);
+    await dbService.recordDonation(record);
 
     return c.json({
       success: true,
-      message: "Donation recorded successfully",
-      receipt: {
+      message: "Invoice generated successfully with Snap",
+      invoice: {
         trxId: record.trxId,
         donorName: record.donorName,
         isAnonymous: record.isAnonymous,
         salt: record.salt,
         amountIDR: record.amountIDR,
         timestamp: record.timestamp,
-        batchId: 1,
+        status: "PENDING",
+        paymentMethod: "QRIS",
+        qrString: record.qrString,
+        qrUrl: record.qrUrl,
+        snapToken: snapResult.token,
+        redirectUrl: snapResult.redirectUrl,
+        expiresAt,
+        isMock: snapResult.isMock,
       },
     });
   } catch (error: any) {
     return c.json({ error: error.message || "Failed to process donation" }, 500);
+  }
+});
+
+// 1b. Inflow: Query Donation Status (with live Midtrans sync)
+app.get("/api/donations/status/:trxId", async (c) => {
+  const trxId = c.req.param("trxId");
+  if (!trxId) {
+    return c.json({ error: "Missing trxId parameter" }, 400);
+  }
+
+  let donation = await dbService.getDonationByTrxId(trxId);
+  if (!donation) {
+    return c.json({ error: "Donation not found", success: false }, 404);
+  }
+
+  // If still PENDING, query Midtrans API live to check if paid via external Midtrans Simulator
+  if (donation.status === "PENDING") {
+    const midtransCheck = await checkMidtransStatus(trxId);
+    if (midtransCheck && midtransCheck.isSettled) {
+      const paidTime = midtransCheck.settlementTime || new Date().toISOString();
+      await dbService.markDonationAsPaid(trxId, paidTime);
+      donation.status = "PAID";
+      donation.paidAt = paidTime;
+    }
+  }
+
+  return c.json({
+    success: true,
+    donation: {
+      trxId: donation.trxId,
+      donorName: donation.donorName,
+      isAnonymous: donation.isAnonymous,
+      salt: donation.salt,
+      amountIDR: donation.amountIDR,
+      status: donation.status || "PENDING",
+      paymentMethod: donation.paymentMethod || "QRIS",
+      qrString: donation.qrString,
+      qrUrl: donation.qrUrl,
+      timestamp: donation.timestamp,
+      paidAt: donation.paidAt,
+      batchId: (donation as any).batchId,
+    },
+  });
+});
+
+// 1c. Inflow: Midtrans Payment Webhook (Idempotent & Signature-Verified)
+app.post("/api/webhooks/payment", async (c) => {
+  try {
+    const body = await c.req.json();
+    const {
+      order_id,
+      status_code,
+      gross_amount,
+      signature_key,
+      transaction_status,
+      settlement_time,
+    } = body;
+
+    if (!order_id) {
+      return c.json({ error: "Missing order_id" }, 400);
+    }
+
+    const donation = await dbService.getDonationByTrxId(order_id);
+    if (!donation) {
+      return c.json({ error: "Donation order not found", success: false }, 404);
+    }
+
+    // Idempotency: If already paid or batched, acknowledge immediately without duplicate work
+    if (donation.status === "PAID" || donation.status === "BATCHED") {
+      return c.json({
+        success: true,
+        message: "Payment notification already processed",
+        status: donation.status,
+        trxId: order_id,
+      });
+    }
+
+    // Verify SHA-512 Signature
+    const serverKey = process.env.MIDTRANS_SERVER_KEY || "SB-Mid-server-TESTKEY12345";
+    const isValidSignature = verifyMidtransSignature(
+      order_id,
+      status_code || "200",
+      gross_amount || `${donation.amountIDR}.00`,
+      serverKey,
+      signature_key || ""
+    );
+
+    if (!isValidSignature) {
+      return c.json(
+        {
+          error: "Unauthorized: Invalid Midtrans signature key",
+          success: false,
+        },
+        401
+      );
+    }
+
+    // If status is settlement / capture, transition to PAID
+    if (transaction_status === "settlement" || transaction_status === "capture" || !transaction_status) {
+      const paidTimestamp = settlement_time || new Date().toISOString();
+      const updated = await dbService.markDonationAsPaid(order_id, paidTimestamp);
+
+      return c.json({
+        success: true,
+        message: "Payment successfully settled and marked as PAID",
+        status: "PAID",
+        trxId: order_id,
+        donation: updated,
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: `Webhook notification acknowledged (status: ${transaction_status})`,
+      status: donation.status,
+      trxId: order_id,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to process payment webhook" }, 500);
+  }
+});
+
+// 1d. Inflow: Sandbox Payment Simulator (One-Click for Demo / Judges)
+app.post("/api/webhooks/simulator", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { trxId } = body;
+
+    if (!trxId) {
+      return c.json({ error: "Missing trxId parameter" }, 400);
+    }
+
+    const donation = await dbService.getDonationByTrxId(trxId);
+    if (!donation) {
+      return c.json({ error: "Donation not found", success: false }, 404);
+    }
+
+    const paidTimestamp = new Date().toISOString();
+    const updated = await dbService.markDonationAsPaid(trxId, paidTimestamp);
+
+    return c.json({
+      success: true,
+      message: "Payment successfully simulated and marked as PAID in Sandbox",
+      donation: {
+        trxId: updated?.trxId || trxId,
+        donorName: updated?.donorName || donation.donorName,
+        isAnonymous: updated?.isAnonymous ?? donation.isAnonymous,
+        salt: updated?.salt || donation.salt,
+        amountIDR: updated?.amountIDR || donation.amountIDR,
+        status: "PAID",
+        paymentMethod: "QRIS",
+        paidAt: paidTimestamp,
+      },
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to simulate payment" }, 500);
   }
 });
 
@@ -184,25 +360,30 @@ app.post("/api/disbursement/upload-proof", async (c) => {
 app.post("/api/relayer/settle-batch", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const batchId = Number(body.batchId) || dataStore.batches.size + 1;
+    const batches = await dbService.getBatches();
+    const batchId = Number(body.batchId) || batches.length + 1;
 
-    // Get donations for this batch
-    let donationList = Array.from(dataStore.donations.values()).filter(d => d.batchId === batchId);
+    // Get unbatched PAID donations
+    let donationList = await dbService.getUnbatchedPaidDonations();
+
     if (donationList.length === 0) {
-      donationList = Array.from(dataStore.donations.values());
+      // Fallback: If no pending paid donations, check all donations in store for demo/test
+      donationList = Array.from(dataStore.donations.values()).filter(d => d.status === "PAID" || !d.status);
     }
 
     if (donationList.length === 0) {
-      // Create a default donation if empty
+      // Create a default donation if completely empty
       const sampleDonation: DonationRecord = {
         trxId: `TRX-${Date.now()}`,
         donorName: "Muzakki Online",
         isAnonymous: false,
         salt: `salt_${Date.now()}`,
         amountIDR: 2500000,
+        status: "PAID",
         timestamp: new Date().toISOString(),
       };
       donationList = [sampleDonation];
+      await dbService.recordDonation(sampleDonation);
     }
 
     const leaves = donationList.map((d) =>
@@ -214,6 +395,11 @@ app.post("/api/relayer/settle-batch", async (c) => {
 
     const onChainResult = await settleBatchOnChain(batchId, root, totalAmount, false);
 
+    // Save batch and mark all included donations as BATCHED in DB and Memory
+    await dbService.recordBatchSettlement(batchId, root, totalAmount, donationList.length, onChainResult.txHash);
+    await dbService.markDonationsBatched(donationList.map(d => d.trxId), batchId);
+
+    // Register tree in memory for instant proof verification
     dataStore.settleBatch(batchId, donationList, onChainResult.txHash);
 
     return c.json({

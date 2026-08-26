@@ -1,4 +1,3 @@
-import React from "react";
 import { Link } from "@tanstack/react-router";
 import { ConnectKitButton } from "connectkit";
 import { Wallet, ChevronDown, AlertCircle } from "lucide-react";

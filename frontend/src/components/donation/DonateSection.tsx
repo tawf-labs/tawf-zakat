@@ -6,6 +6,7 @@ import { QrCode, Wallet, Shield, Copy, Check, ExternalLink, Lock, AlertTriangle,
 import { depositUSDCOnChain, approveUSDCOnChain, getUSDCAllowance, getUSDCBalance } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
 import { parseUnits, formatUnits } from "viem";
+import { payWithSnap } from "../../lib/snapClient";
 
 export function DonateSection() {
   const { address, formattedAddress, isConnected } = useWallet();
@@ -18,8 +19,9 @@ export function DonateSection() {
   const [zakatType, setZakatType] = useState("Zakat Maal");
   const [amountIDR, setAmountIDR] = useState("1000000");
   const [loading, setLoading] = useState(false);
-  const [fiatReceipt, setFiatReceipt] = useState<any>(null);
+  const [fiatInvoice, setFiatInvoice] = useState<any>(null);
   const [copiedSalt, setCopiedSalt] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(900); // 15 mins in seconds
 
   // Web3 State
   const [usdcAmount, setUsdcAmount] = useState("100");
@@ -40,6 +42,41 @@ export function DonateSection() {
     { label: "Rp 2.5 Juta", value: "2500000" },
     { label: "Rp 5 Juta", value: "5000000" },
   ];
+
+  // Timer countdown when invoice is active
+  useEffect(() => {
+    if (!fiatInvoice || fiatInvoice.status === "PAID" || fiatInvoice.status === "BATCHED") return;
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [fiatInvoice]);
+
+  // Smart Polling for payment status
+  useEffect(() => {
+    if (!fiatInvoice || fiatInvoice.status === "PAID" || fiatInvoice.status === "BATCHED") return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`http://localhost:3001/api/donations/status/${fiatInvoice.trxId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.donation && (data.donation.status === "PAID" || data.donation.status === "BATCHED")) {
+            setFiatInvoice((prev: any) => ({
+              ...prev,
+              status: data.donation.status,
+              paidAt: data.donation.paidAt,
+              batchId: data.donation.batchId,
+            }));
+          }
+        }
+      } catch (err) {
+        // Silent error during polling
+      }
+    }, 2500);
+
+    return () => clearInterval(pollInterval);
+  }, [fiatInvoice]);
 
   // Refresh USDC Balance and Allowance
   const refreshUSDCState = useCallback(async () => {
@@ -71,7 +108,7 @@ export function DonateSection() {
     setWeb3Error(null);
 
     try {
-      const res = await approveUSDCOnChain(Number(usdcAmount));
+      await approveUSDCOnChain(Number(usdcAmount));
       setWeb3Status("Izin USDC Berhasil Disetujui di Sepolia! Sekarang Anda dapat menyetor donasi.");
       await refreshUSDCState();
     } catch (err: any) {
@@ -125,41 +162,93 @@ export function DonateSection() {
 
       if (response.ok) {
         const data = await response.json();
-        setFiatReceipt(data.receipt);
+        setFiatInvoice(data.invoice);
+        setTimeLeft(900);
+
+        if (data.invoice?.snapToken) {
+          setTimeout(() => {
+            triggerSnapModal(data.invoice.snapToken);
+          }, 300);
+        }
       } else {
         const randomSalt = `salt_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
         const randomTrx = `TRX-20260826-${Math.floor(1000 + Math.random() * 9000)}`;
-        setFiatReceipt({
+        setFiatInvoice({
           trxId: randomTrx,
           donorName: isAnonymous ? "Hamba Allah" : donorName || "Muzakki",
           isAnonymous,
           salt: randomSalt,
           amountIDR: Number(amountIDR),
           timestamp: new Date().toISOString(),
-          batchId: 1,
+          status: "PENDING",
+          paymentMethod: "QRIS",
+          qrUrl: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=MOCK-QRIS-${randomTrx}`,
         });
+        setTimeLeft(900);
       }
     } catch (err) {
       const randomSalt = `salt_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
       const randomTrx = `TRX-20260826-${Math.floor(1000 + Math.random() * 9000)}`;
-      setFiatReceipt({
+      setFiatInvoice({
         trxId: randomTrx,
         donorName: isAnonymous ? "Hamba Allah" : donorName || "Muzakki",
         isAnonymous,
         salt: randomSalt,
         amountIDR: Number(amountIDR),
         timestamp: new Date().toISOString(),
-        batchId: 1,
+        status: "PENDING",
+        paymentMethod: "QRIS",
+        qrUrl: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=MOCK-QRIS-${randomTrx}`,
       });
+      setTimeLeft(900);
     } finally {
       setLoading(false);
     }
+  };
+
+  const triggerSnapModal = (token?: string) => {
+    const snapToken = token || fiatInvoice?.snapToken;
+    if (!snapToken) {
+      if (fiatInvoice?.redirectUrl) {
+        window.open(fiatInvoice.redirectUrl, "_blank");
+      }
+      return;
+    }
+
+    payWithSnap(snapToken, {
+      onSuccess: function (result: any) {
+        setFiatInvoice((prev: any) => ({
+          ...prev,
+          status: "PAID",
+          paidAt: result.transaction_time || new Date().toISOString(),
+        }));
+      },
+      onPending: function (result: any) {
+        console.log("Snap Pending:", result);
+      },
+      onError: function (result: any) {
+        console.warn("Snap Error:", result);
+      },
+      onClose: function () {
+        console.log("Snap Modal Closed");
+      },
+    });
+  };
+
+  const handleResetDonation = () => {
+    setFiatInvoice(null);
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedSalt(true);
     setTimeout(() => setCopiedSalt(false), 2000);
+  };
+
+  const formatTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
   return (
@@ -182,7 +271,7 @@ export function DonateSection() {
           <button
             onClick={() => {
               setActiveTab("fiat");
-              setFiatReceipt(null);
+              setFiatInvoice(null);
             }}
             className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
               activeTab === "fiat"
@@ -312,7 +401,7 @@ export function DonateSection() {
           </div>
 
           <div className="md:col-span-5">
-            {!fiatReceipt ? (
+            {!fiatInvoice ? (
               <Card className="text-center p-8 flex flex-col items-center justify-center bg-stone-50 border-dashed">
                 <div className="w-16 h-16 rounded-full bg-[#C5A869]/10 text-[#C5A869] flex items-center justify-center mb-4">
                   <QrCode className="w-8 h-8" />
@@ -324,27 +413,130 @@ export function DonateSection() {
                   Isi formulir di sebelah kiri untuk menghasilkan QRIS dinamis dan Kuitansi Kriptografis rahasia Anda.
                 </p>
               </Card>
+            ) : fiatInvoice.status === "PENDING" ? (
+              <Card elevated className="border-2 border-[#C5A869] bg-[#FAFAF8]">
+                <div className="flex items-center justify-between border-b border-[#0F3D30]/10 pb-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping"></span>
+                    <span className="font-serif font-bold text-sm text-[#0F3D30]">
+                      BAYAR VIA QRIS DINAMIS
+                    </span>
+                  </div>
+                  <Badge variant="warning">PENDING ({formatTimer(timeLeft)})</Badge>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-stone-200 text-center mb-4 shadow-inner">
+                  <div className="w-48 h-48 mx-auto bg-white rounded-lg flex items-center justify-center p-2 border border-stone-100 shadow-xs">
+                    <img
+                      src={fiatInvoice.qrUrl}
+                      alt="QRIS Code"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                  <p className="text-[10px] text-stone-500 mt-2 font-mono">
+                    NMID: ID102026TAWFZAKAT01 • {fiatInvoice.trxId}
+                  </p>
+                  <p className="text-base font-bold text-[#0F3D30] mt-1">
+                    Rp {Number(fiatInvoice.amountIDR).toLocaleString("id-ID")}
+                  </p>
+
+                  <div className="flex gap-2 justify-center mt-3 pt-2 border-t border-stone-100">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(fiatInvoice.qrUrl)}
+                      className="text-[11px] font-semibold text-[#0F3D30] hover:text-[#1A5242] bg-[#0F3D30]/5 hover:bg-[#0F3D30]/10 px-2.5 py-1 rounded-md border border-[#0F3D30]/15 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Copy className="w-3 h-3" /> Salin QR URL
+                    </button>
+                    {fiatInvoice.qrString && (
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(fiatInvoice.qrString)}
+                        className="text-[11px] font-semibold text-[#0F3D30] hover:text-[#1A5242] bg-[#0F3D30]/5 hover:bg-[#0F3D30]/10 px-2.5 py-1 rounded-md border border-[#0F3D30]/15 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Salin QR String
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2 mb-4">
+                  {fiatInvoice.snapToken && (
+                    <Button
+                      type="button"
+                      onClick={() => triggerSnapModal()}
+                      className="w-full py-2.5 bg-[#0F3D30] hover:bg-[#1A5242] text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-xs"
+                    >
+                      💳 Buka Pop-up Pembayaran Midtrans Snap
+                    </Button>
+                  )}
+
+                  {fiatInvoice.redirectUrl && (
+                    <a
+                      href={fiatInvoice.redirectUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all text-center border border-emerald-300"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Buka Halaman Pembayaran Midtrans (Tab Baru) ↗
+                    </a>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <a
+                      href="https://simulator.sandbox.midtrans.com/bca/va/index"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-1.5 px-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all text-center border border-stone-200"
+                    >
+                      <ExternalLink className="w-3 h-3" /> VA Simulator ↗
+                    </a>
+                    <a
+                      href="https://simulator.sandbox.midtrans.com/qris/index"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-1.5 px-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all text-center border border-stone-200"
+                    >
+                      <ExternalLink className="w-3 h-3" /> QRIS Simulator ↗
+                    </a>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 rounded-xl p-3 border border-amber-200/60 text-xs text-amber-900 flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 text-amber-600 animate-spin shrink-0" />
+                  <span className="text-[11px] leading-tight">
+                    Sistem sedang memantau pembayaran dari server Midtrans... Halaman otomatis beralih begitu terkonfirmasi.
+                  </span>
+                </div>
+              </Card>
             ) : (
               <Card elevated className="border-2 border-[#0F3D30] bg-[#FAFAF8]">
                 <div className="flex items-center justify-between border-b border-[#0F3D30]/10 pb-3 mb-4">
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
                     <span className="font-serif font-bold text-sm text-[#0F3D30]">
                       KUITANSI DIGITAL MUZAKKI
                     </span>
                   </div>
-                  <Badge variant="success">Tercatat di Batch #1</Badge>
+                  <Badge variant="success">
+                    {fiatInvoice.status === "BATCHED"
+                      ? `Tercatat di Batch #${fiatInvoice.batchId || 1}`
+                      : "PAID (Antrian Batch L1)"}
+                  </Badge>
                 </div>
 
                 <div className="bg-white p-4 rounded-xl border border-stone-200 text-center mb-4 shadow-inner">
-                  <div className="w-36 h-36 mx-auto bg-stone-900 rounded-lg flex items-center justify-center text-white p-2">
-                    <QrCode className="w-full h-full text-white" />
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-2">
+                    <Check className="w-6 h-6 stroke-[3]" />
                   </div>
-                  <p className="text-[10px] text-stone-500 mt-2 font-mono">
-                    NMID: ID102026TAWFZAKAT01
+                  <h4 className="font-serif text-lg font-bold text-[#0F3D30]">
+                    Pembayaran Berhasil!
+                  </h4>
+                  <p className="text-xs text-stone-500 font-mono">
+                    {fiatInvoice.trxId}
                   </p>
-                  <p className="text-sm font-bold text-[#0F3D30] mt-1">
-                    Rp {Number(fiatReceipt.amountIDR).toLocaleString("id-ID")}
+                  <p className="text-base font-bold text-[#0F3D30] mt-1">
+                    Rp {Number(fiatInvoice.amountIDR).toLocaleString("id-ID")}
                   </p>
                 </div>
 
@@ -356,9 +548,9 @@ export function DonateSection() {
                     Simpan Secret Salt ini! Kunci ini tidak diketahui publik dan digunakan untuk memvalidasi Merkle proof donasi Anda di menu Verifikasi.
                   </p>
                   <div className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border text-xs font-mono">
-                    <span className="truncate mr-2 text-stone-800">{fiatReceipt.salt}</span>
+                    <span className="truncate mr-2 text-stone-800">{fiatInvoice.salt}</span>
                     <button
-                      onClick={() => copyToClipboard(fiatReceipt.salt)}
+                      onClick={() => copyToClipboard(fiatInvoice.salt)}
                       className="text-[#0F3D30] hover:text-[#1A5242] shrink-0 cursor-pointer"
                     >
                       {copiedSalt ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
@@ -369,25 +561,32 @@ export function DonateSection() {
                 <div className="text-xs space-y-1.5 border-t border-[#0F3D30]/10 pt-3">
                   <div className="flex justify-between">
                     <span className="text-[#555555]">Transaction ID:</span>
-                    <span className="font-mono font-bold text-[#0F3D30]">{fiatReceipt.trxId}</span>
+                    <span className="font-mono font-bold text-[#0F3D30]">{fiatInvoice.trxId}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#555555]">Nama Muzakki:</span>
-                    <span className="font-medium text-[#1A1A1A]">{fiatReceipt.donorName}</span>
+                    <span className="font-medium text-[#1A1A1A]">{fiatInvoice.donorName}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#555555]">Waktu:</span>
-                    <span className="text-[#555555]">{new Date(fiatReceipt.timestamp).toLocaleTimeString("id-ID")} WIB</span>
+                    <span className="text-[#555555]">{new Date(fiatInvoice.paidAt || fiatInvoice.timestamp).toLocaleTimeString("id-ID")} WIB</span>
                   </div>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-[#0F3D30]/10">
+                <div className="mt-4 pt-3 border-t border-[#0F3D30]/10 space-y-2">
                   <a
                     href="#verify"
                     className="block text-center text-xs font-bold uppercase tracking-wider text-[#0F3D30] hover:underline"
                   >
                     Uji Bukti Merkle Sekarang ➔
                   </a>
+                  <button
+                    type="button"
+                    onClick={handleResetDonation}
+                    className="w-full text-center text-xs text-stone-500 hover:text-stone-700 underline cursor-pointer"
+                  >
+                    Buat Donasi Baru
+                  </button>
                 </div>
               </Card>
             )}
@@ -437,9 +636,20 @@ export function DonateSection() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-[#1A1A1A] uppercase tracking-wider mb-2">
-                    Nominal Setoran (USDC)
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-[#1A1A1A] uppercase tracking-wider">
+                      Nominal Setoran (USDC)
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-[#0F3D30] font-medium cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={usdcAnonymous}
+                        onChange={(e) => setUsdcAnonymous(e.target.checked)}
+                        className="rounded accent-[#0F3D30]"
+                      />
+                      Mode Hamba Allah (Private)
+                    </label>
+                  </div>
                   <div className="relative">
                     <span className="absolute left-4 top-3 text-sm font-semibold text-[#555555]">
                       $

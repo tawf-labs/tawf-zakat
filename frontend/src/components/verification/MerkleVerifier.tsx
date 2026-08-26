@@ -1,9 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
-import { Badge } from "../ui/Badge";
 import { computeDonationLeaf, verifyClientProof } from "../../lib/merkleClient";
-import { ShieldCheck, CheckCircle2, XCircle, Sparkles, Hash, Layers, KeyRound, Cpu } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Sparkles, Hash, Layers, Cpu } from "lucide-react";
 import { type Hex } from "viem";
 
 export function MerkleVerifier() {

@@ -42,6 +42,12 @@ export const Route = createRootRoute({
         href: appCss,
       },
     ],
+    scripts: [
+      {
+        src: "https://app.sandbox.midtrans.com/snap/snap.js",
+        "data-client-key": "Mid-client-pLqckO1qyvfxRaD4",
+      },
+    ],
   }),
   shellComponent: RootDocument,
 });

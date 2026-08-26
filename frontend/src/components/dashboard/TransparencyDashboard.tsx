@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Card } from "../ui/Card";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
-import { Coins, Landmark, ShieldCheck, ArrowUpRight, ArrowDownRight, Layers, CheckCircle2, Wallet, X, ExternalLink } from "lucide-react";
+import { Layers, Wallet, X, ExternalLink } from "lucide-react";
 import { withdrawAmilShareOnChain } from "../../lib/web3Client";
 
 interface BatchItem {
@@ -26,10 +26,10 @@ export function TransparencyDashboard() {
     },
   ]);
 
-  const [totalUSDC, setTotalUSDC] = useState(10000);
+  const [totalUSDC] = useState(10000);
   const [amilTreasuryUSDC, setAmilTreasuryUSDC] = useState(1250);
-  const [mustahikVaultUSDC, setMustahikVaultUSDC] = useState(8750);
-  const [disbursedUSDC, setDisbursedUSDC] = useState(500);
+  const [mustahikVaultUSDC] = useState(8750);
+  const [disbursedUSDC] = useState(500);
 
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAddress, setWithdrawAddress] = useState("");

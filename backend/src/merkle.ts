@@ -7,6 +7,11 @@ export interface DonationRecord {
   salt: string;
   amountIDR: number;
   timestamp: string;
+  status?: "PENDING" | "PAID" | "BATCHED";
+  paymentMethod?: string;
+  qrString?: string;
+  qrUrl?: string;
+  paidAt?: string;
 }
 
 export function computeDonationLeaf(trxId: string, salt: string, amountIDR: number): Hex {
