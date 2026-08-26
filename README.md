@@ -19,8 +19,20 @@ Privacy-preserving zakat donations using UltraHONK zero-knowledge proofs on Ethe
 > See `sc/src/DAO/verifiers/HonkVerifier.sol` and `security-analysis-corrections.md`.
 
 - **Testnet**: [ziswaf.tawf.foundation](https://ziswaf.tawf.foundation)
+- **Live Sepolia Protocol Contract**: [`0x72b60a0C37a78dF62295F88294E790083089f665`](https://sepolia.etherscan.io/address/0x72b60a0C37a78dF62295F88294E790083089f665)
+- **Circle Sepolia USDC**: [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238)
 - **Paper**: `zk-private-zakat.pdf` (IEEE ICIMTech 2026, 6 pages, 33 references)
 - **Authors**: Muhammad Zidan Fatonie, Alexander Agung Santoso Gunawan (BINUS University)
+
+---
+
+## Deployed Contracts (Ethereum Sepolia Testnet)
+
+| Contract | Address | Explorer Link |
+| :--- | :--- | :--- |
+| **ZakatProtocolL1** | `0x72b60a0C37a78dF62295F88294E790083089f665` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x72b60a0C37a78dF62295F88294E790083089f665) |
+| **Circle USDC (Sepolia)** | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) |
+| **Deployer / Admin / Relayer** | `0x5e9B652C4E8a013f6fAb69F0b55377c408B59968` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x5e9B652C4E8a013f6fAb69F0b55377c408B59968) |
 
 ---
 
