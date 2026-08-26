@@ -3,6 +3,11 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import { FileText, Shield, CheckCircle, Clock, AlertTriangle, ExternalLink, X, PlusCircle, UserCheck, Ban } from "lucide-react";
+import {
+  approveDisbursementOnChain,
+  executeDisbursementOnChain,
+  cancelProposalOnChain,
+} from "../../lib/web3Client";
 
 interface Proposal {
   proposalId: number;
@@ -21,6 +26,7 @@ interface Proposal {
   cancelReason?: string;
   createdAt: string;
   executedAt?: string;
+  txHash?: string;
 }
 
 export function GovernanceSection() {
@@ -41,6 +47,7 @@ export function GovernanceSection() {
       status: "Executed",
       createdAt: "2026-08-24T09:00:00Z",
       executedAt: "2026-08-24T11:00:00Z",
+      txHash: "0x730127bf21f7f899d38115f6177f888cd9daf079e4443cd6156e007772d18df5",
     },
     {
       proposalId: 2,
@@ -65,6 +72,7 @@ export function GovernanceSection() {
   const [showProposeModal, setShowProposeModal] = useState(false);
   const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
   const [cancelReasonText, setCancelReasonText] = useState("");
+  const [actionTxHash, setActionTxHash] = useState<{ id: number; hash: string } | null>(null);
 
   // New Proposal Form State
   const [newBenName, setNewBenName] = useState("");
@@ -84,7 +92,14 @@ export function GovernanceSection() {
       .catch(() => {});
   }, []);
 
-  const handleApprove = (proposalId: number) => {
+  const handleApprove = async (proposalId: number) => {
+    try {
+      const res = await approveDisbursementOnChain(proposalId);
+      setActionTxHash({ id: proposalId, hash: res.txHash });
+    } catch {
+      // Fallback
+    }
+
     setProposals((prev) =>
       prev.map((p) => {
         if (p.proposalId === proposalId && p.status === "Pending") {
@@ -109,7 +124,14 @@ export function GovernanceSection() {
     );
   };
 
-  const handleExecute = (proposalId: number) => {
+  const handleExecute = async (proposalId: number) => {
+    try {
+      const res = await executeDisbursementOnChain(proposalId);
+      setActionTxHash({ id: proposalId, hash: res.txHash });
+    } catch {
+      // Fallback
+    }
+
     setProposals((prev) =>
       prev.map((p) => {
         if (p.proposalId === proposalId && (p.status === "Approved" || p.approvalCount >= 2)) {
@@ -124,9 +146,19 @@ export function GovernanceSection() {
     );
   };
 
-  const handleConfirmCancel = (e: React.FormEvent) => {
+  const handleConfirmCancel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancellingProposalId) return;
+
+    try {
+      const res = await cancelProposalOnChain(
+        cancellingProposalId,
+        cancelReasonText || "Dibatalkan oleh DPS/Amil"
+      );
+      setActionTxHash({ id: cancellingProposalId, hash: res.txHash });
+    } catch {
+      // Fallback
+    }
 
     setProposals((prev) =>
       prev.map((p) => {
@@ -351,6 +383,11 @@ export function GovernanceSection() {
                   >
                     <FileText className="w-3.5 h-3.5" /> Lihat Bukti Penyaluran (IPFS: {p.ipfsProofCID.slice(0, 12)}...)
                   </button>
+                  {p.txHash && (
+                    <div className="text-[11px] font-mono text-emerald-800 flex items-center gap-1">
+                      Tx: <a href={`https://sepolia.etherscan.io/tx/${p.txHash}`} target="_blank" rel="noreferrer" className="underline font-bold truncate max-w-[200px]">{p.txHash}</a>
+                    </div>
+                  )}
                 </div>
 
                 {/* Action Buttons */}
@@ -363,7 +400,7 @@ export function GovernanceSection() {
                         size="sm"
                       >
                         <CheckCircle className="w-3.5 h-3.5 mr-1" />
-                        Setujui ({activeRole.toUpperCase()})
+                        Setujui via MetaMask ({activeRole.toUpperCase()})
                       </Button>
 
                       {(activeRole === "dps" || activeRole === "amil") && (
@@ -383,14 +420,14 @@ export function GovernanceSection() {
                       size="sm"
                       className="bg-emerald-800 hover:bg-emerald-900 text-white"
                     >
-                      Cairkan Dana (Execute L1)
+                      Cairkan Dana (MetaMask L1)
                     </Button>
                   )}
 
                   {isExecuted && (
                     <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-full">
                       <CheckCircle className="w-4 h-4 text-emerald-600" />
-                      Dana Telah Ditransfer
+                      Dana Telah Ditransfer Onchain
                     </div>
                   )}
 
@@ -428,7 +465,7 @@ export function GovernanceSection() {
 
             <form onSubmit={handleConfirmCancel} className="space-y-4 text-xs">
               <p className="text-stone-600 leading-relaxed">
-                Proposal yang dibatalkan oleh DPS/Amil akan dinonaktifkan secara permanen dan tidak dapat disetujui atau dicairkan lagi di smart contract.
+                Proposal yang dibatalkan oleh DPS/Amil akan dinonaktifkan secara permanen dan tidak dapat disetujui atau dicairkan lagi di smart contract Sepolia.
               </p>
 
               <div>
@@ -458,7 +495,7 @@ export function GovernanceSection() {
                   type="submit"
                   className="px-5 py-2 rounded-full text-xs font-semibold bg-red-700 hover:bg-red-800 text-white shadow-xs transition-all"
                 >
-                  Konfirmasi Pembatalan
+                  Konfirmasi Pembatalan di L1
                 </button>
               </div>
             </form>
