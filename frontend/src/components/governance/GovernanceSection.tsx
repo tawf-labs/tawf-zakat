@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, CheckCircle, Clock, AlertTriangle, ExternalLink, X, PlusCircle, UserCheck } from "lucide-react";
+import { FileText, Shield, CheckCircle, Clock, AlertTriangle, ExternalLink, X, PlusCircle, UserCheck, Ban } from "lucide-react";
 
 interface Proposal {
   proposalId: number;
@@ -18,6 +18,7 @@ interface Proposal {
   approvalCount: number;
   approvedBy: string[];
   status: "Pending" | "Approved" | "Executed" | "Cancelled";
+  cancelReason?: string;
   createdAt: string;
   executedAt?: string;
 }
@@ -62,6 +63,8 @@ export function GovernanceSection() {
   const [activeRole, setActiveRole] = useState<"dps" | "auditor" | "amil">("dps");
   const [selectedProof, setSelectedProof] = useState<Proposal | null>(null);
   const [showProposeModal, setShowProposeModal] = useState(false);
+  const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
+  const [cancelReasonText, setCancelReasonText] = useState("");
 
   // New Proposal Form State
   const [newBenName, setNewBenName] = useState("");
@@ -119,6 +122,27 @@ export function GovernanceSection() {
         return p;
       })
     );
+  };
+
+  const handleConfirmCancel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancellingProposalId) return;
+
+    setProposals((prev) =>
+      prev.map((p) => {
+        if (p.proposalId === cancellingProposalId) {
+          return {
+            ...p,
+            status: "Cancelled",
+            cancelReason: cancelReasonText || "Dibatalkan oleh pengawas syariah / amil",
+          };
+        }
+        return p;
+      })
+    );
+
+    setCancellingProposalId(null);
+    setCancelReasonText("");
   };
 
   const handleCreateProposal = async (e: React.FormEvent) => {
@@ -253,6 +277,7 @@ export function GovernanceSection() {
           const isApproved = p.status === "Approved";
           const isExecuted = p.status === "Executed";
           const isPending = p.status === "Pending";
+          const isCancelled = p.status === "Cancelled";
 
           return (
             <Card key={p.proposalId} elevated className="p-6 md:p-6">
@@ -262,26 +287,39 @@ export function GovernanceSection() {
                     #{p.proposalId}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-serif font-bold text-lg text-[#0F3D30]">
                         {p.beneficiaryName}
                       </h4>
                       <Badge variant="neutral">{p.asnafLabel}</Badge>
                       <Badge
                         variant={
-                          isExecuted ? "success" : isApproved ? "info" : "warning"
+                          isExecuted
+                            ? "success"
+                            : isApproved
+                            ? "info"
+                            : isCancelled
+                            ? "neutral"
+                            : "warning"
                         }
                       >
                         {isExecuted
                           ? "Realisasi Selesai (Executed)"
                           : isApproved
                           ? "Kuorum 2/3 Tercapai (Approved)"
+                          : isCancelled
+                          ? "Dibatalkan (Cancelled)"
                           : "Menunggu Persetujuan (Pending)"}
                       </Badge>
                     </div>
                     <p className="text-xs text-[#555555] font-mono mt-0.5">
                       NIK Masked: {p.beneficiaryNIKMasked} | Hash: {p.beneficiaryHash.slice(0, 16)}...
                     </p>
+                    {isCancelled && p.cancelReason && (
+                      <p className="text-xs text-red-600 font-medium mt-1">
+                        Alasan Pembatalan: "{p.cancelReason}"
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -316,16 +354,27 @@ export function GovernanceSection() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {isPending && (
-                    <Button
-                      onClick={() => handleApprove(p.proposalId)}
-                      variant="secondary"
-                      size="sm"
-                    >
-                      <CheckCircle className="w-3.5 h-3.5 mr-1" />
-                      Setujui ({activeRole.toUpperCase()})
-                    </Button>
+                    <>
+                      <Button
+                        onClick={() => handleApprove(p.proposalId)}
+                        variant="secondary"
+                        size="sm"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5 mr-1" />
+                        Setujui ({activeRole.toUpperCase()})
+                      </Button>
+
+                      {(activeRole === "dps" || activeRole === "amil") && (
+                        <button
+                          onClick={() => setCancellingProposalId(p.proposalId)}
+                          className="px-3.5 py-1.5 rounded-full text-xs font-semibold border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <Ban className="w-3 h-3" /> Batalkan
+                        </button>
+                      )}
+                    </>
                   )}
 
                   {(isApproved || (isPending && p.approvalCount >= 2)) && (
@@ -344,12 +393,78 @@ export function GovernanceSection() {
                       Dana Telah Ditransfer
                     </div>
                   )}
+
+                  {isCancelled && (
+                    <div className="flex items-center gap-1.5 text-xs text-stone-600 font-medium bg-stone-100 px-3 py-1.5 rounded-full">
+                      <Ban className="w-4 h-4 text-stone-500" />
+                      Proposal Tidak Berlaku
+                    </div>
+                  )}
                 </div>
               </div>
             </Card>
           );
         })}
       </div>
+
+      {/* Cancel Proposal Reason Modal */}
+      {cancellingProposalId && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <Card elevated className="max-w-md w-full bg-white p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0F3D30]/10 mb-4">
+              <div className="flex items-center gap-2 text-red-700">
+                <Ban className="w-5 h-5" />
+                <h4 className="font-serif font-bold text-lg">
+                  Batalkan Proposal #{cancellingProposalId}
+                </h4>
+              </div>
+              <button
+                onClick={() => setCancellingProposalId(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmCancel} className="space-y-4 text-xs">
+              <p className="text-stone-600 leading-relaxed">
+                Proposal yang dibatalkan oleh DPS/Amil akan dinonaktifkan secara permanen dan tidak dapat disetujui atau dicairkan lagi di smart contract.
+              </p>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1.5">
+                  Alasan Pembatalan / Ketidaksesuaian Syariah:
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={cancelReasonText}
+                  onChange={(e) => setCancelReasonText(e.target.value)}
+                  placeholder="Contoh: Berkas mustahik tidak memenuhi kriteria 8 asnaf atau data NIK salah ketik."
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCancellingProposalId(null)}
+                >
+                  Kembali
+                </Button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-full text-xs font-semibold bg-red-700 hover:bg-red-800 text-white shadow-xs transition-all"
+                >
+                  Konfirmasi Pembatalan
+                </button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
 
       {/* IPFS Proof Inspection Modal */}
       {selectedProof && (

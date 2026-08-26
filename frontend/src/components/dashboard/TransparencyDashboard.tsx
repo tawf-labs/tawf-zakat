@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Card } from "../ui/Card";
 import { Badge } from "../ui/Badge";
-import { Coins, Landmark, ShieldCheck, ArrowUpRight, ArrowDownRight, Layers, CheckCircle2 } from "lucide-react";
+import { Button } from "../ui/Button";
+import { Coins, Landmark, ShieldCheck, ArrowUpRight, ArrowDownRight, Layers, CheckCircle2, Wallet, X } from "lucide-react";
 
 interface BatchItem {
   batchId: number;
@@ -24,6 +25,16 @@ export function TransparencyDashboard() {
     },
   ]);
 
+  const [totalUSDC, setTotalUSDC] = useState(10000);
+  const [amilTreasuryUSDC, setAmilTreasuryUSDC] = useState(1250);
+  const [mustahikVaultUSDC, setMustahikVaultUSDC] = useState(8750);
+  const [disbursedUSDC, setDisbursedUSDC] = useState(500);
+
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAddress, setWithdrawAddress] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("250");
+  const [withdrawSuccessMsg, setWithdrawSuccessMsg] = useState<string | null>(null);
+
   useEffect(() => {
     fetch("http://localhost:3001/api/batches")
       .then((res) => res.json())
@@ -41,10 +52,22 @@ export function TransparencyDashboard() {
   const mustahikVaultIDR = totalIDR - amilShareIDR;
   const disbursedIDR = 5000000; // From executed proposal
 
-  const totalUSDC = 10000;
-  const amilShareUSDC = 1250;
-  const mustahikVaultUSDC = 8750;
-  const disbursedUSDC = 500;
+  const handleWithdrawAmil = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = Number(withdrawAmount);
+    if (amt > amilTreasuryUSDC) {
+      alert("Nominal penarikan melebihi saldo kas amil!");
+      return;
+    }
+
+    setAmilTreasuryUSDC((prev) => prev - amt);
+    setWithdrawSuccessMsg(`Penarikan $${amt} USDC untuk operasional amil berhasil dieksekusi di L1!`);
+    setTimeout(() => {
+      setShowWithdrawModal(false);
+      setWithdrawSuccessMsg(null);
+      setWithdrawAddress("");
+    }, 2000);
+  };
 
   return (
     <section id="transparency" className="py-16 px-6 max-w-6xl mx-auto border-t border-[#0F3D30]/10">
@@ -125,7 +148,15 @@ export function TransparencyDashboard() {
                 <p className="text-[11px] text-[#555555]">Real Token di Smart Contract Sepolia</p>
               </div>
             </div>
-            <Badge variant="info">On-Chain Custody</Badge>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowWithdrawModal(true)}
+                className="text-[11px] font-semibold text-[#0F3D30] hover:text-[#1A5242] bg-[#0F3D30]/10 px-3 py-1 rounded-full cursor-pointer"
+              >
+                Cairkan Hak Amil
+              </button>
+              <Badge variant="info">On-Chain Custody</Badge>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 pt-1">
@@ -151,7 +182,7 @@ export function TransparencyDashboard() {
           <div>
             <div className="flex justify-between text-xs font-semibold mb-1.5">
               <span className="text-sky-900">Mustahik Vault (87.5%): ${mustahikVaultUSDC.toLocaleString("en-US")}</span>
-              <span className="text-amber-800">Amil (12.5%): ${amilShareUSDC.toLocaleString("en-US")}</span>
+              <span className="text-amber-800 font-bold">Amil Treasury (12.5%): ${amilTreasuryUSDC.toLocaleString("en-US")}</span>
             </div>
             <div className="w-full h-3 bg-amber-200 rounded-full overflow-hidden flex">
               <div className="h-full bg-[#0F3D30]" style={{ width: "87.5%" }}></div>
@@ -160,6 +191,78 @@ export function TransparencyDashboard() {
           </div>
         </Card>
       </div>
+
+      {/* Amil Treasury Withdrawal Modal */}
+      {showWithdrawModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <Card elevated className="max-w-md w-full bg-white p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0F3D30]/10 mb-4">
+              <div className="flex items-center gap-2">
+                <Wallet className="w-5 h-5 text-[#0F3D30]" />
+                <h4 className="font-serif font-bold text-lg text-[#0F3D30]">
+                  Pencairan Hak Amil (USDC Treasury)
+                </h4>
+              </div>
+              <button
+                onClick={() => setShowWithdrawModal(false)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleWithdrawAmil} className="space-y-4 text-xs">
+              <div className="bg-[#0F3D30]/5 p-3 rounded-xl border border-[#0F3D30]/15 flex justify-between items-center">
+                <span className="text-[#555555]">Saldo Hak Amil Tersedia:</span>
+                <span className="font-bold text-[#0F3D30] font-mono text-sm">
+                  ${amilTreasuryUSDC.toLocaleString("en-US")} USDC
+                </span>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Alamat Wallet Tujuan (Rekening Operasional Amil)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={withdrawAddress}
+                  onChange={(e) => setWithdrawAddress(e.target.value)}
+                  placeholder="0x... Alamat EVM Amil"
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Nominal Penarikan (USDC)
+                </label>
+                <input
+                  type="number"
+                  required
+                  max={amilTreasuryUSDC}
+                  value={withdrawAmount}
+                  onChange={(e) => setWithdrawAmount(e.target.value)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-semibold text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+                <span className="text-[10px] text-stone-500 mt-1 block">
+                  *Penarikan dibatasi maksimal $ {amilTreasuryUSDC} USDC sesuai porsi 12.5%.
+                </span>
+              </div>
+
+              {withdrawSuccessMsg ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-900 font-medium text-center">
+                  {withdrawSuccessMsg}
+                </div>
+              ) : (
+                <Button type="submit" className="w-full py-3 mt-2">
+                  Eksekusi Penarikan Hak Amil (L1)
+                </Button>
+              )}
+            </form>
+          </Card>
+        </div>
+      )}
 
       {/* Settled Batches Table */}
       <Card>
