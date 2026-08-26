@@ -448,4 +448,8 @@ target/
 *.wtns
 *.r1cs
 *.wasm
+.env
+.env.*
+backend/.env
+frontend/.env
 
