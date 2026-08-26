@@ -2,12 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, CheckCircle, Clock, AlertTriangle, ExternalLink, X, PlusCircle, UserCheck, Ban } from "lucide-react";
+import { FileText, Shield, CheckCircle, Clock, AlertTriangle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, Wallet } from "lucide-react";
 import {
   approveDisbursementOnChain,
   executeDisbursementOnChain,
   cancelProposalOnChain,
 } from "../../lib/web3Client";
+import { useWallet } from "../../lib/WalletContext";
 
 interface Proposal {
   proposalId: number;
@@ -30,6 +31,8 @@ interface Proposal {
 }
 
 export function GovernanceSection() {
+  const { address, formattedAddress } = useWallet();
+
   const [proposals, setProposals] = useState<Proposal[]>([
     {
       proposalId: 1,
@@ -72,7 +75,6 @@ export function GovernanceSection() {
   const [showProposeModal, setShowProposeModal] = useState(false);
   const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
   const [cancelReasonText, setCancelReasonText] = useState("");
-  const [actionTxHash, setActionTxHash] = useState<{ id: number; hash: string } | null>(null);
 
   // New Proposal Form State
   const [newBenName, setNewBenName] = useState("");
@@ -94,8 +96,7 @@ export function GovernanceSection() {
 
   const handleApprove = async (proposalId: number) => {
     try {
-      const res = await approveDisbursementOnChain(proposalId);
-      setActionTxHash({ id: proposalId, hash: res.txHash });
+      await approveDisbursementOnChain(proposalId);
     } catch {
       // Fallback
     }
@@ -126,8 +127,7 @@ export function GovernanceSection() {
 
   const handleExecute = async (proposalId: number) => {
     try {
-      const res = await executeDisbursementOnChain(proposalId);
-      setActionTxHash({ id: proposalId, hash: res.txHash });
+      await executeDisbursementOnChain(proposalId);
     } catch {
       // Fallback
     }
@@ -151,11 +151,10 @@ export function GovernanceSection() {
     if (!cancellingProposalId) return;
 
     try {
-      const res = await cancelProposalOnChain(
+      await cancelProposalOnChain(
         cancellingProposalId,
         cancelReasonText || "Dibatalkan oleh DPS/Amil"
       );
-      setActionTxHash({ id: cancellingProposalId, hash: res.txHash });
     } catch {
       // Fallback
     }
@@ -259,42 +258,47 @@ export function GovernanceSection() {
       {/* Role Switcher Toolbar */}
       <div className="bg-white p-4 rounded-2xl border border-[#0F3D30]/10 shadow-xs mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <UserCheck className="w-5 h-5 text-[#0F3D30]" />
+          <UserCheck className="w-4 h-4 text-[#0F3D30]" />
           <span className="text-xs font-semibold uppercase tracking-wider text-[#1A1A1A]">
-            Simulasi Peran Penandatangan:
+            Peran Penandatangan:
           </span>
+          {address && (
+            <span className="text-[11px] font-mono text-[#0F3D30] bg-[#0F3D30]/10 px-2 py-0.5 rounded-full font-bold">
+              {formattedAddress}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setActiveRole("dps")}
-            className={`px-4 py-2 rounded-full text-xs font-semibold transition-all ${
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
               activeRole === "dps"
                 ? "bg-[#0F3D30] text-[#F9F6F0] shadow-xs"
                 : "bg-[#F9F6F0] text-[#555555] hover:text-[#0F3D30]"
             }`}
           >
-            🏛️ Dewan Pengawas Syariah (DPS)
+            <Landmark className="w-3.5 h-3.5" /> Dewan Pengawas Syariah (DPS)
           </button>
           <button
             onClick={() => setActiveRole("auditor")}
-            className={`px-4 py-2 rounded-full text-xs font-semibold transition-all ${
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
               activeRole === "auditor"
                 ? "bg-[#0F3D30] text-[#F9F6F0] shadow-xs"
                 : "bg-[#F9F6F0] text-[#555555] hover:text-[#0F3D30]"
             }`}
           >
-            📊 Auditor Independen
+            <BarChart3 className="w-3.5 h-3.5" /> Auditor Independen
           </button>
           <button
             onClick={() => setActiveRole("amil")}
-            className={`px-4 py-2 rounded-full text-xs font-semibold transition-all ${
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
               activeRole === "amil"
                 ? "bg-[#0F3D30] text-[#F9F6F0] shadow-xs"
                 : "bg-[#F9F6F0] text-[#555555] hover:text-[#0F3D30]"
             }`}
           >
-            🏢 Amil Operasional
+            <Building2 className="w-3.5 h-3.5" /> Amil Operasional
           </button>
         </div>
 
@@ -305,14 +309,14 @@ export function GovernanceSection() {
 
       {/* Proposals List */}
       <div className="space-y-4">
-        {proposals.map((p) => {
+        {proposals.map((p, idx) => {
           const isApproved = p.status === "Approved";
           const isExecuted = p.status === "Executed";
           const isPending = p.status === "Pending";
           const isCancelled = p.status === "Cancelled";
 
           return (
-            <Card key={p.proposalId} elevated className="p-6 md:p-6">
+            <Card key={`gov-proposal-${p.proposalId}-${idx}`} elevated className="p-6 md:p-6">
               <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-4 border-b border-[#0F3D30]/10">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-[#0F3D30]/10 text-[#0F3D30] flex items-center justify-center font-bold text-sm">
@@ -493,7 +497,7 @@ export function GovernanceSection() {
                 </Button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-full text-xs font-semibold bg-red-700 hover:bg-red-800 text-white shadow-xs transition-all"
+                  className="px-5 py-2 rounded-full text-xs font-semibold bg-red-700 hover:bg-red-800 text-white shadow-xs transition-all cursor-pointer"
                 >
                   Konfirmasi Pembatalan di L1
                 </button>

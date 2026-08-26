@@ -312,8 +312,8 @@ export function TransparencyDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#0F3D30]/5 font-mono text-[11px]">
-              {batches.map((b) => (
-                <tr key={b.batchId} className="hover:bg-[#F9F6F0]/60 transition-colors">
+              {batches.map((b, idx) => (
+                <tr key={`settled-batch-${b.batchId}-${idx}`} className="hover:bg-[#F9F6F0]/60 transition-colors">
                   <td className="py-3 px-3 font-bold text-[#0F3D30]">#{b.batchId}</td>
                   <td className="py-3 px-3 text-stone-900 font-semibold truncate max-w-[220px]">
                     {b.merkleRoot}

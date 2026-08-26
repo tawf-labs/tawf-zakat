@@ -1,11 +1,15 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { QrCode, Wallet, Shield, Sparkles, Copy, Check, ArrowRight, Download, Lock, ExternalLink } from "lucide-react";
-import { requestWalletConnection, depositUSDCOnChain } from "../../lib/web3Client";
+import { QrCode, Wallet, Shield, Copy, Check, ExternalLink, Lock, AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
+import { depositUSDCOnChain, approveUSDCOnChain, getUSDCAllowance, getUSDCBalance } from "../../lib/web3Client";
+import { useWallet } from "../../lib/WalletContext";
+import { parseUnits, formatUnits } from "viem";
 
 export function DonateSection() {
+  const { address, formattedAddress, isConnected } = useWallet();
+
   const [activeTab, setActiveTab] = useState<"fiat" | "usdc">("fiat");
 
   // Fiat State
@@ -20,8 +24,12 @@ export function DonateSection() {
   // Web3 State
   const [usdcAmount, setUsdcAmount] = useState("100");
   const [usdcAnonymous, setUsdcAnonymous] = useState(false);
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
+  const [currentAllowance, setCurrentAllowance] = useState<bigint>(0n);
+  const [isApproving, setIsApproving] = useState(false);
+  const [isDepositing, setIsDepositing] = useState(false);
   const [web3Status, setWeb3Status] = useState<string | null>(null);
+  const [web3Error, setWeb3Error] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
 
@@ -32,6 +40,73 @@ export function DonateSection() {
     { label: "Rp 2.5 Juta", value: "2500000" },
     { label: "Rp 5 Juta", value: "5000000" },
   ];
+
+  // Refresh USDC Balance and Allowance
+  const refreshUSDCState = useCallback(async () => {
+    if (!address) return;
+    try {
+      const [bal, allow] = await Promise.all([
+        getUSDCBalance(address),
+        getUSDCAllowance(address),
+      ]);
+      setUsdcBalance(parseFloat(formatUnits(bal, 6)).toFixed(2));
+      setCurrentAllowance(allow);
+    } catch (err) {
+      console.warn("Failed to check USDC balance/allowance:", err);
+    }
+  }, [address]);
+
+  useEffect(() => {
+    if (isConnected && address) {
+      refreshUSDCState();
+    }
+  }, [isConnected, address, refreshUSDCState]);
+
+  const targetAmountBigInt = parseUnits(usdcAmount || "0", 6);
+  const needsApproval = currentAllowance < targetAmountBigInt;
+
+  const handleApprove = async () => {
+    setIsApproving(true);
+    setWeb3Status("Membuka MetaMask... Mohon setujui batas izin (Allowance) USDC.");
+    setWeb3Error(null);
+
+    try {
+      const res = await approveUSDCOnChain(Number(usdcAmount));
+      setWeb3Status("Izin USDC Berhasil Disetujui di Sepolia! Sekarang Anda dapat menyetor donasi.");
+      await refreshUSDCState();
+    } catch (err: any) {
+      setWeb3Status(null);
+      setWeb3Error(err.shortMessage || err.message || "Persetujuan izin USDC dibatalkan di MetaMask.");
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  const handleUsdcDeposit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (needsApproval) {
+      await handleApprove();
+      return;
+    }
+
+    setIsDepositing(true);
+    setWeb3Status("Membuka MetaMask... Mohon konfirmasi transaksi setoran donasi USDC.");
+    setWeb3Error(null);
+    setTxHash(null);
+
+    try {
+      const res = await depositUSDCOnChain(Number(usdcAmount), usdcAnonymous);
+      setWeb3Status("Donasi USDC Berhasil Diterima & Terkunci di Vault Sepolia L1!");
+      setTxHash(res.txHash);
+      setExplorerUrl(res.explorerUrl);
+      await refreshUSDCState();
+    } catch (err: any) {
+      setWeb3Status(null);
+      setWeb3Error(err.shortMessage || err.message || "Transaksi setoran dibatalkan di MetaMask.");
+    } finally {
+      setIsDepositing(false);
+    }
+  };
 
   const handleFiatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +127,6 @@ export function DonateSection() {
         const data = await response.json();
         setFiatReceipt(data.receipt);
       } else {
-        // Fallback local receipt generator
         const randomSalt = `salt_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
         const randomTrx = `TRX-20260826-${Math.floor(1000 + Math.random() * 9000)}`;
         setFiatReceipt({
@@ -79,38 +153,6 @@ export function DonateSection() {
       });
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleConnectWallet = async () => {
-    try {
-      const address = await requestWalletConnection();
-      if (address) {
-        setWalletAddress(address);
-      }
-    } catch (e: any) {
-      console.warn("Wallet connection fallback:", e);
-      setWalletAddress("0x5e9B652C4E8a013f6fAb69F0b55377c408B59968 (Sepolia Deployer)");
-    }
-  };
-
-  const handleUsdcDeposit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setWeb3Status("Meminta konfirmasi transaksi MetaMask di Ethereum Sepolia...");
-
-    try {
-      const res = await depositUSDCOnChain(Number(usdcAmount), usdcAnonymous);
-      setLoading(false);
-      setWeb3Status("Transaksi Berhasil Dikonfirmasi di Sepolia L1!");
-      setTxHash(res.txHash);
-      setExplorerUrl(res.explorerUrl);
-    } catch (err: any) {
-      setLoading(false);
-      setWeb3Status("Transaksi Berhasil Dikonfirmasi (Demo On-Chain)!");
-      const mock = "0x8e5f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f";
-      setTxHash(mock);
-      setExplorerUrl(`https://sepolia.etherscan.io/tx/${mock}`);
     }
   };
 
@@ -142,9 +184,9 @@ export function DonateSection() {
               setActiveTab("fiat");
               setFiatReceipt(null);
             }}
-            className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold uppercase tracking-wider transition-all ${
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
               activeTab === "fiat"
-                ? "bg-[#0F3D30] text-[#F9F6F0] shadow-sm"
+                ? "bg-[#0F3D30] text-[#F9F6F0] shadow-xs"
                 : "text-[#555555] hover:text-[#0F3D30]"
             }`}
           >
@@ -152,9 +194,9 @@ export function DonateSection() {
           </button>
           <button
             onClick={() => setActiveTab("usdc")}
-            className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold uppercase tracking-wider transition-all ${
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
               activeTab === "usdc"
-                ? "bg-[#0F3D30] text-[#F9F6F0] shadow-sm"
+                ? "bg-[#0F3D30] text-[#F9F6F0] shadow-xs"
                 : "text-[#555555] hover:text-[#0F3D30]"
             }`}
           >
@@ -176,7 +218,6 @@ export function DonateSection() {
               </p>
 
               <form onSubmit={handleFiatSubmit} className="space-y-5">
-                {/* Jenis Zakat */}
                 <div>
                   <label className="block text-xs font-semibold text-[#1A1A1A] uppercase tracking-wider mb-2">
                     Jenis Zakat / Infaq
@@ -193,7 +234,6 @@ export function DonateSection() {
                   </select>
                 </div>
 
-                {/* Nama Donatur & Mode Hamba Allah */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-semibold text-[#1A1A1A] uppercase tracking-wider">
@@ -219,7 +259,6 @@ export function DonateSection() {
                   />
                 </div>
 
-                {/* Nominal Donasi */}
                 <div>
                   <label className="block text-xs font-semibold text-[#1A1A1A] uppercase tracking-wider mb-2">
                     Nominal Zakat (IDR)
@@ -230,7 +269,7 @@ export function DonateSection() {
                         type="button"
                         key={item.value}
                         onClick={() => setAmountIDR(item.value)}
-                        className={`py-2 px-2 text-xs rounded-lg border font-medium transition-all ${
+                        className={`py-2 px-2 text-xs rounded-lg border font-medium transition-all cursor-pointer ${
                           amountIDR === item.value
                             ? "bg-[#0F3D30] text-[#F9F6F0] border-[#0F3D30]"
                             : "bg-[#F9F6F0] text-[#1A1A1A] border-[#0F3D30]/10 hover:border-[#0F3D30]/30"
@@ -254,7 +293,6 @@ export function DonateSection() {
                   </div>
                 </div>
 
-                {/* Alokasi Preview */}
                 <div className="bg-[#F9F6F0] rounded-xl p-3 border border-[#0F3D30]/10 text-xs flex justify-between items-center text-[#555555]">
                   <div>
                     <span className="font-semibold text-emerald-800">Mustahik Vault (87.5%):</span>{" "}
@@ -273,7 +311,6 @@ export function DonateSection() {
             </Card>
           </div>
 
-          {/* Sisi Kanan: QRIS Mock & Digital Kuitansi */}
           <div className="md:col-span-5">
             {!fiatReceipt ? (
               <Card className="text-center p-8 flex flex-col items-center justify-center bg-stone-50 border-dashed">
@@ -299,7 +336,6 @@ export function DonateSection() {
                   <Badge variant="success">Tercatat di Batch #1</Badge>
                 </div>
 
-                {/* QRIS Graphic */}
                 <div className="bg-white p-4 rounded-xl border border-stone-200 text-center mb-4 shadow-inner">
                   <div className="w-36 h-36 mx-auto bg-stone-900 rounded-lg flex items-center justify-center text-white p-2">
                     <QrCode className="w-full h-full text-white" />
@@ -312,7 +348,6 @@ export function DonateSection() {
                   </p>
                 </div>
 
-                {/* Secret Salt Box */}
                 <div className="bg-[#0F3D30]/5 border border-[#0F3D30]/15 rounded-xl p-3.5 mb-4">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-[#0F3D30] mb-1">
                     <Lock className="w-3.5 h-3.5 text-[#C5A869]" /> Secret Salt (Kunci Verifikasi Mandiri)
@@ -324,14 +359,13 @@ export function DonateSection() {
                     <span className="truncate mr-2 text-stone-800">{fiatReceipt.salt}</span>
                     <button
                       onClick={() => copyToClipboard(fiatReceipt.salt)}
-                      className="text-[#0F3D30] hover:text-[#1A5242] shrink-0"
+                      className="text-[#0F3D30] hover:text-[#1A5242] shrink-0 cursor-pointer"
                     >
                       {copiedSalt ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
 
-                {/* Transaction ID */}
                 <div className="text-xs space-y-1.5 border-t border-[#0F3D30]/10 pt-3">
                   <div className="flex justify-between">
                     <span className="text-[#555555]">Transaction ID:</span>
@@ -374,27 +408,32 @@ export function DonateSection() {
                   Penyetoran aset riil langsung ke Smart Contract Custodial Vault di Ethereum Sepolia.
                 </p>
               </div>
-              <Badge variant="info">Smart Contract Custody</Badge>
+              <Badge variant="info">Sepolia USDC Vault</Badge>
             </div>
 
-            {!walletAddress ? (
+            {!isConnected || !address ? (
               <div className="text-center py-8 bg-[#F9F6F0] rounded-2xl border border-dashed border-[#0F3D30]/20 p-6">
                 <Wallet className="w-12 h-12 text-[#0F3D30] mx-auto mb-3" />
                 <h4 className="font-serif text-lg font-semibold text-[#0F3D30] mb-2">
                   Hubungkan Dompet Web3 Anda
                 </h4>
                 <p className="text-xs text-[#555555] max-w-sm mx-auto mb-6">
-                  Gunakan MetaMask, Coinbase Wallet, atau Injected Web3 Wallet pada jaringan Ethereum Sepolia Testnet.
+                  Gunakan tombol "Connect Wallet" di bagian kanan atas halaman untuk menghubungkan MetaMask Anda di jaringan Sepolia.
                 </p>
-                <Button onClick={handleConnectWallet} size="lg">
-                  Hubungkan MetaMask
-                </Button>
               </div>
             ) : (
               <form onSubmit={handleUsdcDeposit} className="space-y-5">
-                <div className="bg-[#0F3D30]/5 rounded-xl p-3 flex justify-between items-center text-xs">
-                  <span className="text-[#555555]">Connected Wallet:</span>
-                  <span className="font-mono font-bold text-[#0F3D30]">{walletAddress}</span>
+                <div className="bg-[#0F3D30]/5 rounded-xl p-3.5 flex justify-between items-center text-xs border border-[#0F3D30]/10">
+                  <div>
+                    <span className="text-[#555555] block">Dompet Terhubung:</span>
+                    <span className="font-mono font-bold text-[#0F3D30]">{formattedAddress || address}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[#555555] block">Saldo Sepolia USDC:</span>
+                    <span className="font-mono font-bold text-[#0F3D30]">
+                      {usdcBalance !== null ? `${usdcBalance} USDC` : "Memuat..."}
+                    </span>
+                  </div>
                 </div>
 
                 <div>
@@ -410,12 +449,26 @@ export function DonateSection() {
                       value={usdcAmount}
                       onChange={(e) => setUsdcAmount(e.target.value)}
                       placeholder="100"
+                      min="1"
                       className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl pl-8 pr-16 py-2.5 text-base font-semibold text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
                     />
                     <span className="absolute right-4 top-3 text-xs font-bold text-[#0F3D30]">
                       USDC
                     </span>
                   </div>
+                  {usdcBalance !== null && parseFloat(usdcBalance) < Number(usdcAmount) && (
+                    <div className="text-[11px] text-amber-700 mt-1.5 flex items-center justify-between">
+                      <span>Saldo USDC testnet Anda tidak mencukupi (${usdcBalance} USDC).</span>
+                      <a
+                        href="https://faucet.circle.com/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-bold inline-flex items-center gap-0.5 text-[#0F3D30]"
+                      >
+                        Klaim Faucet Circle <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900">
@@ -427,14 +480,42 @@ export function DonateSection() {
                   </div>
                 </div>
 
-                <Button type="submit" disabled={loading} className="w-full py-3.5">
-                  {loading ? "Menunggu Konfirmasi MetaMask..." : `Kirim ${usdcAmount} USDC ke Vault L1 (Sepolia)`}
-                </Button>
+                {/* 2-Step Allowance / Deposit Action */}
+                {needsApproval ? (
+                  <Button
+                    type="button"
+                    onClick={handleApprove}
+                    disabled={isApproving}
+                    className="w-full py-3.5 bg-amber-800 hover:bg-amber-900 text-white"
+                  >
+                    {isApproving ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" /> Menunggu Persetujuan Allowance di MetaMask...
+                      </span>
+                    ) : (
+                      `Step 1: Setujui Izin Transfer ${usdcAmount} USDC (Approve Allowance)`
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    disabled={isDepositing}
+                    className="w-full py-3.5 bg-[#0F3D30] hover:bg-[#1A5242] text-white"
+                  >
+                    {isDepositing ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" /> Menunggu Konfirmasi Setoran di MetaMask...
+                      </span>
+                    ) : (
+                      `Step 2: Setor ${usdcAmount} USDC ke Vault L1 (Sepolia)`
+                    )}
+                  </Button>
+                )}
 
                 {web3Status && (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-900 space-y-2">
                     <div className="font-bold flex items-center gap-1.5">
-                      <Check className="w-4 h-4 text-emerald-600" /> {web3Status}
+                      <CheckCircle className="w-4 h-4 text-emerald-600" /> {web3Status}
                     </div>
                     {txHash && (
                       <div className="font-mono text-[11px] truncate flex items-center justify-between">
@@ -451,6 +532,16 @@ export function DonateSection() {
                         )}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {web3Error && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-xs text-red-900 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="block mb-0.5">Transaksi Gagal di MetaMask:</strong>
+                      <span>{web3Error}</span>
+                    </div>
                   </div>
                 )}
               </form>
