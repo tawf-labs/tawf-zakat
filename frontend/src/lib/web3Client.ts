@@ -178,6 +178,63 @@ export async function executeDisbursementOnChain(
   };
 }
 
+export async function proposeDisbursementOnChain(params: {
+  currencyType: 0 | 1;
+  amount: number;
+  asnafCategory: number;
+  beneficiaryHash: Hex;
+  ipfsProofCID: string;
+  periodId: number;
+  usdcRecipient?: string;
+}): Promise<{ success: boolean; txHash: string; proposalId: number; explorerUrl: string }> {
+  const { walletClient, accountAddress } = await getActiveWalletClient();
+  const client = getPublicClient();
+
+  const parsedAmount =
+    params.currencyType === 1
+      ? parseUnits(params.amount.toString(), 6)
+      : BigInt(params.amount);
+
+  const recipient = (params.usdcRecipient || accountAddress) as Hex;
+
+  const txHash = await walletClient.writeContract({
+    address: ZAKAT_PROTOCOL_L1_ADDRESS,
+    abi: ZAKAT_PROTOCOL_ABI,
+    functionName: "proposeDisbursement",
+    args: [
+      params.currencyType,
+      parsedAmount,
+      params.asnafCategory,
+      params.beneficiaryHash,
+      params.ipfsProofCID,
+      BigInt(params.periodId),
+      recipient,
+    ],
+  });
+
+  await client.waitForTransactionReceipt({ hash: txHash });
+
+  // Read latest proposal counter
+  let proposalId = 1;
+  try {
+    const count = await client.readContract({
+      address: ZAKAT_PROTOCOL_L1_ADDRESS,
+      abi: ZAKAT_PROTOCOL_ABI,
+      functionName: "proposalCounter",
+    });
+    proposalId = Number(count);
+  } catch (err) {
+    console.warn("Failed to read proposalCounter, defaulting to 1:", err);
+  }
+
+  return {
+    success: true,
+    txHash,
+    proposalId,
+    explorerUrl: `${SEPOLIA_EXPLORER_URL}/tx/${txHash}`,
+  };
+}
+
 export async function withdrawAmilShareOnChain(
   toAddress: string,
   amountUSDC: number
@@ -198,3 +255,67 @@ export async function withdrawAmilShareOnChain(
     explorerUrl: `${SEPOLIA_EXPLORER_URL}/tx/${txHash}`,
   };
 }
+
+export async function getContractBalances(): Promise<{
+  totalCollectedIDR: bigint;
+  mustahikVaultIDR: bigint;
+  amilTreasuryIDR: bigint;
+  totalDisbursedIDR: bigint;
+  totalCollectedUSDC: bigint;
+  mustahikVaultUSDC: bigint;
+  amilTreasuryUSDC: bigint;
+  totalDisbursedUSDC: bigint;
+  proposalCounter: number;
+}> {
+  const client = getPublicClient();
+
+  try {
+    const [
+      totalCollectedIDR,
+      mustahikVaultIDR,
+      amilTreasuryIDR,
+      totalDisbursedIDR,
+      totalCollectedUSDC,
+      mustahikVaultUSDC,
+      amilTreasuryUSDC,
+      totalDisbursedUSDC,
+      proposalCounter,
+    ] = await Promise.all([
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "totalCollectedIDR" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "mustahikVaultIDR" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "amilTreasuryIDR" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "totalDisbursedIDR" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "totalCollectedUSDC" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "mustahikVaultUSDC" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "amilTreasuryUSDC" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "totalDisbursedUSDC" }).catch(() => 0n),
+      client.readContract({ address: ZAKAT_PROTOCOL_L1_ADDRESS, abi: ZAKAT_PROTOCOL_ABI, functionName: "proposalCounter" }).catch(() => 0n),
+    ]);
+
+    return {
+      totalCollectedIDR: totalCollectedIDR as bigint,
+      mustahikVaultIDR: mustahikVaultIDR as bigint,
+      amilTreasuryIDR: amilTreasuryIDR as bigint,
+      totalDisbursedIDR: totalDisbursedIDR as bigint,
+      totalCollectedUSDC: totalCollectedUSDC as bigint,
+      mustahikVaultUSDC: mustahikVaultUSDC as bigint,
+      amilTreasuryUSDC: amilTreasuryUSDC as bigint,
+      totalDisbursedUSDC: totalDisbursedUSDC as bigint,
+      proposalCounter: Number(proposalCounter),
+    };
+  } catch (err) {
+    console.error("Failed to read contract balances:", err);
+    return {
+      totalCollectedIDR: 0n,
+      mustahikVaultIDR: 0n,
+      amilTreasuryIDR: 0n,
+      totalDisbursedIDR: 0n,
+      totalCollectedUSDC: 0n,
+      mustahikVaultUSDC: 0n,
+      amilTreasuryUSDC: 0n,
+      totalDisbursedUSDC: 0n,
+      proposalCounter: 0,
+    };
+  }
+}
+

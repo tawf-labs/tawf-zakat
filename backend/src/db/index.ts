@@ -299,7 +299,14 @@ export const dbService = {
           periodId: proposalData.periodId || 202608,
           status: proposalData.status || "Pending",
           approvalCount: proposalData.approvalCount || 1,
-          approvedBy: JSON.stringify(proposalData.approvedBy || ["Amil Internal"]),
+          approvedBy: JSON.stringify(proposalData.approvedBy || ["Amil Internal (Pengusul)"]),
+        }).onConflictDoUpdate({
+          target: schema.disbursementProposals.id,
+          set: {
+            status: proposalData.status || "Pending",
+            approvalCount: proposalData.approvalCount || 1,
+            approvedBy: JSON.stringify(proposalData.approvedBy || ["Amil Internal (Pengusul)"]),
+          },
         });
       } catch (err) {
         console.error("Failed to insert proposal to Neon DB:", err);
@@ -307,5 +314,68 @@ export const dbService = {
     }
 
     return proposalData;
+  },
+
+  async approveProposal(proposalId: number, approverRole: string, _txHash?: string) {
+    const memory = dataStore.proposals.get(proposalId);
+    let newCount = 2;
+    let newApprovedBy = ["Amil Internal (Pengusul)", approverRole];
+    let newStatus = "Approved";
+
+    if (memory) {
+      if (!memory.approvedBy.includes(approverRole)) {
+        memory.approvedBy.push(approverRole);
+        memory.approvalCount = memory.approvedBy.length;
+      }
+      if (memory.approvalCount >= 2) {
+        memory.status = "Approved";
+      }
+      newCount = memory.approvalCount;
+      newApprovedBy = memory.approvedBy;
+      newStatus = memory.status;
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            approvalCount: newCount,
+            approvedBy: JSON.stringify(newApprovedBy),
+            status: newStatus,
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+      } catch (err) {
+        console.error("Failed to update proposal approval in Neon DB:", err);
+      }
+    }
+
+    return memory || { proposalId, approvalCount: newCount, approvedBy: newApprovedBy, status: newStatus };
+  },
+
+  async executeProposal(proposalId: number, _txHash?: string) {
+    const memory = dataStore.proposals.get(proposalId);
+    const executedAt = new Date().toISOString();
+
+    if (memory) {
+      memory.status = "Executed";
+      memory.executedAt = executedAt;
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            status: "Executed",
+            executedAt: new Date(executedAt),
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+      } catch (err) {
+        console.error("Failed to execute proposal in Neon DB:", err);
+      }
+    }
+
+    return memory || { proposalId, status: "Executed", executedAt };
   },
 };

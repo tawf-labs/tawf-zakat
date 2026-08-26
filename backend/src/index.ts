@@ -291,6 +291,58 @@ app.get("/api/batches", async (c) => {
   });
 });
 
+// 1c. Inflow: Record Web3 USDC Donation (Status: PAID)
+app.post("/api/donations/usdc", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { trxId, txHash, donorAddress, donorName, isAnonymous, amountUSDC, salt, commitmentHash } = body;
+
+    if (!amountUSDC || amountUSDC <= 0) {
+      return c.json({ error: "Invalid donation amount" }, 400);
+    }
+
+    const timestamp = new Date().toISOString();
+    const finalTrxId = trxId || `TRX-USDC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const finalSalt = salt || `salt_usdc_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+    const finalDonorName = isAnonymous ? "Hamba Allah" : donorName || "Muzakki Web3";
+    const amountIDREstimate = Math.round(Number(amountUSDC) * 16000); // 1 USDC ~ 16,000 IDR accounting equivalent
+
+    const record: DonationRecord = {
+      trxId: finalTrxId,
+      donorName: finalDonorName,
+      isAnonymous: Boolean(isAnonymous),
+      salt: finalSalt,
+      amountIDR: amountIDREstimate,
+      timestamp,
+      status: "PAID",
+      paymentMethod: "USDC",
+      qrString: txHash || commitmentHash || (donorAddress ? `Donor: ${donorAddress}` : undefined),
+      paidAt: timestamp,
+    };
+
+    await dbService.recordDonation(record);
+
+    return c.json({
+      success: true,
+      message: "USDC donation recorded successfully",
+      donation: {
+        trxId: record.trxId,
+        donorName: record.donorName,
+        isAnonymous: record.isAnonymous,
+        salt: record.salt,
+        amountUSDC: Number(amountUSDC),
+        amountIDR: record.amountIDR,
+        txHash,
+        status: "PAID",
+        paymentMethod: "USDC",
+        paidAt: timestamp,
+      },
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to record USDC donation" }, 500);
+  }
+});
+
 // 4. Governance: List Disbursement Proposals
 app.get("/api/proposals", async (c) => {
   const proposalList = await dbService.getProposals();
@@ -299,6 +351,95 @@ app.get("/api/proposals", async (c) => {
     totalProposals: proposalList.length,
     proposals: proposalList,
   });
+});
+
+// 4b. Governance: Create Disbursement Proposal
+app.post("/api/proposals", async (c) => {
+  try {
+    const body = await c.req.json();
+    const {
+      proposalId,
+      currencyType,
+      amount,
+      asnafCategory,
+      asnafLabel,
+      beneficiaryName,
+      beneficiaryNIKMasked,
+      beneficiaryHash,
+      ipfsProofCID,
+      periodId,
+      txHash,
+    } = body;
+
+    const proposal = {
+      proposalId: Number(proposalId),
+      currencyType: Number(currencyType || 0),
+      amount: Number(amount),
+      asnafCategory: Number(asnafCategory || 0),
+      asnafLabel: asnafLabel || "Fisabilillah",
+      beneficiaryName: beneficiaryName || "Mustahik",
+      beneficiaryNIKMasked: beneficiaryNIKMasked || "3171************",
+      beneficiaryHash: beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000",
+      ipfsProofCID: ipfsProofCID || "QmPendingProofCID",
+      periodId: Number(periodId || 202608),
+      approvalCount: 1,
+      approvedBy: ["Amil Internal (Pengusul)"],
+      status: "Pending",
+      createdAt: new Date().toISOString(),
+      txHash,
+    };
+
+    await dbService.recordProposal(proposal);
+
+    return c.json({
+      success: true,
+      message: "Proposal created and recorded successfully",
+      proposal,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to create proposal" }, 500);
+  }
+});
+
+// 4c. Governance: Approve Proposal
+app.post("/api/proposals/:id/approve", async (c) => {
+  try {
+    const idParam = c.req.param("id");
+    const proposalId = Number(idParam);
+    const body = await c.req.json();
+    const { approverRole, txHash } = body;
+
+    const roleName = approverRole || "Dewan Pengawas Syariah";
+    const updated = await dbService.approveProposal(proposalId, roleName, txHash);
+
+    return c.json({
+      success: true,
+      message: "Proposal approved successfully",
+      proposal: updated,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to approve proposal" }, 500);
+  }
+});
+
+// 4d. Governance: Execute Proposal
+app.post("/api/proposals/:id/execute", async (c) => {
+  try {
+    const idParam = c.req.param("id");
+    const proposalId = Number(idParam);
+    const body = await c.req.json();
+    const { txHash } = body;
+
+    const updated = await dbService.executeProposal(proposalId, txHash);
+
+    return c.json({
+      success: true,
+      message: "Proposal executed successfully",
+      proposal: updated,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to execute proposal" }, 500);
+  }
 });
 
 // 5. Governance: Upload Proof & Generate IPFS CID for Disbursement

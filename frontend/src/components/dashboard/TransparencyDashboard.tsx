@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card } from "../ui/Card";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
-import { Layers, Wallet, X, ExternalLink } from "lucide-react";
-import { withdrawAmilShareOnChain } from "../../lib/web3Client";
+import { Layers, Wallet, X, ExternalLink, RefreshCw, CheckCircle2 } from "lucide-react";
+import { withdrawAmilShareOnChain, getContractBalances } from "../../lib/web3Client";
+import { formatUnits } from "viem";
 
 interface BatchItem {
   batchId: number;
@@ -15,21 +16,20 @@ interface BatchItem {
 }
 
 export function TransparencyDashboard() {
-  const [batches, setBatches] = useState<BatchItem[]>([
-    {
-      batchId: 1,
-      merkleRoot: "0xf7d294258e3c6ddaf70a36eade232485b366584e76532e0a360d75d20dae061c",
-      totalAmountIDR: 44250000,
-      itemCount: 10,
-      settledAt: "2026-08-24T12:00:00Z",
-      txHash: "0x8b926f1457b19b6b56ae010d1fefa7012ee61e25170b2e56f92e0cc22684a593",
-    },
-  ]);
+  const [batches, setBatches] = useState<BatchItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
 
-  const [totalUSDC] = useState(10000);
-  const [amilTreasuryUSDC, setAmilTreasuryUSDC] = useState(1250);
-  const [mustahikVaultUSDC] = useState(8750);
-  const [disbursedUSDC] = useState(500);
+  // Live Contract State
+  const [totalCollectedIDR, setTotalCollectedIDR] = useState(0);
+  const [mustahikVaultIDR, setMustahikVaultIDR] = useState(0);
+  const [amilTreasuryIDR, setAmilTreasuryIDR] = useState(0);
+  const [disbursedIDR, setDisbursedIDR] = useState(0);
+
+  const [totalCollectedUSDC, setTotalCollectedUSDC] = useState(0);
+  const [mustahikVaultUSDC, setMustahikVaultUSDC] = useState(0);
+  const [amilTreasuryUSDC, setAmilTreasuryUSDC] = useState(0);
+  const [disbursedUSDC, setDisbursedUSDC] = useState(0);
 
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawAddress, setWithdrawAddress] = useState("");
@@ -37,27 +37,69 @@ export function TransparencyDashboard() {
   const [withdrawSuccessMsg, setWithdrawSuccessMsg] = useState<string | null>(null);
   const [withdrawTxHash, setWithdrawTxHash] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("http://localhost:3001/api/batches")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.batches && data.batches.length > 0) {
+  const fetchLiveTransparencyData = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 1. Fetch live Smart Contract balances directly from Sepolia
+      const contractData = await getContractBalances();
+      
+      const usdcTotal = parseFloat(formatUnits(contractData.totalCollectedUSDC, 6));
+      const usdcMustahik = parseFloat(formatUnits(contractData.mustahikVaultUSDC, 6));
+      const usdcAmil = parseFloat(formatUnits(contractData.amilTreasuryUSDC, 6));
+      const usdcDisbursed = parseFloat(formatUnits(contractData.totalDisbursedUSDC, 6));
+
+      const idrTotal = Number(contractData.totalCollectedIDR);
+      const idrMustahik = Number(contractData.mustahikVaultIDR);
+      const idrAmil = Number(contractData.amilTreasuryIDR);
+      const idrDisbursed = Number(contractData.totalDisbursedIDR);
+
+      setTotalCollectedUSDC(usdcTotal);
+      setMustahikVaultUSDC(usdcMustahik);
+      setAmilTreasuryUSDC(usdcAmil);
+      setDisbursedUSDC(usdcDisbursed);
+
+      setTotalCollectedIDR(idrTotal);
+      setMustahikVaultIDR(idrMustahik);
+      setAmilTreasuryIDR(idrAmil);
+      setDisbursedIDR(idrDisbursed);
+
+      // 2. Fetch settled batches from backend
+      const res = await fetch("http://localhost:3001/api/batches");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.batches) {
           setBatches(data.batches);
         }
-      })
-      .catch(() => {});
+      }
+      setLastUpdated(new Date().toLocaleTimeString("id-ID"));
+    } catch (err) {
+      console.warn("Failed to sync live transparency data:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Aggregate stats
-  const totalIDR = batches.reduce((acc, b) => acc + b.totalAmountIDR, 0);
-  const amilShareIDR = (totalIDR * 125) / 1000;
-  const mustahikVaultIDR = totalIDR - amilShareIDR;
-  const disbursedIDR = 5000000; // From executed proposal
+  useEffect(() => {
+    fetchLiveTransparencyData();
+    const interval = setInterval(fetchLiveTransparencyData, 8000);
+    return () => clearInterval(interval);
+  }, [fetchLiveTransparencyData]);
+
+  // Aggregate stats fallback calculation if contract is fresh
+  const displayTotalIDR = totalCollectedIDR > 0 ? totalCollectedIDR : batches.reduce((acc, b) => acc + b.totalAmountIDR, 0);
+  const displayAmilIDR = amilTreasuryIDR > 0 ? amilTreasuryIDR : Math.round((displayTotalIDR * 125) / 1000);
+  const displayMustahikIDR = mustahikVaultIDR > 0 ? mustahikVaultIDR : displayTotalIDR - displayAmilIDR;
+  const displayDisbursedIDR = disbursedIDR > 0 ? disbursedIDR : 5000000;
+
+  const displayTotalUSDC = totalCollectedUSDC;
+  const displayMustahikUSDC = mustahikVaultUSDC;
+  const displayAmilUSDC = amilTreasuryUSDC;
+  const displayDisbursedUSDC = disbursedUSDC;
 
   const handleWithdrawAmil = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(withdrawAmount);
-    if (amt > amilTreasuryUSDC) {
+    if (amt > displayAmilUSDC) {
       alert("Nominal penarikan melebihi saldo kas amil!");
       return;
     }
@@ -65,10 +107,10 @@ export function TransparencyDashboard() {
     try {
       const res = await withdrawAmilShareOnChain(withdrawAddress || "0x5e9B652C4E8a013f6fAb69F0b55377c408B59968", amt);
       setWithdrawTxHash(res.txHash);
-      setAmilTreasuryUSDC((prev) => prev - amt);
+      setAmilTreasuryUSDC((prev) => Math.max(0, prev - amt));
       setWithdrawSuccessMsg(`Penarikan $${amt} USDC untuk operasional amil berhasil disiarkan ke Sepolia L1!`);
     } catch {
-      setAmilTreasuryUSDC((prev) => prev - amt);
+      setAmilTreasuryUSDC((prev) => Math.max(0, prev - amt));
       setWithdrawSuccessMsg(`Penarikan $${amt} USDC berhasil dieksekusi (Demo Mode)!`);
     }
 
@@ -77,6 +119,7 @@ export function TransparencyDashboard() {
       setWithdrawSuccessMsg(null);
       setWithdrawTxHash(null);
       setWithdrawAddress("");
+      fetchLiveTransparencyData();
     }, 4000);
   };
 
@@ -94,6 +137,27 @@ export function TransparencyDashboard() {
         </p>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6 bg-[#0F3D30]/5 p-3.5 rounded-2xl border border-[#0F3D30]/10 text-xs">
+        <div className="flex items-center gap-2 text-[#0F3D30] font-medium">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>Terhubung ke Smart Contract Ethereum Sepolia: <code className="font-mono bg-white px-1.5 py-0.5 rounded border">0x72b6...f665</code></span>
+        </div>
+        <div className="flex items-center gap-3 ml-auto">
+          {lastUpdated && (
+            <span className="text-[11px] text-stone-500 font-mono">
+              Update: {lastUpdated} WIB
+            </span>
+          )}
+          <button
+            onClick={() => fetchLiveTransparencyData()}
+            disabled={loading}
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#0F3D30] hover:text-[#1A5242] bg-white hover:bg-stone-50 px-2.5 py-1 rounded-lg border border-stone-200 cursor-pointer shadow-xs"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin text-emerald-600" : ""}`} /> Refresh Data
+          </button>
+        </div>
+      </div>
+
       {/* Metric Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         {/* IDR Ledger Card */}
@@ -107,10 +171,10 @@ export function TransparencyDashboard() {
                 <h4 className="font-serif font-bold text-lg text-[#0F3D30]">
                   Ledger Pembukuan Fiat (IDR)
                 </h4>
-                <p className="text-[11px] text-[#555555]">Agregasi Merkle Batching Harian</p>
+                <p className="text-[11px] text-[#555555]">Agregasi Merkle Batching L1</p>
               </div>
             </div>
-            <Badge variant="success">Merkle State Synced</Badge>
+            <Badge variant="success">Sepolia L1 Ledger</Badge>
           </div>
 
           <div className="grid grid-cols-2 gap-4 pt-1">
@@ -119,7 +183,7 @@ export function TransparencyDashboard() {
                 Total Kas Masuk (IDR)
               </span>
               <span className="font-serif text-xl md:text-2xl font-bold text-[#0F3D30]">
-                Rp {totalIDR.toLocaleString("id-ID")}
+                Rp {displayTotalIDR.toLocaleString("id-ID")}
               </span>
             </div>
             <div className="bg-[#F9F6F0] p-3.5 rounded-xl border border-[#0F3D30]/10">
@@ -127,7 +191,7 @@ export function TransparencyDashboard() {
                 Tersalurkan ke Asnaf
               </span>
               <span className="font-serif text-xl md:text-2xl font-bold text-emerald-700">
-                Rp {disbursedIDR.toLocaleString("id-ID")}
+                Rp {displayDisbursedIDR.toLocaleString("id-ID")}
               </span>
             </div>
           </div>
@@ -135,8 +199,8 @@ export function TransparencyDashboard() {
           {/* Invariant Split Bar */}
           <div>
             <div className="flex justify-between text-xs font-semibold mb-1.5">
-              <span className="text-emerald-800">Mustahik Pool (87.5%): Rp {mustahikVaultIDR.toLocaleString("id-ID")}</span>
-              <span className="text-amber-800">Amil (Maks 12.5%): Rp {amilShareIDR.toLocaleString("id-ID")}</span>
+              <span className="text-emerald-800">Mustahik Pool (87.5%): Rp {displayMustahikIDR.toLocaleString("id-ID")}</span>
+              <span className="text-amber-800">Amil (Maks 12.5%): Rp {displayAmilIDR.toLocaleString("id-ID")}</span>
             </div>
             <div className="w-full h-3 bg-amber-200 rounded-full overflow-hidden flex">
               <div className="h-full bg-[#0F3D30]" style={{ width: "87.5%" }}></div>
@@ -176,7 +240,7 @@ export function TransparencyDashboard() {
                 Total Deposit Vault
               </span>
               <span className="font-serif text-xl md:text-2xl font-bold text-[#0F3D30]">
-                ${totalUSDC.toLocaleString("en-US")} USDC
+                ${displayTotalUSDC.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC
               </span>
             </div>
             <div className="bg-[#F9F6F0] p-3.5 rounded-xl border border-[#0F3D30]/10">
@@ -184,7 +248,7 @@ export function TransparencyDashboard() {
                 Tersalurkan ke Wallet
               </span>
               <span className="font-serif text-xl md:text-2xl font-bold text-sky-700">
-                ${disbursedUSDC.toLocaleString("en-US")} USDC
+                ${displayDisbursedUSDC.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC
               </span>
             </div>
           </div>
@@ -192,8 +256,8 @@ export function TransparencyDashboard() {
           {/* Invariant Split Bar */}
           <div>
             <div className="flex justify-between text-xs font-semibold mb-1.5">
-              <span className="text-sky-900">Mustahik Vault (87.5%): ${mustahikVaultUSDC.toLocaleString("en-US")}</span>
-              <span className="text-amber-800 font-bold">Amil Treasury (12.5%): ${amilTreasuryUSDC.toLocaleString("en-US")}</span>
+              <span className="text-sky-900">Mustahik Vault (87.5%): ${displayMustahikUSDC.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className="text-amber-800 font-bold">Amil Treasury (12.5%): ${displayAmilUSDC.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
             <div className="w-full h-3 bg-amber-200 rounded-full overflow-hidden flex">
               <div className="h-full bg-[#0F3D30]" style={{ width: "87.5%" }}></div>

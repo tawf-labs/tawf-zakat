@@ -1,14 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2 } from "lucide-react";
+import { FileText, Shield, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw } from "lucide-react";
 import {
   approveDisbursementOnChain,
   executeDisbursementOnChain,
   cancelProposalOnChain,
+  proposeDisbursementOnChain,
 } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
+import { type Hex } from "viem";
 
 interface Proposal {
   proposalId: number;
@@ -33,42 +35,8 @@ interface Proposal {
 export function GovernanceSection() {
   const { address, formattedAddress } = useWallet();
 
-  const [proposals, setProposals] = useState<Proposal[]>([
-    {
-      proposalId: 1,
-      currencyType: 0,
-      amount: 5000000,
-      asnafCategory: 0,
-      asnafLabel: "Fakir",
-      beneficiaryName: "Pak Joko Suwarno",
-      beneficiaryNIKMasked: "320101******0001",
-      beneficiaryHash: "0x8e5f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f",
-      ipfsProofCID: "QmZtmD2qt8fJpq3CLDHVSS5DV7hgqseifznGRubWN15w53",
-      periodId: 202608,
-      approvalCount: 2,
-      approvedBy: ["Amil Internal", "Dewan Pengawas Syariah (DPS)"],
-      status: "Executed",
-      createdAt: "2026-08-24T09:00:00Z",
-      executedAt: "2026-08-24T11:00:00Z",
-      txHash: "0x730127bf21f7f899d38115f6177f888cd9daf079e4443cd6156e007772d18df5",
-    },
-    {
-      proposalId: 2,
-      currencyType: 0,
-      amount: 7500000,
-      asnafCategory: 1,
-      asnafLabel: "Miskin",
-      beneficiaryName: "Ibu Aminah",
-      beneficiaryNIKMasked: "327302******0002",
-      beneficiaryHash: "0x4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c",
-      ipfsProofCID: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco",
-      periodId: 202608,
-      approvalCount: 1,
-      approvedBy: ["Amil Internal"],
-      status: "Pending",
-      createdAt: "2026-08-24T14:30:00Z",
-    },
-  ]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [activeRole, setActiveRole] = useState<"dps" | "auditor" | "amil">("dps");
   const [selectedProof, setSelectedProof] = useState<Proposal | null>(null);
@@ -83,33 +51,57 @@ export function GovernanceSection() {
   const [newAmount, setNewAmount] = useState("3000000");
   const [submittingProposal, setSubmittingProposal] = useState(false);
 
-  useEffect(() => {
-    fetch("http://localhost:3001/api/proposals")
-      .then((res) => res.json())
-      .then((data) => {
+  const fetchProposals = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("http://localhost:3001/api/proposals");
+      if (res.ok) {
+        const data = await res.json();
         if (data.proposals && data.proposals.length > 0) {
           setProposals(data.proposals);
         }
-      })
-      .catch(() => {});
+      }
+    } catch (err) {
+      console.warn("Failed to fetch proposals from backend:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchProposals();
+  }, [fetchProposals]);
+
   const handleApprove = async (proposalId: number) => {
+    let txHash: string | undefined;
     try {
-      await approveDisbursementOnChain(proposalId);
-    } catch {
-      // Fallback
+      const onchainRes = await approveDisbursementOnChain(proposalId);
+      txHash = onchainRes.txHash;
+    } catch (err) {
+      console.warn("Onchain approval skipped or demo fallback:", err);
+    }
+
+    const roleName =
+      activeRole === "dps"
+        ? "Dewan Pengawas Syariah (DPS)"
+        : activeRole === "auditor"
+        ? "Auditor Independen"
+        : "Amil Internal";
+
+    // Sync to Neon DB
+    try {
+      await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approverRole: roleName, txHash }),
+      });
+    } catch (dbErr) {
+      console.warn("Failed to sync approval to Neon DB:", dbErr);
     }
 
     setProposals((prev) =>
       prev.map((p) => {
         if (p.proposalId === proposalId && p.status === "Pending") {
-          const roleName =
-            activeRole === "dps"
-              ? "Dewan Pengawas Syariah (DPS)"
-              : activeRole === "auditor"
-              ? "Auditor Independen"
-              : "Amil Internal";
           const newApprovals = p.approvedBy.includes(roleName)
             ? p.approvedBy
             : [...p.approvedBy, roleName];
@@ -126,10 +118,23 @@ export function GovernanceSection() {
   };
 
   const handleExecute = async (proposalId: number) => {
+    let txHash: string | undefined;
     try {
-      await executeDisbursementOnChain(proposalId);
-    } catch {
-      // Fallback
+      const onchainRes = await executeDisbursementOnChain(proposalId);
+      txHash = onchainRes.txHash;
+    } catch (err) {
+      console.warn("Onchain execute skipped or demo fallback:", err);
+    }
+
+    // Sync to Neon DB
+    try {
+      await fetch(`http://localhost:3001/api/proposals/${proposalId}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ txHash }),
+      });
+    } catch (dbErr) {
+      console.warn("Failed to sync execute to Neon DB:", dbErr);
     }
 
     setProposals((prev) =>
@@ -181,7 +186,8 @@ export function GovernanceSection() {
     setSubmittingProposal(true);
 
     try {
-      const res = await fetch("http://localhost:3001/api/disbursement/upload-proof", {
+      // 1. Upload proof & get metadata hash
+      const proofRes = await fetch("http://localhost:3001/api/disbursement/upload-proof", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -193,49 +199,61 @@ export function GovernanceSection() {
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const newP: Proposal = {
-          proposalId: proposals.length + 1,
+      const proofData = await proofRes.json();
+      const beneficiaryHash: Hex = (proofData.beneficiaryHash || "0x3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a") as Hex;
+      const ipfsProofCID: string = proofData.ipfsProofCID || "QmZtmD2qt8fJpq3CLDHVSS5DV7hgqseifznGRubWN15w53";
+      const maskedNIK = `${newBenNIK.slice(0, 6)}******${newBenNIK.slice(-4)}`;
+
+      let nextProposalId = proposals.length + 1;
+      let onchainTxHash: string | undefined;
+
+      // 2. Try on-chain propose
+      try {
+        const onchainRes = await proposeDisbursementOnChain({
           currencyType: 0,
           amount: Number(newAmount),
           asnafCategory: 6,
-          asnafLabel: newAsnaf,
-          beneficiaryName: newBenName,
-          beneficiaryNIKMasked: `${newBenNIK.slice(0, 6)}******${newBenNIK.slice(-4)}`,
-          beneficiaryHash: data.beneficiaryHash,
-          ipfsProofCID: data.ipfsProofCID,
+          beneficiaryHash,
+          ipfsProofCID,
           periodId: 202608,
-          approvalCount: 1,
-          approvedBy: ["Amil Internal"],
-          status: "Pending",
-          createdAt: new Date().toISOString(),
-        };
-        setProposals([newP, ...proposals]);
-        setShowProposeModal(false);
-        setNewBenName("");
-        setNewBenNIK("");
+        });
+        nextProposalId = onchainRes.proposalId;
+        onchainTxHash = onchainRes.txHash;
+      } catch (onchainErr) {
+        console.warn("On-chain propose skipped or demo mode:", onchainErr);
       }
-    } catch {
-      const mockCID = `Qm${Math.random().toString(36).substring(2, 15)}mockCID`;
-      const newP: Proposal = {
-        proposalId: proposals.length + 1,
+
+      // 3. Persist to Neon DB
+      const proposalPayload = {
+        proposalId: nextProposalId,
         currencyType: 0,
         amount: Number(newAmount),
         asnafCategory: 6,
         asnafLabel: newAsnaf,
         beneficiaryName: newBenName,
-        beneficiaryNIKMasked: `${newBenNIK.slice(0, 6)}******${newBenNIK.slice(-4)}`,
-        beneficiaryHash: "0x3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
-        ipfsProofCID: mockCID,
+        beneficiaryNIKMasked: maskedNIK,
+        beneficiaryHash,
+        ipfsProofCID,
         periodId: 202608,
         approvalCount: 1,
-        approvedBy: ["Amil Internal"],
+        approvedBy: ["Amil Internal (Pengusul)"],
         status: "Pending",
         createdAt: new Date().toISOString(),
+        txHash: onchainTxHash,
       };
-      setProposals([newP, ...proposals]);
+
+      await fetch("http://localhost:3001/api/proposals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proposalPayload),
+      });
+
+      setProposals([proposalPayload as Proposal, ...proposals]);
       setShowProposeModal(false);
+      setNewBenName("");
+      setNewBenNIK("");
+    } catch (err: any) {
+      console.error("Failed to create proposal:", err);
     } finally {
       setSubmittingProposal(false);
     }
@@ -302,9 +320,18 @@ export function GovernanceSection() {
           </button>
         </div>
 
-        <Button onClick={() => setShowProposeModal(true)} size="sm" className="shrink-0">
-          <PlusCircle className="w-3.5 h-3.5 mr-1" /> Ajukan Penyaluran
-        </Button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => fetchProposals()}
+            disabled={loading}
+            className="flex items-center gap-1 text-xs text-[#0F3D30] hover:text-[#1A5242] bg-[#F9F6F0] px-3 py-2 rounded-xl border border-stone-200 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-emerald-600" : ""}`} /> Refresh
+          </button>
+          <Button onClick={() => setShowProposeModal(true)} size="sm" className="shrink-0">
+            <PlusCircle className="w-3.5 h-3.5 mr-1" /> Ajukan Penyaluran
+          </Button>
+        </div>
       </div>
 
       {/* Proposals List */}

@@ -5,7 +5,7 @@ import { Badge } from "../ui/Badge";
 import { QrCode, Wallet, Shield, Copy, Check, ExternalLink, Lock, AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
 import { depositUSDCOnChain, approveUSDCOnChain, getUSDCAllowance, getUSDCBalance } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
-import { parseUnits, formatUnits } from "viem";
+import { parseUnits, formatUnits, keccak256, encodePacked, type Hex } from "viem";
 import { payWithSnap } from "../../lib/snapClient";
 
 export function DonateSection() {
@@ -34,6 +34,18 @@ export function DonateSection() {
   const [web3Error, setWeb3Error] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
+  const [usdcReceipt, setUsdcReceipt] = useState<{
+    trxId: string;
+    txHash: string;
+    donorName: string;
+    isAnonymous: boolean;
+    amountUSDC: number;
+    salt: string;
+    commitmentHash: string;
+    paidAt: string;
+    explorerUrl: string;
+  } | null>(null);
+  const [copiedUsdcSalt, setCopiedUsdcSalt] = useState(false);
 
   const presetAmountsIDR = [
     { label: "Rp 250 Rb", value: "250000" },
@@ -126,16 +138,67 @@ export function DonateSection() {
       return;
     }
 
+    if (!address) {
+      setWeb3Error("Dompet belum terhubung. Silakan hubungkan MetaMask.");
+      return;
+    }
+
     setIsDepositing(true);
     setWeb3Status("Membuka MetaMask... Mohon konfirmasi transaksi setoran donasi USDC.");
     setWeb3Error(null);
     setTxHash(null);
 
+    const salt = `salt_usdc_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
+    const rawCommitment = keccak256(
+      encodePacked(
+        ["address", "string", "uint256"],
+        [address as Hex, salt, targetAmountBigInt]
+      )
+    );
+    const commitmentHash: Hex = usdcAnonymous ? rawCommitment : "0x0000000000000000000000000000000000000000000000000000000000000000";
+
     try {
-      const res = await depositUSDCOnChain(Number(usdcAmount), usdcAnonymous);
+      const res = await depositUSDCOnChain(Number(usdcAmount), usdcAnonymous, commitmentHash);
+      const paidTimestamp = new Date().toISOString();
+      const trxId = `TRX-USDC-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const finalDonorName = usdcAnonymous ? "Hamba Allah" : "Muzakki Web3";
+
       setWeb3Status("Donasi USDC Berhasil Diterima & Terkunci di Vault Sepolia L1!");
       setTxHash(res.txHash);
       setExplorerUrl(res.explorerUrl);
+
+      // Persist to Neon DB
+      try {
+        await fetch("http://localhost:3001/api/donations/usdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trxId,
+            txHash: res.txHash,
+            donorAddress: address,
+            donorName: finalDonorName,
+            isAnonymous: usdcAnonymous,
+            amountUSDC: Number(usdcAmount),
+            salt,
+            commitmentHash: rawCommitment,
+          }),
+        });
+      } catch (dbErr) {
+        console.warn("Failed to sync USDC donation to Neon DB:", dbErr);
+      }
+
+      setUsdcReceipt({
+        trxId,
+        txHash: res.txHash,
+        donorName: finalDonorName,
+        isAnonymous: usdcAnonymous,
+        amountUSDC: Number(usdcAmount),
+        salt,
+        commitmentHash: rawCommitment,
+        paidAt: paidTimestamp,
+        explorerUrl: res.explorerUrl,
+      });
+
       await refreshUSDCState();
     } catch (err: any) {
       setWeb3Status(null);
@@ -610,7 +673,101 @@ export function DonateSection() {
               <Badge variant="info">Sepolia USDC Vault</Badge>
             </div>
 
-            {!isConnected || !address ? (
+            {usdcReceipt ? (
+              <Card elevated className="border-2 border-[#0F3D30] bg-[#FAFAF8]">
+                <div className="flex items-center justify-between border-b border-[#0F3D30]/10 pb-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span className="font-serif font-bold text-sm text-[#0F3D30]">
+                      KUITANSI DIGITAL MUZAKKI (USDC)
+                    </span>
+                  </div>
+                  <Badge variant="success">Terkunci On-Chain L1</Badge>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-stone-200 text-center mb-4 shadow-inner">
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-2">
+                    <Check className="w-6 h-6 stroke-[3]" />
+                  </div>
+                  <h4 className="font-serif text-lg font-bold text-[#0F3D30]">
+                    Donasi USDC Berhasil!
+                  </h4>
+                  <p className="text-xs text-stone-500 font-mono">
+                    {usdcReceipt.trxId}
+                  </p>
+                  <p className="text-base font-bold text-[#0F3D30] mt-1">
+                    ${usdcReceipt.amountUSDC.toLocaleString("en-US", { minimumFractionDigits: 2 })} USDC
+                  </p>
+                  <p className="text-[11px] text-stone-500">
+                    ≈ Rp {(usdcReceipt.amountUSDC * 16000).toLocaleString("id-ID")}
+                  </p>
+                </div>
+
+                <div className="bg-[#0F3D30]/5 border border-[#0F3D30]/15 rounded-xl p-3.5 mb-4">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#0F3D30] mb-1">
+                    <Lock className="w-3.5 h-3.5 text-[#C5A869]" /> Secret Salt (Kunci Privasi Mode Hamba Allah)
+                  </div>
+                  <p className="text-[11px] text-[#555555] mb-2 leading-tight">
+                    Simpan Secret Salt ini! Kunci kriptografis ini membuktikan kepemilikan donasi Anda tanpa membongkar identitas Anda ke publik.
+                  </p>
+                  <div className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border text-xs font-mono">
+                    <span className="truncate mr-2 text-stone-800">{usdcReceipt.salt}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(usdcReceipt.salt);
+                        setCopiedUsdcSalt(true);
+                        setTimeout(() => setCopiedUsdcSalt(false), 2000);
+                      }}
+                      className="text-[#0F3D30] hover:text-[#1A5242] shrink-0 cursor-pointer"
+                    >
+                      {copiedUsdcSalt ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-xs space-y-1.5 border-t border-[#0F3D30]/10 pt-3">
+                  <div className="flex justify-between">
+                    <span className="text-[#555555]">Transaction Hash:</span>
+                    <a
+                      href={usdcReceipt.explorerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono font-bold text-emerald-700 hover:underline truncate max-w-[200px]"
+                    >
+                      {usdcReceipt.txHash} ↗
+                    </a>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#555555]">Nama Muzakki:</span>
+                    <span className="font-medium text-[#1A1A1A]">{usdcReceipt.donorName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#555555]">Waktu Transaksi:</span>
+                    <span className="text-[#555555]">{new Date(usdcReceipt.paidAt).toLocaleTimeString("id-ID")} WIB</span>
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-[#0F3D30]/10 space-y-2">
+                  <a
+                    href="#transparency"
+                    className="block text-center text-xs font-bold uppercase tracking-wider text-[#0F3D30] hover:underline"
+                  >
+                    Lihat Pertambahan Saldo di Dashboard Transparansi ➔
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsdcReceipt(null);
+                      setWeb3Status(null);
+                      setTxHash(null);
+                    }}
+                    className="w-full text-center text-xs text-stone-500 hover:text-stone-700 underline cursor-pointer"
+                  >
+                    Buat Donasi Baru
+                  </button>
+                </div>
+              </Card>
+            ) : !isConnected || !address ? (
               <div className="text-center py-8 bg-[#F9F6F0] rounded-2xl border border-dashed border-[#0F3D30]/20 p-6">
                 <Wallet className="w-12 h-12 text-[#0F3D30] mx-auto mb-3" />
                 <h4 className="font-serif text-lg font-semibold text-[#0F3D30] mb-2">
