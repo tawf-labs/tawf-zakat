@@ -14,9 +14,11 @@ contract ZakatProtocolL1Test is Test {
     address public dps = address(0x3333);
     address public auditor = address(0x4444);
     address public donor = address(0x5555);
+    address public amilBeneficiary = address(0x6666);
 
     event FiatBatchSettled(uint256 indexed batchId, bytes32 merkleRoot, uint256 totalAmountIDR);
     event USDCDeposited(address indexed donor, uint256 amountUSDC, bool isAnonymous, bytes32 commitmentHash);
+    event AmilShareWithdrawn(address indexed to, uint256 amount);
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -109,20 +111,57 @@ contract ZakatProtocolL1Test is Test {
         protocol.recordFiatBatchSettlement(batchId, merkleRoot, 10_000_000);
 
         vm.prank(relayer);
-        vm.expectRevert("Batch already settled");
+        vm.expectRevert(ZakatProtocolL1.BatchAlreadySettled.selector);
         protocol.recordFiatBatchSettlement(batchId, merkleRoot, 10_000_000);
     }
 
     function test_DepositUSDC_RevertZeroAmount() public {
         vm.prank(donor);
-        vm.expectRevert("Amount must be > 0");
+        vm.expectRevert(ZakatProtocolL1.ZeroAmount.selector);
         protocol.depositUSDC(0, false, bytes32(0));
     }
 
     function test_RecordFiatBatchSettlement_RevertZeroAmount() public {
         vm.prank(relayer);
-        vm.expectRevert("Batch amount must be > 0");
+        vm.expectRevert(ZakatProtocolL1.ZeroAmount.selector);
         protocol.recordFiatBatchSettlement(99, keccak256("root"), 0);
+    }
+
+    function test_WithdrawAmilShareUSDC_Success() public {
+        uint256 depositAmount = 1000 * 1e6; // 1,000 USDC -> 125 USDC amil
+        vm.prank(donor);
+        protocol.depositUSDC(depositAmount, false, bytes32(0));
+
+        uint256 withdrawAmount = 100 * 1e6; // 100 USDC
+
+        vm.expectEmit(true, false, false, true);
+        emit AmilShareWithdrawn(amilBeneficiary, withdrawAmount);
+
+        vm.prank(admin);
+        protocol.withdrawAmilShareUSDC(amilBeneficiary, withdrawAmount);
+
+        assertEq(protocol.amilTreasuryUSDC(), 25 * 1e6);
+        assertEq(usdc.balanceOf(amilBeneficiary), withdrawAmount);
+    }
+
+    function test_WithdrawAmilShareUSDC_RevertInsufficientBalance() public {
+        uint256 depositAmount = 1000 * 1e6; // 125 USDC amil
+        vm.prank(donor);
+        protocol.depositUSDC(depositAmount, false, bytes32(0));
+
+        vm.prank(admin);
+        vm.expectRevert(ZakatProtocolL1.InsufficientAmilTreasury.selector);
+        protocol.withdrawAmilShareUSDC(amilBeneficiary, 200 * 1e6); // Exceeds 125 USDC
+    }
+
+    function test_WithdrawAmilShareUSDC_RevertNonAdmin() public {
+        uint256 depositAmount = 1000 * 1e6;
+        vm.prank(donor);
+        protocol.depositUSDC(depositAmount, false, bytes32(0));
+
+        vm.prank(donor);
+        vm.expectRevert();
+        protocol.withdrawAmilShareUSDC(amilBeneficiary, 50 * 1e6);
     }
 
     function testFuzz_InvariantSplitUSDC(uint256 amount) public {

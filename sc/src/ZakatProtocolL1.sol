@@ -2,7 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title ZakatProtocolL1
@@ -10,7 +12,26 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
  * @dev Enforces multi-unit ledger (Fiat IDR accounting & USDC real custody)
  *      with 12.5% max Amil invariant lock and on-chain 2-of-3 Multi-Sig governance.
  */
-contract ZakatProtocolL1 is AccessControl {
+contract ZakatProtocolL1 is AccessControl, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    // --- CUSTOM ERRORS ---
+    error InvalidAddress();
+    error InvalidCurrencyType();
+    error ZeroAmount();
+    error BatchAlreadySettled();
+    error InvalidMerkleRoot();
+    error InsufficientVaultBalance();
+    error InsufficientAmilTreasury();
+    error DoubleClaimDetected();
+    error ProposalNotFound();
+    error ProposalNotPending();
+    error AlreadyApproved();
+    error QuorumNotMet();
+    error AlreadyExecuted();
+    error Unauthorized();
+
+    // --- ROLES ---
     bytes32 public constant RELAYER_ROLE = keccak256("RELAYER_ROLE");
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
     bytes32 public constant SHARIA_SUPERVISOR_ROLE = keccak256("SHARIA_SUPERVISOR_ROLE");
@@ -64,6 +85,8 @@ contract ZakatProtocolL1 is AccessControl {
     event DisbursementProposed(uint256 indexed proposalId, uint8 currencyType, uint256 amount, bytes32 beneficiaryHash, string ipfsProofCID);
     event DisbursementApproved(uint256 indexed proposalId, address indexed approver, uint256 currentApprovals);
     event DisbursementExecuted(uint256 indexed proposalId, uint8 currencyType, uint256 amount, bytes32 beneficiaryHash, string ipfsProofCID);
+    event DisbursementCancelled(uint256 indexed proposalId, address indexed canceller, string reason);
+    event AmilShareWithdrawn(address indexed to, uint256 amount);
 
     constructor(
         address _usdcAddress,
@@ -72,11 +95,9 @@ contract ZakatProtocolL1 is AccessControl {
         address _dps,
         address _auditor
     ) {
-        require(_usdcAddress != address(0), "Invalid USDC address");
-        require(_admin != address(0), "Invalid admin address");
-        require(_relayer != address(0), "Invalid relayer address");
-        require(_dps != address(0), "Invalid DPS address");
-        require(_auditor != address(0), "Invalid auditor address");
+        if (_usdcAddress == address(0) || _admin == address(0) || _relayer == address(0) || _dps == address(0) || _auditor == address(0)) {
+            revert InvalidAddress();
+        }
 
         usdcToken = IERC20(_usdcAddress);
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -91,9 +112,9 @@ contract ZakatProtocolL1 is AccessControl {
         bytes32 _merkleRoot,
         uint256 _totalBatchAmountIDR
     ) external onlyRole(RELAYER_ROLE) {
-        require(fiatBatchRoots[_batchId] == bytes32(0), "Batch already settled");
-        require(_merkleRoot != bytes32(0), "Invalid Merkle root");
-        require(_totalBatchAmountIDR > 0, "Batch amount must be > 0");
+        if (fiatBatchRoots[_batchId] != bytes32(0)) revert BatchAlreadySettled();
+        if (_merkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+        if (_totalBatchAmountIDR == 0) revert ZeroAmount();
 
         uint256 amilShare = (_totalBatchAmountIDR * MAX_AMIL_BPS) / 10000;
         uint256 mustahikShare = _totalBatchAmountIDR - amilShare;
@@ -112,8 +133,9 @@ contract ZakatProtocolL1 is AccessControl {
         bool _isAnonymous,
         bytes32 _anonymousCommitment
     ) external {
-        require(_amountUSDC > 0, "Amount must be > 0");
-        require(usdcToken.transferFrom(msg.sender, address(this), _amountUSDC), "USDC Transfer failed");
+        if (_amountUSDC == 0) revert ZeroAmount();
+
+        usdcToken.safeTransferFrom(msg.sender, address(this), _amountUSDC);
 
         uint256 amilShare = (_amountUSDC * MAX_AMIL_BPS) / 10000;
         uint256 mustahikShare = _amountUSDC - amilShare;
@@ -140,17 +162,19 @@ contract ZakatProtocolL1 is AccessControl {
         uint256 _periodId,
         address _usdcRecipient
     ) external returns (uint256 proposalId) {
-        require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender) || hasRole(RELAYER_ROLE, msg.sender), "Not authorized to propose");
-        require(!hasReceivedZakat[_beneficiaryHash][_periodId], "Double claim detected for beneficiary");
-        require(_amount > 0, "Amount must be > 0");
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(RELAYER_ROLE, msg.sender)) {
+            revert Unauthorized();
+        }
+        if (hasReceivedZakat[_beneficiaryHash][_periodId]) revert DoubleClaimDetected();
+        if (_amount == 0) revert ZeroAmount();
 
         if (_currencyType == 0) {
-            require(_amount <= mustahikVaultIDR, "Insufficient IDR vault balance");
+            if (_amount > mustahikVaultIDR) revert InsufficientVaultBalance();
         } else if (_currencyType == 1) {
-            require(_amount <= mustahikVaultUSDC, "Insufficient USDC vault balance");
-            require(_usdcRecipient != address(0), "Invalid recipient address");
+            if (_amount > mustahikVaultUSDC) revert InsufficientVaultBalance();
+            if (_usdcRecipient == address(0)) revert InvalidAddress();
         } else {
-            revert("Invalid currency type");
+            revert InvalidCurrencyType();
         }
 
         proposalId = ++proposalCounter;
@@ -174,17 +198,18 @@ contract ZakatProtocolL1 is AccessControl {
     }
 
     function approveDisbursement(uint256 _proposalId) external {
-        require(
-            hasRole(DEFAULT_ADMIN_ROLE, msg.sender) ||
-            hasRole(SHARIA_SUPERVISOR_ROLE, msg.sender) ||
-            hasRole(AUDITOR_ROLE, msg.sender),
-            "Not an authorized signatory"
-        );
+        if (
+            !hasRole(DEFAULT_ADMIN_ROLE, msg.sender) &&
+            !hasRole(SHARIA_SUPERVISOR_ROLE, msg.sender) &&
+            !hasRole(AUDITOR_ROLE, msg.sender)
+        ) {
+            revert Unauthorized();
+        }
 
         DisbursementProposal storage proposal = proposals[_proposalId];
-        require(proposal.proposalId != 0, "Proposal does not exist");
-        require(proposal.status == ProposalStatus.Pending, "Proposal is not pending");
-        require(!hasApprovedProposal[_proposalId][msg.sender], "Already approved by this address");
+        if (proposal.proposalId == 0) revert ProposalNotFound();
+        if (proposal.status != ProposalStatus.Pending) revert ProposalNotPending();
+        if (hasApprovedProposal[_proposalId][msg.sender]) revert AlreadyApproved();
 
         hasApprovedProposal[_proposalId][msg.sender] = true;
         proposal.approvalCount++;
@@ -196,22 +221,38 @@ contract ZakatProtocolL1 is AccessControl {
         }
     }
 
-    function executeDisbursement(uint256 _proposalId) external {
+    function cancelProposal(uint256 _proposalId, string calldata _reason) external {
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(SHARIA_SUPERVISOR_ROLE, msg.sender)) {
+            revert Unauthorized();
+        }
+
         DisbursementProposal storage proposal = proposals[_proposalId];
-        require(proposal.proposalId != 0, "Proposal does not exist");
-        require(proposal.status == ProposalStatus.Approved || proposal.approvalCount >= REQUIRED_APPROVALS, "Quorum not met");
-        require(proposal.status != ProposalStatus.Executed, "Already executed");
-        require(!hasReceivedZakat[proposal.beneficiaryHash][proposal.periodId], "Double claim detected");
+        if (proposal.proposalId == 0) revert ProposalNotFound();
+        if (proposal.status != ProposalStatus.Pending) revert ProposalNotPending();
+
+        proposal.status = ProposalStatus.Cancelled;
+
+        emit DisbursementCancelled(_proposalId, msg.sender, _reason);
+    }
+
+    function executeDisbursement(uint256 _proposalId) external nonReentrant {
+        DisbursementProposal storage proposal = proposals[_proposalId];
+        if (proposal.proposalId == 0) revert ProposalNotFound();
+        if (proposal.status != ProposalStatus.Approved && proposal.approvalCount < REQUIRED_APPROVALS) {
+            revert QuorumNotMet();
+        }
+        if (proposal.status == ProposalStatus.Executed) revert AlreadyExecuted();
+        if (hasReceivedZakat[proposal.beneficiaryHash][proposal.periodId]) revert DoubleClaimDetected();
 
         if (proposal.currencyType == 0) {
-            require(proposal.amount <= mustahikVaultIDR, "Insufficient IDR vault");
+            if (proposal.amount > mustahikVaultIDR) revert InsufficientVaultBalance();
             mustahikVaultIDR -= proposal.amount;
             totalDisbursedIDR += proposal.amount;
         } else if (proposal.currencyType == 1) {
-            require(proposal.amount <= mustahikVaultUSDC, "Insufficient USDC vault");
+            if (proposal.amount > mustahikVaultUSDC) revert InsufficientVaultBalance();
             mustahikVaultUSDC -= proposal.amount;
             totalDisbursedUSDC += proposal.amount;
-            require(usdcToken.transfer(proposal.usdcRecipient, proposal.amount), "USDC transfer failed");
+            usdcToken.safeTransfer(proposal.usdcRecipient, proposal.amount);
         }
 
         hasReceivedZakat[proposal.beneficiaryHash][proposal.periodId] = true;
@@ -224,5 +265,17 @@ contract ZakatProtocolL1 is AccessControl {
             proposal.beneficiaryHash,
             proposal.ipfsProofCID
         );
+    }
+
+    // --- AMIL OPERATIONAL TREASURY WITHDRAWAL ---
+    function withdrawAmilShareUSDC(address _to, uint256 _amount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (_to == address(0)) revert InvalidAddress();
+        if (_amount == 0) revert ZeroAmount();
+        if (_amount > amilTreasuryUSDC) revert InsufficientAmilTreasury();
+
+        amilTreasuryUSDC -= _amount;
+        usdcToken.safeTransfer(_to, _amount);
+
+        emit AmilShareWithdrawn(_to, _amount);
     }
 }

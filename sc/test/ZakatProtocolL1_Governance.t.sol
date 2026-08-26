@@ -19,6 +19,11 @@ contract ZakatProtocolL1GovernanceTest is Test {
     bytes32 public constant SAMPLE_BENEFICIARY = keccak256(abi.encodePacked("3201012345670001", "Fulan", "secret_salt_123"));
     string public constant SAMPLE_IPFS_CID = "QmZtmD2qt8fJpq3CLDHVSS5DV7hgqseifznGRubWN15w53";
 
+    event DisbursementProposed(uint256 indexed proposalId, uint8 currencyType, uint256 amount, bytes32 beneficiaryHash, string ipfsProofCID);
+    event DisbursementApproved(uint256 indexed proposalId, address indexed approver, uint256 currentApprovals);
+    event DisbursementExecuted(uint256 indexed proposalId, uint8 currencyType, uint256 amount, bytes32 beneficiaryHash, string ipfsProofCID);
+    event DisbursementCancelled(uint256 indexed proposalId, address indexed canceller, string reason);
+
     function setUp() public {
         usdc = new MockUSDC();
         protocol = new ZakatProtocolL1(
@@ -161,7 +166,7 @@ contract ZakatProtocolL1GovernanceTest is Test {
         );
 
         // Try to execute without 2nd approval
-        vm.expectRevert("Quorum not met");
+        vm.expectRevert(ZakatProtocolL1.QuorumNotMet.selector);
         protocol.executeDisbursement(proposalId);
     }
 
@@ -179,7 +184,7 @@ contract ZakatProtocolL1GovernanceTest is Test {
 
         // Admin tries to approve again
         vm.prank(admin);
-        vm.expectRevert("Already approved by this address");
+        vm.expectRevert(ZakatProtocolL1.AlreadyApproved.selector);
         protocol.approveDisbursement(proposalId);
     }
 
@@ -195,8 +200,51 @@ contract ZakatProtocolL1GovernanceTest is Test {
 
         // Attempting second proposal for same beneficiary in same period reverts
         vm.prank(admin);
-        vm.expectRevert("Double claim detected for beneficiary");
+        vm.expectRevert(ZakatProtocolL1.DoubleClaimDetected.selector);
         protocol.proposeDisbursement(1, amountUSDC, 0, SAMPLE_BENEFICIARY, SAMPLE_IPFS_CID, 202608, mustahik);
+    }
+
+    function test_CancelProposal_Success_ByDPS() public {
+        vm.prank(admin);
+        uint256 p1 = protocol.proposeDisbursement(1, 500 * 1e6, 0, SAMPLE_BENEFICIARY, SAMPLE_IPFS_CID, 202608, mustahik);
+
+        vm.expectEmit(true, false, false, true);
+        emit DisbursementCancelled(p1, dps, "Berkas mustahik tidak memenuhi kriteria asnaf");
+
+        vm.prank(dps);
+        protocol.cancelProposal(p1, "Berkas mustahik tidak memenuhi kriteria asnaf");
+
+        (,,,,,,,,, ZakatProtocolL1.ProposalStatus status) = protocol.proposals(p1);
+        assertTrue(status == ZakatProtocolL1.ProposalStatus.Cancelled);
+
+        // Cancelled proposal cannot be approved
+        vm.prank(auditor);
+        vm.expectRevert(ZakatProtocolL1.ProposalNotPending.selector);
+        protocol.approveDisbursement(p1);
+
+        // Cancelled proposal cannot be executed
+        vm.expectRevert(ZakatProtocolL1.QuorumNotMet.selector);
+        protocol.executeDisbursement(p1);
+    }
+
+    function test_CancelProposal_Success_ByAdmin() public {
+        vm.prank(admin);
+        uint256 p1 = protocol.proposeDisbursement(1, 500 * 1e6, 0, SAMPLE_BENEFICIARY, SAMPLE_IPFS_CID, 202608, mustahik);
+
+        vm.prank(admin);
+        protocol.cancelProposal(p1, "Salah input nominal");
+
+        (,,,,,,,,, ZakatProtocolL1.ProposalStatus status) = protocol.proposals(p1);
+        assertTrue(status == ZakatProtocolL1.ProposalStatus.Cancelled);
+    }
+
+    function test_CancelProposal_Revert_Unauthorized() public {
+        vm.prank(admin);
+        uint256 p1 = protocol.proposeDisbursement(1, 500 * 1e6, 0, SAMPLE_BENEFICIARY, SAMPLE_IPFS_CID, 202608, mustahik);
+
+        vm.prank(donor);
+        vm.expectRevert(ZakatProtocolL1.Unauthorized.selector);
+        protocol.cancelProposal(p1, "Unauthorized");
     }
 
     function test_Allow_DifferentPeriod_SameBeneficiary() public {
