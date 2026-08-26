@@ -2,8 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { dataStore } from "./store";
 import { runSeeder } from "./seed";
-import { computeDonationLeaf, type DonationRecord } from "./merkle";
+import { computeDonationLeaf, MerkleTree, type DonationRecord } from "./merkle";
 import { computeBeneficiaryHash, uploadDisbursementProofToIPFS, type DisbursementMetadata } from "./ipfs";
+import { settleBatchOnChain } from "./relayer";
+import { dbService } from "./db/index";
+import { type Hex } from "viem";
 
 // Auto-seed demo data on startup
 runSeeder();
@@ -21,7 +24,7 @@ app.get("/health", (c) => {
   });
 });
 
-// 1. Inflow: Simulate Fiat QRIS Donation & Generate Receipt with Secret Salt
+// 1. Inflow: Simulate/Record Fiat QRIS Donation & Generate Receipt with Secret Salt
 app.post("/api/donations/fiat", async (c) => {
   try {
     const body = await c.req.json();
@@ -46,7 +49,7 @@ app.post("/api/donations/fiat", async (c) => {
       timestamp,
     };
 
-    dataStore.recordDonation(record, 1);
+    await dbService.recordDonation(record, 1);
 
     return c.json({
       success: true,
@@ -76,7 +79,7 @@ app.post("/api/verify-receipt", async (c) => {
       return c.json({ error: "Missing required fields: trxId, salt, amountIDR" }, 400);
     }
 
-    const result = dataStore.getProofForTrx(trxId, salt, Number(amountIDR));
+    const result = await dbService.getProofForTrx(trxId, salt, Number(amountIDR));
 
     if (!result) {
       // If not in recorded map, still calculate leaf for user preview
@@ -103,8 +106,8 @@ app.post("/api/verify-receipt", async (c) => {
 });
 
 // 3. Batches: List Settled Merkle Batches
-app.get("/api/batches", (c) => {
-  const batchList = Array.from(dataStore.batches.values());
+app.get("/api/batches", async (c) => {
+  const batchList = await dbService.getBatches();
   return c.json({
     success: true,
     totalBatches: batchList.length,
@@ -113,10 +116,8 @@ app.get("/api/batches", (c) => {
 });
 
 // 4. Governance: List Disbursement Proposals
-app.get("/api/proposals", (c) => {
-  const proposalList = Array.from(dataStore.proposals.values()).sort(
-    (a, b) => b.proposalId - a.proposalId
-  );
+app.get("/api/proposals", async (c) => {
+  const proposalList = await dbService.getProposals();
   return c.json({
     success: true,
     totalProposals: proposalList.length,
@@ -176,6 +177,57 @@ app.post("/api/disbursement/upload-proof", async (c) => {
     });
   } catch (error: any) {
     return c.json({ error: error.message || "Failed to upload proof to IPFS" }, 500);
+  }
+});
+
+// 6. Relayer: Settle Merkle Batch Onchain to Ethereum Sepolia
+app.post("/api/relayer/settle-batch", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const batchId = Number(body.batchId) || dataStore.batches.size + 1;
+
+    // Get donations for this batch
+    let donationList = Array.from(dataStore.donations.values()).filter(d => d.batchId === batchId);
+    if (donationList.length === 0) {
+      donationList = Array.from(dataStore.donations.values());
+    }
+
+    if (donationList.length === 0) {
+      // Create a default donation if empty
+      const sampleDonation: DonationRecord = {
+        trxId: `TRX-${Date.now()}`,
+        donorName: "Muzakki Online",
+        isAnonymous: false,
+        salt: `salt_${Date.now()}`,
+        amountIDR: 2500000,
+        timestamp: new Date().toISOString(),
+      };
+      donationList = [sampleDonation];
+    }
+
+    const leaves = donationList.map((d) =>
+      computeDonationLeaf(d.trxId, d.salt, d.amountIDR)
+    );
+    const tree = new MerkleTree(leaves);
+    const root = tree.getRoot();
+    const totalAmount = donationList.reduce((acc, d) => acc + d.amountIDR, 0);
+
+    const onChainResult = await settleBatchOnChain(batchId, root, totalAmount, false);
+
+    dataStore.settleBatch(batchId, donationList, onChainResult.txHash);
+
+    return c.json({
+      success: true,
+      batchId,
+      merkleRoot: root,
+      totalAmountIDR: totalAmount,
+      itemCount: donationList.length,
+      txHash: onChainResult.txHash,
+      explorerUrl: onChainResult.explorerUrl,
+      onChainConfirmed: onChainResult.success,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to settle batch onchain" }, 500);
   }
 });
 
