@@ -17,11 +17,10 @@
 
 ## 2. Live Deployed Smart Contracts & Infrastructure (Sepolia L1)
 
-| Komponen | Alamat Kontrak / URL | Keterangan |
-| :--- | :--- | :--- |
-| **ZakatProtocolL1** | [`0x72b60a0C37a78dF62295F88294E790083089f665`](https://sepolia.etherscan.io/address/0x72b60a0C37a78dF62295F88294E790083089f665) | Core Vault, Multi-Sig 2-of-3, Invariant Split, Merkle Roots |
+| **ZakatProtocolL1** | [`0x6014542ce8f759946aa6f3f9af54fb91685065a5`](https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5) | Core Vault, Multi-Sig 2-of-3, Invariant Split, Merkle Roots |
+| **Safe DPS Multisig** | [`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`](https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1) | 2-of-3 Institutional Sharia Supervisory Board Account |
 | **Official Sepolia USDC** | [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/token/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) | Circle Testnet ERC-20 Token |
-| **Database Cloud** | Neon Serverless PostgreSQL (`ep-calm-glade-...`) | Drizzle ORM Live Persistence |
+| **Database Cloud** | Neon Serverless PostgreSQL (`ep-calm-glade-...`) | Drizzle ORM Live Persistence (Clean Zero-Seed State) |
 | **Wallet Connector** | ConnectKit by Family + Wagmi v3 (Project ID: `b6808bd11499531c85eddbf3cbc72e65`) | EIP-6963 Multi-Injected Discovery |
 
 ---
