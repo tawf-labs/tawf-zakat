@@ -89,19 +89,28 @@ flowchart TD
     end
 ```
 
-### A. Pembagian Hak Amil Otomatis (Invariant Lock)
-Smart contract mengunci batas atas hak amil maksimal 12.5% (1/8) secara terprogram (`MAX_AMIL_BPS = 1250`). Sisanya (minimal 87.5%) mutlak terkunci hanya untuk 7 asnaf mustahik lainnya.
+### A. Pembagian Hak Amil Otomatis (Invariant Lock) & 8 Asnaf BAZNAS
+Smart contract mengunci batas atas hak amil maksimal 12.5% (1/8) secara terprogram (`MAX_AMIL_BPS = 1250`). Sisanya (minimal 87.5%) mutlak terkunci hanya untuk 7 asnaf mustahik lainnya (Fakir, Miskin, Muallaf, Riqab, Gharimin, Fisabilillah, Ibnu Sabil) sesuai ketentuan syariah Islam dan regulasi BAZNAS Indonesia.
 
-### B. Otorisasi Penyaluran (On-Chain Multi-Sig 2-of-3)
+### B. Otorisasi Penyaluran (Hybrid Multi-Sig 2-of-3)
 Penyaluran dana mustahik wajib mendapatkan persetujuan minimal 2 dari 3 entitas kunci:
 1. **Amil Operasional** (`DEFAULT_ADMIN_ROLE` / `AMIL_ROLE`).
 2. **Dewan Pengawas Syariah (DPS)** (`SHARIA_SUPERVISOR_ROLE`).
 3. **Auditor Eksternal / Independen** (`AUDITOR_ROLE`).
 
-### C. Proof-of-Disbursement & Anti-Mustahik Fiktif
-- **Salted Hashing NIK**: `beneficiaryHash = Keccak256(NIK + Nama + SecretSalt)` untuk menjaga privasi penerima dari doxxing sekaligus mencegah manipulasi data.
-- **Anti-Double Claim**: Smart contract mencatat mapping `hasReceivedZakat[beneficiaryHash][periodId]` agar 1 identitas tidak bisa diklaim ganda dalam 1 periode bantuan.
-- **IPFS Evidence CID**: Foto penyerahan tersamar (blur), struk bank, dan tanda tangan digital diunggah ke IPFS dan diikat permanen ke transaksi L1.
+*Signer Interoperability*: Akun pemegang role dapat berupa EOA standar ataupun **Safe.global Smart Account** (Gnosis Safe 2-of-3) yang terhubung via WalletConnect / Safe Apps.
+
+### C. Alur Pengajuan Proposal & Dual-Receipt IPFS Pipeline
+1. **Tahap 1 (Intake & Pre-Approval Metadata)**:
+   - Amil mengunggah data survei mustahik ke backend.
+   - Sistem menghasilkan `beneficiaryHash = Keccak256(NIK + Nama + SecretSalt)` (perlindungan privasi UU PDP & anti-doxxing) dan menyematkan dokumen survei/SKTM ke IPFS (`proposalMetadataCID`).
+   - Amil memanggil fungsi smart contract `proposeDisbursement(...)`.
+2. **Tahap 2 (Verifikasi Syariah & Audit)**:
+   - DPS dan Auditor menelaah proposal dan metadata IPFS melalui portal web, lalu memanggil `approveDisbursement(proposalId)`.
+3. **Tahap 3 (Eksekusi Penyaluran & Post-Disbursement BAST Receipt)**:
+   - **Jalur USDC (`currencyType = 1`)**: Kontrak mentransfer token USDC langsung ke dompet mustahik/vendor (`usdcRecipient`).
+   - **Jalur IDR (`currencyType = 0`)**: Amil mentransfer dana dari Rekening Escrow Bank ke rekening mustahik, mengunggah Berita Acara Serah Terima (BAST) & foto dokumentasi ke IPFS (`disbursementReceiptCID`), lalu memanggil `executeDisbursement(...)` untuk memperbarui ledger L1.
+4. **Anti-Double Claim**: Smart contract mengunci mapping `hasReceivedZakat[beneficiaryHash][periodId] = true` untuk mencegah mustahik fiktif atau klaim ganda dalam satu periode bantuan.
 
 ---
 

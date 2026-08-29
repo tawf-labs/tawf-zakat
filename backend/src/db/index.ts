@@ -378,4 +378,50 @@ export const dbService = {
 
     return memory || { proposalId, status: "Executed", executedAt };
   },
+
+  async syncProposalTx(currentId: number, proposalIdOnChain: number, txHash?: string) {
+    let memory = dataStore.proposals.get(currentId);
+    if (memory) {
+      memory.proposalId = proposalIdOnChain;
+      if (txHash) memory.txHash = txHash;
+      dataStore.proposals.delete(currentId);
+      dataStore.proposals.set(proposalIdOnChain, memory);
+    } else {
+      memory = {
+        proposalId: proposalIdOnChain,
+        currencyType: 0,
+        amount: 0,
+        asnafCategory: 0,
+        asnafLabel: "Fisabilillah",
+        beneficiaryName: "Mustahik",
+        beneficiaryNIKMasked: "3171************",
+        beneficiaryHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+        ipfsProofCID: "QmPendingProofCID",
+        periodId: 202608,
+        approvalCount: 1,
+        approvedBy: ["Amil Internal (Pengusul)"],
+        status: "Pending",
+        createdAt: new Date().toISOString(),
+        txHash,
+      };
+      dataStore.proposals.set(proposalIdOnChain, memory);
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            proposalIdOnChain,
+            status: "Pending",
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, currentId));
+      } catch (err) {
+        console.error("Failed to sync proposal tx to Neon DB:", err);
+      }
+    }
+
+    return memory;
+  },
 };
+

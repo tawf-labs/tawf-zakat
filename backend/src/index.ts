@@ -3,7 +3,13 @@ import { cors } from "hono/cors";
 import { dataStore } from "./store";
 import { runSeeder } from "./seed";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "./merkle";
-import { computeBeneficiaryHash, uploadDisbursementProofToIPFS, type DisbursementMetadata } from "./ipfs";
+import {
+  computeBeneficiaryHash,
+  uploadDisbursementProofToIPFS,
+  uploadProposalDossierToIPFS,
+  type DisbursementMetadata,
+  type ProposalDossierMetadata,
+} from "./ipfs";
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
 import { type Hex } from "viem";
@@ -343,6 +349,17 @@ app.post("/api/donations/usdc", async (c) => {
   }
 });
 
+const ASNAF_LABELS: Record<number, string> = {
+  1: "Fakir",
+  2: "Miskin",
+  3: "Amil",
+  4: "Muallaf",
+  5: "Riqab",
+  6: "Gharimin",
+  7: "Fisabilillah",
+  8: "Ibnu Sabil",
+};
+
 // 4. Governance: List Disbursement Proposals
 app.get("/api/proposals", async (c) => {
   const proposalList = await dbService.getProposals();
@@ -353,7 +370,137 @@ app.get("/api/proposals", async (c) => {
   });
 });
 
-// 4b. Governance: Create Disbursement Proposal
+// 4a. Governance: Proposal Intake & Salted Hash Dossier Pipeline (Ticket #27)
+app.post("/api/proposals/intake", async (c) => {
+  try {
+    const body = await c.req.json();
+    const {
+      programTitle,
+      asnafCategory,
+      asnafLabel,
+      amount,
+      currencyType,
+      beneficiaryName,
+      beneficiaryNIK,
+      locationCity,
+      assessmentSummary,
+      periodId,
+      usdcRecipient,
+      secretSalt,
+      evidenceFiles,
+    } = body;
+
+    if (!programTitle || !asnafCategory || !amount || !beneficiaryName || !beneficiaryNIK) {
+      return c.json(
+        {
+          error: "Missing required fields: programTitle, asnafCategory, amount, beneficiaryName, and beneficiaryNIK are required",
+          success: false,
+        },
+        400
+      );
+    }
+
+    const numericAsnaf = Number(asnafCategory);
+    const resolvedAsnafLabel = asnafLabel || ASNAF_LABELS[numericAsnaf] || "Fisabilillah";
+    const salt = secretSalt || `salt_mustahik_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const beneficiaryHash = computeBeneficiaryHash(beneficiaryNIK, beneficiaryName, salt);
+    const maskedNIK =
+      beneficiaryNIK.length >= 10
+        ? `${beneficiaryNIK.slice(0, 6)}******${beneficiaryNIK.slice(-4)}`
+        : "3171************";
+    const disguisedName = `Bpk/Ibu ${beneficiaryName.charAt(0)}*** (Mustahik-${beneficiaryHash.slice(2, 8)})`;
+
+    const dossierMetadata: ProposalDossierMetadata = {
+      programTitle,
+      asnafCategory: numericAsnaf,
+      asnafLabel: resolvedAsnafLabel,
+      amount: Number(amount),
+      currency: currencyType === 1 ? "USDC" : "IDR",
+      disguisedName,
+      locationCity: locationCity || "Indonesia",
+      beneficiaryHash,
+      beneficiaryNIKMasked: maskedNIK,
+      assessmentSummary: assessmentSummary || "Survei kelayakan asnaf telah diverifikasi oleh tim amil",
+      timestamp: new Date().toISOString(),
+      evidenceFiles: evidenceFiles || [
+        {
+          fileName: "berkas_survei_kelayakan.pdf",
+          fileType: "application/pdf",
+          description: "Dokumen hasil survei mustahik dan rekomendasi asnaf",
+        },
+      ],
+    };
+
+    const ipfsResult = await uploadProposalDossierToIPFS(dossierMetadata);
+
+    const existingProposals = await dbService.getProposals();
+    const temporaryProposalId = existingProposals.length + 1;
+
+    const proposalRecord = {
+      proposalId: temporaryProposalId,
+      currencyType: Number(currencyType || 0),
+      amount: Number(amount),
+      asnafCategory: numericAsnaf,
+      asnafLabel: resolvedAsnafLabel,
+      beneficiaryName,
+      beneficiaryNIKMasked: maskedNIK,
+      beneficiaryHash,
+      ipfsProofCID: ipfsResult.cid,
+      periodId: Number(periodId || 202608),
+      approvalCount: 1,
+      approvedBy: ["Amil Internal (Pengusul)"],
+      status: "Pending" as const,
+      createdAt: new Date().toISOString(),
+    };
+
+    await dbService.recordProposal(proposalRecord);
+
+    return c.json({
+      success: true,
+      message: "Proposal intake successful and pinned to IPFS",
+      proposal: proposalRecord,
+      secretSalt: salt,
+      ipfsGatewayUrl: ipfsResult.gatewayUrl,
+      onChainParams: {
+        currencyType: Number(currencyType || 0),
+        amount: Number(amount),
+        asnafCategory: numericAsnaf,
+        beneficiaryHash,
+        ipfsProofCID: ipfsResult.cid,
+        periodId: Number(periodId || 202608),
+        usdcRecipient: usdcRecipient || null,
+      },
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to intake proposal", success: false }, 500);
+  }
+});
+
+// 4b. Governance: Sync Proposal On-chain Transaction
+app.post("/api/proposals/:id/sync-tx", async (c) => {
+  try {
+    const idParam = c.req.param("id");
+    const currentId = Number(idParam);
+    const body = await c.req.json();
+    const { proposalIdOnChain, txHash } = body;
+
+    const synced = await dbService.syncProposalTx(
+      currentId,
+      Number(proposalIdOnChain || currentId),
+      txHash
+    );
+
+    return c.json({
+      success: true,
+      message: "Proposal synced with on-chain transaction",
+      proposal: synced,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to sync proposal transaction", success: false }, 500);
+  }
+});
+
+// 4c. Governance: Create Disbursement Proposal
 app.post("/api/proposals", async (c) => {
   try {
     const body = await c.req.json();

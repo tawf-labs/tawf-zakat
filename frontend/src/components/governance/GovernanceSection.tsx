@@ -32,6 +32,17 @@ interface Proposal {
   txHash?: string;
 }
 
+const ASNAF_OPTIONS = [
+  { id: 1, label: "Fakir", desc: "Tidak memiliki penghasilan dan harta sama sekali" },
+  { id: 2, label: "Miskin", desc: "Penghasilan tidak mencukupi kebutuhan pokok dasar" },
+  { id: 3, label: "Amil", desc: "Petugas pengelola dan pengadministrasi zakat" },
+  { id: 4, label: "Muallaf", desc: "Orang yang baru memeluk Islam atau diteguhkan imannya" },
+  { id: 5, label: "Riqab", desc: "Pembebasan belenggu / korban eksploitasi kemanusiaan" },
+  { id: 6, label: "Gharimin", desc: "Terlilit hutang darurat untuk kebutuhan primer" },
+  { id: 7, label: "Fisabilillah", desc: "Aktivitas dakwah, pendidikan Islam, dan kemaslahatan umat" },
+  { id: 8, label: "Ibnu Sabil", desc: "Musafir / penuntut ilmu terlantar dalam perjalanan kebaikan" },
+];
+
 export function GovernanceSection() {
   const { address, formattedAddress } = useWallet();
 
@@ -44,11 +55,16 @@ export function GovernanceSection() {
   const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
   const [cancelReasonText, setCancelReasonText] = useState("");
 
-  // New Proposal Form State
+  // New Proposal Form State (Ticket #27)
+  const [newProgramTitle, setNewProgramTitle] = useState("Bantuan Pemberdayaan Asnaf");
   const [newBenName, setNewBenName] = useState("");
   const [newBenNIK, setNewBenNIK] = useState("");
-  const [newAsnaf, setNewAsnaf] = useState("Fisabilillah");
+  const [newAsnafId, setNewAsnafId] = useState(7);
   const [newAmount, setNewAmount] = useState("3000000");
+  const [newCurrencyType, setNewCurrencyType] = useState<0 | 1>(0);
+  const [newCity, setNewCity] = useState("Jakarta");
+  const [newAssessment, setNewAssessment] = useState("Survei lapangan dan verifikasi kelayakan asnaf telah diverifikasi tim amil.");
+  const [newUsdcRecipient, setNewUsdcRecipient] = useState("");
   const [submittingProposal, setSubmittingProposal] = useState(false);
 
   const fetchProposals = useCallback(async () => {
@@ -186,74 +202,78 @@ export function GovernanceSection() {
     setSubmittingProposal(true);
 
     try {
-      // 1. Upload proof & get metadata hash
-      const proofRes = await fetch("http://localhost:3001/api/disbursement/upload-proof", {
+      const selectedAsnafObj = ASNAF_OPTIONS.find((a) => a.id === newAsnafId) || ASNAF_OPTIONS[6];
+
+      // 1. Submit to Intake API: Compute salted hash & pin structured proposal JSON to IPFS
+      const intakeRes = await fetch("http://localhost:3001/api/proposals/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          programTitle: newProgramTitle,
+          asnafCategory: newAsnafId,
+          asnafLabel: selectedAsnafObj.label,
+          amount: Number(newAmount),
+          currencyType: newCurrencyType,
           beneficiaryName: newBenName,
           beneficiaryNIK: newBenNIK,
-          asnafCategory: newAsnaf,
-          amount: Number(newAmount),
-          currency: "IDR",
+          locationCity: newCity,
+          assessmentSummary: newAssessment,
+          periodId: 202608,
+          usdcRecipient: newCurrencyType === 1 ? newUsdcRecipient : undefined,
+          evidenceFiles: [
+            {
+              fileName: "dokumen_survei_kelayakan.pdf",
+              fileType: "application/pdf",
+              description: `Survei kelayakan asnaf ${selectedAsnafObj.label} di ${newCity}`,
+            },
+          ],
         }),
       });
 
-      const proofData = await proofRes.json();
-      const beneficiaryHash: Hex = (proofData.beneficiaryHash || "0x3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a") as Hex;
-      const ipfsProofCID: string = proofData.ipfsProofCID || "QmZtmD2qt8fJpq3CLDHVSS5DV7hgqseifznGRubWN15w53";
-      const maskedNIK = `${newBenNIK.slice(0, 6)}******${newBenNIK.slice(-4)}`;
-
-      let nextProposalId = proposals.length + 1;
-      let onchainTxHash: string | undefined;
-
-      // 2. Try on-chain propose
-      try {
-        const onchainRes = await proposeDisbursementOnChain({
-          currencyType: 0,
-          amount: Number(newAmount),
-          asnafCategory: 6,
-          beneficiaryHash,
-          ipfsProofCID,
-          periodId: 202608,
-        });
-        nextProposalId = onchainRes.proposalId;
-        onchainTxHash = onchainRes.txHash;
-      } catch (onchainErr) {
-        console.warn("On-chain propose skipped or demo mode:", onchainErr);
+      const intakeData = await intakeRes.json();
+      if (!intakeRes.ok || !intakeData.success) {
+        throw new Error(intakeData.error || "Gagal memproses proposal intake");
       }
 
-      // 3. Persist to Neon DB
-      const proposalPayload = {
-        proposalId: nextProposalId,
-        currencyType: 0,
-        amount: Number(newAmount),
-        asnafCategory: 6,
-        asnafLabel: newAsnaf,
-        beneficiaryName: newBenName,
-        beneficiaryNIKMasked: maskedNIK,
-        beneficiaryHash,
-        ipfsProofCID,
-        periodId: 202608,
-        approvalCount: 1,
-        approvedBy: ["Amil Internal (Pengusul)"],
-        status: "Pending",
-        createdAt: new Date().toISOString(),
-        txHash: onchainTxHash,
-      };
+      const { proposal, onChainParams } = intakeData;
+      let onchainProposalId = proposal.proposalId;
+      let onchainTxHash: string | undefined;
 
-      await fetch("http://localhost:3001/api/proposals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(proposalPayload),
-      });
+      // 2. Execute on-chain proposal transaction on Sepolia L1
+      try {
+        const onchainRes = await proposeDisbursementOnChain({
+          currencyType: newCurrencyType,
+          amount: Number(newAmount),
+          asnafCategory: newAsnafId,
+          beneficiaryHash: onChainParams.beneficiaryHash as Hex,
+          ipfsProofCID: onChainParams.ipfsProofCID,
+          periodId: onChainParams.periodId || 202608,
+          usdcRecipient: newCurrencyType === 1 ? newUsdcRecipient : undefined,
+        });
+        onchainProposalId = onchainRes.proposalId;
+        onchainTxHash = onchainRes.txHash;
 
-      setProposals([proposalPayload as Proposal, ...proposals]);
+        // 3. Sync on-chain ID & txHash to Neon DB
+        await fetch(`http://localhost:3001/api/proposals/${proposal.proposalId}/sync-tx`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            proposalIdOnChain: onchainProposalId,
+            txHash: onchainTxHash,
+          }),
+        });
+      } catch (onchainErr) {
+        console.warn("On-chain propose skipped or demo fallback:", onchainErr);
+      }
+
+      await fetchProposals();
       setShowProposeModal(false);
       setNewBenName("");
       setNewBenNIK("");
+      setNewUsdcRecipient("");
     } catch (err: any) {
       console.error("Failed to create proposal:", err);
+      alert(`Error: ${err.message || "Gagal membuat proposal"}`);
     } finally {
       setSubmittingProposal(false);
     }
@@ -618,19 +638,48 @@ export function GovernanceSection() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateProposal} className="space-y-4 text-xs">
+            <form onSubmit={handleCreateProposal} className="space-y-3.5 text-xs max-h-[75vh] overflow-y-auto pr-1">
               <div>
                 <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
-                  Nama Penerima Manfaat
+                  Nama Program / Kegiatan
                 </label>
                 <input
                   type="text"
                   required
-                  value={newBenName}
-                  onChange={(e) => setNewBenName(e.target.value)}
-                  placeholder="Contoh: Ustadz Abdullah"
+                  value={newProgramTitle}
+                  onChange={(e) => setNewProgramTitle(e.target.value)}
+                  placeholder="Contoh: Bantuan Modal Usaha Gerobak Berkah"
                   className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                    Nama Penerima
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newBenName}
+                    onChange={(e) => setNewBenName(e.target.value)}
+                    placeholder="Nama Lengkap..."
+                    className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                    Kota / Wilayah
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newCity}
+                    onChange={(e) => setNewCity(e.target.value)}
+                    placeholder="Contoh: Jakarta Timur"
+                    className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  />
+                </div>
               </div>
 
               <div>
@@ -645,44 +694,87 @@ export function GovernanceSection() {
                   placeholder="16 Digit NIK..."
                   className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
                 />
-                <span className="text-[10px] text-stone-500 mt-1 block">
-                  *NIK akan di-hash secara kriptografis (salted) demi privasi.
+                <span className="text-[10px] text-stone-500 mt-0.5 block">
+                  *Privasi dilindungi: NIK di-hash secara salted keccak256 sebelum masuk ke L1 blockchain.
                 </span>
               </div>
 
               <div>
                 <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
-                  Kategori Asnaf
+                  Kategori 8 Asnaf (Syariah)
                 </label>
                 <select
-                  value={newAsnaf}
-                  onChange={(e) => setNewAsnaf(e.target.value)}
+                  value={newAsnafId}
+                  onChange={(e) => setNewAsnafId(Number(e.target.value))}
                   className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
                 >
-                  <option value="Fisabilillah">Fisabilillah (Guru Ngaji / Dakwah)</option>
-                  <option value="Fakir">Fakir</option>
-                  <option value="Miskin">Miskin</option>
-                  <option value="Ibnu Sabil">Ibnu Sabil (Musafir Terlantar)</option>
-                  <option value="Gharimin">Gharimin (Terlilit Hutang Darurat)</option>
-                  <option value="Mualaf">Mualaf</option>
+                  {ASNAF_OPTIONS.map((asnaf) => (
+                    <option key={asnaf.id} value={asnaf.id}>
+                      {asnaf.id}. {asnaf.label} — {asnaf.desc}
+                    </option>
+                  ))}
                 </select>
               </div>
 
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                    Mata Uang
+                  </label>
+                  <select
+                    value={newCurrencyType}
+                    onChange={(e) => setNewCurrencyType(Number(e.target.value) as 0 | 1)}
+                    className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  >
+                    <option value={0}>IDR (Fiat Escrow)</option>
+                    <option value={1}>USDC (Web3 Token)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                    Nominal {newCurrencyType === 1 ? "(USDC)" : "(IDR)"}
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={newAmount}
+                    onChange={(e) => setNewAmount(e.target.value)}
+                    placeholder={newCurrencyType === 1 ? "100" : "3000000"}
+                    className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-2 text-xs font-semibold text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  />
+                </div>
+              </div>
+
+              {newCurrencyType === 1 && (
+                <div>
+                  <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                    Alamat Wallet Penerima (USDC Recipient)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newUsdcRecipient}
+                    onChange={(e) => setNewUsdcRecipient(e.target.value)}
+                    placeholder="0x..."
+                    className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
-                  Nominal Bantuan (IDR)
+                  Catatan Survei & Verifikasi Kelayakan
                 </label>
-                <input
-                  type="number"
-                  required
-                  value={newAmount}
-                  onChange={(e) => setNewAmount(e.target.value)}
-                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-semibold text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                <textarea
+                  rows={2}
+                  value={newAssessment}
+                  onChange={(e) => setNewAssessment(e.target.value)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl p-2.5 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
                 />
               </div>
 
-              <Button type="submit" disabled={submittingProposal} className="w-full py-3 mt-2">
-                {submittingProposal ? "Mengunggah Bukti ke IPFS..." : "Buat Proposal & Minta Kuorum"}
+              <Button type="submit" disabled={submittingProposal} className="w-full py-3 mt-2 font-semibold">
+                {submittingProposal ? "Memproses Salted Hash & IPFS..." : "Ajukan Proposal ke Multi-Sig L1"}
               </Button>
             </form>
           </Card>
