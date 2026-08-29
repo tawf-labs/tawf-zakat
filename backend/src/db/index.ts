@@ -295,6 +295,10 @@ export const dbService = {
             auditNotes: r.auditNotes || undefined,
             auditedAt: r.auditedAt ? r.auditedAt.toISOString() : undefined,
             auditTxHash: r.auditTxHash || undefined,
+            // Safe.global Multi-Sig Tracking
+            safeStatus: (r.safeStatus as any) || "IDLE",
+            safeConfirmationsCount: r.safeConfirmationsCount || 0,
+            safeConfirmationsRequired: r.safeConfirmationsRequired || 2,
           }));
         }
       } catch (err) {
@@ -328,6 +332,9 @@ export const dbService = {
           status: proposalData.status || "Pending",
           approvalCount: proposalData.approvalCount || 1,
           approvedBy: JSON.stringify(proposalData.approvedBy || ["Amil Internal (Pengusul)"]),
+          safeStatus: "IDLE",
+          safeConfirmationsCount: 0,
+          safeConfirmationsRequired: 2,
         }).onConflictDoUpdate({
           target: schema.disbursementProposals.id,
           set: {
@@ -344,20 +351,36 @@ export const dbService = {
     return proposalData;
   },
 
-  async approveProposal(proposalId: number, approverRole: string, _txHash?: string) {
+  async approveProposal(
+    proposalId: number,
+    approverRole: string,
+    txHash?: string,
+    safeData?: { isPendingSafeQuorum?: boolean; confirmationsCount?: number; confirmationsRequired?: number }
+  ) {
     const memory = dataStore.proposals.get(proposalId);
-    let newCount = 2;
-    let newApprovedBy = ["Amil Internal (Pengusul)", approverRole];
-    let newStatus = "Approved";
+    const isSafePending = safeData?.isPendingSafeQuorum && !txHash;
+
+    let newCount = isSafePending ? (memory?.approvalCount || 1) : 2;
+    let newApprovedBy = isSafePending
+      ? (memory?.approvedBy || ["Amil Internal (Pengusul)"])
+      : ["Amil Internal (Pengusul)", approverRole];
+    let newStatus = isSafePending ? "Pending" : "Approved";
+    let safeStatus = isSafePending ? "PENDING_SAFE_SIGNATURES" : (txHash ? "EXECUTED_ONCHAIN" : "IDLE");
+    let safeConfirmationsCount = safeData?.confirmationsCount || (isSafePending ? 1 : 2);
+    let safeConfirmationsRequired = safeData?.confirmationsRequired || 2;
 
     if (memory) {
-      if (!memory.approvedBy.includes(approverRole)) {
+      if (!isSafePending && !memory.approvedBy.includes(approverRole)) {
         memory.approvedBy.push(approverRole);
         memory.approvalCount = memory.approvedBy.length;
       }
-      if (memory.approvalCount >= 2) {
+      if (!isSafePending && memory.approvalCount >= 2) {
         memory.status = "Approved";
       }
+      memory.safeStatus = safeStatus as any;
+      memory.safeConfirmationsCount = safeConfirmationsCount;
+      memory.safeConfirmationsRequired = safeConfirmationsRequired;
+
       newCount = memory.approvalCount;
       newApprovedBy = memory.approvedBy;
       newStatus = memory.status;
@@ -371,6 +394,10 @@ export const dbService = {
             approvalCount: newCount,
             approvedBy: JSON.stringify(newApprovedBy),
             status: newStatus,
+            safeStatus,
+            safeConfirmationsCount,
+            safeConfirmationsRequired,
+            txHash: txHash || undefined,
           })
           .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
       } catch (err) {
@@ -378,7 +405,15 @@ export const dbService = {
       }
     }
 
-    return memory || { proposalId, approvalCount: newCount, approvedBy: newApprovedBy, status: newStatus };
+    return memory || {
+      proposalId,
+      approvalCount: newCount,
+      approvedBy: newApprovedBy,
+      status: newStatus,
+      safeStatus,
+      safeConfirmationsCount,
+      safeConfirmationsRequired,
+    };
   },
 
   async executeProposal(proposalId: number, _txHash?: string) {

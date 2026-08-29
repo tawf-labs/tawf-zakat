@@ -37,6 +37,10 @@ export interface ProposalRecord {
   auditNotes?: string;
   auditedAt?: string;
   auditTxHash?: string;
+  // Safe.global Multi-Sig Queue Tracking
+  safeStatus?: "IDLE" | "PENDING_SAFE_SIGNATURES" | "EXECUTED_ONCHAIN";
+  safeConfirmationsCount?: number;
+  safeConfirmationsRequired?: number;
 }
 
 class ProtocolDataStore {

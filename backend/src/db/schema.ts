@@ -56,6 +56,10 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   auditNotes: text("audit_notes"),
   auditedAt: timestamp("audited_at"),
   auditTxHash: text("audit_tx_hash"),
+  // Safe.global Multi-Sig Queue Tracking
+  safeStatus: text("safe_status").default("IDLE"), // 'IDLE' | 'PENDING_SAFE_SIGNATURES' | 'EXECUTED_ONCHAIN'
+  safeConfirmationsCount: integer("safe_confirmations_count").default(0),
+  safeConfirmationsRequired: integer("safe_confirmations_required").default(2),
   createdAt: timestamp("created_at").defaultNow(),
   executedAt: timestamp("executed_at"),
 });

@@ -559,14 +559,17 @@ app.post("/api/proposals/:id/approve", async (c) => {
     const idParam = c.req.param("id");
     const proposalId = Number(idParam);
     const body = await c.req.json();
-    const { approverRole, txHash } = body;
+    const { approverRole, txHash, safeData } = body;
 
     const roleName = approverRole || "Dewan Pengawas Syariah";
-    const updated = await dbService.approveProposal(proposalId, roleName, txHash);
+    const updated = await dbService.approveProposal(proposalId, roleName, txHash, safeData);
 
     return c.json({
       success: true,
-      message: "Proposal approved successfully",
+      message:
+        safeData?.isPendingSafeQuorum && !txHash
+          ? "Tanda tangan pertama Safe tersimpan. Menunggu konfirmasi Safe DPS berikutnya."
+          : "Proposal approved successfully",
       proposal: updated,
     });
   } catch (error: any) {

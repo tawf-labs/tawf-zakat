@@ -40,6 +40,10 @@ interface Proposal {
   auditNotes?: string;
   auditedAt?: string;
   auditTxHash?: string;
+  // Safe.global Multi-Sig Tracking
+  safeStatus?: "IDLE" | "PENDING_SAFE_SIGNATURES" | "EXECUTED_ONCHAIN";
+  safeConfirmationsCount?: number;
+  safeConfirmationsRequired?: number;
 }
 
 const ASNAF_OPTIONS = [
@@ -143,11 +147,19 @@ export function GovernanceSection() {
 
   const handleApprove = async (proposalId: number) => {
     let txHash: string | undefined;
+    const safeThreshold = safeInfo?.threshold || 2;
+    let isPendingSafeQuorum = false;
+
     try {
       const onchainRes = await approveDisbursementOnChain(proposalId);
       txHash = onchainRes.txHash;
     } catch (err) {
       console.warn("Onchain approval skipped or demo fallback:", err);
+    }
+
+    // If activeRole is DPS: if no immediate txHash or if Safe threshold > 1, track Safe multisig quorum
+    if (activeRole === "dps" && !txHash && safeThreshold > 1) {
+      isPendingSafeQuorum = true;
     }
 
     const roleName =
@@ -162,28 +174,22 @@ export function GovernanceSection() {
       await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approverRole: roleName, txHash }),
+        body: JSON.stringify({
+          approverRole: roleName,
+          txHash,
+          safeData: {
+            isPendingSafeQuorum,
+            confirmationsCount: 1,
+            confirmationsRequired: safeThreshold,
+          },
+        }),
       });
     } catch (dbErr) {
       console.warn("Failed to sync approval to Neon DB:", dbErr);
     }
 
-    setProposals((prev) =>
-      prev.map((p) => {
-        if (p.proposalId === proposalId && p.status === "Pending") {
-          const newApprovals = p.approvedBy.includes(roleName)
-            ? p.approvedBy
-            : [...p.approvedBy, roleName];
-          return {
-            ...p,
-            approvedBy: newApprovals,
-            approvalCount: newApprovals.length,
-            status: newApprovals.length >= 2 ? "Approved" : "Pending",
-          };
-        }
-        return p;
-      })
-    );
+    await fetchProposals();
+    await fetchSafeStatus();
   };
 
   const handleExecute = async (proposalId: number) => {
@@ -619,6 +625,7 @@ export function GovernanceSection() {
           const isExecuted = p.status === "Executed";
           const isPending = p.status === "Pending";
           const isCancelled = p.status === "Cancelled";
+          const isSafePending = p.safeStatus === "PENDING_SAFE_SIGNATURES";
 
           return (
             <Card key={`gov-proposal-${p.proposalId}-${idx}`} elevated className="p-6 md:p-6">
@@ -639,6 +646,8 @@ export function GovernanceSection() {
                             ? "success"
                             : isApproved
                             ? "info"
+                            : isSafePending
+                            ? "warning"
                             : isCancelled
                             ? "neutral"
                             : "warning"
@@ -648,6 +657,8 @@ export function GovernanceSection() {
                           ? "Realisasi Selesai (Executed)"
                           : isApproved
                           ? "Kuorum 2/3 Tercapai (Approved)"
+                          : isSafePending
+                          ? `⏳ Menunggu Tanda Tangan ke-2 Safe DPS (${p.safeConfirmationsCount || 1}/${p.safeConfirmationsRequired || 2})`
                           : isCancelled
                           ? "Dibatalkan (Cancelled)"
                           : "Menunggu Persetujuan (Pending)"}
@@ -681,7 +692,7 @@ export function GovernanceSection() {
               <div className="pt-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                 <div className="space-y-1 text-xs">
                   <div className="flex items-center gap-1.5 text-stone-700">
-                    <span className="font-semibold">Persetujuan Kuorum ({p.approvalCount}/2):</span>
+                    <span className="font-semibold">Persetujuan Kuorum ({isApproved ? "2/2" : isSafePending ? "1/2 (Safe Pending)" : `${p.approvalCount}/2`}):</span>
                     <span className="text-[#0F3D30] font-medium">
                       {p.approvedBy.join(", ")}
                     </span>
@@ -701,7 +712,7 @@ export function GovernanceSection() {
 
                 {/* Action Buttons */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  {isPending && (
+                  {isPending && !isSafePending && (
                     <>
                       <Button
                         onClick={() => handleApprove(p.proposalId)}
@@ -723,7 +734,18 @@ export function GovernanceSection() {
                     </>
                   )}
 
-                  {(isApproved || (isPending && p.approvalCount >= 2)) && (
+                  {isPending && isSafePending && (
+                    <a
+                      href={`https://app.safe.global/home?safe=sep:${safeInfo?.address || "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-amber-800" /> Buka Safe Queue untuk Tanda Tangan ke-2 <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+
+                  {isApproved && (
                     <Button
                       onClick={() => handleExecute(p.proposalId)}
                       size="sm"
