@@ -558,7 +558,7 @@ export function GovernanceSection() {
                         size="sm"
                       >
                         <CheckCircle className="w-3.5 h-3.5 mr-1" />
-                        Setujui via MetaMask ({activeRole.toUpperCase()})
+                        Setujui On-Chain ({activeRole.toUpperCase()})
                       </Button>
 
                       {(activeRole === "dps" || activeRole === "amil") && (
