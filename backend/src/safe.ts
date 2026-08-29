@@ -132,3 +132,39 @@ export async function getSafePendingTransactions(
     safeThreshold: threshold,
   };
 }
+
+export async function getSafeTransactionDetails(safeTxHash: string) {
+  const url = `https://safe-transaction-sepolia.safe.global/api/v1/multisig-transactions/${safeTxHash}/`;
+
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+    };
+    if (SAFE_API_KEY) {
+      headers["Authorization"] = `Bearer ${SAFE_API_KEY}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return {
+        safeTxHash: data.safeTxHash,
+        isExecuted: Boolean(data.isExecuted),
+        confirmationsRequired: data.confirmationsRequired || 2,
+        confirmationsCount: data.confirmations?.length || 0,
+        transactionHash: data.transactionHash || null,
+        confirmations: data.confirmations || [],
+      };
+    }
+  } catch (err) {
+    console.warn("Failed to fetch safe tx details:", err);
+  }
+
+  return null;
+}
+

@@ -18,7 +18,7 @@ import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
 import { type Hex } from "viem";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
-import { getSafeInfo, getSafePendingTransactions } from "./safe";
+import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
 
 // Auto-seed demo data on startup
 runSeeder();
@@ -559,9 +559,34 @@ app.post("/api/proposals/:id/approve", async (c) => {
     const idParam = c.req.param("id");
     const proposalId = Number(idParam);
     const body = await c.req.json();
-    const { approverRole, txHash, safeData } = body;
+    let { approverRole, txHash, safeData } = body;
 
     const roleName = approverRole || "Dewan Pengawas Syariah";
+
+    // If txHash is provided, verify if it is an off-chain Safe transaction hash
+    if (txHash) {
+      const safeTx = await getSafeTransactionDetails(txHash);
+      if (safeTx) {
+        if (!safeTx.isExecuted) {
+          // Off-chain pending Safe signature: Safe requires another signature before broadcasting on-chain
+          safeData = {
+            isPendingSafeQuorum: true,
+            confirmationsCount: safeTx.confirmationsCount,
+            confirmationsRequired: safeTx.confirmationsRequired,
+          };
+          txHash = undefined; // clear txHash until executed on-chain
+        } else {
+          // Executed on-chain!
+          txHash = safeTx.transactionHash || txHash;
+          safeData = {
+            isPendingSafeQuorum: false,
+            confirmationsCount: safeTx.confirmationsCount,
+            confirmationsRequired: safeTx.confirmationsRequired,
+          };
+        }
+      }
+    }
+
     const updated = await dbService.approveProposal(proposalId, roleName, txHash, safeData);
 
     return c.json({
