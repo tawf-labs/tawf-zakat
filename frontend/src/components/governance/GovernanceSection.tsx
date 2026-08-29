@@ -89,6 +89,7 @@ export function GovernanceSection() {
   const [newCity, setNewCity] = useState("Jakarta");
   const [newAssessment, setNewAssessment] = useState("Survei lapangan dan verifikasi kelayakan asnaf telah diverifikasi tim amil.");
   const [newUsdcRecipient, setNewUsdcRecipient] = useState("");
+  const [submittingProposal, setSubmittingProposal] = useState(false);
   // Safe.global DPS Multisig State (Ticket #32)
   const [safeInfo, setSafeInfo] = useState<{
     address: string;
