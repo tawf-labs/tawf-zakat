@@ -92,25 +92,27 @@ flowchart TD
 ### A. Pembagian Hak Amil Otomatis (Invariant Lock) & 8 Asnaf BAZNAS
 Smart contract mengunci batas atas hak amil maksimal 12.5% (1/8) secara terprogram (`MAX_AMIL_BPS = 1250`). Sisanya (minimal 87.5%) mutlak terkunci hanya untuk 7 asnaf mustahik lainnya (Fakir, Miskin, Muallaf, Riqab, Gharimin, Fisabilillah, Ibnu Sabil) sesuai ketentuan syariah Islam dan regulasi BAZNAS Indonesia.
 
-### B. Otorisasi Penyaluran (Hybrid Multi-Sig 2-of-3)
-Penyaluran dana mustahik wajib mendapatkan persetujuan minimal 2 dari 3 entitas kunci:
-1. **Amil Operasional** (`DEFAULT_ADMIN_ROLE` / `AMIL_ROLE`).
-2. **Dewan Pengawas Syariah (DPS)** (`SHARIA_SUPERVISOR_ROLE`).
-3. **Auditor Eksternal / Independen** (`AUDITOR_ROLE`).
-
-*Signer Interoperability*: Akun pemegang role dapat berupa EOA standar ataupun **Safe.global Smart Account** (Gnosis Safe 2-of-3) yang terhubung via WalletConnect / Safe Apps.
+### B. Otorisasi Penyaluran & Pemisahan Kekuasaan (Separation of Powers - ADR-0006)
+Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
+1. **Pre-Disbursement Approval (Persetujuan Awal)**:
+   - **Amil Operasional** (`DEFAULT_ADMIN_ROLE`): Mengajukan proposal dan data survei kelayakan.
+   - **Dewan Pengawas Syariah (DPS)** (`SHARIA_SUPERVISOR_ROLE`): Komite kolektif (3-5 Ustadz) yang bertindak sebagai pemegang hak veto keabsahan fikih 8 Asnaf. DPS menggunakan **Safe.global Multisig Account** (kuorum 2-of-3 internal ustadz). Persetujuan DPS adalah syarat mutlak sebelum dana boleh keluar.
+2. **Ex-Post Independent Audit (Audit Pasca-Penyaluran)**:
+   - **Auditor Independen** (`AUDITOR_ROLE`): Bertindak setelah dana tersalurkan (*ex-post*). Auditor mencocokkan mutasi bank, BAST di IPFS, dan bukti on-chain, lalu menerbitkan **Cryptographic Attestation (Opini WTP)** di ledger L1 tanpa terlibat dalam konflik kepentingan persetujuan harian.
 
 ### C. Alur Pengajuan Proposal & Dual-Receipt IPFS Pipeline
 1. **Tahap 1 (Intake & Pre-Approval Metadata)**:
    - Amil mengunggah data survei mustahik ke backend.
    - Sistem menghasilkan `beneficiaryHash = Keccak256(NIK + Nama + SecretSalt)` (perlindungan privasi UU PDP & anti-doxxing) dan menyematkan dokumen survei/SKTM ke IPFS (`proposalMetadataCID`).
    - Amil memanggil fungsi smart contract `proposeDisbursement(...)`.
-2. **Tahap 2 (Verifikasi Syariah & Audit)**:
-   - DPS dan Auditor menelaah proposal dan metadata IPFS melalui portal web, lalu memanggil `approveDisbursement(proposalId)`.
+2. **Tahap 2 (Verifikasi Syariah oleh DPS)**:
+   - DPS menelaah dossier IPFS melalui portal web dan menandatangani persetujuan on-chain melalui Safe.global (`approveDisbursement(proposalId)`).
 3. **Tahap 3 (Eksekusi Penyaluran & Post-Disbursement BAST Receipt)**:
    - **Jalur USDC (`currencyType = 1`)**: Kontrak mentransfer token USDC langsung ke dompet mustahik/vendor (`usdcRecipient`).
-   - **Jalur IDR (`currencyType = 0`)**: Amil mentransfer dana dari Rekening Escrow Bank ke rekening mustahik, mengunggah Berita Acara Serah Terima (BAST) & foto dokumentasi ke IPFS (`disbursementReceiptCID`), lalu memanggil `executeDisbursement(...)` untuk memperbarui ledger L1.
-4. **Anti-Double Claim**: Smart contract mengunci mapping `hasReceivedZakat[beneficiaryHash][periodId] = true` untuk mencegah mustahik fiktif atau klaim ganda dalam satu periode bantuan.
+   - **Jalur IDR (`currencyType = 0`)**: Amil mentransfer dana dari Rekening Escrow Bank ke rekening mustahik, mengunggah Berita Acara Serah Terima (BAST) & bukti transfer ke IPFS (`disbursementReceiptCID`), lalu memanggil `executeDisbursement(...)` untuk memperbarui ledger L1.
+4. **Tahap 4 (Jejak Audit & Attestation)**:
+   - Auditor menginspeksi dual-receipt di Public Explorer dan menerbitkan stempel atestasi kepatuhan syariah dan akuntansi.
+5. **Anti-Double Claim**: Smart contract mengunci mapping `hasReceivedZakat[beneficiaryHash][periodId] = true` untuk mencegah mustahik fiktif atau klaim ganda dalam satu periode bantuan.
 
 ---
 
