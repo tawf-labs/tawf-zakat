@@ -40,11 +40,13 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   beneficiaryNIKMasked: text("beneficiary_nik_masked").notNull(),
   beneficiaryHash: text("beneficiary_hash").notNull(),
   ipfsProofCID: text("ipfs_proof_cid").notNull(),
+  disbursementReceiptCID: text("disbursement_receipt_cid"),
   periodId: integer("period_id").notNull(),
   status: text("status").notNull().default("Pending"), // 'Pending' | 'Approved' | 'Executed' | 'Cancelled'
   cancelReason: text("cancel_reason"),
   approvalCount: integer("approval_count").notNull().default(1),
   approvedBy: text("approved_by").notNull().default('["Amil Internal"]'), // JSON string array
+  txHash: text("tx_hash"),
   createdAt: timestamp("created_at").defaultNow(),
   executedAt: timestamp("executed_at"),
 });

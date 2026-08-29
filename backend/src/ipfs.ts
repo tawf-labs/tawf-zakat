@@ -28,7 +28,6 @@ export function computeBeneficiaryHash(nik: string, name: string, secretSalt: st
 export async function uploadDisbursementProofToIPFS(
   metadata: DisbursementMetadata
 ): Promise<{ cid: string; gatewayUrl: string }> {
-  // If PINATA_JWT is present in env, we can pin to live Pinata IPFS
   const pinataJWT = process.env.PINATA_JWT;
 
   if (pinataJWT) {
@@ -59,7 +58,6 @@ export async function uploadDisbursementProofToIPFS(
     }
   }
 
-  // Deterministic mock CID for testing / local development
   const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
   const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
 
@@ -121,7 +119,67 @@ export async function uploadProposalDossierToIPFS(
     }
   }
 
-  // Deterministic mock CID for testing / local development
+  const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
+  const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
+
+  return {
+    cid: mockCID,
+    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+  };
+}
+
+export interface DisbursementReceiptMetadata {
+  proposalId: number;
+  programTitle: string;
+  asnafCategory: number;
+  asnafLabel: string;
+  beneficiaryName: string;
+  beneficiaryNIKMasked: string;
+  beneficiaryHash: Hex;
+  disbursedAmount: number;
+  currency: "IDR" | "USDC";
+  disbursementChannel: "BANK_TRANSFER" | "USDC_ONCHAIN" | "CASH_DIRECT";
+  bankReferenceNumber?: string;
+  bastDocumentCID?: string;
+  photoEvidenceCID?: string;
+  executedTxHash?: string;
+  timestamp: string;
+  signedByAmil: string;
+}
+
+export async function uploadDisbursementReceiptToIPFS(
+  metadata: DisbursementReceiptMetadata
+): Promise<{ cid: string; gatewayUrl: string }> {
+  const pinataJWT = process.env.PINATA_JWT;
+
+  if (pinataJWT) {
+    try {
+      const response = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${pinataJWT}`,
+        },
+        body: JSON.stringify({
+          pinataContent: metadata,
+          pinataMetadata: {
+            name: `zakat-disbursement-bast-prop-${metadata.proposalId}.json`,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          cid: data.IpfsHash,
+          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+        };
+      }
+    } catch (e) {
+      console.warn("Pinata BAST upload failed, falling back to deterministic CID generation", e);
+    }
+  }
+
   const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
   const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
 

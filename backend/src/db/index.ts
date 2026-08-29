@@ -15,6 +15,15 @@ if (databaseUrl) {
     const client = postgres(databaseUrl, { max: 10 });
     dbInstance = drizzle(client, { schema });
     console.log("Connected to Neon PostgreSQL database via Drizzle ORM");
+    // Ensure new columns exist
+    client
+      .unsafe(
+        `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS disbursement_receipt_cid text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;`
+      )
+      .catch((err) => {
+        console.warn("Neon DB migration notice:", err.message);
+      });
   } catch (err) {
     console.warn("Neon database connection failed, falling back to local data store:", err);
   }
@@ -260,6 +269,7 @@ export const dbService = {
             beneficiaryNIKMasked: r.beneficiaryNIKMasked,
             beneficiaryHash: r.beneficiaryHash as Hex,
             ipfsProofCID: r.ipfsProofCID,
+            disbursementReceiptCID: r.disbursementReceiptCID || undefined,
             periodId: r.periodId,
             approvalCount: r.approvalCount,
             approvedBy: JSON.parse(r.approvedBy || "[]"),
@@ -267,6 +277,7 @@ export const dbService = {
             cancelReason: r.cancelReason || undefined,
             createdAt: r.createdAt ? r.createdAt.toISOString() : new Date().toISOString(),
             executedAt: r.executedAt ? r.executedAt.toISOString() : undefined,
+            txHash: r.txHash || undefined,
           }));
         }
       } catch (err) {
@@ -449,6 +460,29 @@ export const dbService = {
 
     return memory || { proposalId, status: "Cancelled", cancelReason, txHash: _txHash };
   },
+
+  async attachBastReceipt(proposalId: number, receiptCID: string, receiptMetadata: any) {
+    const memory = dataStore.proposals.get(proposalId);
+    if (memory) {
+      memory.disbursementReceiptCID = receiptCID;
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            disbursementReceiptCID: receiptCID,
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+      } catch (err) {
+        console.error("Failed to attach BAST receipt in Neon DB:", err);
+      }
+    }
+
+    return memory || { proposalId, disbursementReceiptCID: receiptCID };
+  },
 };
+
 
 

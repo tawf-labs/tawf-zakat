@@ -20,13 +20,16 @@ export interface ProposalRecord {
   beneficiaryNIKMasked: string;
   beneficiaryHash: Hex;
   ipfsProofCID: string;
+  disbursementReceiptCID?: string;
   periodId: number;
   usdcRecipient?: string;
   approvalCount: number;
   approvedBy: string[];
   status: "Pending" | "Approved" | "Executed" | "Cancelled";
+  cancelReason?: string;
   createdAt: string;
   executedAt?: string;
+  txHash?: string;
 }
 
 class ProtocolDataStore {

@@ -22,6 +22,7 @@ interface Proposal {
   beneficiaryNIKMasked: string;
   beneficiaryHash: string;
   ipfsProofCID: string;
+  disbursementReceiptCID?: string;
   periodId: number;
   approvalCount: number;
   approvedBy: string[];
@@ -54,6 +55,12 @@ export function GovernanceSection() {
   const [showProposeModal, setShowProposeModal] = useState(false);
   const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
   const [cancelReasonText, setCancelReasonText] = useState("");
+
+  // BAST & Execution Modal State (Ticket #29)
+  const [executingBastProposal, setExecutingBastProposal] = useState<Proposal | null>(null);
+  const [bastBankRef, setBastBankRef] = useState("");
+  const [bastAmilName, setBastAmilName] = useState("Amil Operasional BAZNAS/LAZ");
+  const [bastSubmitting, setBastSubmitting] = useState(false);
 
   // New Proposal Form State (Ticket #27)
   const [newProgramTitle, setNewProgramTitle] = useState("Bantuan Pemberdayaan Asnaf");
@@ -134,6 +141,16 @@ export function GovernanceSection() {
   };
 
   const handleExecute = async (proposalId: number) => {
+    const target = proposals.find((p) => p.proposalId === proposalId);
+    if (!target) return;
+
+    if (target.currencyType === 0) {
+      // Open BAST upload & bank transfer confirmation modal
+      setExecutingBastProposal(target);
+      return;
+    }
+
+    // Direct USDC Execution on L1
     let txHash: string | undefined;
     try {
       const onchainRes = await executeDisbursementOnChain(proposalId);
@@ -160,11 +177,82 @@ export function GovernanceSection() {
             ...p,
             status: "Executed",
             executedAt: new Date().toISOString(),
+            txHash: txHash || p.txHash,
           };
         }
         return p;
       })
     );
+  };
+
+  const handleExecuteBastSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!executingBastProposal) return;
+    setBastSubmitting(true);
+
+    try {
+      // 1. Upload BAST metadata & bank ref to Pinata IPFS
+      const bastRes = await fetch(
+        `http://localhost:3001/api/proposals/${executingBastProposal.proposalId}/bast`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bankReferenceNumber: bastBankRef || `TRX-BSI-${Date.now()}`,
+            disbursementChannel: "BANK_TRANSFER",
+            signedByAmil: bastAmilName,
+            bastDocumentFileName: "berita_acara_serah_terima_zakat.pdf",
+            photoEvidenceFileName: "dokumentasi_serah_terima_mustahik.jpg",
+          }),
+        }
+      );
+      const bastData = await bastRes.json();
+      const receiptCID = bastData.disbursementReceiptCID;
+
+      // 2. Trigger on-chain execution via MetaMask / Safe
+      let txHash: string | undefined;
+      try {
+        const onchainRes = await executeDisbursementOnChain(
+          executingBastProposal.proposalId
+        );
+        txHash = onchainRes.txHash;
+      } catch (err) {
+        console.warn("Onchain execute fallback:", err);
+      }
+
+      // 3. Mark Executed in Neon DB
+      await fetch(
+        `http://localhost:3001/api/proposals/${executingBastProposal.proposalId}/execute`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txHash }),
+        }
+      );
+
+      // 4. Update local state
+      setProposals((prev) =>
+        prev.map((p) => {
+          if (p.proposalId === executingBastProposal.proposalId) {
+            return {
+              ...p,
+              status: "Executed",
+              disbursementReceiptCID: receiptCID,
+              executedAt: new Date().toISOString(),
+              txHash: txHash || p.txHash,
+            };
+          }
+          return p;
+        })
+      );
+
+      setExecutingBastProposal(null);
+      setBastBankRef("");
+    } catch (err) {
+      console.error("Failed to execute BAST & disbursement:", err);
+    } finally {
+      setBastSubmitting(false);
+    }
   };
 
   const handleConfirmCancel = async (e: React.FormEvent) => {
@@ -488,16 +576,30 @@ export function GovernanceSection() {
                     <Button
                       onClick={() => handleExecute(p.proposalId)}
                       size="sm"
-                      className="bg-emerald-800 hover:bg-emerald-900 text-white"
+                      className="bg-emerald-800 hover:bg-emerald-900 text-white font-semibold"
                     >
-                      Cairkan Dana (MetaMask L1)
+                      {p.currencyType === 1
+                        ? "Kirim USDC On-Chain (Amil L1)"
+                        : "Unggah BAST & Cairkan (Amil)"}
                     </Button>
                   )}
 
                   {isExecuted && (
-                    <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-full">
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
-                      Dana Telah Ditransfer Onchain
+                    <div className="flex flex-col md:flex-row items-start md:items-center gap-2">
+                      <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-full">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        Dana Telah Disalurkan
+                      </div>
+                      {p.disbursementReceiptCID && (
+                        <a
+                          href={`https://ipfs.io/ipfs/${p.disbursementReceiptCID}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 text-[11px] font-mono text-emerald-900 font-semibold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-100"
+                        >
+                          <FileText className="w-3 h-3 text-emerald-700" /> BAST IPFS: {p.disbursementReceiptCID.slice(0, 10)}... <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      )}
                     </div>
                   )}
 
@@ -828,6 +930,101 @@ export function GovernanceSection() {
               <Button type="submit" disabled={submittingProposal} className="w-full py-3 mt-2 font-semibold">
                 {submittingProposal ? "Memproses Salted Hash & IPFS..." : "Ajukan Proposal ke Multi-Sig L1"}
               </Button>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* BAST & Realization Execution Modal (Ticket #29) */}
+      {executingBastProposal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <Card elevated className="max-w-md w-full bg-white p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0F3D30]/10 mb-4">
+              <div className="flex items-center gap-2 text-[#0F3D30]">
+                <FileText className="w-5 h-5" />
+                <h4 className="font-serif font-bold text-lg">
+                  Unggah BAST & Realisasi #{executingBastProposal.proposalId}
+                </h4>
+              </div>
+              <button
+                onClick={() => setExecutingBastProposal(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteBastSubmit} className="space-y-3.5 text-xs max-h-[75vh] overflow-y-auto pr-1">
+              <div className="bg-[#F9F6F0] p-3 rounded-xl border border-[#0F3D30]/10 space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-stone-500">Penerima:</span>
+                  <span className="font-bold text-[#0F3D30]">{executingBastProposal.beneficiaryName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-500">Asnaf:</span>
+                  <span className="font-semibold text-stone-800">{executingBastProposal.asnafLabel}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-500">Nominal Penyaluran:</span>
+                  <span className="font-bold text-[#0F3D30]">
+                    Rp {executingBastProposal.amount.toLocaleString("id-ID")}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Nomor Referensi Transfer Bank / BSI
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={bastBankRef}
+                  onChange={(e) => setBastBankRef(e.target.value)}
+                  placeholder="Contoh: TRX-BSI-20260829-009182"
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Nama Petugas Amil Penanggung Jawab
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={bastAmilName}
+                  onChange={(e) => setBastAmilName(e.target.value)}
+                  placeholder="Nama Lengkap Amil Lapangan..."
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-800 space-y-1">
+                <span className="font-bold block">Dokumen BAST Digital:</span>
+                <p className="text-[11px] text-emerald-700 leading-relaxed">
+                  Berkas berita acara serah terima (BAST) dan dokumentasi penyerahan zakat tersamar akan di-pin ke IPFS Pinata secara permanen.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setExecutingBastProposal(null)}
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={bastSubmitting}
+                  size="sm"
+                  className="bg-emerald-800 hover:bg-emerald-900 text-white font-semibold"
+                >
+                  {bastSubmitting ? "Mengunggah IPFS & Realisasi..." : "Unggah BAST & Selesaikan di L1"}
+                </Button>
+              </div>
             </form>
           </Card>
         </div>

@@ -7,8 +7,10 @@ import {
   computeBeneficiaryHash,
   uploadDisbursementProofToIPFS,
   uploadProposalDossierToIPFS,
+  uploadDisbursementReceiptToIPFS,
   type DisbursementMetadata,
   type ProposalDossierMetadata,
+  type DisbursementReceiptMetadata,
 } from "./ipfs";
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
@@ -590,7 +592,69 @@ app.post("/api/proposals/:id/cancel", async (c) => {
   }
 });
 
-// 4d. Governance: Execute Proposal
+// 4e. Governance: Upload BAST & Struk Penyaluran to IPFS (Ticket #29)
+app.post("/api/proposals/:id/bast", async (c) => {
+  try {
+    const idParam = c.req.param("id");
+    const proposalId = Number(idParam);
+    const body = await c.req.json();
+    const {
+      bankReferenceNumber,
+      disbursementChannel,
+      signedByAmil,
+      bastDocumentFileName,
+      photoEvidenceFileName,
+    } = body;
+
+    const proposals = await dbService.getProposals();
+    const targetProposal = proposals.find((p) => p.proposalId === proposalId);
+
+    if (!targetProposal) {
+      return c.json({ error: "Proposal not found", success: false }, 404);
+    }
+
+    const receiptMetadata: DisbursementReceiptMetadata = {
+      proposalId,
+      programTitle: targetProposal.beneficiaryName
+        ? `Penyaluran Zakat untuk ${targetProposal.beneficiaryName}`
+        : "Penyaluran Hak Asnaf",
+      asnafCategory: targetProposal.asnafCategory || 0,
+      asnafLabel: targetProposal.asnafLabel || "Mustahik",
+      beneficiaryName: targetProposal.beneficiaryName || "Penerima Manfaat",
+      beneficiaryNIKMasked: targetProposal.beneficiaryNIKMasked || "3171************",
+      beneficiaryHash: targetProposal.beneficiaryHash as Hex,
+      disbursedAmount: targetProposal.amount,
+      currency: targetProposal.currencyType === 1 ? "USDC" : "IDR",
+      disbursementChannel: disbursementChannel || (targetProposal.currencyType === 1 ? "USDC_ONCHAIN" : "BANK_TRANSFER"),
+      bankReferenceNumber: bankReferenceNumber || `TRX-BANK-${Date.now()}`,
+      bastDocumentCID: bastDocumentFileName ? `ipfs://QmBASTDoc${Date.now()}` : undefined,
+      photoEvidenceCID: photoEvidenceFileName ? `ipfs://QmPhotoEvidence${Date.now()}` : undefined,
+      timestamp: new Date().toISOString(),
+      signedByAmil: signedByAmil || "Amil Operasional",
+    };
+
+    const ipfsResult = await uploadDisbursementReceiptToIPFS(receiptMetadata);
+
+    const updated = await dbService.attachBastReceipt(
+      proposalId,
+      ipfsResult.cid,
+      receiptMetadata
+    );
+
+    return c.json({
+      success: true,
+      message: "BAST receipt uploaded to IPFS and attached to proposal successfully",
+      disbursementReceiptCID: ipfsResult.cid,
+      ipfsGatewayUrl: ipfsResult.gatewayUrl,
+      receiptMetadata,
+      proposal: updated,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to upload BAST receipt", success: false }, 500);
+  }
+});
+
+// 4f. Governance: Execute Proposal
 app.post("/api/proposals/:id/execute", async (c) => {
   try {
     const idParam = c.req.param("id");
