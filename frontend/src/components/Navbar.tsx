@@ -1,9 +1,13 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ConnectKitButton } from "connectkit";
-import { Wallet, ChevronDown, AlertCircle } from "lucide-react";
+import { Wallet, ChevronDown, AlertCircle, Shield } from "lucide-react";
 import { sepolia } from "wagmi/chains";
+import { SafeConnectModal } from "./SafeConnectModal";
 
 export function Navbar() {
+  const [showSafeModal, setShowSafeModal] = useState(false);
+
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#F9F6F0]/90 border-b border-[#0F3D30]/10 px-6 py-3.5 transition-all">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -54,8 +58,17 @@ export function Navbar() {
           </Link>
         </nav>
 
-        {/* ConnectKit Custom Button Integration */}
-        <div className="flex items-center gap-3">
+        {/* Connect Buttons Integration */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setShowSafeModal(true)}
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-[#0F3D30]/20 bg-white text-[#0F3D30] hover:bg-[#F9F6F0] text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+            title="Salin URI WalletConnect untuk Safe Wallet di browser"
+          >
+            <Shield className="w-3.5 h-3.5 text-[#C5A869]" />
+            <span>Koneksi Safe (DPS)</span>
+          </button>
+
           <ConnectKitButton.Custom>
             {({ isConnected, isConnecting, show, address, truncatedAddress, ensName, chain }) => {
               if (isConnected && address) {
@@ -104,6 +117,11 @@ export function Navbar() {
           </ConnectKitButton.Custom>
         </div>
       </div>
+
+      <SafeConnectModal
+        isOpen={showSafeModal}
+        onClose={() => setShowSafeModal(false)}
+      />
     </header>
   );
 }

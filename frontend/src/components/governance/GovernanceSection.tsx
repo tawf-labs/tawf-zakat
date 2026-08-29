@@ -11,6 +11,7 @@ import {
 } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
 import { type Hex } from "viem";
+import { SafeConnectModal } from "../SafeConnectModal";
 
 interface Proposal {
   proposalId: number;
@@ -97,6 +98,7 @@ export function GovernanceSection() {
     version?: string;
   } | null>(null);
   const [safePendingTxs, setSafePendingTxs] = useState<any[]>([]);
+  const [showSafeConnectModal, setShowSafeConnectModal] = useState(false);
 
   const fetchSafeStatus = useCallback(async () => {
     try {
@@ -590,7 +592,7 @@ export function GovernanceSection() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="text-right hidden sm:block">
               <div className="text-[11px] text-emerald-300">Antrean Safe Queue:</div>
               <div className="text-xs font-bold text-amber-300">
@@ -599,13 +601,19 @@ export function GovernanceSection() {
                   : "Semua Kuorum Selesai"}
               </div>
             </div>
+            <button
+              onClick={() => setShowSafeConnectModal(true)}
+              className="bg-amber-400 hover:bg-amber-300 text-emerald-950 font-bold text-xs px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Shield className="w-3.5 h-3.5 text-emerald-900" /> Salin Kode Sesi Safe
+            </button>
             <a
               href={`https://app.safe.global/home?safe=sep:${safeInfo?.address || "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"}`}
               target="_blank"
               rel="noreferrer"
               className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs"
             >
-              Buka Safe.global App <ExternalLink className="w-3.5 h-3.5" />
+              Buka Safe App <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
         </div>
@@ -1331,6 +1339,12 @@ export function GovernanceSection() {
           </Card>
         </div>
       )}
+
+      {/* Safe Connect Modal */}
+      <SafeConnectModal
+        isOpen={showSafeConnectModal}
+        onClose={() => setShowSafeConnectModal(false)}
+      />
     </section>
   );
 }
