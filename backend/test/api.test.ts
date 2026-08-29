@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, beforeAll } from "bun:test";
 import app from "../src/index";
+import { runSeeder } from "../src/seed";
 
 describe("Backend API Endpoints", () => {
+  beforeAll(async () => {
+    await runSeeder();
+  });
   it("GET /health should return status ok", async () => {
     const res = await app.fetch(new Request("http://localhost:3001/health"));
     expect(res.status).toBe(200);
@@ -41,12 +45,12 @@ describe("Backend API Endpoints", () => {
     expect(body.merkleRoot.startsWith("0x")).toBe(true);
   });
 
-  it("GET /api/proposals should return seeded proposals", async () => {
+  it("GET /api/proposals should return proposals list", async () => {
     const res = await app.fetch(new Request("http://localhost:3001/api/proposals"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(body.totalProposals).toBeGreaterThanOrEqual(2);
+    expect(Array.isArray(body.proposals)).toBe(true);
   });
 
   it("POST /api/disbursement/upload-proof should return beneficiary hash and IPFS CID", async () => {

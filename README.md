@@ -19,18 +19,18 @@ Privacy-preserving zakat donations using UltraHONK zero-knowledge proofs on Ethe
 > See `sc/src/DAO/verifiers/HonkVerifier.sol` and `security-analysis-corrections.md`.
 
 - **Testnet**: [ziswaf.tawf.foundation](https://ziswaf.tawf.foundation)
-- **Live Sepolia Protocol Contract**: [`0x72b60a0C37a78dF62295F88294E790083089f665`](https://sepolia.etherscan.io/address/0x72b60a0C37a78dF62295F88294E790083089f665)
-- **Circle Sepolia USDC**: [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238)
-- **Paper**: `zk-private-zakat.pdf` (IEEE ICIMTech 2026, 6 pages, 33 references)
-- **Authors**: Muhammad Zidan Fatonie, Alexander Agung Santoso Gunawan (BINUS University)
+- **Live Sepolia Protocol Contract**: [`0x6014542ce8f759946aa6f3f9af54fb91685065a5`](https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5)
+- **Multi-Sig Safe DPS Address**: [`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`](https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1)
+- **Settlement Merkle Root Verifier**: SHA-256 in-browser / WebAssembly
+- **Zero-Knowledge Privacy Proofs**: Groth16 SnarkJS circuit over BN254
 
 ---
 
-## Deployed Contracts (Ethereum Sepolia Testnet)
+## 🚀 Deployed Contracts & Live Infrastruktur (Sepolia L1)
 
-| Contract | Address | Explorer Link |
-| :--- | :--- | :--- |
-| **ZakatProtocolL1** | `0x72b60a0C37a78dF62295F88294E790083089f665` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x72b60a0C37a78dF62295F88294E790083089f665) |
+| Komponen | Alamat Kontrak / Link | Deskripsi |
+|---|---|---|
+| **ZakatProtocolL1** | `0x6014542ce8f759946aa6f3f9af54fb91685065a5` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5) |
 | **Circle USDC (Sepolia)** | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) |
 | **Deployer / Admin / Relayer** | `0x5e9B652C4E8a013f6fAb69F0b55377c408B59968` | [View on Sepolia Etherscan](https://sepolia.etherscan.io/address/0x5e9B652C4E8a013f6fAb69F0b55377c408B59968) |
 

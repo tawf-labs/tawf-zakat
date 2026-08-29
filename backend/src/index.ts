@@ -20,8 +20,8 @@ import { type Hex } from "viem";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
 import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
 
-// Auto-seed demo data on startup
-runSeeder();
+// Auto-seed demo data on startup (Disabled for clean start)
+// runSeeder();
 
 const app = new Hono();
 
