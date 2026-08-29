@@ -72,7 +72,34 @@ export function GovernanceSection() {
   const [newCity, setNewCity] = useState("Jakarta");
   const [newAssessment, setNewAssessment] = useState("Survei lapangan dan verifikasi kelayakan asnaf telah diverifikasi tim amil.");
   const [newUsdcRecipient, setNewUsdcRecipient] = useState("");
-  const [submittingProposal, setSubmittingProposal] = useState(false);
+  // Safe.global DPS Multisig State (Ticket #32)
+  const [safeInfo, setSafeInfo] = useState<{
+    address: string;
+    threshold: number;
+    owners: string[];
+    version?: string;
+  } | null>(null);
+  const [safePendingTxs, setSafePendingTxs] = useState<any[]>([]);
+
+  const fetchSafeStatus = useCallback(async () => {
+    try {
+      const infoRes = await fetch("http://localhost:3001/api/safe/info");
+      if (infoRes.ok) {
+        const infoData = await infoRes.json();
+        if (infoData.safe) setSafeInfo(infoData.safe);
+      }
+
+      const pendingRes = await fetch("http://localhost:3001/api/safe/pending");
+      if (pendingRes.ok) {
+        const pendingData = await pendingRes.json();
+        if (pendingData.pendingTransactions) {
+          setSafePendingTxs(pendingData.pendingTransactions);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch Safe status:", err);
+    }
+  }, []);
 
   const fetchProposals = useCallback(async () => {
     setLoading(true);
@@ -93,7 +120,8 @@ export function GovernanceSection() {
 
   useEffect(() => {
     fetchProposals();
-  }, [fetchProposals]);
+    fetchSafeStatus();
+  }, [fetchProposals, fetchSafeStatus]);
 
   const handleApprove = async (proposalId: number) => {
     let txHash: string | undefined;
@@ -458,6 +486,60 @@ export function GovernanceSection() {
           <Button onClick={() => setShowProposeModal(true)} size="sm" className="shrink-0">
             <PlusCircle className="w-3.5 h-3.5 mr-1" /> Ajukan Penyaluran
           </Button>
+        </div>
+      </div>
+
+      {/* Safe.global DPS Multisig Live Integration Card (Ticket #32) */}
+      <div className="bg-emerald-950 text-white rounded-2xl p-5 mb-8 border border-emerald-800 shadow-md">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-800/80 flex items-center justify-center text-emerald-300 font-bold">
+              <Landmark className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-bold text-sm text-emerald-100 flex items-center gap-1.5">
+                  Safe.global Institutional DPS Multisig
+                </h4>
+                <span className="bg-emerald-800 text-emerald-200 text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase">
+                  Sepolia L1
+                </span>
+                <span className="bg-amber-500/20 text-amber-300 text-[10px] font-semibold px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                  Threshold: {safeInfo?.threshold || 1}-of-{safeInfo?.owners?.length || 1} Ulama Syariah
+                </span>
+              </div>
+              <p className="text-xs text-emerald-300/80 font-mono mt-1 flex items-center gap-1">
+                Safe Address:{" "}
+                <a
+                  href={`https://sepolia.etherscan.io/address/${safeInfo?.address || "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-white font-bold"
+                >
+                  {safeInfo?.address || "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"}
+                </a>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-right hidden sm:block">
+              <div className="text-[11px] text-emerald-300">Antrean Safe Queue:</div>
+              <div className="text-xs font-bold text-amber-300">
+                {safePendingTxs.length > 0
+                  ? `${safePendingTxs.length} Transaksi Menunggu Tanda Tangan`
+                  : "Semua Kuorum Selesai"}
+              </div>
+            </div>
+            <a
+              href={`https://app.safe.global/home?safe=sep:${safeInfo?.address || "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"}`}
+              target="_blank"
+              rel="noreferrer"
+              className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs"
+            >
+              Buka Safe.global App <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
         </div>
       </div>
 

@@ -16,6 +16,7 @@ import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
 import { type Hex } from "viem";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
+import { getSafeInfo, getSafePendingTransactions } from "./safe";
 
 // Auto-seed demo data on startup
 runSeeder();
@@ -671,6 +672,33 @@ app.post("/api/proposals/:id/execute", async (c) => {
     });
   } catch (error: any) {
     return c.json({ error: error.message || "Failed to execute proposal" }, 500);
+  }
+});
+
+// 4g. Safe.global Multisig Queue & Status Tracking (Ticket #32)
+app.get("/api/safe/info", async (c) => {
+  try {
+    const safeAddress = c.req.query("address");
+    const safeInfo = await getSafeInfo(safeAddress);
+    return c.json({
+      success: true,
+      safe: safeInfo,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to fetch Safe info", success: false }, 500);
+  }
+});
+
+app.get("/api/safe/pending", async (c) => {
+  try {
+    const safeAddress = c.req.query("address");
+    const result = await getSafePendingTransactions(safeAddress);
+    return c.json({
+      success: true,
+      ...result,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to fetch pending Safe transactions", success: false }, 500);
   }
 });
 

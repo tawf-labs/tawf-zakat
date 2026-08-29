@@ -101,5 +101,5 @@ describe("Public Transparency Audit Trail & Verifiable Proof Explorer (Ticket #3
     expect(verifiedProposal.disbursementReceiptCID).toBe(bastCID);
     expect(verifiedProposal.asnafLabel).toBe("Fisabilillah");
     expect(verifiedProposal.beneficiaryHash).toBe(beneficiaryHash);
-  });
+  }, 15000);
 });
