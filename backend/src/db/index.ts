@@ -19,7 +19,15 @@ if (databaseUrl) {
     client
       .unsafe(
         `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS disbursement_receipt_cid text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;`
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_status text DEFAULT 'PENDING';
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_address text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_name text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_report_cid text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_opinion text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_notes text;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audited_at timestamp;
+         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_tx_hash text;`
       )
       .catch((err) => {
         console.warn("Neon DB migration notice:", err.message);
@@ -278,6 +286,15 @@ export const dbService = {
             createdAt: r.createdAt ? r.createdAt.toISOString() : new Date().toISOString(),
             executedAt: r.executedAt ? r.executedAt.toISOString() : undefined,
             txHash: r.txHash || undefined,
+            // Ex-Post Auditor Attestation
+            auditStatus: (r.auditStatus as "PENDING" | "AUDITED_WTP" | "DISPUTED") || "PENDING",
+            auditorAddress: r.auditorAddress || undefined,
+            auditorName: r.auditorName || undefined,
+            auditReportCID: r.auditReportCID || undefined,
+            auditOpinion: (r.auditOpinion as any) || undefined,
+            auditNotes: r.auditNotes || undefined,
+            auditedAt: r.auditedAt ? r.auditedAt.toISOString() : undefined,
+            auditTxHash: r.auditTxHash || undefined,
           }));
         }
       } catch (err) {
@@ -481,6 +498,89 @@ export const dbService = {
     }
 
     return memory || { proposalId, disbursementReceiptCID: receiptCID };
+  },
+
+  async attestProposal(
+    proposalId: number,
+    attestation: {
+      auditorName: string;
+      auditorAddress: string;
+      auditOpinion: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+      auditNotes?: string;
+      auditReportCID: string;
+      auditTxHash?: string;
+    }
+  ) {
+    const memory = dataStore.proposals.get(proposalId);
+    const auditedAt = new Date().toISOString();
+    const auditStatus = attestation.auditOpinion === "DISPUTED" ? "DISPUTED" : "AUDITED_WTP";
+
+    if (memory) {
+      memory.auditStatus = auditStatus;
+      memory.auditorName = attestation.auditorName;
+      memory.auditorAddress = attestation.auditorAddress;
+      memory.auditOpinion = attestation.auditOpinion;
+      memory.auditNotes = attestation.auditNotes;
+      memory.auditReportCID = attestation.auditReportCID;
+      memory.auditedAt = auditedAt;
+      memory.auditTxHash = attestation.auditTxHash;
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            auditStatus,
+            auditorName: attestation.auditorName,
+            auditorAddress: attestation.auditorAddress,
+            auditOpinion: attestation.auditOpinion,
+            auditNotes: attestation.auditNotes,
+            auditReportCID: attestation.auditReportCID,
+            auditedAt: new Date(),
+            auditTxHash: attestation.auditTxHash,
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+      } catch (err) {
+        console.error("Failed to attest proposal in Neon DB:", err);
+      }
+    }
+
+    return memory || {
+      proposalId,
+      auditStatus,
+      ...attestation,
+      auditedAt,
+    };
+  },
+
+  async getAuditOverview() {
+    const proposals = await this.getProposals();
+    const executed = proposals.filter((p) => p.status === "Executed");
+    const audited = executed.filter((p) => p.auditStatus === "AUDITED_WTP");
+    const disputed = executed.filter((p) => p.auditStatus === "DISPUTED");
+    const pendingAudit = executed.filter((p) => !p.auditStatus || p.auditStatus === "PENDING");
+
+    const totalDisbursedIDR = executed
+      .filter((p) => p.currencyType === 0)
+      .reduce((acc, p) => acc + p.amount, 0);
+    const totalDisbursedUSDC = executed
+      .filter((p) => p.currencyType === 1)
+      .reduce((acc, p) => acc + p.amount, 0);
+
+    const wtpRatePercentage =
+      executed.length > 0 ? Math.round((audited.length / executed.length) * 100) : 100;
+
+    return {
+      totalExecutedDisbursements: executed.length,
+      totalAudited: audited.length,
+      totalDisputed: disputed.length,
+      totalPendingAudit: pendingAudit.length,
+      wtpRatePercentage,
+      totalDisbursedIDR,
+      totalDisbursedUSDC,
+      standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+    };
   },
 };
 

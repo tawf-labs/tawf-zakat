@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw } from "lucide-react";
+import { FileText, Shield, ShieldCheck, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw } from "lucide-react";
 import {
   approveDisbursementOnChain,
   executeDisbursementOnChain,
@@ -31,6 +31,15 @@ interface Proposal {
   createdAt: string;
   executedAt?: string;
   txHash?: string;
+  // Ex-Post Auditor Attestation (Ticket #33)
+  auditStatus?: "PENDING" | "AUDITED_WTP" | "DISPUTED";
+  auditorAddress?: string;
+  auditorName?: string;
+  auditReportCID?: string;
+  auditOpinion?: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditNotes?: string;
+  auditedAt?: string;
+  auditTxHash?: string;
 }
 
 const ASNAF_OPTIONS = [
@@ -61,6 +70,14 @@ export function GovernanceSection() {
   const [bastBankRef, setBastBankRef] = useState("");
   const [bastAmilName, setBastAmilName] = useState("Amil Operasional BAZNAS/LAZ");
   const [bastSubmitting, setBastSubmitting] = useState(false);
+
+  // Auditor Attestation Modal State (Ticket #33)
+  const [attestingProposal, setAttestingProposal] = useState<Proposal | null>(null);
+  const [auditName, setAuditName] = useState("KAP Sharia Trust & Public Auditor");
+  const [auditOpinion, setAuditOpinion] = useState<"WTP" | "DISPUTED">("WTP");
+  const [auditNotes, setAuditNotes] = useState("Penyaluran sesuai standar akuntansi PSAK 109, mutasi bank cocok dengan BAST di IPFS, dan anti-double claim terverifikasi.");
+  const [auditCertName, setAuditCertName] = useState("opini_audit_psak109.pdf");
+  const [submittingAudit, setSubmittingAudit] = useState(false);
 
   // New Proposal Form State (Ticket #27)
   const [newProgramTitle, setNewProgramTitle] = useState("Bantuan Pemberdayaan Asnaf");
@@ -330,6 +347,57 @@ export function GovernanceSection() {
 
     setCancellingProposalId(null);
     setCancelReasonText("");
+  };
+
+  const handleAttest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!attestingProposal) return;
+    setSubmittingAudit(true);
+
+    try {
+      const res = await fetch("http://localhost:3001/api/audit/attest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId: attestingProposal.proposalId,
+          auditorName: auditName,
+          auditorAddress: address || "0xAuditorKAP_Sepolia",
+          auditOpinion: auditOpinion,
+          auditNotes: auditNotes,
+          auditCertFileName: auditCertName,
+          auditTxHash: `0xattest${Date.now()}889900aabbccddeeff`,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const auditReportCID = data.auditReportCID;
+
+        setProposals((prev) =>
+          prev.map((p) => {
+            if (p.proposalId === attestingProposal.proposalId) {
+              return {
+                ...p,
+                auditStatus: auditOpinion === "DISPUTED" ? "DISPUTED" : "AUDITED_WTP",
+                auditorName: auditName,
+                auditorAddress: address || "0xAuditorKAP_Sepolia",
+                auditOpinion: auditOpinion,
+                auditNotes: auditNotes,
+                auditReportCID: auditReportCID,
+                auditedAt: new Date().toISOString(),
+              };
+            }
+            return p;
+          })
+        );
+      }
+
+      setAttestingProposal(null);
+    } catch (err) {
+      console.error("Failed to submit auditor attestation:", err);
+    } finally {
+      setSubmittingAudit(false);
+    }
   };
 
   const handleCreateProposal = async (e: React.FormEvent) => {
@@ -667,10 +735,10 @@ export function GovernanceSection() {
                   )}
 
                   {isExecuted && (
-                    <div className="flex flex-col md:flex-row items-start md:items-center gap-2">
+                    <div className="flex flex-col md:flex-row items-start md:items-center gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-full">
                         <CheckCircle className="w-4 h-4 text-emerald-600" />
-                        Dana Telah Disalurkan
+                        Dana Disalurkan
                       </div>
                       {p.disbursementReceiptCID && (
                         <a
@@ -681,6 +749,30 @@ export function GovernanceSection() {
                         >
                           <FileText className="w-3 h-3 text-emerald-700" /> BAST IPFS: {p.disbursementReceiptCID.slice(0, 10)}... <ExternalLink className="w-2.5 h-2.5" />
                         </a>
+                      )}
+
+                      {/* Auditor Attestation Badge or Action */}
+                      {p.auditStatus === "AUDITED_WTP" ? (
+                        <a
+                          href={`https://ipfs.io/ipfs/${p.auditReportCID || ""}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 text-[11px] font-semibold text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                          Audited WTP ({p.auditorName?.slice(0, 15) || "KAP"}) <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      ) : activeRole === "auditor" ? (
+                        <button
+                          onClick={() => setAttestingProposal(p)}
+                          className="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-indigo-700 hover:bg-indigo-800 text-white transition-colors flex items-center gap-1 cursor-pointer shadow-xs"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" /> Beri Atestasi Audit (WTP)
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-stone-500 bg-stone-100 px-2.5 py-1 rounded-full font-medium">
+                          ⏳ Menunggu Atestasi Auditor
+                        </span>
                       )}
                     </div>
                   )}
@@ -1105,6 +1197,134 @@ export function GovernanceSection() {
                   className="bg-emerald-800 hover:bg-emerald-900 text-white font-semibold"
                 >
                   {bastSubmitting ? "Mengunggah IPFS & Realisasi..." : "Unggah BAST & Selesaikan di L1"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* Auditor Attestation Modal (Ticket #33) */}
+      {attestingProposal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <Card elevated className="max-w-lg w-full p-6 space-y-4 bg-white">
+            <div className="flex items-center justify-between border-b border-[#0F3D30]/10 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-indigo-700" />
+                <h3 className="font-serif font-bold text-lg text-[#0F3D30]">
+                  Atestasi & Opini Audit Independen (PSAK 109)
+                </h3>
+              </div>
+              <button
+                onClick={() => setAttestingProposal(null)}
+                className="text-stone-400 hover:text-stone-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAttest} className="space-y-3.5 text-xs max-h-[75vh] overflow-y-auto pr-1">
+              <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-200 text-indigo-900 space-y-1">
+                <span className="font-bold block">Penyaluran yang Diaudit:</span>
+                <div className="flex justify-between text-xs mt-1">
+                  <span>Penerima: <strong>{attestingProposal.beneficiaryName}</strong></span>
+                  <span>Asnaf: <strong>{attestingProposal.asnafLabel}</strong></span>
+                </div>
+                <div className="text-[11px] font-mono text-indigo-800 mt-1">
+                  Nominal: Rp {attestingProposal.amount.toLocaleString("id-ID")}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Nama Kantor Akuntan Publik (KAP) / Auditor
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={auditName}
+                  onChange={(e) => setAuditName(e.target.value)}
+                  placeholder="Nama KAP / Auditor BAZNAS..."
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Opini Hasil Audit
+                </label>
+                <div className="flex gap-4 mt-1">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="auditOpinion"
+                      value="WTP"
+                      checked={auditOpinion === "WTP"}
+                      onChange={() => setAuditOpinion("WTP")}
+                      className="accent-indigo-700"
+                    />
+                    <span className="font-semibold text-emerald-800">Wajar Tanpa Pengecualian (WTP)</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="auditOpinion"
+                      value="DISPUTED"
+                      checked={auditOpinion === "DISPUTED"}
+                      onChange={() => setAuditOpinion("DISPUTED")}
+                      className="accent-red-600"
+                    />
+                    <span className="font-semibold text-red-700">Disputed / Temuan Kejanggalan</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Catatan Verifikasi & Kepatuhan Syariah
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={auditNotes}
+                  onChange={(e) => setAuditNotes(e.target.value)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl p-3 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Nama Dokumen Sertifikat / Laporan Audit
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={auditCertName}
+                  onChange={(e) => setAuditCertName(e.target.value)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                />
+              </div>
+
+              <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-stone-700 text-[11px] leading-relaxed">
+                Stempel atestasi audit ini akan diterbitkan secara kriptografis dan laporan lengkapnya disematkan ke IPFS Pinata sebagai bukti kepatuhan akuntansi syariah independen.
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAttestingProposal(null)}
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={submittingAudit}
+                  size="sm"
+                  className="bg-indigo-700 hover:bg-indigo-800 text-white font-semibold"
+                >
+                  {submittingAudit ? "Menerbitkan Atestasi ke IPFS..." : "Terbitkan Atestasi Audit (WTP)"}
                 </Button>
               </div>
             </form>

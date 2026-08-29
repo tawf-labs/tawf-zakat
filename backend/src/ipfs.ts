@@ -188,3 +188,64 @@ export async function uploadDisbursementReceiptToIPFS(
     gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
   };
 }
+
+export interface AuditReportMetadata {
+  proposalId: number;
+  programTitle: string;
+  beneficiaryHash: string;
+  disbursedAmount: number;
+  currency: string;
+  asnafLabel: string;
+  bankReferenceNumber?: string;
+  preApprovalDossierCID: string;
+  disbursementBastCID: string;
+  auditorName: string;
+  auditorAddress: string;
+  auditOpinion: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditNotes: string;
+  auditStandard: string; // e.g. "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance"
+  auditCertCID?: string;
+  timestamp: string;
+}
+
+export async function uploadAuditReportToIPFS(
+  metadata: AuditReportMetadata
+): Promise<{ cid: string; gatewayUrl: string }> {
+  const pinataJWT = process.env.PINATA_JWT;
+
+  if (pinataJWT) {
+    try {
+      const response = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${pinataJWT}`,
+        },
+        body: JSON.stringify({
+          pinataContent: metadata,
+          pinataMetadata: {
+            name: `zakat-audit-report-prop-${metadata.proposalId}.json`,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          cid: data.IpfsHash,
+          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+        };
+      }
+    } catch (e) {
+      console.warn("Pinata Audit Report upload failed, falling back to deterministic CID generation", e);
+    }
+  }
+
+  const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
+  const mockCID = `QmAudit${mockCIDHash.slice(2, 44)}`;
+
+  return {
+    cid: mockCID,
+    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+  };
+}

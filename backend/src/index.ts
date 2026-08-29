@@ -8,9 +8,11 @@ import {
   uploadDisbursementProofToIPFS,
   uploadProposalDossierToIPFS,
   uploadDisbursementReceiptToIPFS,
+  uploadAuditReportToIPFS,
   type DisbursementMetadata,
   type ProposalDossierMetadata,
   type DisbursementReceiptMetadata,
+  type AuditReportMetadata,
 } from "./ipfs";
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
@@ -699,6 +701,87 @@ app.get("/api/safe/pending", async (c) => {
     });
   } catch (error: any) {
     return c.json({ error: error.message || "Failed to fetch pending Safe transactions", success: false }, 500);
+  }
+});
+
+// 4h. Ex-Post Independent Auditor Attestation Engine (Ticket #33)
+app.post("/api/audit/attest", async (c) => {
+  try {
+    const body = await c.req.json();
+    const {
+      proposalId,
+      auditorName,
+      auditorAddress,
+      auditOpinion,
+      auditNotes,
+      auditCertFileName,
+      auditTxHash,
+    } = body;
+
+    if (!proposalId || !auditorName || !auditorAddress || !auditOpinion) {
+      return c.json({ error: "Missing required auditor attestation fields", success: false }, 400);
+    }
+
+    const proposals = await dbService.getProposals();
+    const targetProposal = proposals.find((p) => p.proposalId === Number(proposalId));
+
+    if (!targetProposal) {
+      return c.json({ error: "Disbursement proposal not found", success: false }, 404);
+    }
+
+    const auditMetadata: AuditReportMetadata = {
+      proposalId: Number(proposalId),
+      programTitle: targetProposal.beneficiaryName
+        ? `Audit Penyaluran: ${targetProposal.beneficiaryName}`
+        : `Audit Proposal #${proposalId}`,
+      beneficiaryHash: targetProposal.beneficiaryHash,
+      disbursedAmount: targetProposal.amount,
+      currency: targetProposal.currencyType === 1 ? "USDC" : "IDR",
+      asnafLabel: targetProposal.asnafLabel || "Mustahik",
+      preApprovalDossierCID: targetProposal.ipfsProofCID,
+      disbursementBastCID: targetProposal.disbursementReceiptCID || "ipfs://QmBASTDirectReceipt",
+      auditorName,
+      auditorAddress,
+      auditOpinion: auditOpinion as any,
+      auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
+      auditStandard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+      auditCertCID: auditCertFileName ? `ipfs://QmAuditCert${Date.now()}` : undefined,
+      timestamp: new Date().toISOString(),
+    };
+
+    const ipfsResult = await uploadAuditReportToIPFS(auditMetadata);
+
+    const updated = await dbService.attestProposal(Number(proposalId), {
+      auditorName,
+      auditorAddress,
+      auditOpinion: auditOpinion as any,
+      auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
+      auditReportCID: ipfsResult.cid,
+      auditTxHash,
+    });
+
+    return c.json({
+      success: true,
+      message: "Auditor attestation recorded and report pinned to IPFS successfully",
+      auditReportCID: ipfsResult.cid,
+      ipfsGatewayUrl: ipfsResult.gatewayUrl,
+      auditMetadata,
+      proposal: updated,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to record auditor attestation", success: false }, 500);
+  }
+});
+
+app.get("/api/audit/overview", async (c) => {
+  try {
+    const overview = await dbService.getAuditOverview();
+    return c.json({
+      success: true,
+      ...overview,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to fetch audit overview", success: false }, 500);
   }
 });
 

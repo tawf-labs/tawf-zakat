@@ -27,9 +27,16 @@ export interface ProposalRecord {
   approvedBy: string[];
   status: "Pending" | "Approved" | "Executed" | "Cancelled";
   cancelReason?: string;
-  createdAt: string;
-  executedAt?: string;
   txHash?: string;
+  // Ex-Post Auditor Attestation (Ticket #33)
+  auditStatus?: "PENDING" | "AUDITED_WTP" | "DISPUTED";
+  auditorAddress?: string;
+  auditorName?: string;
+  auditReportCID?: string;
+  auditOpinion?: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditNotes?: string;
+  auditedAt?: string;
+  auditTxHash?: string;
 }
 
 class ProtocolDataStore {

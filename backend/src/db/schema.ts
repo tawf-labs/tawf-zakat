@@ -47,6 +47,15 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   approvalCount: integer("approval_count").notNull().default(1),
   approvedBy: text("approved_by").notNull().default('["Amil Internal"]'), // JSON string array
   txHash: text("tx_hash"),
+  // Ex-Post Auditor Attestation (Ticket #33)
+  auditStatus: text("audit_status").notNull().default("PENDING"), // 'PENDING' | 'AUDITED_WTP' | 'DISPUTED'
+  auditorAddress: text("auditor_address"),
+  auditorName: text("auditor_name"),
+  auditReportCID: text("audit_report_cid"),
+  auditOpinion: text("audit_opinion"), // 'WTP' | 'WDP' | 'DISPUTED' | 'CLEAN'
+  auditNotes: text("audit_notes"),
+  auditedAt: timestamp("audited_at"),
+  auditTxHash: text("audit_tx_hash"),
   createdAt: timestamp("created_at").defaultNow(),
   executedAt: timestamp("executed_at"),
 });
