@@ -101,5 +101,36 @@ describe("Public Transparency Audit Trail & Verifiable Proof Explorer (Ticket #3
     expect(verifiedProposal.disbursementReceiptCID).toBe(bastCID);
     expect(verifiedProposal.asnafLabel).toBe("Fisabilillah");
     expect(verifiedProposal.beneficiaryHash).toBe(beneficiaryHash);
-  }, 15000);
+
+    // 7. Ex-Post Independent Auditor Attestation (Ticket #33 & #34)
+    const auditorAttestRes = await app.fetch(
+      new Request("http://localhost:3001/api/audit/attest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId,
+          auditorName: "Kantor Akuntan Publik (KAP) Sharia Audit & Advisory",
+          auditorAddress: "0xAuditorSepoliaAddress1234567890abcdef",
+          auditOpinion: "WTP",
+          auditNotes: "Penyaluran beasiswa santri telah diaudit sesuai PSAK 109, mutasi BSI terverifikasi, dan tidak ditemukan double claim.",
+          auditCertFileName: "laporan_audit_beasiswa_santri_psak109.pdf",
+          auditTxHash: "0xdddd4444555566667777888899990000111122223333eeeeffffaaaabbbbcccc",
+        }),
+      })
+    );
+    expect(auditorAttestRes.status).toBe(200);
+    const auditorAttestData = await auditorAttestRes.json();
+    expect(auditorAttestData.success).toBe(true);
+    expect(auditorAttestData.auditReportCID).toBeDefined();
+    expect(auditorAttestData.proposal.auditStatus).toBe("AUDITED_WTP");
+    expect(auditorAttestData.proposal.auditOpinion).toBe("WTP");
+
+    // 8. Public Audit Overview
+    const overviewRes = await app.fetch(new Request("http://localhost:3001/api/audit/overview"));
+    expect(overviewRes.status).toBe(200);
+    const overviewData = await overviewRes.json();
+    expect(overviewData.success).toBe(true);
+    expect(overviewData.totalAudited).toBeGreaterThanOrEqual(1);
+    expect(overviewData.wtpRatePercentage).toBeGreaterThanOrEqual(0);
+  }, 20000);
 });

@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   FileCheck,
   Shield,
+  ShieldCheck,
   Search,
   FileText,
   Lock,
@@ -46,6 +47,15 @@ interface ProposalItem {
   createdAt: string;
   executedAt?: string;
   txHash?: string;
+  // Ex-Post Auditor Attestation (Ticket #33 & #34)
+  auditStatus?: "PENDING" | "AUDITED_WTP" | "DISPUTED";
+  auditorAddress?: string;
+  auditorName?: string;
+  auditReportCID?: string;
+  auditOpinion?: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditNotes?: string;
+  auditedAt?: string;
+  auditTxHash?: string;
 }
 
 export function TransparencyDashboard() {
@@ -58,6 +68,7 @@ export function TransparencyDashboard() {
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedAsnafFilter, setSelectedAsnafFilter] = useState<string>("ALL");
+  const [selectedAuditFilter, setSelectedAuditFilter] = useState<string>("ALL");
   const [selectedProofProposal, setSelectedProofProposal] = useState<ProposalItem | null>(null);
 
   // Live Contract State
@@ -195,7 +206,13 @@ export function TransparencyDashboard() {
     const matchesAsnaf =
       selectedAsnafFilter === "ALL" || p.asnafLabel === selectedAsnafFilter;
 
-    return matchesSearch && matchesAsnaf;
+    const matchesAudit =
+      selectedAuditFilter === "ALL" ||
+      (selectedAuditFilter === "WTP" && p.auditStatus === "AUDITED_WTP") ||
+      (selectedAuditFilter === "PENDING" && (!p.auditStatus || p.auditStatus === "PENDING")) ||
+      (selectedAuditFilter === "DISPUTED" && p.auditStatus === "DISPUTED");
+
+    return matchesSearch && matchesAsnaf && matchesAudit;
   });
 
   return (
@@ -397,6 +414,16 @@ export function TransparencyDashboard() {
               <option value="Fisabilillah">Fisabilillah</option>
               <option value="Ibnu Sabil">Ibnu Sabil</option>
             </select>
+            <select
+              value={selectedAuditFilter}
+              onChange={(e) => setSelectedAuditFilter(e.target.value)}
+              className="bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-2.5 py-1.5 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+            >
+              <option value="ALL">Semua Status Audit</option>
+              <option value="WTP">Tervalidasi WTP (KAP)</option>
+              <option value="PENDING">Menunggu Audit</option>
+              <option value="DISPUTED">Disputed / Temuan</option>
+            </select>
           </div>
         )}
       </div>
@@ -425,6 +452,7 @@ export function TransparencyDashboard() {
                   <th className="py-3 px-3">Beneficiary Hash (UU PDP)</th>
                   <th className="py-3 px-3">Nominal Penyaluran</th>
                   <th className="py-3 px-3">Status Multi-Sig</th>
+                  <th className="py-3 px-3">Audit Syariah (PSAK 109)</th>
                   <th className="py-3 px-3">Bukti Ganda (IPFS)</th>
                   <th className="py-3 px-3">On-Chain Tx</th>
                 </tr>
@@ -461,6 +489,20 @@ export function TransparencyDashboard() {
                       >
                         {p.status} ({p.approvalCount}/2)
                       </Badge>
+                    </td>
+                    <td className="py-3 px-3">
+                      {p.auditStatus === "AUDITED_WTP" ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-900 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                          <ShieldCheck className="w-3 h-3 text-indigo-600" />
+                          WTP Certified
+                        </span>
+                      ) : p.status === "Executed" ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-stone-500 bg-stone-100 px-2 py-0.5 rounded-md font-medium">
+                          ⏳ In Review
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-stone-400 font-mono">-</span>
+                      )}
                     </td>
                     <td className="py-3 px-3">
                       <button
@@ -650,6 +692,56 @@ export function TransparencyDashboard() {
                 ) : (
                   <div className="text-[11px] text-amber-700 italic bg-amber-50 p-2 rounded-lg border border-amber-200">
                     *BAST akan diunggah oleh amil saat proposal disetujui kuorum dan dana dicairkan.
+                  </div>
+                )}
+              </div>
+
+              {/* Receipt 3: Independent Auditor Attestation & Certification (PSAK 109) */}
+              <div className="p-3.5 bg-indigo-50/60 rounded-xl border border-indigo-200 space-y-2">
+                <div className="flex items-center gap-1.5 text-indigo-900 font-bold">
+                  <ShieldCheck className="w-4 h-4 text-indigo-700" />
+                  <span>3. Laporan Opini Audit Syariah & Keuangan (PSAK 109)</span>
+                </div>
+                <p className="text-[11px] text-indigo-800 leading-relaxed">
+                  Pemeriksaan independen pasca-penyaluran (ex-post) oleh Kantor Akuntan Publik (KAP) & Auditor Syariah BAZNAS.
+                </p>
+
+                {selectedProofProposal.auditStatus === "AUDITED_WTP" ? (
+                  <div className="space-y-2">
+                    <div className="bg-white p-2.5 rounded-lg border border-indigo-200 space-y-1 text-[11px]">
+                      <div className="flex justify-between">
+                        <span className="text-stone-500">Auditor:</span>
+                        <span className="font-bold text-indigo-900">{selectedProofProposal.auditorName || "KAP Sharia Trust"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500">Opini:</span>
+                        <span className="font-bold text-emerald-700">Wajar Tanpa Pengecualian (WTP)</span>
+                      </div>
+                      {selectedProofProposal.auditNotes && (
+                        <div className="text-stone-700 italic pt-1 border-t border-stone-100">
+                          "{selectedProofProposal.auditNotes}"
+                        </div>
+                      )}
+                    </div>
+                    {selectedProofProposal.auditReportCID && (
+                      <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-indigo-200 font-mono text-[11px]">
+                        <span className="text-indigo-900 truncate max-w-[220px]">
+                          {selectedProofProposal.auditReportCID}
+                        </span>
+                        <a
+                          href={`https://ipfs.io/ipfs/${selectedProofProposal.auditReportCID}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-800 hover:underline font-bold inline-flex items-center gap-0.5"
+                        >
+                          Laporan IPFS <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-stone-500 italic bg-white p-2 rounded-lg border border-indigo-100">
+                    *Penyaluran ini sedang dalam antrean verifikasi kepatuhan oleh auditor independen.
                   </div>
                 )}
               </div>
