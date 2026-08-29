@@ -569,6 +569,27 @@ app.post("/api/proposals/:id/approve", async (c) => {
   }
 });
 
+// 4d. Governance: Cancel Proposal (Ticket #28)
+app.post("/api/proposals/:id/cancel", async (c) => {
+  try {
+    const idParam = c.req.param("id");
+    const proposalId = Number(idParam);
+    const body = await c.req.json();
+    const { cancelReason, txHash } = body;
+
+    const reason = cancelReason || "Dibatalkan oleh Pengawas Syariah / Amil";
+    const updated = await dbService.cancelProposal(proposalId, reason, txHash);
+
+    return c.json({
+      success: true,
+      message: "Proposal cancelled successfully",
+      proposal: updated,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to cancel proposal" }, 500);
+  }
+});
+
 // 4d. Governance: Execute Proposal
 app.post("/api/proposals/:id/execute", async (c) => {
   try {

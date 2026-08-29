@@ -423,5 +423,32 @@ export const dbService = {
 
     return memory;
   },
+
+  async cancelProposal(proposalId: number, cancelReason: string, _txHash?: string) {
+    const memory = dataStore.proposals.get(proposalId);
+
+    if (memory) {
+      memory.status = "Cancelled";
+      memory.cancelReason = cancelReason;
+      if (_txHash) memory.txHash = _txHash;
+    }
+
+    if (db) {
+      try {
+        await db
+          .update(schema.disbursementProposals)
+          .set({
+            status: "Cancelled",
+            cancelReason,
+          })
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+      } catch (err) {
+        console.error("Failed to cancel proposal in Neon DB:", err);
+      }
+    }
+
+    return memory || { proposalId, status: "Cancelled", cancelReason, txHash: _txHash };
+  },
 };
+
 
