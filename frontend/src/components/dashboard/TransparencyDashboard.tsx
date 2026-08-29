@@ -367,21 +367,19 @@ export function TransparencyDashboard() {
         <div className="flex items-center gap-2 bg-[#0F3D30]/5 p-1 rounded-xl border border-[#0F3D30]/10">
           <button
             onClick={() => setActiveTab("disbursements")}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "disbursements"
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === "disbursements"
                 ? "bg-[#0F3D30] text-white shadow-xs"
                 : "text-stone-700 hover:bg-stone-200/50"
-            }`}
+              }`}
           >
             <FileCheck className="w-3.5 h-3.5 inline mr-1.5" /> Jejak Penyaluran & Bukti Ganda ({proposals.length})
           </button>
           <button
             onClick={() => setActiveTab("batches")}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "batches"
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === "batches"
                 ? "bg-[#0F3D30] text-white shadow-xs"
                 : "text-stone-700 hover:bg-stone-200/50"
-            }`}
+              }`}
           >
             <Layers className="w-3.5 h-3.5 inline mr-1.5" /> Batch Merkle Inflow ({batches.length})
           </button>
@@ -481,10 +479,10 @@ export function TransparencyDashboard() {
                           p.status === "Executed"
                             ? "success"
                             : p.status === "Approved"
-                            ? "info"
-                            : p.status === "Cancelled"
-                            ? "neutral"
-                            : "warning"
+                              ? "info"
+                              : p.status === "Cancelled"
+                                ? "neutral"
+                                : "warning"
                         }
                       >
                         {p.status} ({p.approvalCount}/2)

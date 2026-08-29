@@ -195,7 +195,9 @@ export async function proposeDisbursementOnChain(params: {
       ? parseUnits(params.amount.toString(), 6)
       : BigInt(params.amount);
 
-  const recipient = (params.usdcRecipient || accountAddress) as Hex;
+  const recipient = (params.currencyType === 1
+    ? (params.usdcRecipient || accountAddress)
+    : "0x0000000000000000000000000000000000000000") as Hex;
 
   const txHash = await walletClient.writeContract({
     address: ZAKAT_PROTOCOL_L1_ADDRESS,
