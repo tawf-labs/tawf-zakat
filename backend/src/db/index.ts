@@ -3,8 +3,19 @@ import postgres from "postgres";
 import * as schema from "./schema";
 import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
-import { type Hex } from "viem";
+import { type Hex, createPublicClient, http, parseAbi } from "viem";
+import { sepolia } from "viem/chains";
 import { desc, eq } from "drizzle-orm";
+import { CONTRACT_CONFIG } from "../config";
+
+const syncPublicClient = createPublicClient({
+  chain: sepolia,
+  transport: http(CONTRACT_CONFIG.RPC_URL),
+});
+
+const PROPOSAL_SYNC_ABI = parseAbi([
+  "function proposals(uint256) view returns (uint256 proposalId, uint8 currencyType, uint256 amount, uint8 asnafCategory, bytes32 beneficiaryHash, string ipfsProofCID, uint256 periodId, address usdcRecipient, uint256 approvalCount, uint8 status)",
+]);
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -266,6 +277,38 @@ export const dbService = {
     if (db) {
       try {
         const rows = await db.select().from(schema.disbursementProposals).orderBy(desc(schema.disbursementProposals.proposalIdOnChain));
+        // Auto-sync pending proposals with on-chain smart contract
+        for (const r of rows) {
+          if (r.status === "Pending" && r.proposalIdOnChain > 0) {
+            try {
+              const onchainP = await syncPublicClient.readContract({
+                address: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS,
+                abi: PROPOSAL_SYNC_ABI,
+                functionName: "proposals",
+                args: [BigInt(r.proposalIdOnChain)],
+              });
+              const onchainStatus = Number(onchainP[9]);
+              const onchainApprovals = Number(onchainP[8]);
+              if (onchainStatus === 1 || onchainApprovals >= 2) {
+                r.status = "Approved";
+                r.approvalCount = onchainApprovals;
+                r.safeStatus = "EXECUTED_ONCHAIN";
+                r.safeConfirmationsCount = 2;
+                r.approvedBy = JSON.stringify(["Amil Internal (Pengusul)", "Dewan Pengawas Syariah (DPS)"]);
+                
+                // Update database
+                db.update(schema.disbursementProposals).set({
+                  status: "Approved",
+                  approvalCount: onchainApprovals,
+                  approvedBy: r.approvedBy,
+                  safeStatus: "EXECUTED_ONCHAIN",
+                  safeConfirmationsCount: 2,
+                }).where(eq(schema.disbursementProposals.id, r.id)).catch(() => {});
+              }
+            } catch (err) {}
+          }
+        }
+
         if (rows.length > 0) {
           return rows.map((r) => ({
             proposalId: r.proposalIdOnChain,
