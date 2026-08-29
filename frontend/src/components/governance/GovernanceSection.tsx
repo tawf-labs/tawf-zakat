@@ -129,7 +129,7 @@ export function GovernanceSection() {
       const res = await fetch("http://localhost:3001/api/proposals");
       if (res.ok) {
         const data = await res.json();
-        if (data.proposals && data.proposals.length > 0) {
+        if (data.proposals) {
           setProposals(data.proposals);
         }
       }
@@ -143,6 +143,11 @@ export function GovernanceSection() {
   useEffect(() => {
     fetchProposals();
     fetchSafeStatus();
+    const interval = setInterval(() => {
+      fetchProposals();
+      fetchSafeStatus();
+    }, 5000);
+    return () => clearInterval(interval);
   }, [fetchProposals, fetchSafeStatus]);
 
   const handleApprove = async (proposalId: number) => {
