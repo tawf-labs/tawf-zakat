@@ -21,7 +21,7 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "Tawf Zakat — Zakat Transparency & Anti-Corruption Protocol",
+        title: "Tawf Zakat — Transparent Syariah Protocol",
       },
     ],
     links: [
@@ -35,7 +35,7 @@ export const Route = createRootRoute({
       },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap",
+        href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Mono:wght@400;500&family=Inter:wght@300;400;500;600;700&display=swap",
       },
       {
         rel: "stylesheet",
@@ -70,7 +70,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      <body className="bg-[#F9F6F0] text-[#1A1A1A] font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-[#C5A869]/30">
+      <body className="bg-white text-[#17332c] font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-[#c4ed70]/40">
         <WagmiProvider config={wagmiConfig}>
           <QueryClientProvider client={queryClient}>
             <ConnectKitProvider
@@ -89,19 +89,19 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 "--ck-primary-button-border-radius": "16px",
                 "--ck-secondary-button-border-radius": "16px",
                 "--ck-body-background": "#FFFFFF",
-                "--ck-body-background-secondary": "#F9F6F0",
-                "--ck-body-background-tertiary": "#F2EBE0",
-                "--ck-body-color": "#1A1A1A",
-                "--ck-body-color-muted": "#666666",
-                "--ck-body-color-muted-hover": "#0F3D30",
-                "--ck-accent-color": "#0F3D30",
-                "--ck-accent-text-color": "#F9F6F0",
-                "--ck-focus-color": "#0F3D30",
-                "--ck-primary-button-background": "#0F3D30",
-                "--ck-primary-button-hover-background": "#1A5242",
-                "--ck-primary-button-color": "#F9F6F0",
-                "--ck-modal-box-shadow": "0px 24px 48px rgba(15, 61, 48, 0.16)",
-                "--ck-dropdown-box-shadow": "0px 12px 32px rgba(15, 61, 48, 0.12)",
+                "--ck-body-background-secondary": "#f4f8f3",
+                "--ck-body-background-tertiary": "#eaf3e8",
+                "--ck-body-color": "#17332c",
+                "--ck-body-color-muted": "#5e7a70",
+                "--ck-body-color-muted-hover": "#1b765e",
+                "--ck-accent-color": "#1b765e",
+                "--ck-accent-text-color": "#FFFFFF",
+                "--ck-focus-color": "#1b765e",
+                "--ck-primary-button-background": "#1b765e",
+                "--ck-primary-button-hover-background": "#143f34",
+                "--ck-primary-button-color": "#FFFFFF",
+                "--ck-modal-box-shadow": "0px 24px 48px rgba(27, 118, 94, 0.16)",
+                "--ck-dropdown-box-shadow": "0px 12px 32px rgba(27, 118, 94, 0.12)",
               }}
             >
               <WalletProvider>
