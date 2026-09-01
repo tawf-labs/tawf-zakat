@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
+import { useAccount, useSignTypedData } from "wagmi";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, ShieldCheck, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw } from "lucide-react";
+import { FileText, Shield, ShieldCheck, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw, PenTool, Sparkles } from "lucide-react";
 import {
   approveDisbursementOnChain,
   executeDisbursementOnChain,
@@ -10,6 +11,8 @@ import {
   proposeDisbursementOnChain,
 } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
+import { useTxToast } from "../../lib/useTxToast";
+import { ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
 import { type Hex } from "viem";
 
 interface Proposal {
@@ -57,8 +60,30 @@ const ASNAF_OPTIONS = [
   { id: 8, label: "Ibnu Sabil", desc: "Musafir / penuntut ilmu terlantar dalam perjalanan kebaikan" },
 ];
 
+const AUDITOR_EIP712_DOMAIN = {
+  name: "Tawf Zakat Protocol",
+  version: "1",
+  chainId: 11155111,
+  verifyingContract: ZAKAT_PROTOCOL_L1_ADDRESS as `0x${string}`,
+} as const;
+
+const AUDITOR_EIP712_TYPES = {
+  AuditorAttestation: [
+    { name: "proposalId", type: "uint256" },
+    { name: "beneficiaryHash", type: "bytes32" },
+    { name: "amountIDR", type: "uint256" },
+    { name: "auditOpinion", type: "string" },
+    { name: "standard", type: "string" },
+    { name: "auditorName", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+} as const;
+
 export function GovernanceSection() {
-  const { address, formattedAddress } = useWallet();
+  const { address, isConnected } = useAccount();
+  const { signTypedDataAsync } = useSignTypedData();
+  const { showSuccess, showError } = useTxToast();
+  const formattedAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
 
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(false);
@@ -364,49 +389,82 @@ export function GovernanceSection() {
   const handleAttest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!attestingProposal) return;
+    if (!isConnected || !address) {
+      showError("Silakan sambungkan dompet Web3 Auditor Anda terlebih dahulu.");
+      return;
+    }
+
     setSubmittingAudit(true);
 
     try {
+      const messageTimestamp = Math.floor(Date.now() / 1000);
+      const beneficiaryHash = (attestingProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex;
+
+      // 1. Request Gasless EIP-712 Signature in MetaMask
+      const signature = await signTypedDataAsync({
+        domain: AUDITOR_EIP712_DOMAIN,
+        types: AUDITOR_EIP712_TYPES,
+        primaryType: "AuditorAttestation",
+        message: {
+          proposalId: BigInt(attestingProposal.proposalId),
+          beneficiaryHash,
+          amountIDR: BigInt(attestingProposal.amount),
+          auditOpinion,
+          standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+          auditorName: auditName,
+          timestamp: BigInt(messageTimestamp),
+        },
+      });
+
+      // 2. Submit to Backend API with gas-sponsored broadcast
       const res = await fetch("http://localhost:3001/api/audit/attest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalId: attestingProposal.proposalId,
           auditorName: auditName,
-          auditorAddress: address || "0xAuditorKAP_Sepolia",
+          auditorAddress: address,
           auditOpinion: auditOpinion,
           auditNotes: auditNotes,
           auditCertFileName: auditCertName,
-          auditTxHash: `0xattest${Date.now()}889900aabbccddeeff`,
+          signature,
+          messageTimestamp,
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const auditReportCID = data.auditReportCID;
-
-        setProposals((prev) =>
-          prev.map((p) => {
-            if (p.proposalId === attestingProposal.proposalId) {
-              return {
-                ...p,
-                auditStatus: auditOpinion === "DISPUTED" ? "DISPUTED" : "AUDITED_WTP",
-                auditorName: auditName,
-                auditorAddress: address || "0xAuditorKAP_Sepolia",
-                auditOpinion: auditOpinion,
-                auditNotes: auditNotes,
-                auditReportCID: auditReportCID,
-                auditedAt: new Date().toISOString(),
-              };
-            }
-            return p;
-          })
-        );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Gagal memproses tanda tangan atestasi auditor");
       }
 
+      showSuccess(
+        "Atestasi Opini WTP Diterbitkan!",
+        `Ditandatangani secara kriptografis oleh ${address.slice(0, 8)}... dan disiarkan ke Sepolia L1.`
+      );
+
+      setProposals((prev) =>
+        prev.map((p) => {
+          if (p.proposalId === attestingProposal.proposalId) {
+            return {
+              ...p,
+              auditStatus: auditOpinion === "DISPUTED" ? "DISPUTED" : "AUDITED_WTP",
+              auditorName: auditName,
+              auditorAddress: address,
+              auditOpinion: auditOpinion,
+              auditNotes: auditNotes,
+              auditReportCID: data.auditReportCID,
+              auditTxHash: data.auditTxHash,
+              auditedAt: new Date().toISOString(),
+            };
+          }
+          return p;
+        })
+      );
+
       setAttestingProposal(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to submit auditor attestation:", err);
+      showError(err, "Gagal Menandatangani Atestasi");
     } finally {
       setSubmittingAudit(false);
     }
@@ -1333,8 +1391,15 @@ export function GovernanceSection() {
                 />
               </div>
 
-              <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-stone-700 text-[11px] leading-relaxed">
-                Stempel atestasi audit ini akan diterbitkan secara kriptografis dan laporan lengkapnya disematkan ke IPFS Pinata sebagai bukti kepatuhan akuntansi syariah independen.
+              <div className="p-3 bg-indigo-50/80 rounded-xl border border-indigo-200 text-indigo-950 text-[11px] leading-relaxed space-y-1.5">
+                <div className="flex items-center gap-1.5 font-bold text-indigo-900">
+                  <PenTool className="w-3.5 h-3.5 text-indigo-700" />
+                  <span>Tanda Tangan Kriptografis Dompet (EIP-712) & Gasless UX</span>
+                </div>
+                <p>
+                  Pop-up MetaMask akan meminta Anda menandatangani pesan audit terstruktur (<strong>0 Gas Fee</strong> untuk Auditor).
+                  Transaksi resmi on-chain ke Sepolia L1 akan <strong>disponsori dan dibayarkan oleh Relayer</strong>.
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -1350,9 +1415,10 @@ export function GovernanceSection() {
                   type="submit"
                   disabled={submittingAudit}
                   size="sm"
-                  className="bg-indigo-700 hover:bg-indigo-800 text-white font-semibold"
+                  className="bg-indigo-700 hover:bg-indigo-800 text-white font-semibold flex items-center gap-1.5"
                 >
-                  {submittingAudit ? "Menerbitkan Atestasi ke IPFS..." : "Terbitkan Atestasi Audit (WTP)"}
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  {submittingAudit ? "Menandatangani di MetaMask..." : "Tandatangani di MetaMask & Siarkan (0 Gas)"}
                 </Button>
               </div>
             </form>

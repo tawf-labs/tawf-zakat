@@ -26,23 +26,56 @@ if (databaseUrl) {
     const client = postgres(databaseUrl, { max: 10 });
     dbInstance = drizzle(client, { schema });
     console.log("Connected to Neon PostgreSQL database via Drizzle ORM");
-    // Ensure new columns exist
-    client
-      .unsafe(
-        `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS disbursement_receipt_cid text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_status text DEFAULT 'PENDING';
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_address text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_name text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_report_cid text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_opinion text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_notes text;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audited_at timestamp;
-         ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_tx_hash text;`
+    // Ensure new columns & indexer tables exist
+    const initStatements = [
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS disbursement_receipt_cid text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_status text DEFAULT 'PENDING';`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_address text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS auditor_name text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_report_cid text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_opinion text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_notes text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audited_at timestamp;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_tx_hash text;`,
+      `CREATE TABLE IF NOT EXISTS indexer_state (
+         id SERIAL PRIMARY KEY,
+         indexer_key TEXT NOT NULL UNIQUE DEFAULT 'sepolia_zakat_l1',
+         last_indexed_block INTEGER NOT NULL DEFAULT 11569000,
+         last_sync_at TIMESTAMP DEFAULT NOW(),
+         status TEXT NOT NULL DEFAULT 'SYNCING',
+         total_events_indexed INTEGER NOT NULL DEFAULT 0
+       );`,
+      `CREATE TABLE IF NOT EXISTS onchain_events (
+         id SERIAL PRIMARY KEY,
+         tx_hash TEXT NOT NULL,
+         block_number INTEGER NOT NULL,
+         log_index INTEGER NOT NULL DEFAULT 0,
+         event_name TEXT NOT NULL,
+         contract_address TEXT NOT NULL,
+         args_json TEXT NOT NULL,
+         created_at TIMESTAMP DEFAULT NOW()
+       );`,
+      `CREATE TABLE IF NOT EXISTS role_members (
+         id SERIAL PRIMARY KEY,
+         role_hash TEXT NOT NULL,
+         role_name TEXT NOT NULL,
+         account_address TEXT NOT NULL,
+         is_active BOOLEAN NOT NULL DEFAULT TRUE,
+         granted_at_block INTEGER,
+         revoked_at_block INTEGER,
+         tx_hash TEXT,
+         updated_at TIMESTAMP DEFAULT NOW()
+       );`,
+    ];
+
+    Promise.all(
+      initStatements.map((sql) =>
+        client.unsafe(sql).catch((err) => {
+          // ignore notices or warnings
+        })
       )
-      .catch((err) => {
-        console.warn("Neon DB migration notice:", err.message);
-      });
+    );
   } catch (err) {
     console.warn("Neon database connection failed, falling back to local data store:", err);
   }
@@ -659,6 +692,270 @@ export const dbService = {
       totalDisbursedUSDC,
       standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
     };
+  },
+
+  // --- INDEXER & ON-CHAIN EVENT PERSISTENCE (ADR-0008) ---
+  async getIndexerState(indexerKey: string = "sepolia_zakat_l1") {
+    if (db) {
+      try {
+        const rows = await db
+          .select()
+          .from(schema.indexerState)
+          .where(eq(schema.indexerState.indexerKey, indexerKey))
+          .limit(1);
+        if (rows.length > 0) return rows[0];
+      } catch (err) {
+        console.error("Failed to query indexer state:", err);
+      }
+    }
+    return {
+      id: 1,
+      indexerKey,
+      lastIndexedBlock: 11569000,
+      lastSyncAt: new Date(),
+      status: "SYNCING",
+      totalEventsIndexed: 0,
+    };
+  },
+
+  async updateIndexerState(
+    lastIndexedBlock: number,
+    status: string = "SYNCED",
+    eventsIncrement: number = 0,
+    indexerKey: string = "sepolia_zakat_l1"
+  ) {
+    if (db) {
+      try {
+        const existing = await this.getIndexerState(indexerKey);
+        const newTotal = (existing.totalEventsIndexed || 0) + eventsIncrement;
+        await db
+          .insert(schema.indexerState)
+          .values({
+            indexerKey,
+            lastIndexedBlock,
+            status,
+            totalEventsIndexed: newTotal,
+            lastSyncAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: schema.indexerState.indexerKey,
+            set: {
+              lastIndexedBlock,
+              status,
+              totalEventsIndexed: newTotal,
+              lastSyncAt: new Date(),
+            },
+          });
+      } catch (err) {
+        console.error("Failed to update indexer state in Neon DB:", err);
+      }
+    }
+  },
+
+  async recordOnchainEvent(event: {
+    txHash: string;
+    blockNumber: number;
+    logIndex?: number;
+    eventName: string;
+    contractAddress: string;
+    argsJson: string;
+  }) {
+    if (db) {
+      try {
+        await db.insert(schema.onchainEvents).values({
+          txHash: event.txHash,
+          blockNumber: event.blockNumber,
+          logIndex: event.logIndex || 0,
+          eventName: event.eventName,
+          contractAddress: event.contractAddress.toLowerCase(),
+          argsJson: event.argsJson,
+        });
+      } catch (err) {
+        console.error("Failed to record onchain event:", err);
+      }
+    }
+  },
+
+  async getOnchainEvents(limit: number = 50) {
+    if (db) {
+      try {
+        return await db
+          .select()
+          .from(schema.onchainEvents)
+          .orderBy(desc(schema.onchainEvents.blockNumber))
+          .limit(limit);
+      } catch (err) {
+        console.error("Failed to fetch onchain events:", err);
+      }
+    }
+    return [];
+  },
+
+  // --- ROLE REGISTRY METHODS (ADR-0008) ---
+  async grantRoleMember(
+    roleHash: string,
+    roleName: string,
+    accountAddress: string,
+    blockNumber?: number,
+    txHash?: string
+  ) {
+    const normalizedAddr = accountAddress.toLowerCase();
+    if (db) {
+      try {
+        const existing = await db
+          .select()
+          .from(schema.roleMembers)
+          .where(eq(schema.roleMembers.accountAddress, normalizedAddr));
+        const matched = existing.find((r) => r.roleHash.toLowerCase() === roleHash.toLowerCase());
+
+        if (matched) {
+          await db
+            .update(schema.roleMembers)
+            .set({
+              isActive: true,
+              grantedAtBlock: blockNumber || matched.grantedAtBlock,
+              txHash: txHash || matched.txHash,
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.roleMembers.id, matched.id));
+        } else {
+          await db.insert(schema.roleMembers).values({
+            roleHash,
+            roleName,
+            accountAddress: normalizedAddr,
+            isActive: true,
+            grantedAtBlock: blockNumber || null,
+            txHash: txHash || null,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to grant role member in DB:", err);
+      }
+    }
+  },
+
+  async revokeRoleMember(
+    roleHash: string,
+    accountAddress: string,
+    blockNumber?: number,
+    txHash?: string
+  ) {
+    const normalizedAddr = accountAddress.toLowerCase();
+    if (db) {
+      try {
+        const existing = await db
+          .select()
+          .from(schema.roleMembers)
+          .where(eq(schema.roleMembers.accountAddress, normalizedAddr));
+        const matched = existing.find((r) => r.roleHash.toLowerCase() === roleHash.toLowerCase());
+
+        if (matched) {
+          await db
+            .update(schema.roleMembers)
+            .set({
+              isActive: false,
+              revokedAtBlock: blockNumber || null,
+              txHash: txHash || matched.txHash,
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.roleMembers.id, matched.id));
+        }
+      } catch (err) {
+        console.error("Failed to revoke role member in DB:", err);
+      }
+    }
+  },
+
+  async getRoleMembers() {
+    if (db) {
+      try {
+        return await db
+          .select()
+          .from(schema.roleMembers)
+          .where(eq(schema.roleMembers.isActive, true));
+      } catch (err) {
+        console.error("Failed to fetch role members from DB:", err);
+      }
+    }
+    // Fallback default known members
+    return [
+      {
+        id: 1,
+        roleHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+        roleName: "DEFAULT_ADMIN_ROLE",
+        accountAddress: "0x5e9b652c4e8a013f6fab69f0b55377c408b59968",
+        isActive: true,
+        grantedAtBlock: 11569000,
+        revokedAtBlock: null,
+        txHash: null,
+        updatedAt: new Date(),
+      },
+      {
+        id: 2,
+        roleHash: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
+        roleName: "SHARIA_SUPERVISOR_ROLE",
+        accountAddress: "0xb4e4253e2affdc0710cb9394b8c4e935f11b00f1",
+        isActive: true,
+        grantedAtBlock: 11569000,
+        revokedAtBlock: null,
+        txHash: null,
+        updatedAt: new Date(),
+      },
+    ];
+  },
+
+  // --- USDC ON-CHAIN DONATION AUTO-RECORDING ---
+  async recordUSDCDonation(data: {
+    txHash: string;
+    donor: string;
+    amountUSDC: number; // Raw USDC value (6 decimals or human number)
+    isAnonymous: boolean;
+    commitmentHash?: string;
+    blockNumber?: number;
+    timestamp?: string;
+  }) {
+    const timestampStr = data.timestamp || new Date().toISOString();
+    const dateStr = timestampStr.slice(0, 10).replace(/-/g, "");
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const trxId = `USDC-${dateStr}-${randomSuffix}`;
+    const salt = `usdc_salt_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+
+    // Compute approximate IDR equivalent for unified ledger reporting (e.g. 1 USDC = ~16,200 IDR)
+    // Human amount in USDC: raw / 1e6
+    const humanUSDC = data.amountUSDC > 1e6 ? data.amountUSDC / 1e6 : data.amountUSDC;
+    const estimatedIDR = Math.round(humanUSDC * 16200);
+
+    const record: DonationRecord = {
+      trxId,
+      donorName: data.isAnonymous ? "Hamba Allah" : `Muzakki Web3 (${data.donor.slice(0, 6)}...${data.donor.slice(-4)})`,
+      isAnonymous: Boolean(data.isAnonymous),
+      salt,
+      amountIDR: estimatedIDR,
+      timestamp: timestampStr,
+      status: "PAID",
+      paymentMethod: "USDC",
+    };
+
+    if (db) {
+      try {
+        await db.insert(schema.donations).values({
+          trxId,
+          donorName: record.donorName,
+          isAnonymous: record.isAnonymous,
+          amountIDR: record.amountIDR,
+          salt: record.salt,
+          status: "PAID",
+          paymentMethod: "USDC",
+          createdAt: new Date(timestampStr),
+          paidAt: new Date(timestampStr),
+        }).onConflictDoNothing();
+      } catch (err) {
+        console.error("Failed to record USDC donation in DB:", err);
+      }
+    }
+
+    dataStore.recordDonation(record);
+    return { success: true, record, trxId };
   },
 };
 

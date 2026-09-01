@@ -1,4 +1,4 @@
-export const ZAKAT_PROTOCOL_L1_ADDRESS = "0x6014542ce8f759946aa6f3f9af54fb91685065a5";
+export const ZAKAT_PROTOCOL_L1_ADDRESS = "0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7";
 export const SEPOLIA_USDC_ADDRESS = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as const;
 
 export const SEPOLIA_CHAIN_ID = 11155111;
@@ -200,4 +200,44 @@ export const ZAKAT_PROTOCOL_ABI = [
     outputs: [{ name: "", type: "bool" }],
     stateMutability: "view",
   },
+  {
+    type: "function",
+    name: "hasRole",
+    inputs: [
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "grantRole",
+    inputs: [
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "revokeRole",
+    inputs: [
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
 ] as const;
+
+export const GOVERNANCE_ROLES = {
+  DEFAULT_ADMIN_ROLE: "0x0000000000000000000000000000000000000000000000000000000000000000",
+  SHARIA_SUPERVISOR_ROLE: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
+  AUDITOR_ROLE: "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c",
+  RELAYER_ROLE: "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
+} as const;
+
+export const SAFE_DPS_MULTISIG_ADDRESS = "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1" as const;
+

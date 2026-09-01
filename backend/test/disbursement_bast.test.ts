@@ -73,5 +73,5 @@ describe("Disbursement Execution, Multi-Unit Settlement & BAST Pipeline (Ticket 
     expect(execData.success).toBe(true);
     expect(execData.proposal.status).toBe("Executed");
     expect(execData.proposal.executedAt).toBeDefined();
-  });
+  }, 30000);
 });

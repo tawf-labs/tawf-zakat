@@ -64,6 +64,41 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   executedAt: timestamp("executed_at"),
 });
 
+// 4. Indexer State Checkpoint Table
+export const indexerState = pgTable("indexer_state", {
+  id: serial("id").primaryKey(),
+  indexerKey: text("indexer_key").notNull().unique().default("sepolia_zakat_l1"),
+  lastIndexedBlock: integer("last_indexed_block").notNull().default(11569000),
+  lastSyncAt: timestamp("last_sync_at").defaultNow(),
+  status: text("status").notNull().default("SYNCING"), // 'SYNCING' | 'SYNCED' | 'ERROR'
+  totalEventsIndexed: integer("total_events_indexed").notNull().default(0),
+});
+
+// 5. On-Chain Events Immutable Audit Log Table
+export const onchainEvents = pgTable("onchain_events", {
+  id: serial("id").primaryKey(),
+  txHash: text("tx_hash").notNull(),
+  blockNumber: integer("block_number").notNull(),
+  logIndex: integer("log_index").notNull().default(0),
+  eventName: text("event_name").notNull(),
+  contractAddress: text("contract_address").notNull(),
+  argsJson: text("args_json").notNull(), // JSON serialized event args
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// 6. Role Members Registry Table
+export const roleMembers = pgTable("role_members", {
+  id: serial("id").primaryKey(),
+  roleHash: text("role_hash").notNull(),
+  roleName: text("role_name").notNull(), // 'DEFAULT_ADMIN_ROLE' | 'SHARIA_SUPERVISOR_ROLE' | 'AUDITOR_ROLE' | 'RELAYER_ROLE'
+  accountAddress: text("account_address").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  grantedAtBlock: integer("granted_at_block"),
+  revokedAtBlock: integer("revoked_at_block"),
+  txHash: text("tx_hash"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export type MerkleBatch = typeof merkleBatches.$inferSelect;
 export type NewMerkleBatch = typeof merkleBatches.$inferInsert;
 
@@ -72,3 +107,12 @@ export type NewDonation = typeof donations.$inferInsert;
 
 export type DisbursementProposal = typeof disbursementProposals.$inferSelect;
 export type NewDisbursementProposal = typeof disbursementProposals.$inferInsert;
+
+export type IndexerState = typeof indexerState.$inferSelect;
+export type NewIndexerState = typeof indexerState.$inferInsert;
+
+export type OnchainEvent = typeof onchainEvents.$inferSelect;
+export type NewOnchainEvent = typeof onchainEvents.$inferInsert;
+
+export type RoleMember = typeof roleMembers.$inferSelect;
+export type NewRoleMember = typeof roleMembers.$inferInsert;

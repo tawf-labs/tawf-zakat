@@ -706,36 +706,60 @@ export function TransparencyDashboard() {
 
                 {selectedProofProposal.auditStatus === "AUDITED_WTP" ? (
                   <div className="space-y-2">
-                    <div className="bg-white p-2.5 rounded-lg border border-indigo-200 space-y-1 text-[11px]">
-                      <div className="flex justify-between">
-                        <span className="text-stone-500">Auditor:</span>
+                    <div className="bg-white p-2.5 rounded-lg border border-indigo-200 space-y-1.5 text-[11px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-500">Auditor Resmi:</span>
                         <span className="font-bold text-indigo-900">{selectedProofProposal.auditorName || "KAP Sharia Trust"}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-stone-500">Opini:</span>
-                        <span className="font-bold text-emerald-700">Wajar Tanpa Pengecualian (WTP)</span>
+                      {selectedProofProposal.auditorAddress && (
+                        <div className="flex items-center justify-between font-mono text-[10px]">
+                          <span className="text-stone-500">Alamat Dompet:</span>
+                          <span className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
+                            {selectedProofProposal.auditorAddress.slice(0, 8)}...{selectedProofProposal.auditorAddress.slice(-6)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-500">Opini Syariah:</span>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                          Wajar Tanpa Pengecualian (WTP)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] text-indigo-800 font-semibold bg-indigo-50/80 p-1.5 rounded-md">
+                        <ShieldCheck className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                        <span>Cryptographically Signed via MetaMask (EIP-712)</span>
                       </div>
                       {selectedProofProposal.auditNotes && (
-                        <div className="text-stone-700 italic pt-1 border-t border-stone-100">
+                        <div className="text-stone-700 italic pt-1 border-t border-stone-100 leading-relaxed">
                           "{selectedProofProposal.auditNotes}"
                         </div>
                       )}
                     </div>
-                    {selectedProofProposal.auditReportCID && (
-                      <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-indigo-200 font-mono text-[11px]">
-                        <span className="text-indigo-900 truncate max-w-[220px]">
-                          {selectedProofProposal.auditReportCID}
-                        </span>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {selectedProofProposal.auditReportCID && (
                         <a
                           href={`https://ipfs.io/ipfs/${selectedProofProposal.auditReportCID}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-indigo-800 hover:underline font-bold inline-flex items-center gap-0.5"
+                          className="flex items-center justify-between bg-white p-2 rounded-lg border border-indigo-200 font-mono text-[11px] text-indigo-800 hover:bg-indigo-50 transition-colors"
                         >
-                          Laporan IPFS <ExternalLink className="w-3 h-3" />
+                          <span className="font-sans font-semibold text-xs">Laporan IPFS</span>
+                          <ExternalLink className="w-3 h-3" />
                         </a>
-                      </div>
-                    )}
+                      )}
+                      {selectedProofProposal.auditTxHash && (
+                        <a
+                          href={`https://sepolia.etherscan.io/tx/${selectedProofProposal.auditTxHash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center justify-between bg-white p-2 rounded-lg border border-indigo-200 font-mono text-[11px] text-indigo-800 hover:bg-indigo-50 transition-colors"
+                        >
+                          <span className="font-sans font-semibold text-xs">Notarisasi Sepolia L1</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-[11px] text-stone-500 italic bg-white p-2 rounded-lg border border-indigo-100">

@@ -76,6 +76,13 @@ export function Navbar() {
             >
               Multi-Sig
             </a>
+            <Link
+              to="/admin/roles"
+              className="hover:text-[#1b765e] transition-colors py-1 hover:underline underline-offset-4 text-[#1b765e] flex items-center gap-1 font-bold"
+            >
+              <Shield className="w-3 h-3 text-[#1b765e]" />
+              Kelola Peran
+            </Link>
           </nav>
         </div>
 
@@ -200,6 +207,14 @@ export function Navbar() {
           >
             Multi-Sig 2-of-3 Governance
           </a>
+          <Link
+            to="/admin/roles"
+            onClick={() => setMobileMenuOpen(false)}
+            className="block text-sm font-bold text-[#1b765e] py-1.5 flex items-center gap-2"
+          >
+            <Shield className="w-4 h-4 text-[#1b765e]" />
+            Kelola Peran (Admin & DPS Portal)
+          </Link>
         </div>
       )}
     </header>

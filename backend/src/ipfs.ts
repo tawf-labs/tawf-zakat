@@ -204,6 +204,8 @@ export interface AuditReportMetadata {
   auditOpinion: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
   auditNotes: string;
   auditStandard: string; // e.g. "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance"
+  auditorSignature?: string;
+  auditTxHash?: string;
   auditCertCID?: string;
   timestamp: string;
 }

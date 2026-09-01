@@ -1,7 +1,12 @@
 {
   "name": "backend",
   "scripts": {
-    "dev": "bun run --hot src/index.ts"
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "start:api": "bun src/index.ts",
+    "start:indexer": "bun src/indexer.ts",
+    "indexer": "bun src/indexer.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/indexer.ts --outdir ./dist --target bun"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

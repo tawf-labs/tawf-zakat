@@ -113,22 +113,37 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
    - Auditor menginspeksi dual-receipt di Public Explorer dan menerbitkan stempel atestasi kepatuhan syariah dan akuntansi.
 5. **Anti-Double Claim**: Smart contract mengunci mapping `hasReceivedZakat[beneficiaryHash][periodId] = true` untuk mencegah mustahik fiktif atau klaim ganda dalam satu periode bantuan.
 
+### D. Indexer & Automated On-Chain Synchronization (ADR-0008)
+1. **Embedded Viem Poller**: Background worker di backend Bun yang melakukan sinkronisasi blok Sepolia L1 setiap 10 detik.
+2. **Event Store & Multi-Table Persistence**:
+   - Menangkap `USDCDeposited` dan otomatis mengarsipkan ke tabel `donations`.
+   - Menangkap `DisbursementProposed`, `DisbursementApproved`, `DisbursementExecuted`, `DisbursementCancelled` untuk menyinkronkan status proposal di PostgreSQL.
+   - Menangkap `RoleGranted` dan `RoleRevoked` untuk mengelola data keanggotaan aktif (`role_members`).
+3. **API Endpoints**:
+   - `GET /api/indexer/status`: Status ketinggian block dan kesehatan indexer.
+   - `GET /api/events`: Log event on-chain publik.
+   - `GET /api/governance/roles`: Data pemegang peran DPS, Auditor, Admin, Relayer.
+
+### E. Public Role Governance Panel (`/admin/roles`)
+1. **Roster Transparansi Publik**: Menampilkan 4 peran kunci (`DEFAULT_ADMIN_ROLE`, `SHARIA_SUPERVISOR_ROLE`, `AUDITOR_ROLE`, `RELAYER_ROLE`).
+2. **Identifikasi Safe Multisig**: Menandai akun DPS Safe Global (`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`) dengan badge khusus dan link ke aplikasi Safe.
+3. **Eksekusi Hak Admin On-Chain**: Form pemberian (`grantRole`) dan pencabutan (`revokeRole`) peran langsung ke smart contract Sepolia bagi wallet dengan hak Admin.
+
+### F. UX Feedback & Syariah Error Decoding
+1. **Global Toast Notification (Sonner)**: Notifikasi siklus transaksi interaktif (Proses ➔ Sukses ➔ Tautan Sepolia Etherscan).
+2. **Human-Readable Revert Translation**: Menerjemahkan error contract Solidity (`DoubleClaimDetected`, `InsufficientVaultBalance`, `QuorumNotMet`, `Unauthorized`) ke dalam istilah syariah operasional yang ramah bagi pengguna awam.
+3. **Graceful Error Boundary**: Komponen penangkap crash UI di level halaman untuk menjaga kestabilan aplikasi.
+
+### G. Gasless EIP-712 Auditor Attestation & Relayer Sponsorship (ADR-0009)
+1. **EIP-712 Typed Structured Data**: Standar tanda tangan kriptografis human-readable di pop-up MetaMask (Proposal ID, Beneficiary Hash, Nominal IDR, Opini WTP, Standar PSAK 109, Timestamp).
+2. **Gasless Auditor Experience**: Auditor menandatangani berkas secara digital dengan 0 gas fee; Relayer backend memvalidasi signature menggunakan `verifyTypedData` Viem dan membroadcast transaksi ke Sepolia L1 menanggung biaya gas.
+3. **Cryptographic Non-Repudiation**: Tanda tangan ECDSA `0x...` disimpan ke IPFS dan database, menghasilkan bukti atestasi yang tak terbantahkan dan dapat diverifikasi publik melalui Public Transparency Explorer.
+
 ---
 
 ## 5. Completed Tasks & Current Project Status
 
-- [x] **Smart Contract (L1)**: `ZakatProtocolL1.sol` deployed on Sepolia with SafeERC20, Invariant Split, Multi-Sig 2-of-3, and Emergency Cancel.
-- [x] **Backend & Database**: Bun + Hono API + Neon PostgreSQL via Drizzle ORM + Merkle Tree batch settlement engine (`bun test` 13 pass).
-- [x] **Frontend Web3**: TanStack Start + ConnectKit (Soft Syariah Theme) + Wagmi v3 + Viem + ERC-20 Allowance flow + EIP-6963 provider isolation.
-- [x] **Architecture Diagrams**: Comprehensive flowcharts in `FLOWCHART.md`.
-
----
-
-## 6. Next Steps & Recommended Milestones
-
-1. **Auto-Sync USDC Donations to Neon DB**:
-   Tambahkan `POST /api/donations/usdc` di backend dan panggil dari frontend saat konfirmasi MetaMask sukses untuk buku kas terpadu (Fiat + USDC).
-2. **ZK Anonymous Commitment Pipeline**:
-   Integrasikan sirkuit ZK / hashing client-side untuk daun Merkle donasi USDC Hamba Allah.
-3. **Multi-Sig Execution Testing**:
-   Lakukan pengujian end-to-end otorisasi proposal multi-sig dengan akun DPS & Auditor di Sepolia.
+- [x] **Smart Contract (L1)**: `ZakatProtocolL1.sol` deployed on Sepolia (`0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7`) with SafeERC20, Invariant Split, Multi-Sig 2-of-3, and Emergency Cancel.
+- [x] **Backend & Database**: Bun + Hono API + Neon PostgreSQL via Drizzle ORM + Merkle Tree batch settlement engine + Embedded Viem Indexer Engine.
+- [x] **Frontend Web3**: TanStack Start + ConnectKit (Soft Syariah Theme) + Wagmi v3 + Viem + Public Role Governance Panel (`/admin/roles`) + Sonner Toasts + Error Boundary.
+- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0009 tercatat lengkap di `docs/adr/`.
