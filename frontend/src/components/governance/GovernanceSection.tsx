@@ -3,16 +3,15 @@ import { useAccount, useSignTypedData } from "wagmi";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { FileText, Shield, ShieldCheck, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw, PenTool, Sparkles } from "lucide-react";
+import { FileText, Shield, ShieldCheck, CheckCircle, ExternalLink, X, PlusCircle, UserCheck, Ban, Landmark, BarChart3, Building2, RefreshCw, PenTool, Sparkles, Upload, FileUp, CheckCircle2, Image as ImageIcon } from "lucide-react";
 import {
   approveDisbursementOnChain,
   executeDisbursementOnChain,
   cancelProposalOnChain,
   proposeDisbursementOnChain,
 } from "../../lib/web3Client";
-import { useWallet } from "../../lib/WalletContext";
 import { useTxToast } from "../../lib/useTxToast";
-import { ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
+import { ZAKAT_PROTOCOL_L1_ADDRESS, getIpfsUrl, PINATA_DEDICATED_GATEWAY } from "../../lib/contracts";
 import { type Hex } from "viem";
 
 interface Proposal {
@@ -94,21 +93,24 @@ export function GovernanceSection() {
   const [cancellingProposalId, setCancellingProposalId] = useState<number | null>(null);
   const [cancelReasonText, setCancelReasonText] = useState("");
 
-  // BAST & Execution Modal State (Ticket #29)
+  // BAST & Execution Modal State (Ticket #29 & ADR-0010)
   const [executingBastProposal, setExecutingBastProposal] = useState<Proposal | null>(null);
   const [bastBankRef, setBastBankRef] = useState("");
   const [bastAmilName, setBastAmilName] = useState("Amil Operasional BAZNAS/LAZ");
+  const [bastDocFile, setBastDocFile] = useState<File | null>(null);
+  const [bastPhotoFile, setBastPhotoFile] = useState<File | null>(null);
   const [bastSubmitting, setBastSubmitting] = useState(false);
 
-  // Auditor Attestation Modal State (Ticket #33)
+  // Auditor Attestation Modal State (Ticket #33 & ADR-0009 & ADR-0010)
   const [attestingProposal, setAttestingProposal] = useState<Proposal | null>(null);
   const [auditName, setAuditName] = useState("KAP Sharia Trust & Public Auditor");
   const [auditOpinion, setAuditOpinion] = useState<"WTP" | "DISPUTED">("WTP");
   const [auditNotes, setAuditNotes] = useState("Penyaluran sesuai standar akuntansi PSAK 109, mutasi bank cocok dengan BAST di IPFS, dan anti-double claim terverifikasi.");
+  const [auditCertFile, setAuditCertFile] = useState<File | null>(null);
   const [auditCertName, setAuditCertName] = useState("opini_audit_psak109.pdf");
   const [submittingAudit, setSubmittingAudit] = useState(false);
 
-  // New Proposal Form State (Ticket #27)
+  // New Proposal Form State (Ticket #27 & ADR-0010)
   const [newProgramTitle, setNewProgramTitle] = useState("Bantuan Pemberdayaan Asnaf");
   const [newBenName, setNewBenName] = useState("");
   const [newBenNIK, setNewBenNIK] = useState("");
@@ -118,7 +120,29 @@ export function GovernanceSection() {
   const [newCity, setNewCity] = useState("Jakarta");
   const [newAssessment, setNewAssessment] = useState("Survei lapangan dan verifikasi kelayakan asnaf telah diverifikasi tim amil.");
   const [newUsdcRecipient, setNewUsdcRecipient] = useState("");
+  const [intakeFile, setIntakeFile] = useState<File | null>(null);
   const [submittingProposal, setSubmittingProposal] = useState(false);
+
+  // Helper for real multipart binary file upload to Pinata IPFS
+  const uploadFileToIpfs = async (file: File): Promise<{ cid: string; gatewayUrl: string }> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("name", file.name);
+
+    const res = await fetch("http://localhost:3001/api/ipfs/upload-file", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "IPFS upload error" }));
+      throw new Error(err.error || "Gagal mengunggah berkas ke IPFS Pinata");
+    }
+
+    const data = await res.json();
+    return { cid: data.cid, gatewayUrl: data.gatewayUrl };
+  };
+
   // Safe.global DPS Multisig State (Ticket #32)
   const [safeInfo, setSafeInfo] = useState<{
     address: string;
@@ -178,7 +202,6 @@ export function GovernanceSection() {
   const handleApprove = async (proposalId: number) => {
     let txHash: string | undefined;
     const safeThreshold = safeInfo?.threshold || 2;
-    let isPendingSafeQuorum = false;
 
     try {
       const onchainRes = await approveDisbursementOnChain(proposalId);
@@ -187,39 +210,43 @@ export function GovernanceSection() {
       console.warn("Onchain approval skipped or demo fallback:", err);
     }
 
-    // If activeRole is DPS: if no immediate txHash or if Safe threshold > 1, track Safe multisig quorum
-    if (activeRole === "dps" && !txHash && safeThreshold > 1) {
-      isPendingSafeQuorum = true;
-    }
-
-    const roleName =
-      activeRole === "dps"
-        ? "Dewan Pengawas Syariah (DPS)"
-        : activeRole === "auditor"
-        ? "Auditor Independen"
-        : "Amil Internal";
-
-    // Sync to Neon DB
     try {
-      await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
+      const res = await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          approverRole: roleName,
+          approverRole: "Dewan Pengawas Syariah (DPS)",
           txHash,
-          safeData: {
-            isPendingSafeQuorum,
-            confirmationsCount: 1,
-            confirmationsRequired: safeThreshold,
-          },
+          safeData: safeInfo ? {
+            safeAddress: safeInfo.address,
+            threshold: safeInfo.threshold,
+            owners: safeInfo.owners,
+          } : undefined,
         }),
       });
-    } catch (dbErr) {
-      console.warn("Failed to sync approval to Neon DB:", dbErr);
-    }
 
-    await fetchProposals();
-    await fetchSafeStatus();
+      if (res.ok) {
+        const data = await res.json();
+        setProposals((prev) =>
+          prev.map((p) => {
+            if (p.proposalId === proposalId) {
+              const currentApprovals = p.approvalCount + 1;
+              const isQuorumMet = currentApprovals >= safeThreshold;
+              return {
+                ...p,
+                approvalCount: currentApprovals,
+                status: isQuorumMet ? "Approved" : "Pending",
+                approvedBy: [...p.approvedBy, `DPS Member (${formattedAddress || "0xSafe"})`],
+                safeStatus: isQuorumMet ? "EXECUTED_ONCHAIN" : "PENDING_SAFE_SIGNATURES",
+              };
+            }
+            return p;
+          })
+        );
+      }
+    } catch (err) {
+      console.error("Failed to approve proposal:", err);
+    }
   };
 
   const handleExecute = async (proposalId: number) => {
@@ -273,7 +300,20 @@ export function GovernanceSection() {
     setBastSubmitting(true);
 
     try {
-      // 1. Upload BAST metadata & bank ref to Pinata IPFS
+      let bastDocCID: string | undefined;
+      let photoCID: string | undefined;
+
+      // 1. Upload real binary files to Pinata IPFS if selected
+      if (bastDocFile) {
+        const uploaded = await uploadFileToIpfs(bastDocFile);
+        bastDocCID = uploaded.cid;
+      }
+      if (bastPhotoFile) {
+        const uploaded = await uploadFileToIpfs(bastPhotoFile);
+        photoCID = uploaded.cid;
+      }
+
+      // 2. Upload BAST metadata & bank ref to Pinata IPFS
       const bastRes = await fetch(
         `http://localhost:3001/api/proposals/${executingBastProposal.proposalId}/bast`,
         {
@@ -283,15 +323,18 @@ export function GovernanceSection() {
             bankReferenceNumber: bastBankRef || `TRX-BSI-${Date.now()}`,
             disbursementChannel: "BANK_TRANSFER",
             signedByAmil: bastAmilName,
-            bastDocumentFileName: "berita_acara_serah_terima_zakat.pdf",
-            photoEvidenceFileName: "dokumentasi_serah_terima_mustahik.jpg",
+            bastDocumentCID: bastDocCID,
+            photoEvidenceCID: photoCID,
+            bastDocumentFileName: bastDocFile?.name || "berita_acara_serah_terima_zakat.pdf",
+            photoEvidenceFileName: bastPhotoFile?.name || "dokumentasi_serah_terima_mustahik.jpg",
           }),
         }
       );
       const bastData = await bastRes.json();
+      if (!bastRes.ok) throw new Error(bastData.error || "Gagal mengunggah BAST ke IPFS");
       const receiptCID = bastData.disbursementReceiptCID;
 
-      // 2. Trigger on-chain execution via MetaMask / Safe
+      // 3. Trigger on-chain execution via MetaMask / Safe
       let txHash: string | undefined;
       try {
         const onchainRes = await executeDisbursementOnChain(
@@ -302,7 +345,7 @@ export function GovernanceSection() {
         console.warn("Onchain execute fallback:", err);
       }
 
-      // 3. Mark Executed in Neon DB
+      // 4. Mark Executed in Neon DB
       await fetch(
         `http://localhost:3001/api/proposals/${executingBastProposal.proposalId}/execute`,
         {
@@ -312,7 +355,12 @@ export function GovernanceSection() {
         }
       );
 
-      // 4. Update local state
+      showSuccess(
+        "BAST Terbit & Dana Terealisasi!",
+        `Berkas BAST berhasil di-pin ke IPFS Pinata (${receiptCID.slice(0, 12)}...)`
+      );
+
+      // 5. Update local state
       setProposals((prev) =>
         prev.map((p) => {
           if (p.proposalId === executingBastProposal.proposalId) {
@@ -330,8 +378,11 @@ export function GovernanceSection() {
 
       setExecutingBastProposal(null);
       setBastBankRef("");
-    } catch (err) {
+      setBastDocFile(null);
+      setBastPhotoFile(null);
+    } catch (err: any) {
       console.error("Failed to execute BAST & disbursement:", err);
+      showError(err, "Gagal Realisasi BAST");
     } finally {
       setBastSubmitting(false);
     }
@@ -397,10 +448,18 @@ export function GovernanceSection() {
     setSubmittingAudit(true);
 
     try {
+      let auditCertCID: string | undefined;
+
+      // 1. Upload audit certificate PDF to Pinata IPFS if selected
+      if (auditCertFile) {
+        const uploaded = await uploadFileToIpfs(auditCertFile);
+        auditCertCID = uploaded.cid;
+      }
+
       const messageTimestamp = Math.floor(Date.now() / 1000);
       const beneficiaryHash = (attestingProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex;
 
-      // 1. Request Gasless EIP-712 Signature in MetaMask
+      // 2. Request Gasless EIP-712 Signature in MetaMask
       const signature = await signTypedDataAsync({
         domain: AUDITOR_EIP712_DOMAIN,
         types: AUDITOR_EIP712_TYPES,
@@ -416,7 +475,7 @@ export function GovernanceSection() {
         },
       });
 
-      // 2. Submit to Backend API with gas-sponsored broadcast
+      // 3. Submit to Backend API with gas-sponsored broadcast
       const res = await fetch("http://localhost:3001/api/audit/attest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -426,7 +485,8 @@ export function GovernanceSection() {
           auditorAddress: address,
           auditOpinion: auditOpinion,
           auditNotes: auditNotes,
-          auditCertFileName: auditCertName,
+          auditCertCID,
+          auditCertFileName: auditCertFile?.name || auditCertName,
           signature,
           messageTimestamp,
         }),
@@ -462,6 +522,7 @@ export function GovernanceSection() {
       );
 
       setAttestingProposal(null);
+      setAuditCertFile(null);
     } catch (err: any) {
       console.error("Failed to submit auditor attestation:", err);
       showError(err, "Gagal Menandatangani Atestasi");
@@ -476,8 +537,15 @@ export function GovernanceSection() {
 
     try {
       const selectedAsnafObj = ASNAF_OPTIONS.find((a) => a.id === newAsnafId) || ASNAF_OPTIONS[6];
+      let intakeFileCID: string | undefined;
 
-      // 1. Submit to Intake API: Compute salted hash & pin structured proposal JSON to IPFS
+      // 1. Upload verification evidence document to IPFS if selected
+      if (intakeFile) {
+        const uploaded = await uploadFileToIpfs(intakeFile);
+        intakeFileCID = uploaded.cid;
+      }
+
+      // 2. Submit to Intake API: Compute salted hash & pin structured proposal JSON to IPFS
       const intakeRes = await fetch("http://localhost:3001/api/proposals/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -495,9 +563,10 @@ export function GovernanceSection() {
           usdcRecipient: newCurrencyType === 1 ? newUsdcRecipient : undefined,
           evidenceFiles: [
             {
-              fileName: "dokumen_survei_kelayakan.pdf",
-              fileType: "application/pdf",
+              fileName: intakeFile?.name || "dokumen_survei_kelayakan.pdf",
+              fileType: intakeFile?.type || "application/pdf",
               description: `Survei kelayakan asnaf ${selectedAsnafObj.label} di ${newCity}`,
+              fileCID: intakeFileCID,
             },
           ],
         }),
@@ -512,7 +581,7 @@ export function GovernanceSection() {
       let onchainProposalId = proposal.proposalId;
       let onchainTxHash: string | undefined;
 
-      // 2. Execute on-chain proposal transaction on Sepolia L1
+      // 3. Execute on-chain proposal transaction on Sepolia L1
       try {
         const onchainRes = await proposeDisbursementOnChain({
           currencyType: newCurrencyType,
@@ -526,7 +595,7 @@ export function GovernanceSection() {
         onchainProposalId = onchainRes.proposalId;
         onchainTxHash = onchainRes.txHash;
 
-        // 3. Sync on-chain ID & txHash to Neon DB
+        // 4. Sync on-chain ID & txHash to Neon DB
         await fetch(`http://localhost:3001/api/proposals/${proposal.proposalId}/sync-tx`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -539,14 +608,20 @@ export function GovernanceSection() {
         console.warn("On-chain propose skipped or demo fallback:", onchainErr);
       }
 
+      showSuccess(
+        "Proposal Zakat Berhasil Diajukan!",
+        `Dossier syariah tersimpan di IPFS (${onChainParams.ipfsProofCID.slice(0, 12)}...) dan tercatat di antrean Multi-Sig DPS.`
+      );
+
       await fetchProposals();
       setShowProposeModal(false);
       setNewBenName("");
       setNewBenNIK("");
       setNewUsdcRecipient("");
+      setIntakeFile(null);
     } catch (err: any) {
       console.error("Failed to create proposal:", err);
-      alert(`Error: ${err.message || "Gagal membuat proposal"}`);
+      showError(err, "Gagal Mengajukan Proposal");
     } finally {
       setSubmittingProposal(false);
     }
@@ -828,7 +903,7 @@ export function GovernanceSection() {
                       </div>
                       {p.disbursementReceiptCID && (
                         <a
-                          href={`https://ipfs.io/ipfs/${p.disbursementReceiptCID}`}
+                          href={getIpfsUrl(p.disbursementReceiptCID)}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center gap-1 text-[11px] font-mono text-emerald-900 font-semibold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-100"
@@ -840,7 +915,7 @@ export function GovernanceSection() {
                       {/* Auditor Attestation Badge or Action */}
                       {p.auditStatus === "AUDITED_WTP" ? (
                         <a
-                          href={`https://ipfs.io/ipfs/${p.auditReportCID || ""}`}
+                          href={getIpfsUrl(p.auditReportCID)}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center gap-1 text-[11px] font-semibold text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100"
@@ -1012,12 +1087,12 @@ export function GovernanceSection() {
 
               <div className="flex gap-2">
                 <a
-                  href={`https://ipfs.io/ipfs/${selectedProof.ipfsProofCID}`}
+                  href={getIpfsUrl(selectedProof.ipfsProofCID)}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center justify-center gap-1.5 flex-1 py-2.5 rounded-full bg-[#0F3D30] text-white text-xs font-semibold uppercase tracking-wider hover:bg-[#1A5242]"
                 >
-                  Buka IPFS Gateway <ExternalLink className="w-3.5 h-3.5" />
+                  Buka IPFS Dossier <ExternalLink className="w-3.5 h-3.5" />
                 </a>
                 {selectedProof.status === "Pending" && (
                   <button
@@ -1187,15 +1262,32 @@ export function GovernanceSection() {
                 />
               </div>
 
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  Unggah Berkas Bukti Survei / SKTM (Opsional, PDF/JPG)
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setIntakeFile(e.target.files?.[0] || null)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-1.5 text-xs text-[#1A1A1A] file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-[#0F3D30] file:text-white hover:file:bg-[#1A5242]"
+                />
+                {intakeFile && (
+                  <span className="text-[10px] text-emerald-700 font-semibold mt-1 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Berkas siap di-pin ke IPFS: {intakeFile.name} ({(intakeFile.size / 1024).toFixed(1)} KB)
+                  </span>
+                )}
+              </div>
+
               <Button type="submit" disabled={submittingProposal} className="w-full py-3 mt-2 font-semibold">
-                {submittingProposal ? "Memproses Salted Hash & IPFS..." : "Ajukan Proposal ke Multi-Sig L1"}
+                {submittingProposal ? "Mengunggah IPFS & Mengajukan..." : "Ajukan Proposal ke Multi-Sig L1"}
               </Button>
             </form>
           </Card>
         </div>
       )}
 
-      {/* BAST & Realization Execution Modal (Ticket #29) */}
+      {/* BAST & Realization Execution Modal (Ticket #29 & ADR-0010) */}
       {executingBastProposal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <Card elevated className="max-w-md w-full bg-white p-6">
@@ -1260,10 +1352,44 @@ export function GovernanceSection() {
                 />
               </div>
 
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  1. Berkas Scan Dokumen BAST (PDF)
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  onChange={(e) => setBastDocFile(e.target.files?.[0] || null)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-1.5 text-xs text-[#1A1A1A] file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-emerald-800 file:text-white"
+                />
+                {bastDocFile && (
+                  <span className="text-[10px] text-emerald-700 font-semibold mt-0.5 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Berkas BAST: {bastDocFile.name}
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
+                  2. Foto Serah Terima Zakat Tersamar (JPG/PNG)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setBastPhotoFile(e.target.files?.[0] || null)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-1.5 text-xs text-[#1A1A1A] file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-emerald-800 file:text-white"
+                />
+                {bastPhotoFile && (
+                  <span className="text-[10px] text-emerald-700 font-semibold mt-0.5 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Foto Dokumentasi: {bastPhotoFile.name}
+                  </span>
+                )}
+              </div>
+
               <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-800 space-y-1">
-                <span className="font-bold block">Dokumen BAST Digital:</span>
+                <span className="font-bold block">Pinata Dedicated IPFS Gateway:</span>
                 <p className="text-[11px] text-emerald-700 leading-relaxed">
-                  Berkas berita acara serah terima (BAST) dan dokumentasi penyerahan zakat tersamar akan di-pin ke IPFS Pinata secara permanen.
+                  Berkas fisik akan diunggah ke IPFS Pinata secara desentralisasi dan dapat dibuka melalui gateway berkecepatan tinggi: <strong className="font-mono text-[10px]">white-lazy-marten-351.mypinata.cloud</strong>
                 </p>
               </div>
 
@@ -1290,7 +1416,7 @@ export function GovernanceSection() {
         </div>
       )}
 
-      {/* Auditor Attestation Modal (Ticket #33) */}
+      {/* Auditor Attestation Modal (Ticket #33 & ADR-0009 & ADR-0010) */}
       {attestingProposal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <Card elevated className="max-w-lg w-full p-6 space-y-4 bg-white">
@@ -1380,25 +1506,29 @@ export function GovernanceSection() {
 
               <div>
                 <label className="block font-semibold text-[#1A1A1A] uppercase tracking-wider mb-1">
-                  Nama Dokumen Sertifikat / Laporan Audit
+                  Unggah Berkas Laporan / Sertifikat Audit KAP (PDF)
                 </label>
                 <input
-                  type="text"
-                  required
-                  value={auditCertName}
-                  onChange={(e) => setAuditCertName(e.target.value)}
-                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3.5 py-2 text-xs font-mono text-[#1A1A1A] focus:outline-none focus:border-[#0F3D30]"
+                  type="file"
+                  accept=".pdf"
+                  onChange={(e) => setAuditCertFile(e.target.files?.[0] || null)}
+                  className="w-full bg-[#F9F6F0] border border-[#0F3D30]/20 rounded-xl px-3 py-1.5 text-xs text-[#1A1A1A] file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-700 file:text-white"
                 />
+                {auditCertFile && (
+                  <span className="text-[10px] text-indigo-700 font-semibold mt-0.5 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Berkas Sertifikat: {auditCertFile.name}
+                  </span>
+                )}
               </div>
 
               <div className="p-3 bg-indigo-50/80 rounded-xl border border-indigo-200 text-indigo-950 text-[11px] leading-relaxed space-y-1.5">
                 <div className="flex items-center gap-1.5 font-bold text-indigo-900">
                   <PenTool className="w-3.5 h-3.5 text-indigo-700" />
-                  <span>Tanda Tangan Kriptografis Dompet (EIP-712) & Gasless UX</span>
+                  <span>Tanda Tangan Kriptografis Dompet (EIP-712) & Dedicated IPFS</span>
                 </div>
                 <p>
                   Pop-up MetaMask akan meminta Anda menandatangani pesan audit terstruktur (<strong>0 Gas Fee</strong> untuk Auditor).
-                  Transaksi resmi on-chain ke Sepolia L1 akan <strong>disponsori dan dibayarkan oleh Relayer</strong>.
+                  Berkas laporan resmi akan di-pin ke IPFS Pinata dan transaksi notarisasi on-chain <strong>disponsori oleh Relayer</strong>.
                 </p>
               </div>
 

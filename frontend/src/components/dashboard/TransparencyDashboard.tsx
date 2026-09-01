@@ -17,6 +17,7 @@ import {
   Lock,
 } from "lucide-react";
 import { withdrawAmilShareOnChain, getContractBalances } from "../../lib/web3Client";
+import { getIpfsUrl } from "../../lib/contracts";
 import { formatUnits } from "viem";
 
 interface BatchItem {
@@ -654,7 +655,7 @@ export function TransparencyDashboard() {
                 <div className="flex items-center justify-between bg-white p-2 rounded-lg border font-mono text-[11px]">
                   <span className="text-stone-500 truncate max-w-[220px]">{selectedProofProposal.ipfsProofCID}</span>
                   <a
-                    href={`https://ipfs.io/ipfs/${selectedProofProposal.ipfsProofCID}`}
+                    href={getIpfsUrl(selectedProofProposal.ipfsProofCID)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-[#0F3D30] hover:underline font-bold inline-flex items-center gap-0.5"
@@ -679,7 +680,7 @@ export function TransparencyDashboard() {
                       {selectedProofProposal.disbursementReceiptCID}
                     </span>
                     <a
-                      href={`https://ipfs.io/ipfs/${selectedProofProposal.disbursementReceiptCID}`}
+                      href={getIpfsUrl(selectedProofProposal.disbursementReceiptCID)}
                       target="_blank"
                       rel="noreferrer"
                       className="text-emerald-800 hover:underline font-bold inline-flex items-center gap-0.5"
@@ -739,7 +740,7 @@ export function TransparencyDashboard() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {selectedProofProposal.auditReportCID && (
                         <a
-                          href={`https://ipfs.io/ipfs/${selectedProofProposal.auditReportCID}`}
+                          href={getIpfsUrl(selectedProofProposal.auditReportCID)}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center justify-between bg-white p-2 rounded-lg border border-indigo-200 font-mono text-[11px] text-indigo-800 hover:bg-indigo-50 transition-colors"

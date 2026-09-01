@@ -4,6 +4,15 @@ export const SEPOLIA_USDC_ADDRESS = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
 export const SEPOLIA_CHAIN_ID = 11155111;
 export const SEPOLIA_EXPLORER_URL = "https://sepolia.etherscan.io";
 
+export const PINATA_DEDICATED_GATEWAY = "https://white-lazy-marten-351.mypinata.cloud/ipfs";
+export const PUBLIC_IPFS_GATEWAY = "https://ipfs.io/ipfs";
+
+export function getIpfsUrl(cid?: string | null, preferredGateway = PINATA_DEDICATED_GATEWAY): string {
+  if (!cid) return "";
+  const cleanCid = cid.replace(/^ipfs:\/\//, "");
+  return `${preferredGateway}/${cleanCid}`;
+}
+
 export const ERC20_ABI = [
   {
     type: "function",

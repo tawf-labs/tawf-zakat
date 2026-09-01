@@ -5,10 +5,13 @@ import { runSeeder } from "./seed";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "./merkle";
 import {
   computeBeneficiaryHash,
+  uploadFileToIPFS,
   uploadDisbursementProofToIPFS,
   uploadProposalDossierToIPFS,
   uploadDisbursementReceiptToIPFS,
   uploadAuditReportToIPFS,
+  PINATA_DEDICATED_GATEWAY,
+  PUBLIC_IPFS_GATEWAY,
   type DisbursementMetadata,
   type ProposalDossierMetadata,
   type DisbursementReceiptMetadata,
@@ -58,6 +61,43 @@ if (shouldRunEmbeddedIndexer) {
 const app = new Hono();
 
 app.use("/*", cors());
+
+// Real IPFS File Upload Endpoint (ADR-0010)
+app.post("/api/ipfs/upload-file", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const file = body["file"];
+    const customName = body["name"] as string | undefined;
+
+    if (!file || !(file instanceof Blob || typeof file === "object")) {
+      return c.json({ error: "Missing or invalid file in multipart body", success: false }, 400);
+    }
+
+    const fileName = customName || (file instanceof File ? file.name : `evidence-${Date.now()}.bin`);
+    const mimeType = file instanceof Blob ? file.type : "application/octet-stream";
+
+    const result = await uploadFileToIPFS(file as Blob, fileName, mimeType);
+
+    return c.json({
+      success: true,
+      cid: result.cid,
+      gatewayUrl: result.gatewayUrl,
+      pinSize: result.pinSize,
+      fileName,
+    });
+  } catch (error: any) {
+    console.error("IPFS File Upload API Error:", error);
+    return c.json({ error: error.message || "Failed to upload file to IPFS", success: false }, 502);
+  }
+});
+
+app.get("/api/ipfs/gateway", (c) => {
+  return c.json({
+    success: true,
+    dedicatedGateway: PINATA_DEDICATED_GATEWAY,
+    publicGateway: PUBLIC_IPFS_GATEWAY,
+  });
+});
 
 // Health Check
 app.get("/health", (c) => {
@@ -697,8 +737,8 @@ app.post("/api/proposals/:id/bast", async (c) => {
       currency: targetProposal.currencyType === 1 ? "USDC" : "IDR",
       disbursementChannel: disbursementChannel || (targetProposal.currencyType === 1 ? "USDC_ONCHAIN" : "BANK_TRANSFER"),
       bankReferenceNumber: bankReferenceNumber || `TRX-BANK-${Date.now()}`,
-      bastDocumentCID: bastDocumentFileName ? `ipfs://QmBASTDoc${Date.now()}` : undefined,
-      photoEvidenceCID: photoEvidenceFileName ? `ipfs://QmPhotoEvidence${Date.now()}` : undefined,
+      bastDocumentCID: body.bastDocumentCID || (bastDocumentFileName ? `ipfs://QmBASTDoc${Date.now()}` : undefined),
+      photoEvidenceCID: body.photoEvidenceCID || (photoEvidenceFileName ? `ipfs://QmPhotoEvidence${Date.now()}` : undefined),
       timestamp: new Date().toISOString(),
       signedByAmil: signedByAmil || "Amil Operasional",
     };
@@ -847,7 +887,7 @@ app.post("/api/audit/attest", async (c) => {
       auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
       auditStandard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
       auditorSignature: signature || undefined,
-      auditCertCID: auditCertFileName ? `ipfs://QmAuditCert${Date.now()}` : undefined,
+      auditCertCID: body.auditCertCID || (auditCertFileName ? `ipfs://QmAuditCert${Date.now()}` : undefined),
       timestamp: new Date().toISOString(),
     };
 

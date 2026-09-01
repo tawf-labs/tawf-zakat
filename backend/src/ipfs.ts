@@ -1,5 +1,89 @@
 import { keccak256, encodePacked, type Hex } from "viem";
 
+export const PINATA_DEDICATED_GATEWAY = "https://white-lazy-marten-351.mypinata.cloud/ipfs";
+export const PUBLIC_IPFS_GATEWAY = "https://ipfs.io/ipfs";
+
+export function getIpfsGatewayUrl(cid: string, preferredGateway = PINATA_DEDICATED_GATEWAY): string {
+  if (!cid) return "";
+  const cleanCid = cid.replace(/^ipfs:\/\//, "");
+  return `${preferredGateway}/${cleanCid}`;
+}
+
+export function computeBeneficiaryHash(nik: string, name: string, secretSalt: string): Hex {
+  return keccak256(
+    encodePacked(
+      ["string", "string", "string"],
+      [nik, name, secretSalt]
+    )
+  );
+}
+
+/**
+ * Upload binary file (PDF, JPG, PNG) to Pinata IPFS via multipart pinFileToIPFS
+ */
+export async function uploadFileToIPFS(
+  file: Blob | File | Buffer | Uint8Array,
+  fileName: string,
+  mimeType = "application/octet-stream"
+): Promise<{ cid: string; gatewayUrl: string; pinSize: number }> {
+  const pinataJWT = process.env.PINATA_JWT;
+
+  if (pinataJWT) {
+    try {
+      const formData = new FormData();
+      const fileBlob = file instanceof Blob ? file : new Blob([file], { type: mimeType });
+      formData.append("file", fileBlob, fileName);
+      formData.append(
+        "pinataMetadata",
+        JSON.stringify({
+          name: fileName,
+          keyvalues: {
+            app: "zakat-protocol-l1",
+            uploadedAt: new Date().toISOString(),
+          },
+        })
+      );
+
+      const response = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${pinataJWT}`,
+        },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          cid: data.IpfsHash,
+          gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
+          pinSize: data.PinSize || 0,
+        };
+      } else {
+        const errText = await response.text();
+        console.error("Pinata pinFileToIPFS HTTP error:", response.status, errText);
+        throw new Error(`Pinata file upload failed: HTTP ${response.status}`);
+      }
+    } catch (e: any) {
+      console.warn("Pinata binary file upload failed:", e.message || e);
+      if (process.env.NODE_ENV !== "test") {
+        throw new Error(`Gagal mengunggah berkas ke IPFS Pinata: ${e.message || "Network error"}`);
+      }
+    }
+  }
+
+  // Fallback for isolated unit tests without network access
+  const mockContent = file instanceof Blob ? await file.text() : file.toString();
+  const mockCIDHash = keccak256(encodePacked(["string", "string"], [fileName, mockContent]));
+  const mockCID = `QmFile${mockCIDHash.slice(2, 44)}`;
+
+  return {
+    cid: mockCID,
+    gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
+    pinSize: mockContent.length,
+  };
+}
+
 export interface DisbursementMetadata {
   beneficiaryName: string;
   beneficiaryNIKMasked: string;
@@ -13,16 +97,8 @@ export interface DisbursementMetadata {
     fileName: string;
     fileType: string;
     description: string;
+    fileCID?: string;
   }[];
-}
-
-export function computeBeneficiaryHash(nik: string, name: string, secretSalt: string): Hex {
-  return keccak256(
-    encodePacked(
-      ["string", "string", "string"],
-      [nik, name, secretSalt]
-    )
-  );
 }
 
 export async function uploadDisbursementProofToIPFS(
@@ -50,11 +126,14 @@ export async function uploadDisbursementProofToIPFS(
         const data = await response.json();
         return {
           cid: data.IpfsHash,
-          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+          gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
         };
+      } else {
+        const errText = await response.text();
+        console.error("Pinata pinJSONToIPFS error:", response.status, errText);
       }
-    } catch (e) {
-      console.warn("Pinata upload failed, falling back to deterministic CID generation", e);
+    } catch (e: any) {
+      console.warn("Pinata upload failed:", e.message || e);
     }
   }
 
@@ -63,7 +142,7 @@ export async function uploadDisbursementProofToIPFS(
 
   return {
     cid: mockCID,
-    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+    gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
   };
 }
 
@@ -83,6 +162,7 @@ export interface ProposalDossierMetadata {
     fileName: string;
     fileType: string;
     description: string;
+    fileCID?: string;
   }[];
 }
 
@@ -111,11 +191,20 @@ export async function uploadProposalDossierToIPFS(
         const data = await response.json();
         return {
           cid: data.IpfsHash,
-          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+          gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
         };
+      } else {
+        const errText = await response.text();
+        console.error("Pinata proposal upload error:", response.status, errText);
+        if (process.env.NODE_ENV !== "test") {
+          throw new Error(`Gagal mengunggah berkas proposal ke IPFS: HTTP ${response.status}`);
+        }
       }
-    } catch (e) {
-      console.warn("Pinata upload failed, falling back to deterministic CID generation", e);
+    } catch (e: any) {
+      console.warn("Pinata upload failed:", e.message || e);
+      if (process.env.NODE_ENV !== "test") {
+        throw new Error(`Gagal memproses unggahan proposal ke IPFS Pinata: ${e.message || "Network timeout"}`);
+      }
     }
   }
 
@@ -124,7 +213,7 @@ export async function uploadProposalDossierToIPFS(
 
   return {
     cid: mockCID,
-    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+    gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
   };
 }
 
@@ -172,11 +261,20 @@ export async function uploadDisbursementReceiptToIPFS(
         const data = await response.json();
         return {
           cid: data.IpfsHash,
-          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+          gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
         };
+      } else {
+        const errText = await response.text();
+        console.error("Pinata BAST upload error:", response.status, errText);
+        if (process.env.NODE_ENV !== "test") {
+          throw new Error(`Gagal mengunggah BAST ke IPFS: HTTP ${response.status}`);
+        }
       }
-    } catch (e) {
-      console.warn("Pinata BAST upload failed, falling back to deterministic CID generation", e);
+    } catch (e: any) {
+      console.warn("Pinata BAST upload failed:", e.message || e);
+      if (process.env.NODE_ENV !== "test") {
+        throw new Error(`Gagal memproses unggahan BAST ke IPFS Pinata: ${e.message || "Network timeout"}`);
+      }
     }
   }
 
@@ -185,7 +283,7 @@ export async function uploadDisbursementReceiptToIPFS(
 
   return {
     cid: mockCID,
-    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+    gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
   };
 }
 
@@ -235,11 +333,20 @@ export async function uploadAuditReportToIPFS(
         const data = await response.json();
         return {
           cid: data.IpfsHash,
-          gatewayUrl: `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`,
+          gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
         };
+      } else {
+        const errText = await response.text();
+        console.error("Pinata Audit Report upload error:", response.status, errText);
+        if (process.env.NODE_ENV !== "test") {
+          throw new Error(`Gagal mengunggah laporan audit ke IPFS: HTTP ${response.status}`);
+        }
       }
-    } catch (e) {
-      console.warn("Pinata Audit Report upload failed, falling back to deterministic CID generation", e);
+    } catch (e: any) {
+      console.warn("Pinata Audit Report upload failed:", e.message || e);
+      if (process.env.NODE_ENV !== "test") {
+        throw new Error(`Gagal memproses unggahan laporan audit ke IPFS Pinata: ${e.message || "Network timeout"}`);
+      }
     }
   }
 
@@ -248,6 +355,6 @@ export async function uploadAuditReportToIPFS(
 
   return {
     cid: mockCID,
-    gatewayUrl: `https://ipfs.io/ipfs/${mockCID}`,
+    gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
   };
 }

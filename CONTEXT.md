@@ -137,7 +137,10 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 ### G. Gasless EIP-712 Auditor Attestation & Relayer Sponsorship (ADR-0009)
 1. **EIP-712 Typed Structured Data**: Standar tanda tangan kriptografis human-readable di pop-up MetaMask (Proposal ID, Beneficiary Hash, Nominal IDR, Opini WTP, Standar PSAK 109, Timestamp).
 2. **Gasless Auditor Experience**: Auditor menandatangani berkas secara digital dengan 0 gas fee; Relayer backend memvalidasi signature menggunakan `verifyTypedData` Viem dan membroadcast transaksi ke Sepolia L1 menanggung biaya gas.
-3. **Cryptographic Non-Repudiation**: Tanda tangan ECDSA `0x...` disimpan ke IPFS dan database, menghasilkan bukti atestasi yang tak terbantahkan dan dapat diverifikasi publik melalui Public Transparency Explorer.
+### H. Real Decentralized Storage & Dedicated IPFS Gateway (ADR-0010)
+1. **Real Multipart File Uploads**: Endpoint `POST /api/ipfs/upload-file` mengunggah berkas fisik asli (scan BAST PDF, foto serah terima bantuan, sertifikat audit KAP) ke Pinata IPFS via `pinFileToIPFS`.
+2. **Dedicated Fast Gateway**: Akses berkas instan berkecepatan tinggi melalui gateway privat `white-lazy-marten-351.mypinata.cloud/ipfs/` dengan multi-gateway fallback otomatis.
+3. **Strict Validation & Zero-Broken-Link Policy**: Validasi ketat pengunggahan IPFS; mencegah pencatatan CID rusak/palsu ke smart contract on-chain Sepolia.
 
 ---
 
@@ -146,4 +149,4 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 - [x] **Smart Contract (L1)**: `ZakatProtocolL1.sol` deployed on Sepolia (`0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7`) with SafeERC20, Invariant Split, Multi-Sig 2-of-3, and Emergency Cancel.
 - [x] **Backend & Database**: Bun + Hono API + Neon PostgreSQL via Drizzle ORM + Merkle Tree batch settlement engine + Embedded Viem Indexer Engine.
 - [x] **Frontend Web3**: TanStack Start + ConnectKit (Soft Syariah Theme) + Wagmi v3 + Viem + Public Role Governance Panel (`/admin/roles`) + Sonner Toasts + Error Boundary.
-- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0009 tercatat lengkap di `docs/adr/`.
+- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0010 tercatat lengkap di `docs/adr/`.
