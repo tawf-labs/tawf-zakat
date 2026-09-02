@@ -101,8 +101,15 @@ export function AuditorAttestationPanel({
       });
 
       if (!res.ok) {
-        const errJson = await res.json();
-        throw new Error(errJson.error || "Gagal mencatat atestasi auditor");
+        const errText = await res.text();
+        let errMessage = "Gagal mencatat atestasi auditor";
+        try {
+          const errJson = JSON.parse(errText);
+          errMessage = errJson.error || errMessage;
+        } catch {
+          errMessage = errText || errMessage;
+        }
+        throw new Error(errMessage);
       }
 
       toast.success(`Atestasi Opini WTP untuk Proposal #${pId} berhasil dicatat on-chain (Gas Disponsori)!`);

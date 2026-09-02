@@ -32,7 +32,7 @@ import { eventBus, createWebSocketHandler, websocket } from "./ws";
 export const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
   version: "1",
-  chainId: 11155111,
+  chainId: CONTRACT_CONFIG.CHAIN_ID,
   verifyingContract: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS as Hex,
 } as const;
 
@@ -883,9 +883,9 @@ app.get("/api/safe/pending", async (c) => {
 });
 
 // 4h. Ex-Post Independent Auditor Attestation Engine (Ticket #33 & ADR-0009)
-app.post("/api/audit/attest", async (c) => {
+const handleAuditAttest = async (c: any) => {
   try {
-    const body = await c.req.json();
+    const body = await c.req.json().catch(() => ({}));
     const {
       proposalId,
       auditorName,
@@ -895,7 +895,9 @@ app.post("/api/audit/attest", async (c) => {
       auditCertFileName,
       auditTxHash,
       signature,
+      standard,
       messageTimestamp,
+      timestamp,
     } = body;
 
     if (!proposalId || !auditorName || !auditorAddress || !auditOpinion) {
@@ -910,7 +912,8 @@ app.post("/api/audit/attest", async (c) => {
     }
 
     // Verify EIP-712 Cryptographic Signature if provided
-    const eip712Timestamp = messageTimestamp ? BigInt(messageTimestamp) : BigInt(Math.floor(Date.now() / 1000));
+    const eip712Timestamp = timestamp ? BigInt(timestamp) : (messageTimestamp ? BigInt(messageTimestamp) : BigInt(Math.floor(Date.now() / 1000)));
+    const standardString = standard || "PSAK 109 & Fikih BAZNAS";
     let isSignatureValid = true;
 
     if (signature && signature.startsWith("0x")) {
@@ -925,15 +928,35 @@ app.post("/api/audit/attest", async (c) => {
             beneficiaryHash: (targetProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex,
             amountIDR: BigInt(targetProposal.amount),
             auditOpinion: auditOpinion as string,
-            standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+            standard: standardString,
             auditorName: auditorName as string,
             timestamp: eip712Timestamp,
           },
           signature: signature as Hex,
         });
       } catch (sigErr) {
-        console.warn("EIP-712 signature verification error:", sigErr);
-        isSignatureValid = false;
+        console.warn("EIP-712 signature verification fallback check:", sigErr);
+        // Try fallback with alternative standard string if primary didn't match
+        try {
+          isSignatureValid = await verifyTypedData({
+            address: auditorAddress as Hex,
+            domain: AUDITOR_EIP712_DOMAIN,
+            types: AUDITOR_EIP712_TYPES,
+            primaryType: "AuditorAttestation",
+            message: {
+              proposalId: BigInt(proposalId),
+              beneficiaryHash: (targetProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex,
+              amountIDR: BigInt(targetProposal.amount),
+              auditOpinion: auditOpinion as string,
+              standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+              auditorName: auditorName as string,
+              timestamp: eip712Timestamp,
+            },
+            signature: signature as Hex,
+          });
+        } catch {
+          isSignatureValid = false;
+        }
       }
 
       if (!isSignatureValid) {
@@ -956,7 +979,7 @@ app.post("/api/audit/attest", async (c) => {
       auditorAddress,
       auditOpinion: auditOpinion as any,
       auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
-      auditStandard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
+      auditStandard: standardString,
       auditorSignature: signature || undefined,
       auditCertCID: body.auditCertCID || (auditCertFileName ? `ipfs://QmAuditCert${Date.now()}` : undefined),
       timestamp: new Date().toISOString(),
@@ -1029,7 +1052,10 @@ app.post("/api/audit/attest", async (c) => {
   } catch (error: any) {
     return c.json({ error: error.message || "Failed to record auditor attestation", success: false }, 500);
   }
-});
+};
+
+app.post("/api/audit/attest", handleAuditAttest);
+app.post("/api/governance/attest-audit", handleAuditAttest);
 
 app.get("/api/audit/overview", async (c) => {
   try {
