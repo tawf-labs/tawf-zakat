@@ -134,9 +134,14 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 2. **Human-Readable Revert Translation**: Menerjemahkan error contract Solidity (`DoubleClaimDetected`, `InsufficientVaultBalance`, `QuorumNotMet`, `Unauthorized`) ke dalam istilah syariah operasional yang ramah bagi pengguna awam.
 3. **Graceful Error Boundary**: Komponen penangkap crash UI di level halaman untuk menjaga kestabilan aplikasi.
 
-### G. Gasless EIP-712 Auditor Attestation & Relayer Sponsorship (ADR-0009)
-1. **EIP-712 Typed Structured Data**: Standar tanda tangan kriptografis human-readable di pop-up MetaMask (Proposal ID, Beneficiary Hash, Nominal IDR, Opini WTP, Standar PSAK 109, Timestamp).
-2. **Gasless Auditor Experience**: Auditor menandatangani berkas secara digital dengan 0 gas fee; Relayer backend memvalidasi signature menggunakan `verifyTypedData` Viem dan membroadcast transaksi ke Sepolia L1 menanggung biaya gas.
+### G. Universal Gasless EIP-712 Governance for Amil, DPS, & Auditor (ADR-0009 & ADR-0015)
+1. **EIP-712 Typed Structured Data**: Standar tanda tangan digital human-readable di pop-up dompet (MetaMask/Rabby/Coinbase) untuk seluruh aksi tata kelola:
+   - **Amil**: Pembuatan proposal (`AmilProposal`), eksekusi pencairan (`AmilExecution`), dan pembatalan (`ProposalCancellation`).
+   - **DPS**: Persetujuan kelayakan syariah (`DpsApproval`) dan pembatalan syariah (`ProposalCancellation`).
+   - **Auditor**: Atestasi ex-post opini WTP (`AuditorAttestation`).
+2. **Universal Gasless Experience**: Amil dan DPS tidak perlu memiliki atau mengelola saldo ETH gas fee. Relayer backend memvalidasi tanda tangan EIP-712, memeriksa kewenangan role secara on-chain/DB, dan menanggung biaya gas untuk transaksi on-chain.
+3. **Clean & Professional Typography**: Antarmuka tata kelola menggunakan tipografi natural tanpa label mencolok seperti "0 Gas / Gasless Sponsored".
+
 ### H. Real Decentralized Storage & Dedicated IPFS Gateway (ADR-0010)
 1. **Real Multipart File Uploads**: Endpoint `POST /api/ipfs/upload-file` mengunggah berkas fisik asli (scan BAST PDF, foto serah terima bantuan, sertifikat audit KAP) ke Pinata IPFS via `pinFileToIPFS`.
 2. **Dedicated Fast Gateway**: Akses berkas instan berkecepatan tinggi melalui gateway privat `white-lazy-marten-351.mypinata.cloud/ipfs/` dengan multi-gateway fallback otomatis.

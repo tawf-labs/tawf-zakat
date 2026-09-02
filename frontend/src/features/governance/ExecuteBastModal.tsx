@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
 import { Input } from "../../components/ui/Input";
-import { executeDisbursementOnChain } from "../../lib/web3Client";
-import { useAccount } from "wagmi";
+import { useAccount, useSignTypedData } from "wagmi";
 import { Upload, Loader2, CheckCircle2, FileText, Sparkles } from "lucide-react";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface ExecuteBastModalProps {
@@ -20,6 +20,7 @@ export function ExecuteBastModal({
   onSuccess,
 }: ExecuteBastModalProps) {
   const { address, isConnected } = useAccount();
+  const { signTypedDataAsync } = useSignTypedData();
 
   const [bankRef, setBankRef] = useState("TRF-BANK-001");
   const [file, setFile] = useState<File | null>(null);
@@ -55,21 +56,39 @@ export function ExecuteBastModal({
         }
       }
 
-      setStatusText("Mengeksekusi pencairan dana di smart contract Arbitrum...");
-      const tx = await executeDisbursementOnChain(pId, cid);
+      setStatusText("Silakan konfirmasi tanda tangan digital otorisasi di dompet...");
+      const timestamp = BigInt(Math.floor(Date.now() / 1000));
+      const signature = await signTypedDataAsync({
+        domain: GOVERNANCE_EIP712_DOMAIN,
+        types: GOVERNANCE_EIP712_TYPES,
+        primaryType: "AmilExecution",
+        message: {
+          proposalId: BigInt(pId),
+          disbursementReceiptCID: cid,
+          timestamp,
+        },
+      });
 
-      setStatusText("Menyinkronkan status pencairan ke basis data...");
+      setStatusText("Memproses eksekusi penyaluran via Relayer...");
+      const res = await fetch("http://localhost:3001/api/governance/gasless-execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId: pId,
+          disbursementReceiptCID: cid,
+          timestamp: Number(timestamp),
+          signature,
+          signerAddress: address,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Gagal mengeksekusi pencairan via Relayer.");
+      }
+
+      // Also record the BAST disbursement receipt metadata in IPFS pipeline
       try {
-        await fetch(`http://localhost:3001/api/proposals/${pId}/execute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            txHash: tx.txHash,
-            disbursementReceiptCID: cid,
-          }),
-        });
-
-        // Also record the BAST disbursement receipt metadata in IPFS pipeline
         await fetch("http://localhost:3001/api/disbursements/execute-bast", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -77,7 +96,6 @@ export function ExecuteBastModal({
             proposalId: pId,
             receiptCID: cid,
             bankTransferRef: bankRef,
-            txHash: tx.txHash,
           }),
         });
       } catch (syncErr) {

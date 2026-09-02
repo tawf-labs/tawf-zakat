@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
 import { Input } from "../../components/ui/Input";
-import { proposeDisbursementOnChain } from "../../lib/web3Client";
-import { useAccount } from "wagmi";
+import { useAccount, useSignTypedData } from "wagmi";
 import { Upload, Loader2, Sparkles, ShieldCheck, FileText, CheckCircle2 } from "lucide-react";
 import { keccak256, encodePacked, parseUnits, type Hex } from "viem";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface CreateProposalModalProps {
@@ -26,6 +26,7 @@ const ASNAF_OPTIONS = [
 
 export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreateProposalModalProps) {
   const { address, isConnected } = useAccount();
+  const { signTypedDataAsync } = useSignTypedData();
 
   const [title, setTitle] = useState("Bantuan Pangan & Sembako Mustahik");
   const [beneficiaryName, setBeneficiaryName] = useState("");
@@ -80,52 +81,67 @@ export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreatePropos
         encodePacked(["string", "string", "bytes32"], [nik, beneficiaryName, salt as Hex])
       );
 
-      // 3. Submit proposal on-chain to Arbitrum Sepolia
-      setStatusText("Mengirim transaksi pengajuan ke smart contract Arbitrum...");
-      const numAmount = Number(amount);
+      // 3. Request EIP-712 Typed Signature from Amil
+      setStatusText("Silakan konfirmasi tanda tangan digital di dompet...");
       const currentPeriodId = 202609;
+      const numAmount = Number(amount);
+      const parsedAmount = currencyType === 1 ? parseUnits(amount.toString(), 6) : BigInt(amount);
+      const recipient = (currencyType === 1 ? (address as Hex) : "0x0000000000000000000000000000000000000000") as Hex;
+      const timestamp = BigInt(Math.floor(Date.now() / 1000));
 
-      const res = await proposeDisbursementOnChain({
-        currencyType,
-        amount: numAmount,
-        asnafCategory: asnafId,
-        beneficiaryHash,
-        ipfsProofCID: cid,
-        periodId: currentPeriodId,
-        usdcRecipient: address,
+      const signature = await signTypedDataAsync({
+        domain: GOVERNANCE_EIP712_DOMAIN,
+        types: GOVERNANCE_EIP712_TYPES,
+        primaryType: "AmilProposal",
+        message: {
+          currencyType,
+          amount: parsedAmount,
+          asnafCategory: asnafId,
+          beneficiaryHash,
+          ipfsProofCID: cid,
+          periodId: BigInt(currentPeriodId),
+          usdcRecipient: recipient,
+          timestamp,
+        },
       });
 
-      // 4. Synchronize proposal into backend database
-      setStatusText("Menyimpan berkas usulan ke basis data...");
-      try {
-        await fetch("http://localhost:3001/api/proposals/intake", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            programTitle: title,
-            currencyType,
-            amount: numAmount,
-            asnafCategory: asnafId,
-            beneficiaryName,
-            beneficiaryNIK: nik,
-            secretSalt: salt,
-            evidenceFiles: [
-              {
-                fileName: file ? file.name : "berkas_survei_mustahik.pdf",
-                fileType: file ? file.type : "application/pdf",
-                description: "Dokumen survei kelayakan asnaf BAZNAS",
-                cid,
-              },
-            ],
-            periodId: currentPeriodId,
-            usdcRecipient: address,
-          }),
-        });
-      } catch (syncErr) {
-        console.warn("Backend proposal sync error:", syncErr);
+      // 4. Submit to Backend Gasless Governance Relayer
+      setStatusText("Memproses pengajuan ke smart contract via Relayer...");
+      const res = await fetch("http://localhost:3001/api/governance/gasless-propose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currencyType,
+          amount: currencyType === 1 ? Number(parsedAmount) : numAmount,
+          asnafCategory: asnafId,
+          beneficiaryHash,
+          ipfsProofCID: cid,
+          periodId: currentPeriodId,
+          usdcRecipient: recipient,
+          timestamp: Number(timestamp),
+          signature,
+          signerAddress: address,
+          programTitle: title,
+          beneficiaryName,
+          beneficiaryNIK: nik,
+          secretSalt: salt,
+          evidenceFiles: [
+            {
+              fileName: file ? file.name : "berkas_survei_mustahik.pdf",
+              fileType: file ? file.type : "application/pdf",
+              description: "Dokumen survei kelayakan asnaf BAZNAS",
+              cid,
+            },
+          ],
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Gagal mengajukan proposal via Relayer.");
       }
 
-      toast.success(`Proposal #${title} berhasil diajukan ke antrean DPS!`);
+      toast.success(`Proposal "${title}" berhasil diajukan ke antrean DPS!`);
       onSuccess?.();
       onClose();
     } catch (err: any) {

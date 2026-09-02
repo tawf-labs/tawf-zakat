@@ -252,3 +252,48 @@ export const GOVERNANCE_ROLES = {
 
 export const SAFE_DPS_MULTISIG_ADDRESS = "0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1" as const;
 
+export const GOVERNANCE_EIP712_DOMAIN = {
+  name: "Tawf Zakat Protocol",
+  version: "1",
+  chainId: 421614,
+  verifyingContract: ZAKAT_PROTOCOL_L1_ADDRESS as `0x${string}`,
+} as const;
+
+export const GOVERNANCE_EIP712_TYPES = {
+  AmilProposal: [
+    { name: "currencyType", type: "uint8" },
+    { name: "amount", type: "uint256" },
+    { name: "asnafCategory", type: "uint8" },
+    { name: "beneficiaryHash", type: "bytes32" },
+    { name: "ipfsProofCID", type: "string" },
+    { name: "periodId", type: "uint256" },
+    { name: "usdcRecipient", type: "address" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  DpsApproval: [
+    { name: "proposalId", type: "uint256" },
+    { name: "decision", type: "string" },
+    { name: "notes", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  AmilExecution: [
+    { name: "proposalId", type: "uint256" },
+    { name: "disbursementReceiptCID", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  ProposalCancellation: [
+    { name: "proposalId", type: "uint256" },
+    { name: "reason", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  AuditorAttestation: [
+    { name: "proposalId", type: "uint256" },
+    { name: "beneficiaryHash", type: "bytes32" },
+    { name: "amountIDR", type: "uint256" },
+    { name: "auditOpinion", type: "string" },
+    { name: "standard", type: "string" },
+    { name: "auditorName", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+} as const;
+

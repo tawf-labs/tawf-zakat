@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle } from "lucide-react";
-import { approveDisbursementOnChain } from "../../lib/web3Client";
-import { useAccount } from "wagmi";
+import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle, XCircle } from "lucide-react";
+import { useAccount, useSignTypedData } from "wagmi";
 import { useGovernanceRole } from "./RoleContext";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface DpsSafeApprovalCardProps {
@@ -12,6 +12,7 @@ interface DpsSafeApprovalCardProps {
 
 export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeApprovalCardProps) {
   const { address, isConnected } = useAccount();
+  const { signTypedDataAsync } = useSignTypedData();
   const { canApproveDps, getRestrictionReason } = useGovernanceRole();
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
@@ -32,20 +33,36 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
 
     setLoadingId(proposalId);
     try {
-      const tx = await approveDisbursementOnChain(proposalId);
+      toast.info("Silakan konfirmasi tanda tangan digital persetujuan di dompet...");
+      const timestamp = BigInt(Math.floor(Date.now() / 1000));
+      const signature = await signTypedDataAsync({
+        domain: GOVERNANCE_EIP712_DOMAIN,
+        types: GOVERNANCE_EIP712_TYPES,
+        primaryType: "DpsApproval",
+        message: {
+          proposalId: BigInt(proposalId),
+          decision: "APPROVED",
+          notes: "Memenuhi kriteria Asnaf sesuai fatwa DSN-MUI.",
+          timestamp,
+        },
+      });
 
-      // Synchronize approval state to backend database
-      try {
-        await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            approverRole: "Dewan Pengawas Syariah",
-            txHash: tx.txHash,
-          }),
-        });
-      } catch (syncErr) {
-        console.warn("Backend approval sync error:", syncErr);
+      const res = await fetch("http://localhost:3001/api/governance/gasless-approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId,
+          decision: "APPROVED",
+          notes: "Memenuhi kriteria Asnaf sesuai fatwa DSN-MUI.",
+          timestamp: Number(timestamp),
+          signature,
+          signerAddress: address,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Gagal mencatat persetujuan syariah.");
       }
 
       toast.success(`Proposal #${proposalId} berhasil disetujui on-chain!`);
@@ -53,6 +70,64 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
     } catch (err: any) {
       console.error("DPS Approval error:", err);
       toast.error(err.message || "Gagal menyetujui proposal.");
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleReject = async (proposalId: number) => {
+    if (!canApproveDps) {
+      toast.info("Akses Dibatasi", {
+        description: getRestrictionReason("approve"),
+      });
+      return;
+    }
+
+    if (!isConnected || !address) {
+      toast.error("Silakan hubungkan dompet anggota DPS terlebih dahulu.");
+      return;
+    }
+
+    const reason = prompt("Masukkan alasan penolakan/pembatalan proposal syariah:", "Tidak memenuhi kriteria asnaf BAZNAS.");
+    if (!reason) return;
+
+    setLoadingId(proposalId);
+    try {
+      toast.info("Silakan konfirmasi pembatalan proposal di dompet...");
+      const timestamp = BigInt(Math.floor(Date.now() / 1000));
+      const signature = await signTypedDataAsync({
+        domain: GOVERNANCE_EIP712_DOMAIN,
+        types: GOVERNANCE_EIP712_TYPES,
+        primaryType: "ProposalCancellation",
+        message: {
+          proposalId: BigInt(proposalId),
+          reason,
+          timestamp,
+        },
+      });
+
+      const res = await fetch("http://localhost:3001/api/governance/gasless-cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId,
+          reason,
+          timestamp: Number(timestamp),
+          signature,
+          signerAddress: address,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Gagal membatalkan proposal.");
+      }
+
+      toast.success(`Proposal #${proposalId} berhasil ditolak/dibatalkan.`);
+      onActionComplete();
+    } catch (err: any) {
+      console.error("DPS Rejection error:", err);
+      toast.error(err.message || "Gagal membatalkan proposal.");
     } finally {
       setLoadingId(null);
     }
@@ -127,6 +202,17 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    disabled={isLoading || !canApproveDps}
+                    onClick={() => handleReject(pId)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all cursor-pointer disabled:opacity-50"
+                    title={!canApproveDps ? getRestrictionReason("approve") : "Tolak / batalkan proposal"}
+                  >
+                    <XCircle className="w-4 h-4 text-rose-600" />
+                    <span>Tolak</span>
+                  </button>
+
+                  <button
+                    type="button"
                     disabled={isLoading}
                     onClick={() => handleApprove(pId)}
                     className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer ${
@@ -151,6 +237,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
                     )}
                   </button>
                 </div>
+
               </div>
             );
           })}

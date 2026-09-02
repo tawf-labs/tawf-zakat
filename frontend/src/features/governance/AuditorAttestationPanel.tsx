@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { FileSpreadsheet, CheckCircle2, ShieldCheck, Loader2, Sparkles, ExternalLink, Award, Lock } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
-import { ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
 import { type Hex } from "viem";
 import { toast } from "sonner";
 import { useGovernanceRole } from "./RoleContext";
@@ -10,25 +10,6 @@ interface AuditorAttestationPanelProps {
   proposals: any[];
   onActionComplete: () => void;
 }
-
-const AUDITOR_EIP712_DOMAIN = {
-  name: "Tawf Zakat Protocol",
-  version: "1",
-  chainId: 421614,
-  verifyingContract: ZAKAT_PROTOCOL_L1_ADDRESS as `0x${string}`,
-} as const;
-
-const AUDITOR_EIP712_TYPES = {
-  AuditorAttestation: [
-    { name: "proposalId", type: "uint256" },
-    { name: "beneficiaryHash", type: "bytes32" },
-    { name: "amountIDR", type: "uint256" },
-    { name: "auditOpinion", type: "string" },
-    { name: "standard", type: "string" },
-    { name: "auditorName", type: "string" },
-    { name: "timestamp", type: "uint256" },
-  ],
-} as const;
 
 export function AuditorAttestationPanel({
   proposals,
@@ -67,10 +48,10 @@ export function AuditorAttestationPanel({
         "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef") as Hex;
 
       // 1. Sign Gasless EIP-712 Signature
-      toast.info("Silakan konfirmasi tanda tangan digital EIP-712 di dompet...");
+      toast.info("Silakan konfirmasi tanda tangan digital otorisasi di dompet...");
       const signature = await signTypedDataAsync({
-        domain: AUDITOR_EIP712_DOMAIN,
-        types: AUDITOR_EIP712_TYPES,
+        domain: GOVERNANCE_EIP712_DOMAIN,
+        types: GOVERNANCE_EIP712_TYPES,
         primaryType: "AuditorAttestation",
         message: {
           proposalId: BigInt(pId),
@@ -112,7 +93,7 @@ export function AuditorAttestationPanel({
         throw new Error(errMessage);
       }
 
-      toast.success(`Atestasi Opini WTP untuk Proposal #${pId} berhasil dicatat on-chain (Gas Disponsori)!`);
+      toast.success(`Atestasi Opini WTP untuk Proposal #${pId} berhasil dicatat on-chain!`);
       onActionComplete();
     } catch (err: any) {
       console.error("Auditor Attestation error:", err);
@@ -134,15 +115,12 @@ export function AuditorAttestationPanel({
               Panel Atestasi Auditor Independen (Ex-Post WTP)
             </h3>
             <p className="text-xs text-[#5e7a70]">
-              Tanda tangan digital EIP-712 bebas biaya gas (disponsori Relayer) untuk sertifikasi kepatuhan PSAK 109.
+              Sertifikasi kepatuhan akuntansi syariah PSAK 109 & Fikih BAZNAS.
             </p>
           </div>
         </div>
-
-        <span className="text-xs font-semibold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full flex items-center gap-1">
-          <Sparkles className="w-3.5 h-3.5" /> 0 Gas Fee (Gasless)
-        </span>
       </div>
+
 
       {executedProposals.length === 0 ? (
         <div className="py-10 text-center text-xs text-[#5e7a70] space-y-2">
@@ -217,7 +195,7 @@ export function AuditorAttestationPanel({
                       ) : (
                         <Lock className="w-3.5 h-3.5 text-[#5e7a70]" />
                       )}
-                      <span>Terbitkan Opini WTP (0 Gas)</span>
+                      <span>Terbitkan Opini WTP</span>
                       {!canAttestAudit && (
                         <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-white text-[#5e7a70] border border-[#dbe7dd]">
                           Khusus Auditor
