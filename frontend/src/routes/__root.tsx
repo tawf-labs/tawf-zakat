@@ -9,6 +9,7 @@ import { WalletProvider } from "../lib/WalletContext";
 import { WebSocketProvider } from "../lib/WebSocketContext";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
+import { RoleProvider } from "../features/governance";
 import React, { useState } from "react";
 
 import appCss from "../styles.css?url";
@@ -113,14 +114,16 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               }}
             >
               <WalletProvider>
-                <WebSocketProvider>
-                  <Toaster richColors position="top-right" closeButton theme="light" />
-                  <Navbar />
-                  <ErrorBoundary>
-                    <div className="flex-1">{children}</div>
-                  </ErrorBoundary>
-                  <Footer />
-                </WebSocketProvider>
+                <RoleProvider>
+                  <WebSocketProvider>
+                    <Toaster richColors position="top-right" closeButton theme="light" />
+                    <Navbar />
+                    <ErrorBoundary>
+                      <div className="flex-1">{children}</div>
+                    </ErrorBoundary>
+                    <Footer />
+                  </WebSocketProvider>
+                </RoleProvider>
               </WalletProvider>
             </ConnectKitProvider>
           </QueryClientProvider>

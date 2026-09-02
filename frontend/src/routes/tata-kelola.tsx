@@ -16,16 +16,8 @@ import {
 import { Landmark, Shield, Scale, FileSpreadsheet, PlusCircle, Users, Lock } from "lucide-react";
 
 export const Route = createFileRoute("/tata-kelola")({
-  component: TataKelolaPageWrapper,
+  component: TataKelolaPage,
 });
-
-function TataKelolaPageWrapper() {
-  return (
-    <RoleProvider>
-      <TataKelolaPage />
-    </RoleProvider>
-  );
-}
 
 function TataKelolaPage() {
   const queryClient = useQueryClient();
