@@ -56,6 +56,8 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   auditNotes: text("audit_notes"),
   auditedAt: timestamp("audited_at"),
   auditTxHash: text("audit_tx_hash"),
+  laiDocumentCID: text("lai_document_cid"),
+  financialStatementsCID: text("financial_statements_cid"),
   // Safe.global Multi-Sig Queue Tracking
   safeStatus: text("safe_status").default("IDLE"), // 'IDLE' | 'PENDING_SAFE_SIGNATURES' | 'EXECUTED_ONCHAIN'
   safeConfirmationsCount: integer("safe_confirmations_count").default(0),
@@ -116,3 +118,22 @@ export type NewOnchainEvent = typeof onchainEvents.$inferInsert;
 
 export type RoleMember = typeof roleMembers.$inferSelect;
 export type NewRoleMember = typeof roleMembers.$inferInsert;
+
+// 7. Auditor Identity Registry Table
+// One-time onboarding record per KAP/auditor wallet — the single source of truth
+// for the human-readable identity behind an AUDITOR_ROLE address. Attestations
+// pull auditorName/licenseProofCID from here instead of accepting free-typed input.
+export const auditorProfiles = pgTable("auditor_profiles", {
+  id: serial("id").primaryKey(),
+  accountAddress: text("account_address").notNull().unique(),
+  name: text("name").notNull(),
+  kapLicenseNumber: text("kap_license_number").notNull(),
+  licenseProofCID: text("license_proof_cid").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  registeredBy: text("registered_by").notNull(),
+  registeredAt: timestamp("registered_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type AuditorProfile = typeof auditorProfiles.$inferSelect;
+export type NewAuditorProfile = typeof auditorProfiles.$inferInsert;

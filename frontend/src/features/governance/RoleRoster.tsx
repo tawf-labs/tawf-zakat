@@ -1,6 +1,7 @@
 import React from "react";
 import { Shield, ShieldCheck, Scale, FileSpreadsheet, Zap, ExternalLink } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { AuditorRegistrationPanel } from "./AuditorRegistrationPanel";
 
 export function RoleRoster() {
   const roles = [
@@ -107,6 +108,8 @@ export function RoleRoster() {
           );
         })}
       </div>
+
+      <AuditorRegistrationPanel />
     </div>
   );
 }

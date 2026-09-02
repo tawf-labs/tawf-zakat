@@ -11,6 +11,7 @@ import {
   uploadDisbursementReceiptToIPFS,
   uploadAuditReportToIPFS,
   inspectIpfsCid,
+  assertValidPdfUpload,
   PINATA_DEDICATED_GATEWAY,
   PUBLIC_IPFS_GATEWAY,
   type DisbursementMetadata,
@@ -20,7 +21,7 @@ import {
 } from "./ipfs";
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
-import { verifyTypedData, createPublicClient, createWalletClient, http, toHex, type Hex } from "viem";
+import { verifyTypedData, createPublicClient, createWalletClient, http, toHex, parseAbi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
@@ -44,9 +45,66 @@ export const AUDITOR_EIP712_TYPES = {
     { name: "auditOpinion", type: "string" },
     { name: "standard", type: "string" },
     { name: "auditorName", type: "string" },
+    { name: "laiDocumentCID", type: "string" },
+    { name: "financialStatementsCID", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  AuditorRegistration: [
+    { name: "auditorAddress", type: "address" },
+    { name: "auditorName", type: "string" },
+    { name: "kapLicenseNumber", type: "string" },
+    { name: "licenseProofCID", type: "string" },
     { name: "timestamp", type: "uint256" },
   ],
 } as const;
+
+const VALID_AUDIT_OPINIONS = ["WTP", "WDP", "TW", "TMP"] as const;
+type AuditOpinion = (typeof VALID_AUDIT_OPINIONS)[number];
+
+const GOVERNANCE_ROLE_HASHES: Record<string, Hex> = {
+  DEFAULT_ADMIN_ROLE: "0x0000000000000000000000000000000000000000000000000000000000000000",
+  SHARIA_SUPERVISOR_ROLE: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
+  AUDITOR_ROLE: "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c",
+  RELAYER_ROLE: "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
+};
+
+const HAS_ROLE_ABI = parseAbi(["function hasRole(bytes32 role, address account) view returns (bool)"]);
+
+const rolePublicClient = createPublicClient({
+  chain: arbitrumSepolia,
+  transport: http(CONTRACT_CONFIG.RPC_URL),
+});
+
+// Mirrors the frontend's RoleContext dual-check (live on-chain hasRole OR the
+// backend role_members roster synced by the indexer) so a privileged route
+// never trusts a bare address in the request body on its own.
+async function isAddressAuthorizedForRole(address: string, roleName: string): Promise<boolean> {
+  const normalized = address.toLowerCase();
+  const roleHash = GOVERNANCE_ROLE_HASHES[roleName];
+  if (!roleHash) return false;
+
+  try {
+    const hasOnChain = await rolePublicClient.readContract({
+      address: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS,
+      abi: HAS_ROLE_ABI,
+      functionName: "hasRole",
+      args: [roleHash, address as Hex],
+    });
+    if (hasOnChain) return true;
+  } catch (err) {
+    console.warn(`On-chain hasRole check failed for ${roleName}:`, err);
+  }
+
+  try {
+    const roleMembers = await dbService.getRoleMembers();
+    return roleMembers.some(
+      (r: any) => r.accountAddress?.toLowerCase() === normalized && r.roleName === roleName
+    );
+  } catch (err) {
+    console.warn("DB role member lookup failed:", err);
+    return false;
+  }
+}
 
 export const GOVERNANCE_EIP712_DOMAIN = AUDITOR_EIP712_DOMAIN;
 
@@ -84,6 +142,15 @@ export const GOVERNANCE_EIP712_TYPES = {
     { name: "auditOpinion", type: "string" },
     { name: "standard", type: "string" },
     { name: "auditorName", type: "string" },
+    { name: "laiDocumentCID", type: "string" },
+    { name: "financialStatementsCID", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  AuditorRegistration: [
+    { name: "auditorAddress", type: "address" },
+    { name: "auditorName", type: "string" },
+    { name: "kapLicenseNumber", type: "string" },
+    { name: "licenseProofCID", type: "string" },
     { name: "timestamp", type: "uint256" },
   ],
 } as const;
@@ -134,6 +201,41 @@ app.post("/api/ipfs/upload-file", async (c) => {
   } catch (error: any) {
     console.error("IPFS File Upload API Error:", error);
     return c.json({ error: error.message || "Failed to upload file to IPFS", success: false }, 502);
+  }
+});
+
+// Strict PDF-only Document Upload (audit LAI / financial statements / KAP license proof)
+app.post("/api/ipfs/upload-document", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const file = body["file"];
+    const customName = body["name"] as string | undefined;
+
+    if (!file || !(file instanceof Blob)) {
+      return c.json({ error: "Missing or invalid file in multipart body", success: false }, 400);
+    }
+
+    const mimeType = file.type || "application/octet-stream";
+    const fileName = customName || (file instanceof File ? file.name : `document-${Date.now()}.pdf`);
+
+    try {
+      assertValidPdfUpload(mimeType, file.size, fileName);
+    } catch (validationErr: any) {
+      return c.json({ error: validationErr.message, success: false }, 400);
+    }
+
+    const result = await uploadFileToIPFS(file, fileName, mimeType);
+
+    return c.json({
+      success: true,
+      cid: result.cid,
+      gatewayUrl: result.gatewayUrl,
+      pinSize: result.pinSize,
+      fileName,
+    });
+  } catch (error: any) {
+    console.error("IPFS Document Upload API Error:", error);
+    return c.json({ error: error.message || "Failed to upload document to IPFS", success: false }, 502);
   }
 });
 
@@ -923,26 +1025,133 @@ app.get("/api/safe/pending", async (c) => {
   }
 });
 
+// 4h-0. Auditor Identity Registry: one-time onboarding by an admin (DEFAULT_ADMIN_ROLE),
+// never by the auditor themselves. This is the only place an auditor's name/KAP license
+// gets set — attestations pull from here instead of accepting free-typed input.
+app.post("/api/governance/auditors/register", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { adminAddress, auditorAddress, auditorName, kapLicenseNumber, licenseProofCID, signature, timestamp } = body;
+
+    if (!adminAddress || !auditorAddress || !auditorName || !kapLicenseNumber || !licenseProofCID || !signature) {
+      return c.json({ error: "Missing required auditor registration fields", success: false }, 400);
+    }
+
+    const eip712Timestamp = timestamp ? BigInt(timestamp) : BigInt(Math.floor(Date.now() / 1000));
+
+    let isSignatureValid = false;
+    try {
+      isSignatureValid = await verifyTypedData({
+        address: adminAddress as Hex,
+        domain: AUDITOR_EIP712_DOMAIN,
+        types: AUDITOR_EIP712_TYPES,
+        primaryType: "AuditorRegistration",
+        message: {
+          auditorAddress: auditorAddress as Hex,
+          auditorName: auditorName as string,
+          kapLicenseNumber: kapLicenseNumber as string,
+          licenseProofCID: licenseProofCID as string,
+          timestamp: eip712Timestamp,
+        },
+        signature: signature as Hex,
+      });
+    } catch {
+      isSignatureValid = false;
+    }
+
+    if (!isSignatureValid) {
+      return c.json({ error: "Unauthorized: Invalid or forged EIP-712 admin signature", success: false }, 401);
+    }
+
+    const isAdmin = await isAddressAuthorizedForRole(adminAddress, "DEFAULT_ADMIN_ROLE");
+    if (!isAdmin) {
+      return c.json({ error: "Unauthorized: Signer does not hold DEFAULT_ADMIN_ROLE", success: false }, 403);
+    }
+
+    const profile = await dbService.upsertAuditorProfile({
+      accountAddress: auditorAddress,
+      name: auditorName,
+      kapLicenseNumber,
+      licenseProofCID,
+      registeredBy: adminAddress,
+    });
+
+    eventBus.broadcast("AUDITOR_REGISTERED", { auditorAddress, auditorName, registeredBy: adminAddress });
+
+    return c.json({ success: true, message: "Auditor identity registered successfully", profile });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to register auditor identity", success: false }, 500);
+  }
+});
+
+app.get("/api/governance/auditors", async (c) => {
+  try {
+    const profiles = await dbService.getAuditorProfiles();
+    return c.json({ success: true, profiles });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to list auditor profiles", success: false }, 500);
+  }
+});
+
+app.get("/api/governance/auditors/:address", async (c) => {
+  try {
+    const address = c.req.param("address");
+    const profile = await dbService.getAuditorProfile(address);
+    if (!profile) {
+      return c.json({ error: "Auditor not registered", success: false, profile: null }, 404);
+    }
+    return c.json({ success: true, profile });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to fetch auditor profile", success: false }, 500);
+  }
+});
+
 // 4h. Ex-Post Independent Auditor Attestation Engine (Ticket #33 & ADR-0009)
 const handleAuditAttest = async (c: any) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const {
       proposalId,
-      auditorName,
       auditorAddress,
       auditOpinion,
       auditNotes,
-      auditCertFileName,
-      auditTxHash,
+      laiDocumentCID,
+      financialStatementsCID,
       signature,
-      standard,
-      messageTimestamp,
       timestamp,
     } = body;
 
-    if (!proposalId || !auditorName || !auditorAddress || !auditOpinion) {
+    if (!proposalId || !auditorAddress || !auditOpinion || !signature) {
       return c.json({ error: "Missing required auditor attestation fields", success: false }, 400);
+    }
+
+    if (!VALID_AUDIT_OPINIONS.includes(auditOpinion)) {
+      return c.json({
+        error: `Opini audit tidak valid. Gunakan salah satu: ${VALID_AUDIT_OPINIONS.join(", ")}`,
+        success: false,
+      }, 400);
+    }
+
+    if (!laiDocumentCID || !financialStatementsCID) {
+      return c.json({
+        error: "Dokumen LAI dan paket laporan keuangan diaudit wajib diunggah sebelum opini dapat diterbitkan",
+        success: false,
+      }, 400);
+    }
+
+    // Auditor identity must already be onboarded by an admin — never trust a
+    // client-supplied name. This also doubles as the authorization gate.
+    const auditorProfile = await dbService.getAuditorProfile(auditorAddress);
+    if (!auditorProfile) {
+      return c.json({
+        error: "Wallet ini belum terdaftar sebagai auditor. Hubungi admin untuk registrasi KAP terlebih dahulu.",
+        success: false,
+      }, 403);
+    }
+
+    const isAuthorizedAuditor = await isAddressAuthorizedForRole(auditorAddress, "AUDITOR_ROLE");
+    if (!isAuthorizedAuditor) {
+      return c.json({ error: "Unauthorized: Wallet tidak memegang AUDITOR_ROLE", success: false }, 403);
     }
 
     const proposals = await dbService.getProposals();
@@ -952,60 +1161,36 @@ const handleAuditAttest = async (c: any) => {
       return c.json({ error: "Disbursement proposal not found", success: false }, 404);
     }
 
-    // Verify EIP-712 Cryptographic Signature if provided
-    const eip712Timestamp = timestamp ? BigInt(timestamp) : (messageTimestamp ? BigInt(messageTimestamp) : BigInt(Math.floor(Date.now() / 1000)));
-    const standardString = standard || "PSAK 109 & Fikih BAZNAS";
-    let isSignatureValid = true;
+    const auditorName = auditorProfile.name;
+    const standardString = "PSAK 109 & Fikih BAZNAS";
+    const eip712Timestamp = timestamp ? BigInt(timestamp) : BigInt(Math.floor(Date.now() / 1000));
 
-    if (signature && signature.startsWith("0x")) {
-      try {
-        isSignatureValid = await verifyTypedData({
-          address: auditorAddress as Hex,
-          domain: AUDITOR_EIP712_DOMAIN,
-          types: AUDITOR_EIP712_TYPES,
-          primaryType: "AuditorAttestation",
-          message: {
-            proposalId: BigInt(proposalId),
-            beneficiaryHash: (targetProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex,
-            amountIDR: BigInt(targetProposal.amount),
-            auditOpinion: auditOpinion as string,
-            standard: standardString,
-            auditorName: auditorName as string,
-            timestamp: eip712Timestamp,
-          },
-          signature: signature as Hex,
-        });
-      } catch (sigErr) {
-        isSignatureValid = false;
-      }
+    let isSignatureValid = false;
+    try {
+      isSignatureValid = await verifyTypedData({
+        address: auditorAddress as Hex,
+        domain: AUDITOR_EIP712_DOMAIN,
+        types: AUDITOR_EIP712_TYPES,
+        primaryType: "AuditorAttestation",
+        message: {
+          proposalId: BigInt(proposalId),
+          beneficiaryHash: (targetProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex,
+          amountIDR: BigInt(targetProposal.amount),
+          auditOpinion: auditOpinion as string,
+          standard: standardString,
+          auditorName: auditorName as string,
+          laiDocumentCID: laiDocumentCID as string,
+          financialStatementsCID: financialStatementsCID as string,
+          timestamp: eip712Timestamp,
+        },
+        signature: signature as Hex,
+      });
+    } catch (sigErr) {
+      isSignatureValid = false;
+    }
 
-      // Try fallback with alternative standard string if primary didn't match
-      if (!isSignatureValid) {
-        try {
-          isSignatureValid = await verifyTypedData({
-            address: auditorAddress as Hex,
-            domain: AUDITOR_EIP712_DOMAIN,
-            types: AUDITOR_EIP712_TYPES,
-            primaryType: "AuditorAttestation",
-            message: {
-              proposalId: BigInt(proposalId),
-              beneficiaryHash: (targetProposal.beneficiaryHash || "0x0000000000000000000000000000000000000000000000000000000000000000") as Hex,
-              amountIDR: BigInt(targetProposal.amount),
-              auditOpinion: auditOpinion as string,
-              standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
-              auditorName: auditorName as string,
-              timestamp: eip712Timestamp,
-            },
-            signature: signature as Hex,
-          });
-        } catch {
-          isSignatureValid = false;
-        }
-      }
-
-      if (!isSignatureValid) {
-        return c.json({ error: "Unauthorized: Invalid or forged EIP-712 auditor signature", success: false }, 401);
-      }
+    if (!isSignatureValid) {
+      return c.json({ error: "Unauthorized: Invalid or forged EIP-712 auditor signature", success: false }, 401);
     }
 
     const auditMetadata: AuditReportMetadata = {
@@ -1021,57 +1206,66 @@ const handleAuditAttest = async (c: any) => {
       disbursementBastCID: targetProposal.disbursementReceiptCID || "ipfs://QmBASTDirectReceipt",
       auditorName,
       auditorAddress,
-      auditOpinion: auditOpinion as any,
-      auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
+      auditOpinion: auditOpinion as AuditOpinion,
+      auditNotes: auditNotes || "",
       auditStandard: standardString,
-      auditorSignature: signature || undefined,
-      auditCertCID: body.auditCertCID || (auditCertFileName ? `ipfs://QmAuditCert${Date.now()}` : undefined),
+      auditorSignature: signature,
+      laiDocumentCID,
+      financialStatementsCID,
+      licenseProofCID: auditorProfile.licenseProofCID,
       timestamp: new Date().toISOString(),
     };
 
     const ipfsResult = await uploadAuditReportToIPFS(auditMetadata);
 
-    // Gas-Sponsored On-Chain Transaction Broadcast by Backend Relayer
-    let finalAuditTxHash = auditTxHash;
-    if (process.env.PRIVATE_KEY && (!finalAuditTxHash || finalAuditTxHash.includes("attest") || !finalAuditTxHash.startsWith("0x"))) {
-      try {
-        const relayerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as Hex);
-        const publicClient = createPublicClient({
-          chain: arbitrumSepolia,
-          transport: http(CONTRACT_CONFIG.RPC_URL),
-        });
-        const fees = await publicClient.estimateFeesPerGas();
-        const maxFeePerGas = fees.maxFeePerGas ? (fees.maxFeePerGas * 150n) / 100n : undefined;
-        const maxPriorityFeePerGas = fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * 150n) / 100n : undefined;
+    // Gas-Sponsored On-Chain Notarization Tx — hard-fail on any relayer error.
+    // A fabricated txHash recorded as if real would defeat the entire point
+    // of an on-chain-verifiable audit trail, so there is no fallback here.
+    if (!process.env.PRIVATE_KEY) {
+      return c.json({ error: "Relayer belum dikonfigurasi di server (PRIVATE_KEY kosong)", success: false }, 503);
+    }
 
-        const relayerClient = createWalletClient({
-          account: relayerAccount,
-          chain: arbitrumSepolia,
-          transport: http(CONTRACT_CONFIG.RPC_URL),
-        });
+    let finalAuditTxHash: string;
+    try {
+      const relayerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as Hex);
+      const publicClient = createPublicClient({
+        chain: arbitrumSepolia,
+        transport: http(CONTRACT_CONFIG.RPC_URL),
+      });
+      const fees = await publicClient.estimateFeesPerGas();
+      const maxFeePerGas = fees.maxFeePerGas ? (fees.maxFeePerGas * 150n) / 100n : undefined;
+      const maxPriorityFeePerGas = fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * 150n) / 100n : undefined;
 
-        // Broadcast sponsored transaction recording auditor attestation on Arbitrum Sepolia (Notarization Tx)
-        const sponsoredTx = await relayerClient.sendTransaction({
-          to: relayerAccount.address,
-          value: 0n,
-          data: toHex(`AUDIT_WTP:PROP_${proposalId}:OPIN_${auditOpinion}:${ipfsResult.cid}`),
-          maxFeePerGas,
-          maxPriorityFeePerGas,
-        });
-        finalAuditTxHash = sponsoredTx;
-      } catch (relayerErr) {
-        console.warn("Relayer sponsored broadcast fallback:", relayerErr);
-        finalAuditTxHash = `0x${toHex(`AUDIT_WTP_${proposalId}_${Date.now()}`).slice(2).padStart(64, "0")}`;
-      }
+      const relayerClient = createWalletClient({
+        account: relayerAccount,
+        chain: arbitrumSepolia,
+        transport: http(CONTRACT_CONFIG.RPC_URL),
+      });
+
+      finalAuditTxHash = await relayerClient.sendTransaction({
+        to: relayerAccount.address,
+        value: 0n,
+        data: toHex(`AUDIT_${auditOpinion}:PROP_${proposalId}:${ipfsResult.cid}`),
+        maxFeePerGas,
+        maxPriorityFeePerGas,
+      });
+    } catch (relayerErr: any) {
+      console.error("Relayer sponsored broadcast failed for audit attestation:", relayerErr);
+      return c.json({
+        error: "Gagal menyiarkan transaksi atestasi ke jaringan on-chain. Silakan coba lagi.",
+        success: false,
+      }, 502);
     }
 
     const updated = await dbService.attestProposal(Number(proposalId), {
       auditorName,
       auditorAddress,
-      auditOpinion: auditOpinion as any,
-      auditNotes: auditNotes || "Penyaluran sesuai standar akuntansi syariah PSAK 109 / SAS 109.",
+      auditOpinion: auditOpinion as AuditOpinion,
+      auditNotes: auditNotes || "",
       auditReportCID: ipfsResult.cid,
       auditTxHash: finalAuditTxHash,
+      laiDocumentCID,
+      financialStatementsCID,
     });
 
     eventBus.broadcast("AUDIT_ATTESTED", {
@@ -1089,7 +1283,7 @@ const handleAuditAttest = async (c: any) => {
       ipfsGatewayUrl: ipfsResult.gatewayUrl,
       auditTxHash: finalAuditTxHash,
       auditorSignature: signature,
-      isCryptographicallySigned: Boolean(signature && isSignatureValid),
+      isCryptographicallySigned: true,
       auditMetadata,
       proposal: updated,
     });
@@ -1385,6 +1579,17 @@ app.post("/api/governance/gasless-execute", async (c) => {
 
     if (!isSignatureValid) {
       return c.json({ error: "Unauthorized: Invalid or forged EIP-712 Amil execution signature", success: false }, 400);
+    }
+
+    // A disputed audit opinion (WDP/TW/TMP) blocks the proposal from proceeding
+    // to disbursement — otherwise the auditor gate is purely decorative.
+    const proposals = await dbService.getProposals();
+    const targetProposal = proposals.find((p) => p.proposalId === Number(proposalId));
+    if (targetProposal?.auditStatus === "DISPUTED") {
+      return c.json({
+        error: "Pencairan diblokir: proposal ini memiliki opini audit bersengketa (bukan WTP)",
+        success: false,
+      }, 409);
     }
 
     const txHash = await broadcastGovernanceRelayerTx(`EXECUTE_DISBURSEMENT:PROP_${proposalId}:${disbursementReceiptCID || "NO_BAST"}`);

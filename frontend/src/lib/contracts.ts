@@ -293,7 +293,25 @@ export const GOVERNANCE_EIP712_TYPES = {
     { name: "auditOpinion", type: "string" },
     { name: "standard", type: "string" },
     { name: "auditorName", type: "string" },
+    { name: "laiDocumentCID", type: "string" },
+    { name: "financialStatementsCID", type: "string" },
+    { name: "timestamp", type: "uint256" },
+  ],
+  AuditorRegistration: [
+    { name: "auditorAddress", type: "address" },
+    { name: "auditorName", type: "string" },
+    { name: "kapLicenseNumber", type: "string" },
+    { name: "licenseProofCID", type: "string" },
     { name: "timestamp", type: "uint256" },
   ],
 } as const;
+
+export const AUDIT_STANDARD = "PSAK 109 & Fikih BAZNAS";
+export const AUDIT_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+export const AUDIT_OPINIONS = [
+  { value: "WTP", label: "WTP — Wajar Tanpa Pengecualian" },
+  { value: "WDP", label: "WDP — Wajar Dengan Pengecualian" },
+  { value: "TW", label: "TW — Tidak Wajar" },
+  { value: "TMP", label: "TMP — Tidak Memberikan Pendapat" },
+] as const;
 

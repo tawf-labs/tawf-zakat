@@ -1,7 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import app, { AUDITOR_EIP712_DOMAIN, AUDITOR_EIP712_TYPES } from "../src/index";
+import { dbService } from "../src/db/index";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import type { Hex } from "viem";
+
+const AUDITOR_ROLE_HASH = "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c";
+const AUDITOR_NAME = "Kantor Akuntan Publik (KAP) Sharia Trust";
 
 describe("Independent Auditor Attestation Engine & On-Chain Certification (Ticket #33 & ADR-0009)", () => {
   it("should record auditor attestation with EIP-712 cryptographic signature and verify authorship", async () => {
@@ -61,7 +65,21 @@ describe("Independent Auditor Attestation Engine & On-Chain Certification (Ticke
       })
     );
 
-    // 4. Generate valid EIP-712 signature from Auditor Wallet
+    // 4. Onboard the auditor (AUDITOR_ROLE + registry profile) — attestation now
+    // requires both, since the name/standing is no longer free-typed per submission.
+    await dbService.grantRoleMember(AUDITOR_ROLE_HASH, "AUDITOR_ROLE", auditorAccount.address);
+    await dbService.upsertAuditorProfile({
+      accountAddress: auditorAccount.address,
+      name: AUDITOR_NAME,
+      kapLicenseNumber: "AP.5678",
+      licenseProofCID: "ipfs://QmLicenseProofUnitTest",
+      registeredBy: "0xTestAdmin0000000000000000000000000000",
+    });
+
+    const laiDocumentCID = "ipfs://QmLaiDocumentUnitTest";
+    const financialStatementsCID = "ipfs://QmFinancialStatementsUnitTest";
+
+    // 5. Generate valid EIP-712 signature from Auditor Wallet
     const messageTimestamp = Math.floor(Date.now() / 1000);
     const signature = await auditorAccount.signTypedData({
       domain: AUDITOR_EIP712_DOMAIN,
@@ -72,13 +90,15 @@ describe("Independent Auditor Attestation Engine & On-Chain Certification (Ticke
         beneficiaryHash: beneficiaryHash as Hex,
         amountIDR: 5000000n,
         auditOpinion: "WTP",
-        standard: "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance Standard",
-        auditorName: "Kantor Akuntan Publik (KAP) Sharia Trust",
+        standard: "PSAK 109 & Fikih BAZNAS",
+        auditorName: AUDITOR_NAME,
+        laiDocumentCID,
+        financialStatementsCID,
         timestamp: BigInt(messageTimestamp),
       },
     });
 
-    // 5. Test Invalid/Forged Signature Rejection
+    // 6. Test Invalid/Forged Signature Rejection
     const invalidSignature = "0x" + "9".repeat(130);
     const rejectRes = await app.fetch(
       new Request("http://localhost:3001/api/audit/attest", {
@@ -86,30 +106,31 @@ describe("Independent Auditor Attestation Engine & On-Chain Certification (Ticke
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalId,
-          auditorName: "Kantor Akuntan Publik (KAP) Sharia Trust",
           auditorAddress: auditorAccount.address,
           auditOpinion: "WTP",
+          laiDocumentCID,
+          financialStatementsCID,
           signature: invalidSignature,
-          messageTimestamp,
+          timestamp: messageTimestamp,
         }),
       })
     );
     expect(rejectRes.status).toBe(401);
 
-    // 6. Test Valid EIP-712 Attestation Submission
+    // 7. Test Valid EIP-712 Attestation Submission
     const attestRes = await app.fetch(
       new Request("http://localhost:3001/api/audit/attest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalId,
-          auditorName: "Kantor Akuntan Publik (KAP) Sharia Trust",
           auditorAddress: auditorAccount.address,
           auditOpinion: "WTP",
           auditNotes: "Penyaluran sesuai standar PSAK 109, mutasi bank cocok dengan BAST.",
-          auditCertFileName: "opini_audit_psak109_maryam.pdf",
+          laiDocumentCID,
+          financialStatementsCID,
           signature,
-          messageTimestamp,
+          timestamp: messageTimestamp,
         }),
       })
     );

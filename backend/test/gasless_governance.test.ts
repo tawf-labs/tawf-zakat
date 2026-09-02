@@ -3,8 +3,11 @@ import app, {
   GOVERNANCE_EIP712_DOMAIN,
   GOVERNANCE_EIP712_TYPES,
 } from "../src/index";
+import { dbService } from "../src/db/index";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import type { Hex } from "viem";
+
+const AUDITOR_ROLE_HASH = "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c";
 
 describe("Universal Gasless EIP-712 Governance Engine for Amil & DPS (Ticket #50 & ADR-0015)", () => {
   const amilAccount = privateKeyToAccount(generatePrivateKey());
@@ -383,6 +386,18 @@ describe("Universal Gasless EIP-712 Governance Engine for Amil & DPS (Ticket #50
     expect(data3.proposal.status).toBe("Executed");
 
     // Phase 4: Independent Auditor Gasless WTP Attestation
+    // Auditor identity must be onboarded (AUDITOR_ROLE + registry profile) before attesting.
+    await dbService.grantRoleMember(AUDITOR_ROLE_HASH, "AUDITOR_ROLE", auditorAccount.address);
+    await dbService.upsertAuditorProfile({
+      accountAddress: auditorAccount.address,
+      name: "KAP Sharia Trust & Public Auditor",
+      kapLicenseNumber: "AP.1234",
+      licenseProofCID: "ipfs://QmLicenseProofE2ETest",
+      registeredBy: "0xTestAdmin0000000000000000000000000000",
+    });
+
+    const laiDocumentCID = "ipfs://QmLaiDocumentE2ETest";
+    const financialStatementsCID = "ipfs://QmFinancialStatementsE2ETest";
     const t4 = Math.floor(Date.now() / 1000);
     const sigAttest = await auditorAccount.signTypedData({
       domain: GOVERNANCE_EIP712_DOMAIN,
@@ -395,6 +410,8 @@ describe("Universal Gasless EIP-712 Governance Engine for Amil & DPS (Ticket #50
         auditOpinion: "WTP",
         standard: "PSAK 109 & Fikih BAZNAS",
         auditorName: "KAP Sharia Trust & Public Auditor",
+        laiDocumentCID,
+        financialStatementsCID,
         timestamp: BigInt(t4),
       },
     });
@@ -405,11 +422,9 @@ describe("Universal Gasless EIP-712 Governance Engine for Amil & DPS (Ticket #50
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalId,
-          beneficiaryHash: benHash,
-          amountIDR: 5000000,
           auditOpinion: "WTP",
-          standard: "PSAK 109 & Fikih BAZNAS",
-          auditorName: "KAP Sharia Trust & Public Auditor",
+          laiDocumentCID,
+          financialStatementsCID,
           timestamp: t4,
           signature: sigAttest,
           auditorAddress: auditorAccount.address,

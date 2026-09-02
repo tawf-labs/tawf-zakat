@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
-import { FileText, ExternalLink, Download, ShieldCheck, Eye, Loader2 } from "lucide-react";
+import { FileText, ExternalLink, ShieldCheck, Eye } from "lucide-react";
 import { PINATA_DEDICATED_GATEWAY, PUBLIC_IPFS_GATEWAY, getIpfsUrl } from "../../lib/contracts";
+import { UniversalEvidenceModal } from "../evidence/UniversalEvidenceModal";
 
 interface BastModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ interface BastModalProps {
 
 export function BastModal({ isOpen, onClose, proposal }: BastModalProps) {
   const [useFallback, setUseFallback] = useState(false);
+  const [showEvidenceViewer, setShowEvidenceViewer] = useState(false);
 
   if (!proposal) return null;
 
@@ -80,16 +82,23 @@ export function BastModal({ isOpen, onClose, proposal }: BastModalProps) {
 
           {/* Action Links */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowEvidenceViewer(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#17332c] hover:bg-[#1b765e] text-white text-xs font-bold uppercase tracking-wider transition-all shadow-2xs cursor-pointer"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Lihat Isi Dokumen</span>
+              </button>
               <a
                 href={ipfsUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#17332c] hover:bg-[#1b765e] text-white text-xs font-bold uppercase tracking-wider transition-all shadow-2xs"
+                className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-[#dbe7dd] text-[11px] font-semibold text-[#5e7a70] hover:bg-[#f4f8f3] transition-colors"
               >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Buka Berkas BAST Asli</span>
-                <ExternalLink className="w-3.5 h-3.5 ml-1" />
+                <span>Buka Gateway IPFS Langsung</span>
+                <ExternalLink className="w-3 h-3" />
               </a>
               <button
                 type="button"
@@ -109,6 +118,13 @@ export function BastModal({ isOpen, onClose, proposal }: BastModalProps) {
           </div>
         </div>
       </DialogContent>
+
+      <UniversalEvidenceModal
+        isOpen={showEvidenceViewer}
+        onClose={() => setShowEvidenceViewer(false)}
+        cid={cid || undefined}
+        title={`Berita Acara Serah Terima (BAST) — Proposal #${proposal.id}`}
+      />
     </Dialog>
   );
 }

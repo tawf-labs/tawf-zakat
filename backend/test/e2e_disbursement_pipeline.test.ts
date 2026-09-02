@@ -1,5 +1,10 @@
 import { describe, it, expect } from "bun:test";
-import app from "../src/index";
+import app, { AUDITOR_EIP712_DOMAIN, AUDITOR_EIP712_TYPES } from "../src/index";
+import { dbService } from "../src/db/index";
+import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import type { Hex } from "viem";
+
+const AUDITOR_ROLE_HASH = "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c";
 
 describe("Public Transparency Audit Trail & Verifiable Proof Explorer (Ticket #30)", () => {
   it("should execute full lifecycle: intake -> approval quorum -> BAST pinning -> execution -> public audit trail inspection", async () => {
@@ -103,18 +108,52 @@ describe("Public Transparency Audit Trail & Verifiable Proof Explorer (Ticket #3
     expect(verifiedProposal.beneficiaryHash).toBe(beneficiaryHash);
 
     // 7. Ex-Post Independent Auditor Attestation (Ticket #33 & #34)
+    // Auditor must be onboarded (AUDITOR_ROLE + registry profile) and sign EIP-712
+    // over the exact documents reviewed before an opinion can be recorded.
+    const auditorAccount = privateKeyToAccount(generatePrivateKey());
+    await dbService.grantRoleMember(AUDITOR_ROLE_HASH, "AUDITOR_ROLE", auditorAccount.address);
+    const auditorName = "Kantor Akuntan Publik (KAP) Sharia Audit & Advisory";
+    await dbService.upsertAuditorProfile({
+      accountAddress: auditorAccount.address,
+      name: auditorName,
+      kapLicenseNumber: "AP.9012",
+      licenseProofCID: "ipfs://QmLicenseProofE2EPipelineTest",
+      registeredBy: "0xTestAdmin0000000000000000000000000000",
+    });
+
+    const laiDocumentCID = "ipfs://QmLaiDocumentE2EPipelineTest";
+    const financialStatementsCID = "ipfs://QmFinancialStatementsE2EPipelineTest";
+    const auditTimestamp = Math.floor(Date.now() / 1000);
+    const auditSignature = await auditorAccount.signTypedData({
+      domain: AUDITOR_EIP712_DOMAIN,
+      types: AUDITOR_EIP712_TYPES,
+      primaryType: "AuditorAttestation",
+      message: {
+        proposalId: BigInt(proposalId),
+        beneficiaryHash: beneficiaryHash as Hex,
+        amountIDR: BigInt(2500000),
+        auditOpinion: "WTP",
+        standard: "PSAK 109 & Fikih BAZNAS",
+        auditorName,
+        laiDocumentCID,
+        financialStatementsCID,
+        timestamp: BigInt(auditTimestamp),
+      },
+    });
+
     const auditorAttestRes = await app.fetch(
       new Request("http://localhost:3001/api/audit/attest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalId,
-          auditorName: "Kantor Akuntan Publik (KAP) Sharia Audit & Advisory",
-          auditorAddress: "0xAuditorSepoliaAddress1234567890abcdef",
+          auditorAddress: auditorAccount.address,
           auditOpinion: "WTP",
           auditNotes: "Penyaluran beasiswa santri telah diaudit sesuai PSAK 109, mutasi BSI terverifikasi, dan tidak ditemukan double claim.",
-          auditCertFileName: "laporan_audit_beasiswa_santri_psak109.pdf",
-          auditTxHash: "0xdddd4444555566667777888899990000111122223333eeeeffffaaaabbbbcccc",
+          laiDocumentCID,
+          financialStatementsCID,
+          signature: auditSignature,
+          timestamp: auditTimestamp,
         }),
       })
     );

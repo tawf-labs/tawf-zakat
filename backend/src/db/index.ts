@@ -38,6 +38,19 @@ if (databaseUrl) {
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_notes text;`,
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audited_at timestamp;`,
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_tx_hash text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS lai_document_cid text;`,
+      `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS financial_statements_cid text;`,
+      `CREATE TABLE IF NOT EXISTS auditor_profiles (
+         id SERIAL PRIMARY KEY,
+         account_address TEXT NOT NULL UNIQUE,
+         name TEXT NOT NULL,
+         kap_license_number TEXT NOT NULL,
+         license_proof_cid TEXT NOT NULL,
+         is_active BOOLEAN NOT NULL DEFAULT TRUE,
+         registered_by TEXT NOT NULL,
+         registered_at TIMESTAMP DEFAULT NOW(),
+         updated_at TIMESTAMP DEFAULT NOW()
+       );`,
       `CREATE TABLE IF NOT EXISTS indexer_state (
          id SERIAL PRIMARY KEY,
          indexer_key TEXT NOT NULL UNIQUE DEFAULT 'sepolia_zakat_l1',
@@ -652,15 +665,19 @@ export const dbService = {
     attestation: {
       auditorName: string;
       auditorAddress: string;
-      auditOpinion: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+      auditOpinion: "WTP" | "WDP" | "TW" | "TMP";
       auditNotes?: string;
       auditReportCID: string;
       auditTxHash?: string;
+      laiDocumentCID: string;
+      financialStatementsCID: string;
     }
   ) {
     const memory = dataStore.proposals.get(proposalId);
     const auditedAt = new Date().toISOString();
-    const auditStatus = attestation.auditOpinion === "DISPUTED" ? "DISPUTED" : "AUDITED_WTP";
+    // Only a clean WTP opinion is undisputed; WDP/TW/TMP all mean the auditor
+    // flagged a material issue, so any of them routes the proposal to DISPUTED.
+    const auditStatus = attestation.auditOpinion === "WTP" ? "AUDITED_WTP" : "DISPUTED";
 
     if (memory) {
       memory.auditStatus = auditStatus;
@@ -671,6 +688,8 @@ export const dbService = {
       memory.auditReportCID = attestation.auditReportCID;
       memory.auditedAt = auditedAt;
       memory.auditTxHash = attestation.auditTxHash;
+      memory.laiDocumentCID = attestation.laiDocumentCID;
+      memory.financialStatementsCID = attestation.financialStatementsCID;
     }
 
     if (db) {
@@ -686,6 +705,8 @@ export const dbService = {
             auditReportCID: attestation.auditReportCID,
             auditedAt: new Date(),
             auditTxHash: attestation.auditTxHash,
+            laiDocumentCID: attestation.laiDocumentCID,
+            financialStatementsCID: attestation.financialStatementsCID,
           })
           .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
       } catch (err) {
@@ -938,6 +959,88 @@ export const dbService = {
         updatedAt: new Date(),
       },
     ];
+  },
+
+  // --- AUDITOR IDENTITY REGISTRY (one-time onboarding, source of truth for attestations) ---
+  async upsertAuditorProfile(profile: {
+    accountAddress: string;
+    name: string;
+    kapLicenseNumber: string;
+    licenseProofCID: string;
+    registeredBy: string;
+  }) {
+    const normalizedAddr = profile.accountAddress.toLowerCase();
+
+    if (db) {
+      try {
+        const [row] = await db
+          .insert(schema.auditorProfiles)
+          .values({
+            accountAddress: normalizedAddr,
+            name: profile.name,
+            kapLicenseNumber: profile.kapLicenseNumber,
+            licenseProofCID: profile.licenseProofCID,
+            registeredBy: profile.registeredBy,
+          })
+          .onConflictDoUpdate({
+            target: schema.auditorProfiles.accountAddress,
+            set: {
+              name: profile.name,
+              kapLicenseNumber: profile.kapLicenseNumber,
+              licenseProofCID: profile.licenseProofCID,
+              registeredBy: profile.registeredBy,
+              isActive: true,
+              updatedAt: new Date(),
+            },
+          })
+          .returning();
+        return row;
+      } catch (err) {
+        console.error("Failed to upsert auditor profile in Neon DB:", err);
+      }
+    }
+
+    return {
+      id: 0,
+      accountAddress: normalizedAddr,
+      name: profile.name,
+      kapLicenseNumber: profile.kapLicenseNumber,
+      licenseProofCID: profile.licenseProofCID,
+      isActive: true,
+      registeredBy: profile.registeredBy,
+      registeredAt: new Date(),
+      updatedAt: new Date(),
+    };
+  },
+
+  async getAuditorProfile(accountAddress: string) {
+    const normalizedAddr = accountAddress.toLowerCase();
+    if (db) {
+      try {
+        const rows = await db
+          .select()
+          .from(schema.auditorProfiles)
+          .where(eq(schema.auditorProfiles.accountAddress, normalizedAddr));
+        return rows.find((r) => r.isActive) || null;
+      } catch (err) {
+        console.error("Failed to fetch auditor profile from Neon DB:", err);
+      }
+    }
+    return null;
+  },
+
+  async getAuditorProfiles() {
+    if (db) {
+      try {
+        return await db
+          .select()
+          .from(schema.auditorProfiles)
+          .where(eq(schema.auditorProfiles.isActive, true));
+      } catch (err) {
+        console.error("Failed to fetch auditor profiles from Neon DB:", err);
+      }
+    }
+    return [];
   },
 
   // --- USDC ON-CHAIN DONATION AUTO-RECORDING ---

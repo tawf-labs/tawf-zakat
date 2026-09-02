@@ -418,13 +418,32 @@ export interface AuditReportMetadata {
   disbursementBastCID: string;
   auditorName: string;
   auditorAddress: string;
-  auditOpinion: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditOpinion: "WTP" | "WDP" | "TW" | "TMP"; // SA 705: Wajar Tanpa/Dengan Pengecualian, Tidak Wajar, Tidak Memberikan Pendapat
   auditNotes: string;
   auditStandard: string; // e.g. "PSAK 109 / SAS 109 & BAZNAS Sharia Compliance"
   auditorSignature?: string;
   auditTxHash?: string;
-  auditCertCID?: string;
+  // Snapshotted at attestation time (not a live registry reference) so a
+  // published report stays independently verifiable even if the auditor's
+  // registry entry is later edited or revoked.
+  laiDocumentCID: string;
+  financialStatementsCID: string;
+  licenseProofCID: string;
   timestamp: string;
+}
+
+export const MAX_AUDIT_DOCUMENT_BYTES = 10 * 1024 * 1024; // 10MB
+
+export function assertValidPdfUpload(mimeType: string, sizeBytes: number, label: string): void {
+  if (mimeType !== "application/pdf") {
+    throw new Error(`${label} harus berupa berkas PDF (diterima: ${mimeType || "tidak diketahui"})`);
+  }
+  if (sizeBytes <= 0) {
+    throw new Error(`${label} kosong atau gagal terbaca`);
+  }
+  if (sizeBytes > MAX_AUDIT_DOCUMENT_BYTES) {
+    throw new Error(`${label} melebihi batas ukuran 10MB`);
+  }
 }
 
 export async function uploadAuditReportToIPFS(

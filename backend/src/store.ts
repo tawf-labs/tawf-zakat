@@ -33,10 +33,12 @@ export interface ProposalRecord {
   auditorAddress?: string;
   auditorName?: string;
   auditReportCID?: string;
-  auditOpinion?: "WTP" | "WDP" | "DISPUTED" | "CLEAN";
+  auditOpinion?: "WTP" | "WDP" | "TW" | "TMP";
   auditNotes?: string;
   auditedAt?: string;
   auditTxHash?: string;
+  laiDocumentCID?: string;
+  financialStatementsCID?: string;
   // Safe.global Multi-Sig Queue Tracking
   safeStatus?: "IDLE" | "PENDING_SAFE_SIGNATURES" | "EXECUTED_ONCHAIN";
   safeConfirmationsCount?: number;
