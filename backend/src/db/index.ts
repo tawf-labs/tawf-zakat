@@ -343,39 +343,52 @@ export const dbService = {
         }
 
         if (rows.length > 0) {
-          return rows.map((r) => ({
-            proposalId: r.proposalIdOnChain,
-            currencyType: r.currencyType as 0 | 1,
-            amount: r.amount,
-            asnafCategory: 0,
-            asnafLabel: r.asnafCategory,
-            beneficiaryName: r.beneficiaryName,
-            beneficiaryNIKMasked: r.beneficiaryNIKMasked,
-            beneficiaryHash: r.beneficiaryHash as Hex,
-            ipfsProofCID: r.ipfsProofCID,
-            disbursementReceiptCID: r.disbursementReceiptCID || undefined,
-            periodId: r.periodId,
-            approvalCount: r.approvalCount,
-            approvedBy: JSON.parse(r.approvedBy || "[]"),
-            status: r.status as "Pending" | "Approved" | "Executed" | "Cancelled",
-            cancelReason: r.cancelReason || undefined,
-            createdAt: r.createdAt ? r.createdAt.toISOString() : new Date().toISOString(),
-            executedAt: r.executedAt ? r.executedAt.toISOString() : undefined,
-            txHash: r.txHash || undefined,
-            // Ex-Post Auditor Attestation
-            auditStatus: (r.auditStatus as "PENDING" | "AUDITED_WTP" | "DISPUTED") || "PENDING",
-            auditorAddress: r.auditorAddress || undefined,
-            auditorName: r.auditorName || undefined,
-            auditReportCID: r.auditReportCID || undefined,
-            auditOpinion: (r.auditOpinion as any) || undefined,
+          return rows.map((r) => {
+            const pId = r.proposalIdOnChain || r.id;
+            const isUSDC = r.currencyType === 1;
+            const amountVal = Number(r.amount);
+            const amountUSDCVal = isUSDC
+              ? amountVal > 100000
+                ? (amountVal / 1000000).toString()
+                : amountVal.toString()
+              : undefined;
+
+            return {
+              id: pId,
+              proposalId: pId,
+              currencyType: (r.currencyType as 0 | 1) || 0,
+              amount: amountVal,
+              amountIDR: !isUSDC ? amountVal : undefined,
+              amountUSDC: amountUSDCVal,
+              asnafCategory: 0,
+              asnafLabel: r.asnafCategory || "Fakir Miskin",
+              asnafType: r.asnafCategory || "Fakir Miskin",
+              beneficiaryName: r.beneficiaryName,
+              beneficiaryNIKMasked: r.beneficiaryNIKMasked,
+              beneficiaryHash: r.beneficiaryHash as Hex,
+              ipfsProofCID: r.ipfsProofCID,
+              disbursementReceiptCID: r.disbursementReceiptCID || undefined,
+              periodId: r.periodId,
+              approvalCount: r.approvalCount,
+              approvedBy: JSON.parse(r.approvedBy || "[]"),
+              status: r.status as "Pending" | "Approved" | "Executed" | "Cancelled",
+              cancelReason: r.cancelReason || undefined,
+              createdAt: r.createdAt ? r.createdAt.toISOString() : new Date().toISOString(),
+              executedAt: r.executedAt ? r.executedAt.toISOString() : undefined,
+              txHash: r.txHash || undefined,
+              // Ex-Post Auditor Attestation
+              auditStatus: (r.auditStatus as "PENDING" | "AUDITED_WTP" | "DISPUTED") || "PENDING",
+              auditorAddress: r.auditorAddress || undefined,
+              auditorName: r.auditorName || undefined,
+              auditReportCID: r.auditReportCID || undefined,
+              auditOpinion: (r.auditOpinion as any) || undefined,
             auditNotes: r.auditNotes || undefined,
             auditedAt: r.auditedAt ? r.auditedAt.toISOString() : undefined,
             auditTxHash: r.auditTxHash || undefined,
-            // Safe.global Multi-Sig Tracking
-            safeStatus: (r.safeStatus as any) || "IDLE",
-            safeConfirmationsCount: r.safeConfirmationsCount || 0,
-            safeConfirmationsRequired: r.safeConfirmationsRequired || 2,
-          }));
+              safeConfirmationsCount: r.safeConfirmationsCount || 0,
+              safeConfirmationsRequired: r.safeConfirmationsRequired || 2,
+            };
+          });
         }
       } catch (err) {
         console.error("Failed to fetch proposals from Neon DB:", err);

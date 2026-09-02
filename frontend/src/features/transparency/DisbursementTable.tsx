@@ -9,8 +9,11 @@ import { Link } from "@tanstack/react-router";
 
 interface ProposalRecord {
   id: number;
+  proposalId?: number;
+  amount?: number;
   beneficiaryHash?: string;
   asnafType?: string;
+  asnafLabel?: string;
   amountIDR?: number;
   amountUSDC?: string;
   currencyType?: number;
@@ -34,12 +37,14 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
 
   // Filtered proposals
   const filtered = (proposals || []).filter((p) => {
-    const matchesAsnaf = selectedAsnaf === "ALL" || (p.asnafType || "Fakir") === selectedAsnaf;
+    const pAsnaf = p.asnafLabel || p.asnafType || "Fakir";
+    const matchesAsnaf = selectedAsnaf === "ALL" || pAsnaf === selectedAsnaf;
+    const pIdStr = (p.proposalId || p.id || "").toString();
     const matchesSearch =
       searchTerm === "" ||
-      p.id.toString().includes(searchTerm) ||
+      pIdStr.includes(searchTerm) ||
       (p.beneficiaryHash || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.asnafType || "").toLowerCase().includes(searchTerm.toLowerCase());
+      pAsnaf.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesAsnaf && matchesSearch;
   });
 
@@ -104,41 +109,46 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="font-mono font-bold text-xs text-[#17332c]">
-                  #{item.id}
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs font-semibold text-[#1b765e] bg-[#f4f8f3] px-2.5 py-1 rounded-full border border-[#dbe7dd]">
-                    {item.asnafType || "Fakir Miskin"}
-                  </span>
-                </TableCell>
-                <TableCell className="font-mono text-xs text-[#5e7a70]" title={item.beneficiaryHash}>
-                  {item.beneficiaryHash
-                    ? `${item.beneficiaryHash.slice(0, 8)}...${item.beneficiaryHash.slice(-6)}`
-                    : "0x7a8b...9c1d"}
-                </TableCell>
-                <TableCell className="font-serif font-bold text-sm text-[#17332c]">
-                  {item.amountIDR
-                    ? `Rp ${item.amountIDR.toLocaleString("id-ID")}`
-                    : `${item.amountUSDC} USDC`}
-                </TableCell>
-                <TableCell>
-                  {item.status === "EXECUTED" ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                      <CheckCircle2 className="w-3 h-3" /> Tersalurkan & WTP
+            {filtered.map((item, idx) => {
+              const pId = item.proposalId || item.id || idx + 1;
+              const isUSDC = item.currencyType === 1 || Boolean(item.amountUSDC);
+              const formattedNominal = isUSDC
+                ? `${item.amountUSDC || item.amount || 0} USDC`
+                : `Rp ${Number(item.amountIDR || item.amount || 0).toLocaleString("id-ID")}`;
+
+              return (
+                <TableRow key={pId}>
+                  <TableCell className="font-mono font-bold text-xs text-[#17332c]">
+                    #{pId}
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-xs font-semibold text-[#1b765e] bg-[#f4f8f3] px-2.5 py-1 rounded-full border border-[#dbe7dd]">
+                      {item.asnafLabel || item.asnafType || "Fakir Miskin"}
                     </span>
-                  ) : item.status === "APPROVED" ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 px-2.5 py-0.5 rounded-full">
-                      <ShieldCheck className="w-3 h-3" /> Disetujui DPS
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">
-                      <Clock className="w-3 h-3" /> Menunggu Persetujuan
-                    </span>
-                  )}
-                </TableCell>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-[#5e7a70]" title={item.beneficiaryHash}>
+                    {item.beneficiaryHash
+                      ? `${item.beneficiaryHash.slice(0, 8)}...${item.beneficiaryHash.slice(-6)}`
+                      : "0x7a8b...9c1d"}
+                  </TableCell>
+                  <TableCell className="font-serif font-bold text-sm text-[#17332c]">
+                    {formattedNominal}
+                  </TableCell>
+                  <TableCell>
+                    {item.status?.toUpperCase() === "EXECUTED" ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                        <CheckCircle2 className="w-3 h-3" /> Tersalurkan & WTP
+                      </span>
+                    ) : item.status?.toUpperCase() === "APPROVED" ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 px-2.5 py-0.5 rounded-full">
+                        <ShieldCheck className="w-3 h-3" /> Disetujui DPS
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">
+                        <Clock className="w-3 h-3" /> Menunggu Persetujuan
+                      </span>
+                    )}
+                  </TableCell>
                 <TableCell>
                   <button
                     type="button"
@@ -161,7 +171,8 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
                   </a>
                 </TableCell>
               </TableRow>
-            ))}
+            );
+          })}
           </TableBody>
         </Table>
       )}
