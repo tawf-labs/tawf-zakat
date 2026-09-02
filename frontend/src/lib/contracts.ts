@@ -19,7 +19,8 @@ export function getApiBaseUrl(): string {
   // Explicit override — required whenever the frontend is deployed on a
   // different origin than the backend (e.g. Vercel frontend + VPS API),
   // since relative-path fetches would otherwise hit the frontend's own domain.
-  const envUrl = (import.meta as any).env?.VITE_API_BASE_URL as string | undefined;
+  const metaEnv = (import.meta as any).env || {};
+  const envUrl = (metaEnv.VITE_API_BASE_URL || metaEnv.VITE_API_URL || metaEnv.VITE_PUBLIC_API_URL) as string | undefined;
   if (envUrl) return envUrl.replace(/\/$/, "");
 
   if (typeof window === "undefined") {
@@ -36,6 +37,10 @@ export function getApiBaseUrl(): string {
 }
 
 export function getWsBaseUrl(): string {
+  const metaEnv = (import.meta as any).env || {};
+  const explicitWsUrl = (metaEnv.VITE_WS_URL || metaEnv.VITE_PUBLIC_WS_URL) as string | undefined;
+  if (explicitWsUrl) return explicitWsUrl.replace(/\/$/, "");
+
   const base = getApiBaseUrl();
   if (base) {
     return base.replace(/^http/, "ws");

@@ -450,6 +450,8 @@ target/
 *.wasm
 .env
 .env.*
+!.env.example
+!frontend/.env.example
 backend/.env
 frontend/.env
 backend/dist/
