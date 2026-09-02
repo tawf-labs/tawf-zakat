@@ -58,15 +58,6 @@ export function Navbar() {
 
         {/* Right Actions */}
         <div className="flex items-center gap-3">
-          {/* Live WebSocket Indicator Badge */}
-          <div
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-medium border border-[#dbe7dd] bg-[#f4f8f3] text-[#17332c]"
-            title={isConnected ? "WebSocket Real-Time Terhubung" : "Menghubungkan ke Server Real-Time..."}
-          >
-            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
-            <span>{isConnected ? "LIVE REAL-TIME" : "MENGHUBUNGKAN"}</span>
-          </div>
-
           {/* Connect Wallet Button */}
           <ConnectKitButton.Custom>
             {({ isConnected: isWalletConnected, isConnecting, show, address, truncatedAddress }) => {
@@ -127,13 +118,6 @@ export function Navbar() {
               </Link>
             );
           })}
-          <div className="pt-2 border-t border-[#dbe7dd]/60 flex items-center justify-between text-xs text-[#5e7a70] px-2">
-            <span>Status Data Real-Time:</span>
-            <span className="flex items-center gap-1 font-mono text-[10px] font-bold text-[#17332c]">
-              <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-amber-400"}`} />
-              {isConnected ? "ONLINE" : "OFFLINE"}
-            </span>
-          </div>
         </div>
       )}
     </header>
