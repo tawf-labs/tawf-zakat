@@ -35,6 +35,7 @@ export function AuditorAttestationPanel({
 }: AuditorAttestationPanelProps) {
   const { address, isConnected } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
+  const { canAttestAudit, getRestrictionReason } = useGovernanceRole();
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
   // Executed proposals that can receive auditor attestation
@@ -43,8 +44,15 @@ export function AuditorAttestationPanel({
   );
 
   const handleAttest = async (proposal: any) => {
+    if (!canAttestAudit) {
+      toast.info("Akses Dibatasi", {
+        description: getRestrictionReason("audit"),
+      });
+      return;
+    }
+
     if (!isConnected || !address) {
-      toast.error("Silakan hubungkan dompet Auditor (KAP) terlebih dahulu.");
+      toast.error("Silakan hubungkan dompet dengan hak Auditor (AUDITOR_ROLE).");
       return;
     }
 
@@ -187,10 +195,26 @@ export function AuditorAttestationPanel({
                       type="button"
                       disabled={isLoading}
                       onClick={() => handleAttest(p)}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#17332c] hover:bg-[#1b765e] disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                      className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer ${
+                        canAttestAudit
+                          ? "bg-[#17332c] hover:bg-[#1b765e] text-white"
+                          : "bg-[#eaf3e8] text-[#5e7a70] border border-[#dbe7dd]"
+                      }`}
+                      title={!canAttestAudit ? getRestrictionReason("audit") : "Terbitkan opini audit WTP secara gasless EIP-712"}
                     >
-                      {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-[#c4ed70]" />}
+                      {isLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : canAttestAudit ? (
+                        <Sparkles className="w-4 h-4 text-[#c4ed70]" />
+                      ) : (
+                        <Lock className="w-3.5 h-3.5 text-[#5e7a70]" />
+                      )}
                       <span>Terbitkan Opini WTP (0 Gas)</span>
+                      {!canAttestAudit && (
+                        <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-white text-[#5e7a70] border border-[#dbe7dd]">
+                          Khusus Auditor
+                        </span>
+                      )}
                     </button>
                   )}
                 </div>

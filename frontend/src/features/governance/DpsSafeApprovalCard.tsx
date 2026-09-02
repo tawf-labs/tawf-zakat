@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, FileText, AlertCircle } from "lucide-react";
+import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle } from "lucide-react";
 import { approveDisbursementOnChain } from "../../lib/web3Client";
 import { useAccount } from "wagmi";
+import { useGovernanceRole } from "./RoleContext";
 import { toast } from "sonner";
 
 interface DpsSafeApprovalCardProps {
@@ -11,11 +12,19 @@ interface DpsSafeApprovalCardProps {
 
 export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeApprovalCardProps) {
   const { address, isConnected } = useAccount();
+  const { canApproveDps, getRestrictionReason } = useGovernanceRole();
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
   const pendingProposals = proposals.filter((p) => p.status === "Pending" || p.status === "PENDING");
 
   const handleApprove = async (proposalId: number) => {
+    if (!canApproveDps) {
+      toast.info("Akses Dibatasi", {
+        description: getRestrictionReason("approve"),
+      });
+      return;
+    }
+
     if (!isConnected || !address) {
       toast.error("Silakan hubungkan dompet anggota DPS terlebih dahulu.");
       return;
@@ -52,12 +61,12 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
         </div>
 
         <a
-          href="https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"
+          href="https://app.safe.global/home?safe=arb-sep:0x5e9B652C4E8a013f6fAb69F0b55377c408B59968"
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#f4f8f3] border border-[#dbe7dd] text-xs font-semibold text-[#1b765e] hover:bg-[#1b765e] hover:text-white transition-all shadow-2xs"
         >
-          <span>Buka Safe.global App</span>
+          <span>Buka Safe Arbitrum App</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
       </div>
@@ -105,10 +114,26 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
                     type="button"
                     disabled={isLoading}
                     onClick={() => handleApprove(pId)}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#17332c] hover:bg-[#1b765e] disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                    className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer ${
+                      canApproveDps
+                        ? "bg-[#17332c] hover:bg-[#1b765e] text-white"
+                        : "bg-[#eaf3e8] text-[#5e7a70] border border-[#dbe7dd]"
+                    }`}
+                    title={!canApproveDps ? getRestrictionReason("approve") : "Setujui usulan penyaluran sebagai Dewan Pengawas Syariah"}
                   >
-                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4 text-[#c4ed70]" />}
+                    {isLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : canApproveDps ? (
+                      <ShieldCheck className="w-4 h-4 text-[#c4ed70]" />
+                    ) : (
+                      <Lock className="w-3.5 h-3.5 text-[#5e7a70]" />
+                    )}
                     <span>Setujui (DPS)</span>
+                    {!canApproveDps && (
+                      <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-white text-[#5e7a70] border border-[#dbe7dd]">
+                        Khusus DPS
+                      </span>
+                    )}
                   </button>
                 </div>
               </div>

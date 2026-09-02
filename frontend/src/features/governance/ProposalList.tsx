@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/Table";
-import { ShieldCheck, CheckCircle2, Clock, PlusCircle, FileText, ExternalLink, Scale, Sparkles } from "lucide-react";
+import { ShieldCheck, CheckCircle2, Clock, PlusCircle, FileText, Lock, Sparkles, AlertCircle } from "lucide-react";
 import { ExecuteBastModal } from "./ExecuteBastModal";
 import { BastModal } from "../transparency/BastModal";
+import { useGovernanceRole } from "./RoleContext";
+import { toast } from "sonner";
 
 interface ProposalListProps {
   proposals: any[];
@@ -15,11 +17,33 @@ export function ProposalList({ proposals, onOpenCreate, onRefresh }: ProposalLis
   const [selectedForExecution, setSelectedForExecution] = useState<any | null>(null);
   const [selectedForBastView, setSelectedForBastView] = useState<any | null>(null);
 
+  const { canCreateProposal, canExecuteBast, effectiveRole, getRestrictionReason } = useGovernanceRole();
+
   const filtered = (proposals || []).filter((p) => {
     if (activeTab === "ALL") return true;
     const s = (p.status || "").toUpperCase();
     return s === activeTab;
   });
+
+  const handleCreateClick = () => {
+    if (!canCreateProposal) {
+      toast.info("Akses Dibatasi", {
+        description: getRestrictionReason("create"),
+      });
+      return;
+    }
+    onOpenCreate();
+  };
+
+  const handleExecuteClick = (p: any) => {
+    if (!canExecuteBast) {
+      toast.info("Akses Dibatasi", {
+        description: getRestrictionReason("bast"),
+      });
+      return;
+    }
+    setSelectedForExecution(p);
+  };
 
   return (
     <div className="rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-xs space-y-6">
@@ -34,14 +58,30 @@ export function ProposalList({ proposals, onOpenCreate, onRefresh }: ProposalLis
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onOpenCreate}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#17332c] hover:bg-[#1b765e] text-white text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer self-start sm:self-auto"
-        >
-          <PlusCircle className="w-4 h-4 text-[#c4ed70]" />
-          <span>Buat Usulan Baru</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={handleCreateClick}
+            className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer ${
+              canCreateProposal
+                ? "bg-[#17332c] hover:bg-[#1b765e] text-white"
+                : "bg-[#eaf3e8] text-[#5e7a70] hover:bg-[#dbe7dd] border border-[#dbe7dd]"
+            }`}
+            title={!canCreateProposal ? getRestrictionReason("create") : "Buat usulan program penyaluran baru"}
+          >
+            {canCreateProposal ? (
+              <PlusCircle className="w-4 h-4 text-[#c4ed70]" />
+            ) : (
+              <Lock className="w-3.5 h-3.5 text-[#5e7a70]" />
+            )}
+            <span>Buat Usulan Baru</span>
+            {!canCreateProposal && (
+              <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-white text-[#5e7a70] border border-[#dbe7dd]">
+                Khusus Amil
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Filter Tabs */}
@@ -130,20 +170,26 @@ export function ProposalList({ proposals, onOpenCreate, onRefresh }: ProposalLis
                       {statusUpper === "APPROVED" && (
                         <button
                           type="button"
-                          onClick={() => setSelectedForExecution(p)}
-                          className="px-3 py-1 rounded-lg bg-[#17332c] hover:bg-[#1b765e] text-white text-[11px] font-bold uppercase tracking-wider transition-colors shadow-2xs"
+                          onClick={() => handleExecuteClick(p)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-colors shadow-2xs cursor-pointer ${
+                            canExecuteBast
+                              ? "bg-[#17332c] hover:bg-[#1b765e] text-white"
+                              : "bg-[#eaf3e8] text-[#5e7a70] border border-[#dbe7dd]"
+                          }`}
+                          title={!canExecuteBast ? getRestrictionReason("bast") : "Unggah berkas BAST dan cairkan dana on-chain"}
                         >
-                          Cairkan BAST
+                          {!canExecuteBast && <Lock className="w-3 h-3 text-[#5e7a70]" />}
+                          <span>Cairkan BAST</span>
                         </button>
                       )}
                       {(statusUpper === "EXECUTED" || p.disbursementReceiptCID) && (
                         <button
                           type="button"
                           onClick={() => setSelectedForBastView(p)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[#dbe7dd] text-[11px] font-semibold text-[#1b765e] hover:bg-[#f4f8f3]"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[#dbe7dd] text-[11px] font-semibold text-[#1b765e] hover:bg-[#f4f8f3] cursor-pointer"
                         >
                           <FileText className="w-3 h-3" />
-                          <span>BAST</span>
+                          <span>Lihat BAST</span>
                         </button>
                       )}
                     </div>

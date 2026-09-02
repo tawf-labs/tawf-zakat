@@ -9,15 +9,27 @@ import {
   DpsSafeApprovalCard,
   AuditorAttestationPanel,
   RoleRoster,
+  RoleProvider,
+  useGovernanceRole,
+  PersonaBanner,
 } from "../features/governance";
-import { Landmark, Shield, Scale, FileSpreadsheet, PlusCircle, Users } from "lucide-react";
+import { Landmark, Shield, Scale, FileSpreadsheet, PlusCircle, Users, Lock } from "lucide-react";
 
 export const Route = createFileRoute("/tata-kelola")({
-  component: TataKelolaPage,
+  component: TataKelolaPageWrapper,
 });
+
+function TataKelolaPageWrapper() {
+  return (
+    <RoleProvider>
+      <TataKelolaPage />
+    </RoleProvider>
+  );
+}
 
 function TataKelolaPage() {
   const queryClient = useQueryClient();
+  const { canCreateProposal } = useGovernanceRole();
   const [activeTab, setActiveTab] = useState<"proposals" | "dps" | "auditor" | "roster">("proposals");
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
@@ -43,7 +55,7 @@ function TataKelolaPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#f4f8f3]/30 pb-20 space-y-10">
+    <main className="min-h-screen bg-[#f4f8f3]/30 pb-20 space-y-8">
       <PageHeader
         badgeText="Portal Otorisasi Stakeholder"
         title="Tata Kelola Syariah & Pengawasan"
@@ -53,9 +65,17 @@ function TataKelolaPage() {
             <button
               type="button"
               onClick={() => setCreateModalOpen(true)}
-              className="inline-flex items-center gap-2 rounded-full bg-[#17332c] hover:bg-[#1b765e] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all shadow-xs cursor-pointer"
+              className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer ${
+                canCreateProposal
+                  ? "bg-[#17332c] hover:bg-[#1b765e] text-white"
+                  : "bg-white text-[#5e7a70] border border-[#dbe7dd]"
+              }`}
             >
-              <PlusCircle className="h-4 w-4 text-[#c4ed70]" />
+              {canCreateProposal ? (
+                <PlusCircle className="h-4 w-4 text-[#c4ed70]" />
+              ) : (
+                <Lock className="h-3.5 w-3.5 text-[#5e7a70]" />
+              )}
               <span>Buat Usulan Baru</span>
             </button>
             <Link
@@ -69,7 +89,10 @@ function TataKelolaPage() {
         }
       />
 
-      <Container className="space-y-8">
+      <Container className="space-y-6">
+        {/* Role Persona Simulator */}
+        <PersonaBanner />
+
         {/* Stakeholder Role Tabs */}
         <div className="flex flex-wrap gap-2 border-b border-[#dbe7dd] pb-4">
           <button
