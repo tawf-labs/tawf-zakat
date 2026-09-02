@@ -70,7 +70,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const fetchRoles = async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/governance/roles");
+        const res = await fetch(`${getApiBaseUrl()}/api/governance/roles`);
         if (res.ok) {
           const json = await res.json();
           setRoleMembers(json.roles || []);

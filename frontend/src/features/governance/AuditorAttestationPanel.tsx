@@ -43,7 +43,7 @@ async function uploadAuditDocument(file: File): Promise<string> {
   formData.append("file", file);
   formData.append("name", file.name);
 
-  const res = await fetch("http://localhost:3001/api/ipfs/upload-document", {
+  const res = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
     method: "POST",
     body: formData,
   });
@@ -99,7 +99,7 @@ export function AuditorAttestationPanel({
       return;
     }
 
-    fetch(`http://localhost:3001/api/governance/auditors/${address}`)
+    fetch(`${getApiBaseUrl()}/api/governance/auditors/${address}`)
       .then((res) => res.json().catch(() => ({})))
       .then((json) => {
         if (!cancelled) {
@@ -189,7 +189,7 @@ export function AuditorAttestationPanel({
       });
 
       // 3. Broadcast via Relayer API with Sponsored Gas
-      const res = await fetch("http://localhost:3001/api/governance/attest-audit", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/attest-audit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

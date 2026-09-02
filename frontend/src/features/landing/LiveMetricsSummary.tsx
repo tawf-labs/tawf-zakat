@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, CheckCircle2, HeartHandshake, Users, ShieldAlert, ArrowUpRight } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 import { Link } from "@tanstack/react-router";
+import { getApiBaseUrl } from "../../lib/contracts";
 
 interface BatchItem {
   id: number;
@@ -23,7 +24,7 @@ export function LiveMetricsSummary() {
     queryKey: ["transparency", "batches"],
     queryFn: async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/batches");
+        const res = await fetch(`${getApiBaseUrl()}/api/batches`);
         if (!res.ok) return [];
         const json = await res.json();
         return json.batches || [];
@@ -38,7 +39,7 @@ export function LiveMetricsSummary() {
     queryKey: ["transparency", "proposals"],
     queryFn: async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/proposals");
+        const res = await fetch(`${getApiBaseUrl()}/api/proposals`);
         if (!res.ok) return [];
         const json = await res.json();
         return json.proposals || [];

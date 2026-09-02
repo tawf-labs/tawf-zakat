@@ -1,16 +1,24 @@
 import React, { useEffect, useState } from "react";
 import { ShieldPlus, Loader2, Upload, UserCheck, Lock } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, AUDIT_DOCUMENT_MAX_BYTES } from "../../lib/contracts";
+import { 
+  GOVERNANCE_EIP712_DOMAIN, 
+  GOVERNANCE_EIP712_TYPES, 
+  AUDIT_DOCUMENT_MAX_BYTES,
+  getApiBaseUrl,
+} from "../../lib/contracts";
 import { toast } from "sonner";
 import { useGovernanceRole } from "./RoleContext";
 
 interface AuditorProfile {
+  id: number;
   accountAddress: string;
   name: string;
   kapLicenseNumber: string;
   licenseProofCID: string;
-  registeredAt?: string;
+  isActive: boolean;
+  registeredBy: string;
+  registeredAt: string;
 }
 
 export function AuditorRegistrationPanel() {
@@ -28,7 +36,7 @@ export function AuditorRegistrationPanel() {
   const canRegister = canCreateProposal; // DEFAULT_ADMIN_ROLE wallet, same gate as proposal creation
 
   const refreshProfiles = () => {
-    fetch("http://localhost:3001/api/governance/auditors")
+    fetch(`${getApiBaseUrl()}/api/governance/auditors`)
       .then((res) => res.json().catch(() => ({})))
       .then((json) => setProfiles(json?.profiles || []))
       .catch(() => {});
@@ -77,7 +85,7 @@ export function AuditorRegistrationPanel() {
       const formData = new FormData();
       formData.append("file", licenseFile);
       formData.append("name", licenseFile.name);
-      const uploadRes = await fetch("http://localhost:3001/api/ipfs/upload-document", {
+      const uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
         method: "POST",
         body: formData,
       });
@@ -102,7 +110,7 @@ export function AuditorRegistrationPanel() {
         },
       });
 
-      const res = await fetch("http://localhost:3001/api/governance/auditors/register", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/auditors/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

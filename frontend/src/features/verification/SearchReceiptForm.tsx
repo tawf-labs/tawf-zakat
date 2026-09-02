@@ -6,6 +6,7 @@ import { CertificateCard } from "./CertificateCard";
 import { MerkleProofDetails } from "./MerkleProofDetails";
 import { type Hex } from "viem";
 import { toast } from "sonner";
+import { getApiBaseUrl } from "../../lib/contracts";
 
 interface SearchReceiptFormProps {
   initialTrxId?: string;
@@ -52,7 +53,7 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
 
     try {
       // 1. Fetch donation details from backend
-      const res = await fetch(`http://localhost:3001/api/donations/${encodeURIComponent(searchId.trim())}`);
+      const res = await fetch(`${getApiBaseUrl()}/api/donations/${encodeURIComponent(searchId.trim())}`);
       
       if (res.ok) {
         const data = await res.json();

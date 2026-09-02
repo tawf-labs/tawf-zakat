@@ -8,6 +8,7 @@ import {
   getUSDCAllowance,
   getUSDCBalance,
 } from "../../lib/web3Client";
+import { getApiBaseUrl } from "../../lib/contracts";
 import { parseUnits, formatUnits, keccak256, encodePacked, type Hex } from "viem";
 import { Input } from "../../components/ui/Input";
 import { PaymentMethodSelector, type PaymentMethodType } from "./PaymentMethodSelector";
@@ -169,7 +170,7 @@ export function DonationForm({
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
 
-        const res = await fetch("http://localhost:3001/api/donations/fiat", {
+        const res = await fetch(`${getApiBaseUrl()}/api/donations/fiat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

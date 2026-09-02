@@ -15,6 +15,8 @@ import {
 } from "../features/governance";
 import { Landmark, Shield, Scale, FileSpreadsheet, PlusCircle, Users, Lock } from "lucide-react";
 
+import { getApiBaseUrl } from "../lib/contracts";
+
 export const Route = createFileRoute("/tata-kelola")({
   component: TataKelolaPage,
 });
@@ -30,7 +32,7 @@ function TataKelolaPage() {
     queryKey: ["governance", "proposals"],
     queryFn: async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/proposals");
+        const res = await fetch(`${getApiBaseUrl()}/api/proposals`);
         if (!res.ok) return [];
         const json = await res.json();
         return json.proposals || [];

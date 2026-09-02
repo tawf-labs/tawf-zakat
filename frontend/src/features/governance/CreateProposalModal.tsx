@@ -61,7 +61,7 @@ export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreatePropos
         const formData = new FormData();
         formData.append("file", file);
         formData.append("docType", "PROPOSAL_DOSSIER");
-        const uploadRes = await fetch("http://localhost:3001/api/ipfs/upload-file", {
+        const uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-file`, {
           method: "POST",
           body: formData,
         });
@@ -107,7 +107,7 @@ export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreatePropos
 
       // 4. Submit to Backend Gasless Governance Relayer
       setStatusText("Memproses pengajuan ke smart contract via Relayer...");
-      const res = await fetch("http://localhost:3001/api/governance/gasless-propose", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-propose`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

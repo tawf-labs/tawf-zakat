@@ -15,6 +15,20 @@ export function getIpfsUrl(cid?: string | null, preferredGateway = PINATA_DEDICA
   return `${preferredGateway}/${cleanCid}`;
 }
 
+export function getApiBaseUrl(): string {
+  if (typeof window === "undefined") {
+    return "http://localhost:3001";
+  }
+  // If running locally in development mode (port 5173 or direct port 3000 on localhost without reverse proxy)
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    if (window.location.port === "5173" || window.location.port === "3000") {
+      return "http://localhost:3001";
+    }
+  }
+  // In production behind Nginx or on VPS domain/IP, use relative path ""
+  return "";
+}
+
 export const ERC20_ABI = [
   {
     type: "function",

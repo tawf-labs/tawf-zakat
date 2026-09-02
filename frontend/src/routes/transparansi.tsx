@@ -11,6 +11,8 @@ import {
 } from "../features/transparency";
 import { ShieldCheck, Eye, Layers } from "lucide-react";
 
+import { getApiBaseUrl } from "../lib/contracts";
+
 export const Route = createFileRoute("/transparansi")({
   component: TransparansiPage,
 });
@@ -21,7 +23,7 @@ function TransparansiPage() {
     queryKey: ["transparency", "batches"],
     queryFn: async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/batches");
+        const res = await fetch(`${getApiBaseUrl()}/api/batches`);
         if (!res.ok) return [];
         const json = await res.json();
         return json.batches || [];
@@ -37,7 +39,7 @@ function TransparansiPage() {
     queryKey: ["transparency", "proposals"],
     queryFn: async () => {
       try {
-        const res = await fetch("http://localhost:3001/api/proposals");
+        const res = await fetch(`${getApiBaseUrl()}/api/proposals`);
         if (!res.ok) return [];
         const json = await res.json();
         return json.proposals || [];

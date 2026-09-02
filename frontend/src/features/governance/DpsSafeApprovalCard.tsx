@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle, XCircle } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
 import { useGovernanceRole } from "./RoleContext";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, getApiBaseUrl } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface DpsSafeApprovalCardProps {
@@ -47,7 +47,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
         },
       });
 
-      const res = await fetch("http://localhost:3001/api/governance/gasless-approve", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -106,7 +106,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
         },
       });
 
-      const res = await fetch("http://localhost:3001/api/governance/gasless-cancel", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Input } from "../../components/ui/Input";
 import { useAccount, useSignTypedData } from "wagmi";
 import { Upload, Loader2, CheckCircle2, FileText, Sparkles } from "lucide-react";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, getApiBaseUrl } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface ExecuteBastModalProps {
@@ -46,7 +46,7 @@ export function ExecuteBastModal({
         const formData = new FormData();
         formData.append("file", file);
         formData.append("docType", "BAST_RECEIPT");
-        const uploadRes = await fetch("http://localhost:3001/api/ipfs/upload-file", {
+        const uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-file`, {
           method: "POST",
           body: formData,
         });
@@ -70,7 +70,7 @@ export function ExecuteBastModal({
       });
 
       setStatusText("Memproses eksekusi penyaluran via Relayer...");
-      const res = await fetch("http://localhost:3001/api/governance/gasless-execute", {
+      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -89,7 +89,7 @@ export function ExecuteBastModal({
 
       // Also record the BAST disbursement receipt metadata in IPFS pipeline
       try {
-        await fetch("http://localhost:3001/api/disbursements/execute-bast", {
+        await fetch(`${getApiBaseUrl()}/api/disbursements/execute-bast`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

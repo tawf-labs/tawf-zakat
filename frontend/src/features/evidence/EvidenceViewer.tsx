@@ -6,27 +6,16 @@ import { MetadataInspectorCard } from "./MetadataInspectorCard";
 import { RawJsonTree } from "./RawJsonTree";
 import { OnChainIntegrityBadge } from "./OnChainIntegrityBadge";
 import { toast } from "sonner";
+import { getIpfsUrl, getApiBaseUrl } from "../../lib/contracts";
 
 interface EvidenceViewerProps {
   initialCid?: string;
 }
 
 const SAMPLE_EVIDENCE_CIDS = [
-  {
-    label: "BAST Sembako Fakir Miskin (#1)",
-    cid: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco",
-    docType: "BAST_RECEIPT",
-  },
-  {
-    label: "Dossier Survei Muallaf Mandiri (#3)",
-    cid: "QmZtmD2qt8fJpq3CLDHvdzsKfNc27U8pArn4gHLKa3UPEa",
-    docType: "PROPOSAL_DOSSIER",
-  },
-  {
-    label: "Opini Audit WTP KAP Sharia (#2)",
-    cid: "QmW2WQi7j6c7UgJTarActp7tDNWBdfjPTy45bET4whbT5r",
-    docType: "AUDITOR_ATTESTATION",
-  },
+  { label: "BAST Beras Fakir (PDF)", cid: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco", type: "BAST_RECEIPT" },
+  { label: "Survei Kelayakan Gharimin (PDF)", cid: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG", type: "SURVEY_REPORT" },
+  { label: "Atestasi Audit Syariah WTP (JSON)", cid: "QmZtmD2qtWbpPyv6CW1bgX84Txjd3DAxL6zzN1OQvU8hk7", type: "AUDITOR_ATTESTATION" },
 ];
 
 export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
@@ -41,7 +30,7 @@ export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
     if (!targetCid.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`http://localhost:3001/api/ipfs/inspect/${encodeURIComponent(targetCid.trim())}`);
+      const res = await fetch(`${getApiBaseUrl()}/api/ipfs/inspect/${encodeURIComponent(targetCid.trim())}`);
       if (res.ok) {
         const json = await res.json();
         setInspectionData(json);
