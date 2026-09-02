@@ -55,9 +55,36 @@ export function ExecuteBastModal({
         }
       }
 
-      setStatusText("Mengeksekusi pencairan dana di smart contract Sepolia...");
+      setStatusText("Mengeksekusi pencairan dana di smart contract Arbitrum...");
       const tx = await executeDisbursementOnChain(pId, cid);
-      toast.success(`Pencairan Program #${pId} berhasil dicatat on-chain!`);
+
+      setStatusText("Menyinkronkan status pencairan ke basis data...");
+      try {
+        await fetch(`http://localhost:3001/api/proposals/${pId}/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            txHash: tx.txHash,
+            disbursementReceiptCID: cid,
+          }),
+        });
+
+        // Also record the BAST disbursement receipt metadata in IPFS pipeline
+        await fetch("http://localhost:3001/api/disbursements/execute-bast", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            proposalId: pId,
+            receiptCID: cid,
+            bankTransferRef: bankRef,
+            txHash: tx.txHash,
+          }),
+        });
+      } catch (syncErr) {
+        console.warn("Backend execution sync fallback:", syncErr);
+      }
+
+      toast.success(`Pencairan Program #${pId} berhasil dicatat on-chain & BAST terunggah!`);
       onSuccess?.();
       onClose();
     } catch (err: any) {

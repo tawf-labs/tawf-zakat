@@ -5,7 +5,7 @@ import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
 import { type Hex, createPublicClient, http, parseAbi } from "viem";
 import { arbitrumSepolia } from "viem/chains";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 
 const syncPublicClient = createPublicClient({
@@ -488,7 +488,12 @@ export const dbService = {
             safeConfirmationsRequired,
             txHash: txHash || undefined,
           })
-          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+          .where(
+            or(
+              eq(schema.disbursementProposals.proposalIdOnChain, proposalId),
+              eq(schema.disbursementProposals.id, proposalId)
+            )
+          );
       } catch (err) {
         console.error("Failed to update proposal approval in Neon DB:", err);
       }
@@ -505,13 +510,15 @@ export const dbService = {
     };
   },
 
-  async executeProposal(proposalId: number, _txHash?: string) {
+  async executeProposal(proposalId: number, txHash?: string, receiptCID?: string) {
     const memory = dataStore.proposals.get(proposalId);
     const executedAt = new Date().toISOString();
 
     if (memory) {
       memory.status = "Executed";
       memory.executedAt = executedAt;
+      if (txHash) memory.txHash = txHash;
+      if (receiptCID) memory.disbursementReceiptCID = receiptCID;
     }
 
     if (db) {
@@ -521,14 +528,21 @@ export const dbService = {
           .set({
             status: "Executed",
             executedAt: new Date(executedAt),
+            ...(txHash ? { txHash } : {}),
+            ...(receiptCID ? { disbursementReceiptCID: receiptCID } : {}),
           })
-          .where(eq(schema.disbursementProposals.proposalIdOnChain, proposalId));
+          .where(
+            or(
+              eq(schema.disbursementProposals.proposalIdOnChain, proposalId),
+              eq(schema.disbursementProposals.id, proposalId)
+            )
+          );
       } catch (err) {
         console.error("Failed to execute proposal in Neon DB:", err);
       }
     }
 
-    return memory || { proposalId, status: "Executed", executedAt };
+    return memory || { proposalId, status: "Executed", executedAt, txHash, disbursementReceiptCID: receiptCID };
   },
 
   async syncProposalTx(currentId: number, proposalIdOnChain: number, txHash?: string) {

@@ -33,6 +33,21 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
     setLoadingId(proposalId);
     try {
       const tx = await approveDisbursementOnChain(proposalId);
+
+      // Synchronize approval state to backend database
+      try {
+        await fetch(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            approverRole: "Dewan Pengawas Syariah",
+            txHash: tx.txHash,
+          }),
+        });
+      } catch (syncErr) {
+        console.warn("Backend approval sync error:", syncErr);
+      }
+
       toast.success(`Proposal #${proposalId} berhasil disetujui on-chain!`);
       onActionComplete();
     } catch (err: any) {

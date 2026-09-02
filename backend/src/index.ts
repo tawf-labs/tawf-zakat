@@ -833,15 +833,16 @@ app.post("/api/proposals/:id/execute", async (c) => {
   try {
     const idParam = c.req.param("id");
     const proposalId = Number(idParam);
-    const body = await c.req.json();
-    const { txHash } = body;
+    const body = await c.req.json().catch(() => ({}));
+    const { txHash, disbursementReceiptCID } = body;
 
-    const updated = await dbService.executeProposal(proposalId, txHash);
+    const updated = await dbService.executeProposal(proposalId, txHash, disbursementReceiptCID);
 
     eventBus.broadcast("PROPOSAL_EXECUTED", {
       proposalId,
       status: "Executed",
       txHash,
+      disbursementReceiptCID,
     });
 
     return c.json({
@@ -850,7 +851,7 @@ app.post("/api/proposals/:id/execute", async (c) => {
       proposal: updated,
     });
   } catch (error: any) {
-    return c.json({ error: error.message || "Failed to execute proposal" }, 500);
+    return c.json({ error: error.message || "Failed to execute proposal", success: false }, 500);
   }
 });
 
