@@ -10,6 +10,7 @@ import {
   uploadProposalDossierToIPFS,
   uploadDisbursementReceiptToIPFS,
   uploadAuditReportToIPFS,
+  inspectIpfsCid,
   PINATA_DEDICATED_GATEWAY,
   PUBLIC_IPFS_GATEWAY,
   type DisbursementMetadata,
@@ -1190,6 +1191,53 @@ app.get("/api/governance/roles", async (c) => {
 });
 
 
+
+// 15. Universal IPFS Evidence Inspector (Ticket #46 & ADR-0013)
+app.get("/api/ipfs/inspect/:cid", async (c) => {
+  try {
+    const cidParam = c.req.param("cid");
+    if (!cidParam) {
+      return c.json({ error: "Missing IPFS CID parameter", success: false }, 400);
+    }
+
+    const inspection = await inspectIpfsCid(cidParam);
+
+    // Reconcile with on-chain proposals in database
+    const proposals = await dbService.getProposals();
+    const matchingProposal = proposals.find(
+      (p) =>
+        p.ipfsProofCID === cidParam ||
+        p.disbursementReceiptCID === cidParam ||
+        p.auditReportCID === cidParam
+    );
+
+    let onChainContext = null;
+    if (matchingProposal) {
+      onChainContext = {
+        proposalId: matchingProposal.proposalId,
+        asnafCategory: matchingProposal.asnafCategory,
+        asnafLabel: matchingProposal.asnafLabel,
+        beneficiaryHash: matchingProposal.beneficiaryHash,
+        status: matchingProposal.status,
+        amount: matchingProposal.amount,
+        currencyType: matchingProposal.currencyType,
+        txHash: matchingProposal.txHash,
+        auditOpinion: matchingProposal.auditOpinion,
+        auditStatus: matchingProposal.auditStatus,
+        executedAt: matchingProposal.executedAt,
+      };
+    }
+
+    return c.json({
+      success: true,
+      cid: cidParam,
+      ...inspection,
+      onChainContext,
+    });
+  } catch (error: any) {
+    return c.json({ error: error.message || "Failed to inspect IPFS CID", success: false }, 500);
+  }
+});
 
 // 16. Manual Trigger Sync (Admin / Test Hook)
 app.post("/api/indexer/trigger-sync", async (c) => {

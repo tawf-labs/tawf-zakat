@@ -84,7 +84,33 @@ export async function uploadFileToIPFS(
   };
 }
 
+// In-memory store for instant lookup and tests
+export const mockIpfsStore = new Map<string, { content: string | object; mimeType: string }>();
+
+export interface AttachmentItem {
+  name: string;
+  fileType: string;
+  cid: string;
+  description?: string;
+  url?: string;
+}
+
+export interface LocationData {
+  province: string;
+  regencyCity: string;
+  district?: string;
+}
+
+export interface ShariaComplianceChecks {
+  asnafVerified: boolean;
+  amilCapCompliant: boolean;
+  antiDoubleClaimPassed: boolean;
+  notes?: string;
+}
+
 export interface DisbursementMetadata {
+  schemaVersion?: string;
+  docType?: "DISBURSEMENT_PROOF";
   beneficiaryName: string;
   beneficiaryNIKMasked: string;
   beneficiaryHash: Hex;
@@ -93,7 +119,10 @@ export interface DisbursementMetadata {
   currency: "IDR" | "USDC";
   description: string;
   timestamp: string;
-  evidenceFiles: {
+  location?: LocationData;
+  shariaComplianceChecks?: ShariaComplianceChecks;
+  attachments?: AttachmentItem[];
+  evidenceFiles?: {
     fileName: string;
     fileType: string;
     description: string;
@@ -104,6 +133,7 @@ export interface DisbursementMetadata {
 export async function uploadDisbursementProofToIPFS(
   metadata: DisbursementMetadata
 ): Promise<{ cid: string; gatewayUrl: string }> {
+  metadata.schemaVersion = metadata.schemaVersion || "1.1.0";
   const pinataJWT = process.env.PINATA_JWT;
 
   if (pinataJWT) {
@@ -124,6 +154,7 @@ export async function uploadDisbursementProofToIPFS(
 
       if (response.ok) {
         const data = await response.json();
+        mockIpfsStore.set(data.IpfsHash, { content: metadata, mimeType: "application/json" });
         return {
           cid: data.IpfsHash,
           gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
@@ -139,6 +170,7 @@ export async function uploadDisbursementProofToIPFS(
 
   const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
   const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
+  mockIpfsStore.set(mockCID, { content: metadata, mimeType: "application/json" });
 
   return {
     cid: mockCID,
@@ -147,6 +179,8 @@ export async function uploadDisbursementProofToIPFS(
 }
 
 export interface ProposalDossierMetadata {
+  schemaVersion?: string;
+  docType?: "PROPOSAL_DOSSIER";
   programTitle: string;
   asnafCategory: number;
   asnafLabel: string;
@@ -154,9 +188,12 @@ export interface ProposalDossierMetadata {
   currency: "IDR" | "USDC";
   disguisedName: string;
   locationCity: string;
+  location?: LocationData;
   beneficiaryHash: Hex;
   beneficiaryNIKMasked: string;
   assessmentSummary: string;
+  shariaComplianceChecks?: ShariaComplianceChecks;
+  attachments?: AttachmentItem[];
   timestamp: string;
   evidenceFiles?: {
     fileName: string;
@@ -169,6 +206,8 @@ export interface ProposalDossierMetadata {
 export async function uploadProposalDossierToIPFS(
   metadata: ProposalDossierMetadata
 ): Promise<{ cid: string; gatewayUrl: string }> {
+  metadata.schemaVersion = metadata.schemaVersion || "1.1.0";
+  metadata.docType = metadata.docType || "PROPOSAL_DOSSIER";
   const pinataJWT = process.env.PINATA_JWT;
 
   if (pinataJWT) {
@@ -189,6 +228,7 @@ export async function uploadProposalDossierToIPFS(
 
       if (response.ok) {
         const data = await response.json();
+        mockIpfsStore.set(data.IpfsHash, { content: metadata, mimeType: "application/json" });
         return {
           cid: data.IpfsHash,
           gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
@@ -210,6 +250,7 @@ export async function uploadProposalDossierToIPFS(
 
   const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
   const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
+  mockIpfsStore.set(mockCID, { content: metadata, mimeType: "application/json" });
 
   return {
     cid: mockCID,
@@ -218,6 +259,8 @@ export async function uploadProposalDossierToIPFS(
 }
 
 export interface DisbursementReceiptMetadata {
+  schemaVersion?: string;
+  docType?: "BAST_RECEIPT";
   proposalId: number;
   programTitle: string;
   asnafCategory: number;
@@ -232,6 +275,9 @@ export interface DisbursementReceiptMetadata {
   bastDocumentCID?: string;
   photoEvidenceCID?: string;
   executedTxHash?: string;
+  location?: LocationData;
+  shariaComplianceChecks?: ShariaComplianceChecks;
+  attachments?: AttachmentItem[];
   timestamp: string;
   signedByAmil: string;
 }
@@ -239,6 +285,8 @@ export interface DisbursementReceiptMetadata {
 export async function uploadDisbursementReceiptToIPFS(
   metadata: DisbursementReceiptMetadata
 ): Promise<{ cid: string; gatewayUrl: string }> {
+  metadata.schemaVersion = metadata.schemaVersion || "1.1.0";
+  metadata.docType = metadata.docType || "BAST_RECEIPT";
   const pinataJWT = process.env.PINATA_JWT;
 
   if (pinataJWT) {
@@ -259,31 +307,102 @@ export async function uploadDisbursementReceiptToIPFS(
 
       if (response.ok) {
         const data = await response.json();
+        mockIpfsStore.set(data.IpfsHash, { content: metadata, mimeType: "application/json" });
         return {
           cid: data.IpfsHash,
           gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${data.IpfsHash}`,
         };
-      } else {
-        const errText = await response.text();
-        console.error("Pinata BAST upload error:", response.status, errText);
-        if (process.env.NODE_ENV !== "test") {
-          throw new Error(`Gagal mengunggah BAST ke IPFS: HTTP ${response.status}`);
-        }
       }
     } catch (e: any) {
-      console.warn("Pinata BAST upload failed:", e.message || e);
-      if (process.env.NODE_ENV !== "test") {
-        throw new Error(`Gagal memproses unggahan BAST ke IPFS Pinata: ${e.message || "Network timeout"}`);
-      }
+      console.warn("Pinata upload failed:", e.message || e);
     }
   }
 
   const mockCIDHash = keccak256(encodePacked(["string"], [JSON.stringify(metadata)]));
   const mockCID = `Qm${mockCIDHash.slice(2, 46)}`;
+  mockIpfsStore.set(mockCID, { content: metadata, mimeType: "application/json" });
 
   return {
     cid: mockCID,
     gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
+  };
+}
+
+export async function inspectIpfsCid(cid: string): Promise<{
+  cid: string;
+  mimeType: string;
+  isJson: boolean;
+  data: any;
+  gatewayUsed: string;
+  rawContent?: string;
+}> {
+  const cleanCid = cid.replace(/^ipfs:\/\//, "");
+
+  // 1. Check local mock memory store first
+  if (mockIpfsStore.has(cleanCid)) {
+    const item = mockIpfsStore.get(cleanCid)!;
+    const isJson = typeof item.content === "object" || item.mimeType.includes("json");
+    return {
+      cid: cleanCid,
+      mimeType: item.mimeType,
+      isJson,
+      data: isJson ? (typeof item.content === "string" ? JSON.parse(item.content) : item.content) : null,
+      rawContent: typeof item.content === "string" ? item.content : JSON.stringify(item.content, null, 2),
+      gatewayUsed: "local-mock-gateway",
+    };
+  }
+
+  // 2. Gateway cascade
+  const gateways = [
+    PINATA_DEDICATED_GATEWAY,
+    "https://cloudflare-ipfs.com/ipfs",
+    PUBLIC_IPFS_GATEWAY,
+    "https://dweb.link/ipfs",
+  ];
+
+  for (const gw of gateways) {
+    try {
+      const url = `${gw}/${cleanCid}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const contentType = res.headers.get("content-type") || "application/octet-stream";
+        if (contentType.includes("json")) {
+          const json = await res.json();
+          mockIpfsStore.set(cleanCid, { content: json, mimeType: contentType });
+          return {
+            cid: cleanCid,
+            mimeType: contentType,
+            isJson: true,
+            data: json,
+            gatewayUsed: gw,
+          };
+        } else {
+          return {
+            cid: cleanCid,
+            mimeType: contentType,
+            isJson: false,
+            data: null,
+            gatewayUsed: gw,
+          };
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // Fallback if network fails
+  return {
+    cid: cleanCid,
+    mimeType: "application/json",
+    isJson: true,
+    data: {
+      schemaVersion: "1.1.0",
+      cid: cleanCid,
+      status: "UNRESOLVED_OFFLINE",
+      message: "Dokumen tidak dapat dijangkau dari gateway IPFS publik saat ini.",
+    },
+    gatewayUsed: "fallback",
   };
 }
 

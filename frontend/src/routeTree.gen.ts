@@ -16,6 +16,7 @@ import { Route as TataKelolaRouteImport } from './routes/tata-kelola'
 import { Route as TransparansiRouteImport } from './routes/transparansi'
 import { Route as VerifikasiRouteImport } from './routes/verifikasi'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
+import { Route as TransparansiBuktiRouteImport } from './routes/transparansi/bukti'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,24 +53,31 @@ const AdminRolesRoute = AdminRolesRouteImport.update({
   path: '/admin/roles',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TransparansiBuktiRoute = TransparansiBuktiRouteImport.update({
+  id: '/bukti',
+  path: '/bukti',
+  getParentRoute: () => TransparansiRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
   '/tata-kelola': typeof TataKelolaRoute
-  '/transparansi': typeof TransparansiRoute
+  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
+  '/transparansi/bukti': typeof TransparansiBuktiRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
   '/tata-kelola': typeof TataKelolaRoute
-  '/transparansi': typeof TransparansiRoute
+  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
+  '/transparansi/bukti': typeof TransparansiBuktiRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -77,9 +85,10 @@ export interface FileRoutesById {
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
   '/tata-kelola': typeof TataKelolaRoute
-  '/transparansi': typeof TransparansiRoute
+  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
+  '/transparansi/bukti': typeof TransparansiBuktiRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
+    | '/transparansi/bukti'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
+    | '/transparansi/bukti'
   id:
     | '__root__'
     | '/'
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
+    | '/transparansi/bukti'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -116,7 +128,7 @@ export interface RootRouteChildren {
   AboutRoute: typeof AboutRoute
   DonasiRoute: typeof DonasiRoute
   TataKelolaRoute: typeof TataKelolaRoute
-  TransparansiRoute: typeof TransparansiRoute
+  TransparansiRoute: typeof TransparansiRouteWithChildren
   VerifikasiRoute: typeof VerifikasiRoute
   AdminRolesRoute: typeof AdminRolesRoute
 }
@@ -172,15 +184,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRolesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/transparansi/bukti': {
+      id: '/transparansi/bukti'
+      path: '/bukti'
+      fullPath: '/transparansi/bukti'
+      preLoaderRoute: typeof TransparansiBuktiRouteImport
+      parentRoute: typeof TransparansiRoute
+    }
   }
 }
+
+interface TransparansiRouteChildren {
+  TransparansiBuktiRoute: typeof TransparansiBuktiRoute
+}
+
+const TransparansiRouteChildren: TransparansiRouteChildren = {
+  TransparansiBuktiRoute: TransparansiBuktiRoute,
+}
+
+const TransparansiRouteWithChildren = TransparansiRoute._addFileChildren(
+  TransparansiRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   DonasiRoute: DonasiRoute,
   TataKelolaRoute: TataKelolaRoute,
-  TransparansiRoute: TransparansiRoute,
+  TransparansiRoute: TransparansiRouteWithChildren,
   VerifikasiRoute: VerifikasiRoute,
   AdminRolesRoute: AdminRolesRoute,
 }

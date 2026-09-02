@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/Table";
 import { Badge } from "../../components/ui/Badge";
-import { FileText, ExternalLink, Search, ShieldCheck, CheckCircle2, Clock } from "lucide-react";
+import { FileText, ExternalLink, Search, ShieldCheck, CheckCircle2, Clock, Sparkles } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { BastModal } from "./BastModal";
+import { UniversalEvidenceModal } from "../evidence/UniversalEvidenceModal";
+import { Link } from "@tanstack/react-router";
 
 interface ProposalRecord {
   id: number;
@@ -164,11 +166,12 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
         </Table>
       )}
 
-      {/* BAST Modal */}
-      <BastModal
+      {/* Universal Evidence Inspector Modal */}
+      <UniversalEvidenceModal
         isOpen={!!selectedProposalForBast}
         onClose={() => setSelectedProposalForBast(null)}
-        proposal={selectedProposalForBast}
+        cid={selectedProposalForBast?.disbursementReceiptCID || selectedProposalForBast?.proposalMetadataCID || "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"}
+        title={`Bukti Penyaluran Program #${selectedProposalForBast?.id} (${selectedProposalForBast?.asnafType || "Fakir Miskin"})`}
       />
     </div>
   );

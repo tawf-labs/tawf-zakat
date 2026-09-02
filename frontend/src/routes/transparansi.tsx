@@ -64,6 +64,15 @@ function TransparansiPage() {
         badgeText="Transparansi 100% Terbuka"
         title="Pusat Transparansi & Mutasi Dana"
         description="Pantau seluruh dana zakat yang terkumpul dan tersalurkan secara real-time. Dilengkapi bukti Berita Acara Serah Terima (BAST) dan rekonsiliasi data on-chain."
+        actions={
+          <a
+            href="/transparansi/bukti"
+            className="inline-flex items-center gap-2 rounded-full bg-[#17332c] hover:bg-[#1b765e] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all shadow-xs cursor-pointer"
+          >
+            <Layers className="w-4 h-4 text-[#c4ed70]" />
+            <span>Pusat Pembuktian IPFS</span>
+          </a>
+        }
       />
 
       <Container className="space-y-10">
