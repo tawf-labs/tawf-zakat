@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { FileSpreadsheet, CheckCircle2, ShieldCheck, Loader2, Sparkles, ExternalLink, Award } from "lucide-react";
+import { FileSpreadsheet, CheckCircle2, ShieldCheck, Loader2, Sparkles, ExternalLink, Award, Lock } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
 import { ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
 import { type Hex } from "viem";
 import { toast } from "sonner";
+import { useGovernanceRole } from "./RoleContext";
 
 interface AuditorAttestationPanelProps {
   proposals: any[];
@@ -13,7 +14,7 @@ interface AuditorAttestationPanelProps {
 const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
   version: "1",
-  chainId: 11155111,
+  chainId: 421614,
   verifyingContract: ZAKAT_PROTOCOL_L1_ADDRESS as `0x${string}`,
 } as const;
 
