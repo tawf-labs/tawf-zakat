@@ -78,10 +78,29 @@ export async function getUSDCBalance(ownerAddress: string): Promise<bigint> {
   }
 }
 
+async function getGasFeeParams() {
+  try {
+    const client = getPublicClient();
+    const fees = await client.estimateFeesPerGas();
+    if (fees.maxFeePerGas) {
+      // Arbitrum Nitro sequencer base fee buffer (+50% buffer to prevent "max fee per gas less than block base fee")
+      const maxFeePerGas = (fees.maxFeePerGas * 150n) / 100n;
+      const maxPriorityFeePerGas = fees.maxPriorityFeePerGas
+        ? (fees.maxPriorityFeePerGas * 150n) / 100n
+        : parseUnits("0.05", 9);
+      return { maxFeePerGas, maxPriorityFeePerGas };
+    }
+  } catch (e) {
+    console.warn("Arbitrum gas fee estimation buffer fallback:", e);
+  }
+  return {};
+}
+
 export async function approveUSDCOnChain(
   amountUSDC: number
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
   const parsedAmount = parseUnits(amountUSDC.toString(), 6); // USDC uses 6 decimals
 
   const txHash = await walletClient.writeContract({
@@ -89,6 +108,7 @@ export async function approveUSDCOnChain(
     abi: ERC20_ABI,
     functionName: "approve",
     args: [ZAKAT_PROTOCOL_L1_ADDRESS, parsedAmount],
+    ...feeParams,
   });
 
   return {
@@ -104,6 +124,7 @@ export async function depositUSDCOnChain(
   commitmentHash: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
   const parsedAmount = parseUnits(amountUSDC.toString(), 6); // USDC uses 6 decimals
 
   const txHash = await walletClient.writeContract({
@@ -111,6 +132,7 @@ export async function depositUSDCOnChain(
     abi: ZAKAT_PROTOCOL_ABI,
     functionName: "depositUSDC",
     args: [parsedAmount, isAnonymous, commitmentHash],
+    ...feeParams,
   });
 
   return {
@@ -124,12 +146,14 @@ export async function approveDisbursementOnChain(
   proposalId: number
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
 
   const txHash = await walletClient.writeContract({
     address: ZAKAT_PROTOCOL_L1_ADDRESS,
     abi: ZAKAT_PROTOCOL_ABI,
     functionName: "approveDisbursement",
     args: [BigInt(proposalId)],
+    ...feeParams,
   });
 
   return {
@@ -144,12 +168,14 @@ export async function cancelProposalOnChain(
   reason: string
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
 
   const txHash = await walletClient.writeContract({
     address: ZAKAT_PROTOCOL_L1_ADDRESS,
     abi: ZAKAT_PROTOCOL_ABI,
     functionName: "cancelProposal",
     args: [BigInt(proposalId), reason],
+    ...feeParams,
   });
 
   return {
@@ -163,12 +189,14 @@ export async function executeDisbursementOnChain(
   proposalId: number
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
 
   const txHash = await walletClient.writeContract({
     address: ZAKAT_PROTOCOL_L1_ADDRESS,
     abi: ZAKAT_PROTOCOL_ABI,
     functionName: "executeDisbursement",
     args: [BigInt(proposalId)],
+    ...feeParams,
   });
 
   return {
@@ -189,6 +217,7 @@ export async function proposeDisbursementOnChain(params: {
 }): Promise<{ success: boolean; txHash: string; proposalId: number; explorerUrl: string }> {
   const { walletClient, accountAddress } = await getActiveWalletClient();
   const client = getPublicClient();
+  const feeParams = await getGasFeeParams();
 
   const parsedAmount =
     params.currencyType === 1
@@ -212,6 +241,7 @@ export async function proposeDisbursementOnChain(params: {
       BigInt(params.periodId),
       recipient,
     ],
+    ...feeParams,
   });
 
   await client.waitForTransactionReceipt({ hash: txHash });
@@ -242,6 +272,7 @@ export async function withdrawAmilShareOnChain(
   amountUSDC: number
 ): Promise<{ success: boolean; txHash: string; explorerUrl: string }> {
   const { walletClient } = await getActiveWalletClient();
+  const feeParams = await getGasFeeParams();
   const parsedAmount = parseUnits(amountUSDC.toString(), 6);
 
   const txHash = await walletClient.writeContract({
@@ -249,6 +280,7 @@ export async function withdrawAmilShareOnChain(
     abi: ZAKAT_PROTOCOL_ABI,
     functionName: "withdrawAmilShareUSDC",
     args: [toAddress as Hex, parsedAmount],
+    ...feeParams,
   });
 
   return {

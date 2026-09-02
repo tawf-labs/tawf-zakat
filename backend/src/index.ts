@@ -968,17 +968,27 @@ app.post("/api/audit/attest", async (c) => {
     if (process.env.PRIVATE_KEY && (!finalAuditTxHash || finalAuditTxHash.includes("attest") || !finalAuditTxHash.startsWith("0x"))) {
       try {
         const relayerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as Hex);
+        const publicClient = createPublicClient({
+          chain: arbitrumSepolia,
+          transport: http(CONTRACT_CONFIG.RPC_URL),
+        });
+        const fees = await publicClient.estimateFeesPerGas();
+        const maxFeePerGas = fees.maxFeePerGas ? (fees.maxFeePerGas * 150n) / 100n : undefined;
+        const maxPriorityFeePerGas = fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * 150n) / 100n : undefined;
+
         const relayerClient = createWalletClient({
           account: relayerAccount,
           chain: arbitrumSepolia,
           transport: http(CONTRACT_CONFIG.RPC_URL),
         });
 
-        // Broadcast sponsored transaction recording auditor attestation on Sepolia L1 (Notarization Tx)
+        // Broadcast sponsored transaction recording auditor attestation on Arbitrum Sepolia (Notarization Tx)
         const sponsoredTx = await relayerClient.sendTransaction({
           to: relayerAccount.address,
           value: 0n,
           data: toHex(`AUDIT_WTP:PROP_${proposalId}:OPIN_${auditOpinion}:${ipfsResult.cid}`),
+          maxFeePerGas,
+          maxPriorityFeePerGas,
         });
         finalAuditTxHash = sponsoredTx;
       } catch (relayerErr) {

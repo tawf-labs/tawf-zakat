@@ -65,13 +65,14 @@ async function testArbitrumE2E() {
   console.log(`✅ Deposited 100 USDC (https://sepolia.arbiscan.io/tx/${depositTx})`);
 
   // 3. Record Fiat Batch Settlement on-chain
-  console.log("\n3️⃣ Recording Fiat Batch #101 Settlement...");
+  const batchId = BigInt(Math.floor(Date.now() / 1000) % 1000000);
+  console.log(`\n3️⃣ Recording Fiat Batch #${batchId} Settlement...`);
   const mockRoot = "0x8b926f1457b19b6b56ae010d1fefa7012ee61e25170b2e56f92e0cc22684a593" as Hex;
   const batchTx = await walletClient.writeContract({
     address: zakatAddress,
     abi: zakatArtifact.abi,
     functionName: "recordFiatBatchSettlement",
-    args: [101n, mockRoot, 25000000n],
+    args: [batchId, mockRoot, 25000000n],
   });
   console.log(`⏳ Waiting for batch tx: ${batchTx}`);
   await publicClient.waitForTransactionReceipt({ hash: batchTx });
