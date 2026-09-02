@@ -310,9 +310,9 @@ export const dbService = {
     if (db) {
       try {
         const rows = await db.select().from(schema.disbursementProposals).orderBy(desc(schema.disbursementProposals.proposalIdOnChain));
-        // Auto-sync pending proposals with on-chain smart contract
+        // Auto-sync pending proposals with on-chain smart contract (only if beneficiaryHash matches)
         for (const r of rows) {
-          if (r.status === "Pending" && r.proposalIdOnChain > 0) {
+          if (r.status === "Pending" && r.proposalIdOnChain > 0 && r.beneficiaryHash) {
             try {
               const onchainP = await syncPublicClient.readContract({
                 address: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS,
@@ -320,23 +320,32 @@ export const dbService = {
                 functionName: "proposals",
                 args: [BigInt(r.proposalIdOnChain)],
               });
+              const onchainBenHash = onchainP[4] as string;
               const onchainStatus = Number(onchainP[9]);
               const onchainApprovals = Number(onchainP[8]);
-              if (onchainStatus === 1 || onchainApprovals >= 2) {
-                r.status = "Approved";
-                r.approvalCount = onchainApprovals;
-                r.safeStatus = "EXECUTED_ONCHAIN";
-                r.safeConfirmationsCount = 2;
-                r.approvedBy = JSON.stringify(["Amil Internal (Pengusul)", "Dewan Pengawas Syariah (DPS)"]);
-                
-                // Update database
-                db.update(schema.disbursementProposals).set({
-                  status: "Approved",
-                  approvalCount: onchainApprovals,
-                  approvedBy: r.approvedBy,
-                  safeStatus: "EXECUTED_ONCHAIN",
-                  safeConfirmationsCount: 2,
-                }).where(eq(schema.disbursementProposals.id, r.id)).catch(() => {});
+
+              // Verify that the on-chain proposal record actually matches this database proposal's beneficiaryHash
+              if (
+                onchainBenHash &&
+                r.beneficiaryHash &&
+                onchainBenHash.toLowerCase() === r.beneficiaryHash.toLowerCase()
+              ) {
+                if (onchainStatus === 1 || onchainApprovals >= 2) {
+                  r.status = "Approved";
+                  r.approvalCount = onchainApprovals;
+                  r.safeStatus = "EXECUTED_ONCHAIN";
+                  r.safeConfirmationsCount = 2;
+                  r.approvedBy = JSON.stringify(["Amil Internal (Pengusul)", "Dewan Pengawas Syariah (DPS)"]);
+                  
+                  // Update database
+                  db.update(schema.disbursementProposals).set({
+                    status: "Approved",
+                    approvalCount: onchainApprovals,
+                    approvedBy: r.approvedBy,
+                    safeStatus: "EXECUTED_ONCHAIN",
+                    safeConfirmationsCount: 2,
+                  }).where(eq(schema.disbursementProposals.id, r.id)).catch(() => {});
+                }
               }
             } catch (err) {}
           }
