@@ -21,7 +21,7 @@ export function RoleRoster() {
       account: "0x37C2bE50D1150c265691F46A1d8F07a3D039B6F3",
       badge: "Gasless EIP-712 Attestation",
       description: "Pemeriksa BAST & kepatuhan akuntansi syariah PSAK 109 pasca-penyaluran.",
-      link: "https://sepolia.etherscan.io/address/0x37C2bE50D1150c265691F46A1d8F07a3D039B6F3",
+      link: "https://sepolia.arbiscan.io/address/0x37C2bE50D1150c265691F46A1d8F07a3D039B6F3",
       linkText: "Lihat Akun Auditor",
     },
     {
@@ -31,18 +31,18 @@ export function RoleRoster() {
       account: "0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB",
       badge: "Intake & BAST Execution",
       description: "Pengelola survei lapangan mustahik dan pelaksanaan BAST fisik.",
-      link: "https://sepolia.etherscan.io/address/0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB",
+      link: "https://sepolia.arbiscan.io/address/0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB",
       linkText: "Lihat Akun Amil",
     },
     {
       title: "Automated Relayer Engine",
       roleId: "RELAYER_ROLE",
       icon: Zap,
-      account: "0x6014542ce8f759946aa6f3f9af54fb91685065a5",
+      account: "0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b",
       badge: "Zero-Gas Batch Settlement",
-      description: "Server relay yang membroadcast batch settlement dan mensponsori gas audit.",
-      link: "https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5",
-      linkText: "Lihat Relayer Contract",
+      description: "Server relay yang membroadcast batch settlement dan mensponsori gas audit di Arbitrum.",
+      link: "https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b",
+      linkText: "Lihat Smart Contract",
     },
   ];
 

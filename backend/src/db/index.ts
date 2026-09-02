@@ -4,12 +4,12 @@ import * as schema from "./schema";
 import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
 import { type Hex, createPublicClient, http, parseAbi } from "viem";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { desc, eq } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 
 const syncPublicClient = createPublicClient({
-  chain: sepolia,
+  chain: arbitrumSepolia,
   transport: http(CONTRACT_CONFIG.RPC_URL),
 });
 

@@ -98,12 +98,12 @@ export function Footer() {
             <ul className="space-y-2 text-xs text-[#f4f8f3]/70 font-mono">
               <li>
                 <a
-                  href="https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5"
+                  href="https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b"
                   target="_blank"
                   rel="noreferrer"
                   className="hover:text-[#c4ed70] transition-colors flex items-center gap-1"
                 >
-                  <span>Sepolia Contract</span>
+                  <span>Arbitrum Sepolia Contract</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </li>

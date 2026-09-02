@@ -1,8 +1,10 @@
-export const ZAKAT_PROTOCOL_L1_ADDRESS = "0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7";
-export const SEPOLIA_USDC_ADDRESS = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as const;
+export const ZAKAT_PROTOCOL_L1_ADDRESS = "0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b";
+export const SEPOLIA_USDC_ADDRESS = "0xdb10a1ee7a3a628353d0d29db60f99d46d41e30d" as const;
 
-export const SEPOLIA_CHAIN_ID = 11155111;
-export const SEPOLIA_EXPLORER_URL = "https://sepolia.etherscan.io";
+export const ARBITRUM_SEPOLIA_CHAIN_ID = 421614;
+export const SEPOLIA_CHAIN_ID = 421614;
+export const SEPOLIA_EXPLORER_URL = "https://sepolia.arbiscan.io";
+export const ARBISCAN_EXPLORER_URL = "https://sepolia.arbiscan.io";
 
 export const PINATA_DEDICATED_GATEWAY = "https://white-lazy-marten-351.mypinata.cloud/ipfs";
 export const PUBLIC_IPFS_GATEWAY = "https://ipfs.io/ipfs";

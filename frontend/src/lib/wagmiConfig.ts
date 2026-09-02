@@ -1,12 +1,13 @@
 import { createConfig, http } from "wagmi";
-import { sepolia } from "wagmi/chains";
+import { arbitrumSepolia, sepolia } from "wagmi/chains";
 import { getDefaultConfig } from "connectkit";
 
 export const wagmiConfig = createConfig(
   getDefaultConfig({
     // Your dApp chains
-    chains: [sepolia],
+    chains: [arbitrumSepolia, sepolia],
     transports: {
+      [arbitrumSepolia.id]: http("https://sepolia-rollup.arbitrum.io/rpc"),
       [sepolia.id]: http("https://ethereum-sepolia-rpc.publicnode.com"),
     },
 

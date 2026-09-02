@@ -99,7 +99,7 @@ export function PaymentSuccessModal({
             <div className="flex items-center justify-between pt-1 border-t border-[#dbe7dd]/60">
               <span className="text-[#5e7a70]">Tx Hash On-Chain:</span>
               <a
-                href={`https://sepolia.etherscan.io/tx/${receiptData.txHash}`}
+                href={`https://sepolia.arbiscan.io/tx/${receiptData.txHash}`}
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-[#1b765e] hover:underline flex items-center gap-1"

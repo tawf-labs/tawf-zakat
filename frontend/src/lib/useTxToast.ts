@@ -43,16 +43,16 @@ export function useTxToast() {
               successDescription ||
               `Tercatat permanen pada blok #${receipt.blockNumber.toString()}`,
             action: {
-              label: "Etherscan",
+              label: "Arbiscan",
               onClick: () =>
-                window.open(`https://sepolia.etherscan.io/tx/${txHash}`, "_blank"),
+                window.open(`https://sepolia.arbiscan.io/tx/${txHash}`, "_blank"),
             },
             duration: 8000,
           });
           onSuccess?.();
           return receipt;
         } else {
-          throw new Error("Transaction execution reverted on Sepolia L1.");
+          throw new Error("Transaction execution reverted on Arbitrum Sepolia.");
         }
       } else {
         // Fallback without publicClient
@@ -60,9 +60,9 @@ export function useTxToast() {
           id: toastId,
           description: `Tx: ${txHash.slice(0, 10)}...${txHash.slice(-6)}`,
           action: {
-            label: "Etherscan",
+            label: "Arbiscan",
             onClick: () =>
-              window.open(`https://sepolia.etherscan.io/tx/${txHash}`, "_blank"),
+              window.open(`https://sepolia.arbiscan.io/tx/${txHash}`, "_blank"),
           },
           duration: 8000,
         });
@@ -77,7 +77,7 @@ export function useTxToast() {
           ? {
               label: "Cek Tx",
               onClick: () =>
-                window.open(`https://sepolia.etherscan.io/tx/${txHash}`, "_blank"),
+                window.open(`https://sepolia.arbiscan.io/tx/${txHash}`, "_blank"),
             }
           : undefined,
         duration: 9000,
@@ -91,9 +91,9 @@ export function useTxToast() {
       description,
       action: txHash
         ? {
-            label: "Etherscan",
+            label: "Arbiscan",
             onClick: () =>
-              window.open(`https://sepolia.etherscan.io/tx/${txHash}`, "_blank"),
+              window.open(`https://sepolia.arbiscan.io/tx/${txHash}`, "_blank"),
           }
         : undefined,
       duration: 6000,

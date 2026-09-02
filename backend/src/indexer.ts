@@ -7,7 +7,7 @@ import {
   keccak256,
   toHex,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { dbService } from "./db/index";
 import { dataStore } from "./store";
@@ -39,13 +39,13 @@ export class IndexerEngine {
   private isRunning: boolean = false;
   private timer: NodeJS.Timeout | null = null;
   private readonly contractAddress: Hex;
-  private readonly startBlock: number = 11569000;
-  private readonly chunkSize: number = 1000;
+  private readonly startBlock: number = 304590800;
+  private readonly chunkSize: number = 2000;
   private readonly pollIntervalMs: number = 10000;
 
   constructor() {
     this.client = createPublicClient({
-      chain: sepolia,
+      chain: arbitrumSepolia,
       transport: http(CONTRACT_CONFIG.RPC_URL),
     });
     this.contractAddress = CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS as Hex;

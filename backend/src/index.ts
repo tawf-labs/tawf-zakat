@@ -22,7 +22,7 @@ import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
 import { verifyTypedData, createWalletClient, http, toHex, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
 import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
@@ -963,7 +963,7 @@ app.post("/api/audit/attest", async (c) => {
         const relayerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as Hex);
         const relayerClient = createWalletClient({
           account: relayerAccount,
-          chain: sepolia,
+          chain: arbitrumSepolia,
           transport: http(CONTRACT_CONFIG.RPC_URL),
         });
 

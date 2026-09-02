@@ -6,7 +6,7 @@ import {
   type Hex,
   parseUnits,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia, sepolia } from "viem/chains";
 import { getAccount } from "@wagmi/core";
 import { wagmiConfig } from "./wagmiConfig";
 import {
@@ -19,8 +19,8 @@ import {
 
 export function getPublicClient() {
   return createPublicClient({
-    chain: sepolia,
-    transport: http("https://ethereum-sepolia-rpc.publicnode.com"),
+    chain: arbitrumSepolia,
+    transport: http("https://sepolia-rollup.arbitrum.io/rpc"),
   });
 }
 
@@ -39,7 +39,7 @@ export async function getActiveWalletClient() {
   return {
     walletClient: createWalletClient({
       account: account.address,
-      chain: sepolia,
+      chain: arbitrumSepolia,
       transport: custom(provider as any),
     }),
     accountAddress: account.address,
