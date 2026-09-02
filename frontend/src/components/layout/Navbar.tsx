@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ConnectKitButton } from "connectkit";
+import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
 import { Menu, X, Shield, HeartHandshake, Eye, CheckCircle2, Home, Landmark } from "lucide-react";
 import { useWebSocket } from "../../lib/WebSocketContext";
 
@@ -59,7 +59,7 @@ export function Navbar() {
         {/* Right Actions */}
         <div className="flex items-center gap-3">
           {/* Connect Wallet Button */}
-          <ConnectKitButton.Custom>
+          <SafeConnectKitButton>
             {({ isConnected: isWalletConnected, isConnecting, show, address, truncatedAddress }) => {
               return (
                 <button
@@ -85,7 +85,7 @@ export function Navbar() {
                 </button>
               );
             }}
-          </ConnectKitButton.Custom>
+          </SafeConnectKitButton>
 
           {/* Mobile Menu Toggle Button */}
           <button

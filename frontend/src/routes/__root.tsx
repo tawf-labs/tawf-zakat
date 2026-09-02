@@ -3,7 +3,7 @@ import { Navbar } from "../components/layout/Navbar";
 import { Footer } from "../components/layout/Footer";
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ConnectKitProvider } from "connectkit";
+import { SafeConnectKitProvider } from "../lib/SafeConnectKitProvider";
 import { wagmiConfig } from "../lib/wagmiConfig";
 import { WalletProvider } from "../lib/WalletContext";
 import { WebSocketProvider } from "../lib/WebSocketContext";
@@ -82,7 +82,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body className="bg-white text-[#17332c] font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-[#c4ed70]/40">
         <WagmiProvider config={wagmiConfig}>
           <QueryClientProvider client={queryClient}>
-            <ConnectKitProvider
+            <SafeConnectKitProvider
               theme="soft"
               mode="light"
               options={{
@@ -125,7 +125,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                   </WebSocketProvider>
                 </RoleProvider>
               </WalletProvider>
-            </ConnectKitProvider>
+            </SafeConnectKitProvider>
           </QueryClientProvider>
         </WagmiProvider>
         <Scripts />
