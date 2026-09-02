@@ -118,18 +118,20 @@ export function DonationForm({
           return;
         }
 
-        const parsedUSDC = parseUnits(usdcAmount, 6);
-        if (parsedUSDC <= 0n) {
+        const numUSDC = parseFloat(usdcAmount);
+        if (isNaN(numUSDC) || numUSDC <= 0) {
           toast.error("Nominal USDC harus lebih besar dari 0.");
           setLoading(false);
           return;
         }
 
+        const parsedUSDC = parseUnits(usdcAmount, 6);
+
         // 1. Check & execute allowance approval if needed
         if (allowance < parsedUSDC) {
           setStatusMessage("Menyetujui izin transfer USDC (Approve)...");
-          const approveHash = await approveUSDCOnChain(parsedUSDC);
-          toast.info(`Persetujuan USDC terkirim: ${approveHash.slice(0, 10)}...`);
+          const approveRes = await approveUSDCOnChain(numUSDC);
+          toast.info(`Persetujuan USDC terkirim: ${approveRes.txHash.slice(0, 10)}...`);
           setAllowance(parsedUSDC);
         }
 
@@ -142,7 +144,8 @@ export function DonationForm({
           encodePacked(["string", "uint256", "bytes32"], [donorName || "Anonymous", parsedUSDC, salt as Hex])
         );
 
-        const depositTx = await depositUSDCOnChain(parsedUSDC, isAnonymous, commitmentHash);
+        const depositRes = await depositUSDCOnChain(numUSDC, isAnonymous, commitmentHash);
+        const depositTx = depositRes.txHash;
 
         const newReceipt = {
           trxId: `USDC-${depositTx.slice(2, 10).toUpperCase()}`,
@@ -166,7 +169,7 @@ export function DonationForm({
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
 
-        const res = await fetch("http://localhost:3001/api/donations", {
+        const res = await fetch("http://localhost:3001/api/donations/fiat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -179,14 +182,13 @@ export function DonationForm({
           }),
         });
 
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Gagal membuat pesanan donasi");
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data) {
+          throw new Error(data?.error || "Gagal membuat pesanan donasi");
         }
 
-        const data = await res.json();
-        const trxId = data.donation?.trxId || data.trxId;
-        const snapToken = data.snapToken;
+        const trxId = data.trxId || data.donation?.trxId || data.invoice?.trxId;
+        const snapToken = data.snapToken || data.invoice?.snapToken;
 
         setReceiptData({
           trxId,

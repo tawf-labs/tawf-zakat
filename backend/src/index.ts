@@ -114,20 +114,20 @@ app.get("/health", (c) => {
 });
 
 // 1. Inflow: Create Fiat QRIS Invoice (Status: PENDING)
-app.post("/api/donations/fiat", async (c) => {
+const handleFiatDonation = async (c: any) => {
   try {
     const body = await c.req.json();
-    const { donorName, isAnonymous, amountIDR } = body;
+    const { donorName, isAnonymous, amountIDR, zakatType, paymentMethod } = body;
 
     if (!amountIDR || amountIDR <= 0) {
-      return c.json({ error: "Invalid donation amount" }, 400);
+      return c.json({ error: "Invalid donation amount", success: false }, 400);
     }
 
     const timestamp = new Date().toISOString();
     const dateStr = timestamp.slice(0, 10).replace(/-/g, "");
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const trxId = `TRX-${dateStr}-${randomSuffix}`;
-    const salt = `salt_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+    const salt = body.salt || `salt_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
     const finalDonorName = isAnonymous ? "Hamba Allah" : donorName || "Muzakki";
 
     // Create single clean Snap Transaction on Midtrans to avoid order_id session collision
@@ -145,7 +145,7 @@ app.post("/api/donations/fiat", async (c) => {
       amountIDR: Number(amountIDR),
       timestamp,
       status: "PENDING",
-      paymentMethod: "QRIS",
+      paymentMethod: (paymentMethod || "QRIS").toUpperCase(),
       qrString,
       qrUrl,
     };
@@ -155,6 +155,10 @@ app.post("/api/donations/fiat", async (c) => {
     return c.json({
       success: true,
       message: "Invoice generated successfully with Snap",
+      trxId: record.trxId,
+      snapToken: snapResult.token,
+      redirectUrl: snapResult.redirectUrl,
+      donation: record,
       invoice: {
         trxId: record.trxId,
         donorName: record.donorName,
@@ -163,7 +167,7 @@ app.post("/api/donations/fiat", async (c) => {
         amountIDR: record.amountIDR,
         timestamp: record.timestamp,
         status: "PENDING",
-        paymentMethod: "QRIS",
+        paymentMethod: record.paymentMethod,
         qrString: record.qrString,
         qrUrl: record.qrUrl,
         snapToken: snapResult.token,
@@ -173,9 +177,12 @@ app.post("/api/donations/fiat", async (c) => {
       },
     });
   } catch (error: any) {
-    return c.json({ error: error.message || "Failed to process donation" }, 500);
+    return c.json({ error: error.message || "Failed to process donation", success: false }, 500);
   }
-});
+};
+
+app.post("/api/donations", handleFiatDonation);
+app.post("/api/donations/fiat", handleFiatDonation);
 
 // 1b. Inflow: Query Donation Status (with live Midtrans sync)
 app.get("/api/donations/status/:trxId", async (c) => {
