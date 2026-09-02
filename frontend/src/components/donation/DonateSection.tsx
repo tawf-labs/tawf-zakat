@@ -5,6 +5,7 @@ import { Badge } from "../ui/Badge";
 import { QrCode, Wallet, Shield, Copy, Check, ExternalLink, Lock, AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
 import { depositUSDCOnChain, approveUSDCOnChain, getUSDCAllowance, getUSDCBalance } from "../../lib/web3Client";
 import { useWallet } from "../../lib/WalletContext";
+import { useWebSocket } from "../../lib/WebSocketContext";
 import { parseUnits, formatUnits, keccak256, encodePacked, type Hex } from "viem";
 import { payWithSnap } from "../../lib/snapClient";
 
@@ -64,31 +65,24 @@ export function DonateSection() {
     return () => clearInterval(timer);
   }, [fiatInvoice]);
 
-  // Smart Polling for payment status
+  const { subscribe } = useWebSocket();
+
+  // Instant real-time listener for payment status via WebSocket (ADR-0011)
   useEffect(() => {
     if (!fiatInvoice || fiatInvoice.status === "PAID" || fiatInvoice.status === "BATCHED") return;
 
-    const pollInterval = setInterval(async () => {
-      try {
-        const res = await fetch(`http://localhost:3001/api/donations/status/${fiatInvoice.trxId}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.donation && (data.donation.status === "PAID" || data.donation.status === "BATCHED")) {
-            setFiatInvoice((prev: any) => ({
-              ...prev,
-              status: data.donation.status,
-              paidAt: data.donation.paidAt,
-              batchId: data.donation.batchId,
-            }));
-          }
-        }
-      } catch (err) {
-        // Silent error during polling
+    const unsub = subscribe("DONATION_PAID", (data) => {
+      if (data?.trxId === fiatInvoice.trxId) {
+        setFiatInvoice((prev: any) => ({
+          ...prev,
+          status: "PAID",
+          paidAt: data.paidAt || new Date().toISOString(),
+        }));
       }
-    }, 2500);
+    });
 
-    return () => clearInterval(pollInterval);
-  }, [fiatInvoice]);
+    return () => unsub();
+  }, [fiatInvoice, subscribe]);
 
   // Refresh USDC Balance and Allowance
   const refreshUSDCState = useCallback(async () => {

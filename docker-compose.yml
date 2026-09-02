@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: .
+      target: backend
+    container_name: tawf-zakat-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - PINATA_JWT=${PINATA_JWT}
+      - MIDTRANS_SERVER_KEY=${MIDTRANS_SERVER_KEY}
+      - MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
+      - RPC_URL=${RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      - ZAKAT_PROTOCOL_L1_ADDRESS=${ZAKAT_PROTOCOL_L1_ADDRESS:-0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7}
+      - PINATA_DEDICATED_GATEWAY=${PINATA_DEDICATED_GATEWAY:-https://white-lazy-marten-351.mypinata.cloud/ipfs}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/indexer/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+    container_name: tawf-zakat-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    depends_on:
+      - backend

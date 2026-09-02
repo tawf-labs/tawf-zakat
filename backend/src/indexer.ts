@@ -11,6 +11,7 @@ import { sepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { dbService } from "./db/index";
 import { dataStore } from "./store";
+import { eventBus } from "./ws";
 
 // Known Role Hash Dictionary
 export const KNOWN_ROLES: Record<string, string> = {
@@ -127,6 +128,14 @@ export class IndexerEngine {
 
     console.log(`[Indexer] Processed on-chain event ${eventName} at block #${blockNumber} (tx: ${txHash.slice(0, 10)}...)`);
 
+    // Broadcast generic indexed event
+    eventBus.broadcast("ONCHAIN_EVENT_INDEXED", {
+      eventName,
+      txHash,
+      blockNumber,
+      logIndex,
+    });
+
     // 2. State-specific domain updates
     switch (eventName) {
       case "USDCDeposited": {
@@ -143,6 +152,28 @@ export class IndexerEngine {
           commitmentHash,
           blockNumber,
         });
+
+        eventBus.broadcast("DONATION_RECEIVED", {
+          currency: "USDC",
+          donor,
+          amountUSDC,
+          isAnonymous,
+          txHash,
+        });
+        break;
+      }
+
+      case "FiatBatchSettled": {
+        const batchId = Number(args.batchId);
+        const merkleRoot = args.merkleRoot as string;
+        const totalAmountIDR = Number(args.totalAmountIDR);
+
+        eventBus.broadcast("MERKLE_BATCH_SETTLED", {
+          batchId,
+          merkleRoot,
+          totalAmountIDR,
+          txHash,
+        });
         break;
       }
 
@@ -152,6 +183,11 @@ export class IndexerEngine {
         if (memory) {
           memory.txHash = txHash;
         }
+
+        eventBus.broadcast("PROPOSAL_CREATED", {
+          proposalId,
+          txHash,
+        });
         break;
       }
 
@@ -170,6 +206,14 @@ export class IndexerEngine {
             memory.status = "Approved";
           }
         }
+
+        eventBus.broadcast("PROPOSAL_APPROVED", {
+          proposalId,
+          approver,
+          currentApprovals: count,
+          isQuorumMet: count >= 2,
+          txHash,
+        });
         break;
       }
 
@@ -180,6 +224,11 @@ export class IndexerEngine {
           memory.status = "Executed";
           memory.executedAt = new Date().toISOString();
         }
+
+        eventBus.broadcast("PROPOSAL_EXECUTED", {
+          proposalId,
+          txHash,
+        });
         break;
       }
 
@@ -191,6 +240,12 @@ export class IndexerEngine {
           memory.status = "Cancelled";
           memory.cancelReason = reason;
         }
+
+        eventBus.broadcast("PROPOSAL_CANCELLED", {
+          proposalId,
+          reason,
+          txHash,
+        });
         break;
       }
 
@@ -200,6 +255,14 @@ export class IndexerEngine {
         const roleName = KNOWN_ROLES[roleHash] || `CUSTOM_ROLE_${roleHash.slice(0, 8)}`;
 
         await dbService.grantRoleMember(roleHash, roleName, account, blockNumber, txHash);
+
+        eventBus.broadcast("ROLE_MEMBERS_CHANGED", {
+          action: "GRANTED",
+          roleHash,
+          roleName,
+          account,
+          txHash,
+        });
         break;
       }
 
@@ -208,6 +271,13 @@ export class IndexerEngine {
         const account = (args.account as string).toLowerCase();
 
         await dbService.revokeRoleMember(roleHash, account, blockNumber, txHash);
+
+        eventBus.broadcast("ROLE_MEMBERS_CHANGED", {
+          action: "REVOKED",
+          roleHash,
+          account,
+          txHash,
+        });
         break;
       }
     }

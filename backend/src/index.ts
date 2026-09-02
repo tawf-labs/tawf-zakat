@@ -26,6 +26,7 @@ import { CONTRACT_CONFIG } from "./config";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
 import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
 import { indexerEngine } from "./indexer";
+import { eventBus, createWebSocketHandler, websocket } from "./ws";
 
 export const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
@@ -61,6 +62,9 @@ if (shouldRunEmbeddedIndexer) {
 const app = new Hono();
 
 app.use("/*", cors());
+
+// Realtime WebSocket Endpoint (ADR-0011)
+app.get("/ws", createWebSocketHandler());
 
 // Real IPFS File Upload Endpoint (ADR-0010)
 app.post("/api/ipfs/upload-file", async (c) => {
@@ -271,6 +275,14 @@ app.post("/api/webhooks/payment", async (c) => {
       const paidTimestamp = settlement_time || new Date().toISOString();
       const updated = await dbService.markDonationAsPaid(order_id, paidTimestamp);
 
+      eventBus.broadcast("DONATION_PAID", {
+        trxId: order_id,
+        amountIDR: updated?.amountIDR || donation.amountIDR,
+        donorName: updated?.donorName || donation.donorName,
+        isAnonymous: updated?.isAnonymous || donation.isAnonymous,
+        paidAt: paidTimestamp,
+      });
+
       return c.json({
         success: true,
         message: "Payment successfully settled and marked as PAID",
@@ -308,6 +320,14 @@ app.post("/api/webhooks/simulator", async (c) => {
 
     const paidTimestamp = new Date().toISOString();
     const updated = await dbService.markDonationAsPaid(trxId, paidTimestamp);
+
+    eventBus.broadcast("DONATION_PAID", {
+      trxId,
+      amountIDR: updated?.amountIDR || donation.amountIDR,
+      donorName: updated?.donorName || donation.donorName,
+      isAnonymous: updated?.isAnonymous || donation.isAnonymous,
+      paidAt: paidTimestamp,
+    });
 
     return c.json({
       success: true,
@@ -539,6 +559,13 @@ app.post("/api/proposals/intake", async (c) => {
 
     await dbService.recordProposal(proposalRecord);
 
+    eventBus.broadcast("PROPOSAL_CREATED", {
+      proposalId: proposalRecord.proposalId,
+      asnafLabel: proposalRecord.asnafLabel,
+      amount: proposalRecord.amount,
+      beneficiaryName: proposalRecord.beneficiaryName,
+    });
+
     return c.json({
       success: true,
       message: "Proposal intake successful and pinned to IPFS",
@@ -622,6 +649,14 @@ app.post("/api/proposals", async (c) => {
 
     await dbService.recordProposal(proposal);
 
+    eventBus.broadcast("PROPOSAL_CREATED", {
+      proposalId: proposal.proposalId,
+      asnafLabel: proposal.asnafLabel,
+      amount: proposal.amount,
+      beneficiaryName: proposal.beneficiaryName,
+      txHash,
+    });
+
     return c.json({
       success: true,
       message: "Proposal created and recorded successfully",
@@ -668,6 +703,15 @@ app.post("/api/proposals/:id/approve", async (c) => {
 
     const updated = await dbService.approveProposal(proposalId, roleName, txHash, safeData);
 
+    eventBus.broadcast("PROPOSAL_APPROVED", {
+      proposalId,
+      approverRole: roleName,
+      status: updated?.status,
+      approvalCount: updated?.approvalCount,
+      isQuorumMet: updated?.status === "Approved",
+      txHash,
+    });
+
     return c.json({
       success: true,
       message:
@@ -691,6 +735,13 @@ app.post("/api/proposals/:id/cancel", async (c) => {
 
     const reason = cancelReason || "Dibatalkan oleh Pengawas Syariah / Amil";
     const updated = await dbService.cancelProposal(proposalId, reason, txHash);
+
+    eventBus.broadcast("PROPOSAL_CANCELLED", {
+      proposalId,
+      cancelReason: reason,
+      status: "Cancelled",
+      txHash,
+    });
 
     return c.json({
       success: true,
@@ -751,6 +802,11 @@ app.post("/api/proposals/:id/bast", async (c) => {
       receiptMetadata
     );
 
+    eventBus.broadcast("PROPOSAL_EXECUTED", {
+      proposalId,
+      disbursementReceiptCID: ipfsResult.cid,
+    });
+
     return c.json({
       success: true,
       message: "BAST receipt uploaded to IPFS and attached to proposal successfully",
@@ -773,6 +829,12 @@ app.post("/api/proposals/:id/execute", async (c) => {
     const { txHash } = body;
 
     const updated = await dbService.executeProposal(proposalId, txHash);
+
+    eventBus.broadcast("PROPOSAL_EXECUTED", {
+      proposalId,
+      status: "Executed",
+      txHash,
+    });
 
     return c.json({
       success: true,
@@ -926,6 +988,14 @@ app.post("/api/audit/attest", async (c) => {
       auditTxHash: finalAuditTxHash,
     });
 
+    eventBus.broadcast("AUDIT_ATTESTED", {
+      proposalId: Number(proposalId),
+      auditorName,
+      auditOpinion,
+      auditTxHash: finalAuditTxHash,
+      auditReportCID: ipfsResult.cid,
+    });
+
     return c.json({
       success: true,
       message: "Auditor attestation cryptographically verified, pinned to IPFS, and broadcast on-chain successfully",
@@ -1055,6 +1125,14 @@ app.post("/api/relayer/settle-batch", async (c) => {
     // Register tree in memory for instant proof verification
     dataStore.settleBatch(batchId, donationList, onChainResult.txHash);
 
+    eventBus.broadcast("MERKLE_BATCH_SETTLED", {
+      batchId,
+      merkleRoot: root,
+      totalAmountIDR: totalAmount,
+      itemCount: donationList.length,
+      txHash: onChainResult.txHash,
+    });
+
     return c.json({
       success: true,
       batchId,
@@ -1133,4 +1211,5 @@ console.log(`🚀 Zakat Protocol API running at http://localhost:${port}`);
 export default {
   port,
   fetch: app.fetch,
+  websocket,
 };

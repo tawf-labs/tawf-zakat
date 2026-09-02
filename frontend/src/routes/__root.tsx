@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConnectKitProvider } from "connectkit";
 import { wagmiConfig } from "../lib/wagmiConfig";
 import { WalletProvider } from "../lib/WalletContext";
+import { WebSocketProvider } from "../lib/WebSocketContext";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import React, { useState } from "react";
@@ -107,12 +108,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               }}
             >
               <WalletProvider>
-                <Toaster richColors position="top-right" closeButton theme="light" />
-                <Navbar />
-                <ErrorBoundary>
-                  <div className="flex-1">{children}</div>
-                </ErrorBoundary>
-                <Footer />
+                <WebSocketProvider>
+                  <Toaster richColors position="top-right" closeButton theme="light" />
+                  <Navbar />
+                  <ErrorBoundary>
+                    <div className="flex-1">{children}</div>
+                  </ErrorBoundary>
+                  <Footer />
+                </WebSocketProvider>
               </WalletProvider>
             </ConnectKitProvider>
           </QueryClientProvider>

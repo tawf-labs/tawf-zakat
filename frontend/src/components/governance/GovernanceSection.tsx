@@ -12,6 +12,7 @@ import {
 } from "../../lib/web3Client";
 import { useTxToast } from "../../lib/useTxToast";
 import { ZAKAT_PROTOCOL_L1_ADDRESS, getIpfsUrl, PINATA_DEDICATED_GATEWAY } from "../../lib/contracts";
+import { useWebSocket } from "../../lib/WebSocketContext";
 import { type Hex } from "viem";
 
 interface Proposal {
@@ -189,15 +190,38 @@ export function GovernanceSection() {
     }
   }, []);
 
+  const { subscribe } = useWebSocket();
+
   useEffect(() => {
     fetchProposals();
     fetchSafeStatus();
-    const interval = setInterval(() => {
+
+    // Real-time Event Invalidation (ADR-0011) - Zero polling overhead
+    const unsubCreated = subscribe("PROPOSAL_CREATED", () => {
+      fetchProposals();
+    });
+    const unsubApproved = subscribe("PROPOSAL_APPROVED", () => {
       fetchProposals();
       fetchSafeStatus();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [fetchProposals, fetchSafeStatus]);
+    });
+    const unsubExecuted = subscribe("PROPOSAL_EXECUTED", () => {
+      fetchProposals();
+    });
+    const unsubCancelled = subscribe("PROPOSAL_CANCELLED", () => {
+      fetchProposals();
+    });
+    const unsubAttested = subscribe("AUDIT_ATTESTED", () => {
+      fetchProposals();
+    });
+
+    return () => {
+      unsubCreated();
+      unsubApproved();
+      unsubExecuted();
+      unsubCancelled();
+      unsubAttested();
+    };
+  }, [fetchProposals, fetchSafeStatus, subscribe]);
 
   const handleApprove = async (proposalId: number) => {
     let txHash: string | undefined;

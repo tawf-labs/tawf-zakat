@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { withdrawAmilShareOnChain, getContractBalances } from "../../lib/web3Client";
 import { getIpfsUrl } from "../../lib/contracts";
+import { useWebSocket } from "../../lib/WebSocketContext";
 import { formatUnits } from "viem";
 
 interface BatchItem {
@@ -141,11 +142,26 @@ export function TransparencyDashboard() {
     }
   }, []);
 
+  const { subscribe } = useWebSocket();
+
   useEffect(() => {
     fetchLiveTransparencyData();
-    const interval = setInterval(fetchLiveTransparencyData, 8000);
-    return () => clearInterval(interval);
-  }, [fetchLiveTransparencyData]);
+
+    // Event-driven real-time invalidation (ADR-0011) - Zero polling overhead
+    const unsubBatch = subscribe("MERKLE_BATCH_SETTLED", fetchLiveTransparencyData);
+    const unsubEvent = subscribe("ONCHAIN_EVENT_INDEXED", fetchLiveTransparencyData);
+    const unsubDonation = subscribe("DONATION_PAID", fetchLiveTransparencyData);
+    const unsubExecuted = subscribe("PROPOSAL_EXECUTED", fetchLiveTransparencyData);
+    const unsubAttested = subscribe("AUDIT_ATTESTED", fetchLiveTransparencyData);
+
+    return () => {
+      unsubBatch();
+      unsubEvent();
+      unsubDonation();
+      unsubExecuted();
+      unsubAttested();
+    };
+  }, [fetchLiveTransparencyData, subscribe]);
 
   // Aggregate stats calculation
   const displayTotalIDR =

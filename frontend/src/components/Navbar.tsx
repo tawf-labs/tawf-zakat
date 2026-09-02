@@ -3,9 +3,11 @@ import { Link } from "@tanstack/react-router";
 import { ConnectKitButton } from "connectkit";
 import { Wallet, ChevronDown, AlertCircle, Menu, X, Shield, Search } from "lucide-react";
 import { sepolia } from "wagmi/chains";
+import { useWebSocket } from "../lib/WebSocketContext";
 
 export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { isConnected } = useWebSocket();
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[#dbe7dd] bg-white/95 backdrop-blur-md shadow-xs transition-all">
@@ -88,6 +90,15 @@ export function Navbar() {
 
         {/* Right Actions */}
         <div className="flex items-center gap-3">
+          {/* Live WebSocket Indicator Badge */}
+          <div
+            className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-medium border border-[#dbe7dd] bg-[#f4f8f3] text-[#17332c]"
+            title={isConnected ? "WebSocket Real-Time Terhubung" : "Menghubungkan ke Server Real-Time..."}
+          >
+            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
+            <span>{isConnected ? "LIVE" : "CONNECTING"}</span>
+          </div>
+
           {/* Quick Donate CTA */}
           <a
             href="#donate"
