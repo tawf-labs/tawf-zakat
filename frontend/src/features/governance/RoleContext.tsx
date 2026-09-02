@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "../../lib/web3Client";
-import { GOVERNANCE_ROLES, ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
+import { GOVERNANCE_ROLES, ZAKAT_PROTOCOL_L1_ADDRESS, getApiBaseUrl } from "../../lib/contracts";
 import { parseAbi } from "viem";
 
 export type GovernancePersona = "AUTO" | "AMIL" | "DPS" | "AUDITOR" | "PUBLIC";

@@ -24,6 +24,7 @@ import {
   GOVERNANCE_ROLES,
   SAFE_DPS_MULTISIG_ADDRESS,
   SEPOLIA_EXPLORER_URL,
+  getApiBaseUrl,
 } from "../../lib/contracts";
 import { useTxToast } from "../../lib/useTxToast";
 import type { Hex } from "viem";
@@ -137,8 +138,8 @@ function AdminRolesPage() {
     try {
       setLoading(true);
       const [rolesRes, eventsRes] = await Promise.all([
-        fetch("/api/governance/roles").then((r) => r.json()),
-        fetch("/api/events?limit=30").then((r) => r.json()),
+        fetch(`${getApiBaseUrl()}/api/governance/roles`).then((r) => r.json()),
+        fetch(`${getApiBaseUrl()}/api/events?limit=30`).then((r) => r.json()),
       ]);
 
       if (rolesRes.success && rolesRes.roles) {

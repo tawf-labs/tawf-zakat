@@ -4,7 +4,7 @@ import { Input } from "../../components/ui/Input";
 import { useAccount, useSignTypedData } from "wagmi";
 import { Upload, Loader2, Sparkles, ShieldCheck, FileText, CheckCircle2 } from "lucide-react";
 import { keccak256, encodePacked, parseUnits, type Hex } from "viem";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES } from "../../lib/contracts";
+import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, getApiBaseUrl } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface CreateProposalModalProps {

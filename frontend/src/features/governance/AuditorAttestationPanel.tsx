@@ -18,6 +18,7 @@ import {
   AUDIT_STANDARD,
   AUDIT_OPINIONS,
   AUDIT_DOCUMENT_MAX_BYTES,
+  getApiBaseUrl,
 } from "../../lib/contracts";
 import { type Hex } from "viem";
 import { toast } from "sonner";

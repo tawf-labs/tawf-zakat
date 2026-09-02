@@ -13,6 +13,7 @@ const config = defineConfig({
   plugins: [
     devtools(),
     nitro({
+      preset: process.env.VERCEL ? 'vercel' : undefined,
       rollupConfig: {
         external: [/^@sentry\//, '@coinbase/cdp-sdk', '@x402/evm'],
       },
