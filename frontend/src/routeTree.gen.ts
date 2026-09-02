@@ -11,6 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
+import { Route as DonasiRouteImport } from './routes/donasi'
+import { Route as TataKelolaRouteImport } from './routes/tata-kelola'
+import { Route as TransparansiRouteImport } from './routes/transparansi'
+import { Route as VerifikasiRouteImport } from './routes/verifikasi'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +27,26 @@ const AboutRoute = AboutRouteImport.update({
   path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DonasiRoute = DonasiRouteImport.update({
+  id: '/donasi',
+  path: '/donasi',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TataKelolaRoute = TataKelolaRouteImport.update({
+  id: '/tata-kelola',
+  path: '/tata-kelola',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TransparansiRoute = TransparansiRouteImport.update({
+  id: '/transparansi',
+  path: '/transparansi',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VerifikasiRoute = VerifikasiRouteImport.update({
+  id: '/verifikasi',
+  path: '/verifikasi',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRolesRoute = AdminRolesRouteImport.update({
   id: '/admin/roles',
   path: '/admin/roles',
@@ -32,30 +56,68 @@ const AdminRolesRoute = AdminRolesRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/donasi': typeof DonasiRoute
+  '/tata-kelola': typeof TataKelolaRoute
+  '/transparansi': typeof TransparansiRoute
+  '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/donasi': typeof DonasiRoute
+  '/tata-kelola': typeof TataKelolaRoute
+  '/transparansi': typeof TransparansiRoute
+  '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/donasi': typeof DonasiRoute
+  '/tata-kelola': typeof TataKelolaRoute
+  '/transparansi': typeof TransparansiRoute
+  '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/about' | '/admin/roles'
+  fullPaths:
+    | '/'
+    | '/about'
+    | '/donasi'
+    | '/tata-kelola'
+    | '/transparansi'
+    | '/verifikasi'
+    | '/admin/roles'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/about' | '/admin/roles'
-  id: '__root__' | '/' | '/about' | '/admin/roles'
+  to:
+    | '/'
+    | '/about'
+    | '/donasi'
+    | '/tata-kelola'
+    | '/transparansi'
+    | '/verifikasi'
+    | '/admin/roles'
+  id:
+    | '__root__'
+    | '/'
+    | '/about'
+    | '/donasi'
+    | '/tata-kelola'
+    | '/transparansi'
+    | '/verifikasi'
+    | '/admin/roles'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
+  DonasiRoute: typeof DonasiRoute
+  TataKelolaRoute: typeof TataKelolaRoute
+  TransparansiRoute: typeof TransparansiRoute
+  VerifikasiRoute: typeof VerifikasiRoute
   AdminRolesRoute: typeof AdminRolesRoute
 }
 
@@ -75,6 +137,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/donasi': {
+      id: '/donasi'
+      path: '/donasi'
+      fullPath: '/donasi'
+      preLoaderRoute: typeof DonasiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tata-kelola': {
+      id: '/tata-kelola'
+      path: '/tata-kelola'
+      fullPath: '/tata-kelola'
+      preLoaderRoute: typeof TataKelolaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/transparansi': {
+      id: '/transparansi'
+      path: '/transparansi'
+      fullPath: '/transparansi'
+      preLoaderRoute: typeof TransparansiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/verifikasi': {
+      id: '/verifikasi'
+      path: '/verifikasi'
+      fullPath: '/verifikasi'
+      preLoaderRoute: typeof VerifikasiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/roles': {
       id: '/admin/roles'
       path: '/admin/roles'
@@ -88,6 +178,10 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
+  DonasiRoute: DonasiRoute,
+  TataKelolaRoute: TataKelolaRoute,
+  TransparansiRoute: TransparansiRoute,
+  VerifikasiRoute: VerifikasiRoute,
   AdminRolesRoute: AdminRolesRoute,
 }
 export const routeTree = rootRouteImport

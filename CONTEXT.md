@@ -146,7 +146,24 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 1. **Native Bun + Hono WebSocket (`/ws`)**: Jalur komunikasi real-time dua arah ultra-cepat yang menggantikan polling interval pada frontend.
 2. **Event Broadcaster Engine**: Meneruskan event on-chain dari Indexer Viem dan mutasi transaksi API (proposal baru, persetujuan DPS, pencairan BAST, atestasi audit, pembayaran QRIS) ke seluruh client yang terhubung secara instan.
 3. **Thin Invalidation Strategy**: Mengirim sinyal event ringan (< 200 bytes) untuk memicu pembaruan state frontend & notifikasi Sonner Toast tanpa beban jaringan berlebih.
-4. **VPS Production Ready**: Dilengkapi konfigurasi Nginx reverse proxy dengan WebSocket upgrade header dan Docker Compose.
+### J. Frontend Feature-Driven Architecture & Human-Centric Syariah UX (ADR-0012)
+1. **Multi-Route Information Architecture (TanStack Router)**:
+   - `/` (Beranda): Nilai transparansi, kalkulator zakat kilat, ringkasan saldo & penyaluran real-time, pilar pengawasan 3 lapis, program bantuan unggulan.
+   - `/donasi`: Alur penyaluran zakat khusus (Zakat Maal, Zakat Penghasilan, Zakat Fitrah, Infaq) dengan metode QRIS / Virtual Account / USDC Web3 & lafal niat/akad zakat.
+   - `/transparansi`: Pusat transparansi & explorer publik (neraca kas real-time, grafik alokasi 8 Asnaf BAZNAS, riwayat penyaluran mustahik, berkas BAST IPFS, & tautan Sepolia Etherscan).
+   - `/verifikasi`: Cek bukti donasi digital (pencarian via ID Transaksi / Hash NIK, verifikasi Merkle inclusion proof instan, unduh sertifikat/kwitansi zakat).
+   - `/tata-kelola`: Portal operasional terpadu untuk Amil (pengajuan & BAST upload), Dewan Pengawas Syariah (DPS Safe Multisig approval), Auditor Independen (Gasless EIP-712 WTP Attestation).
+   - `/tata-kelola/roles`: Roster transparansi dan manajemen peran on-chain.
+2. **Feature-Driven / Vertical Slice Structure**:
+   - `src/components/ui/`: UI Primitives (Button, Dialog, Card, Badge, Input, Tabs, Table) berbasis Tailwind + Radix.
+   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
+3. **Indonesian Islamic Fiqh Copywriting**:
+   - Memprioritaskan bahasa fikih dan filantropi Islam Indonesia yang menenangkan bagi Muzakki awam.
+   - Menjadikan kapabilitas kriptografi/web3 sebagai bukti jaminan syariah otomatis, dengan opsi penelusuran data teknis on-chain di tab/accordion sekunder bagi auditor.
+4. **Interactive BAZNAS Zakat Calculator**:
+   - Menghitung Zakat Penghasilan & Zakat Maal berdasarkan nisab emas BAZNAS, dengan tombol integrasi langsung ke formulir donasi.
+5. **State & Render Optimization**:
+   - Isolasi form state pada leaf components, TanStack Query v5 granular caching, dan WebSocket thin invalidation tanpa trigger re-render masif.
 
 ---
 
@@ -155,4 +172,4 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 - [x] **Smart Contract (L1)**: `ZakatProtocolL1.sol` deployed on Sepolia (`0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7`) with SafeERC20, Invariant Split, Multi-Sig 2-of-3, and Emergency Cancel.
 - [x] **Backend & Database**: Bun + Hono API + Neon PostgreSQL via Drizzle ORM + Merkle Tree batch settlement engine + Embedded Viem Indexer Engine + Real-time WebSocket Server.
 - [x] **Frontend Web3**: TanStack Start + ConnectKit (Soft Syariah Theme) + Wagmi v3 + Viem + Public Role Governance Panel (`/admin/roles`) + Sonner Toasts + Error Boundary + WebSocket Live Invalidation Client.
-- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0011 tercatat lengkap di `docs/adr/`.
+- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0012 tercatat lengkap di `docs/adr/`.

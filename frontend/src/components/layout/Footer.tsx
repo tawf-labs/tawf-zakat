@@ -1,0 +1,138 @@
+import React from "react";
+import { Link } from "@tanstack/react-router";
+import { ShieldCheck, ExternalLink, HeartHandshake, FileText, CheckCircle2 } from "lucide-react";
+import { Container } from "./Container";
+
+export function Footer() {
+  return (
+    <footer className="border-t border-[#dbe7dd] bg-[#17332c] text-[#f4f8f3] pt-14 pb-10">
+      <Container>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 lg:gap-12 pb-12 border-b border-white/10">
+          {/* Col 1: Brand & Mission */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-[#c4ed70] flex items-center justify-center text-[#17332c] font-serif font-bold text-base">
+                Z
+              </div>
+              <span className="font-serif text-xl font-bold tracking-tight text-white">
+                TAWF ZAKAT
+              </span>
+            </div>
+            <p className="text-sm text-[#f4f8f3]/80 leading-relaxed max-w-md">
+              Protokol filantropi Islam modern yang menjamin 100% transparansi penyaluran zakat, infaq, dan sedekah melalui pengawasan terprogram Dewan Pengawas Syariah (DPS) dan Auditor Independen.
+            </p>
+            <div className="flex items-center gap-2 text-xs text-[#c4ed70] font-medium pt-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Sesuai Fikih 8 Asnaf BAZNAS & Standar Akuntansi PSAK 109</span>
+            </div>
+          </div>
+
+          {/* Col 2: Navigasi Cepat */}
+          <div className="space-y-3">
+            <h4 className="font-serif text-sm font-bold uppercase tracking-wider text-[#c4ed70]">
+              Layanan Muzakki
+            </h4>
+            <ul className="space-y-2 text-sm text-[#f4f8f3]/80">
+              <li>
+                <Link to="/donasi" className="hover:text-white transition-colors">
+                  Kalkulator Zakat
+                </Link>
+              </li>
+              <li>
+                <Link to="/donasi" className="hover:text-white transition-colors">
+                  Zakat Penghasilan
+                </Link>
+              </li>
+              <li>
+                <Link to="/donasi" className="hover:text-white transition-colors">
+                  Zakat Maal & Tabungan
+                </Link>
+              </li>
+              <li>
+                <Link to="/donasi" className="hover:text-white transition-colors">
+                  Infaq & Sedekah
+                </Link>
+              </li>
+              <li>
+                <Link to="/verifikasi" className="hover:text-white transition-colors">
+                  Cek Bukti Donasi
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          {/* Col 3: Transparansi Publik */}
+          <div className="space-y-3">
+            <h4 className="font-serif text-sm font-bold uppercase tracking-wider text-[#c4ed70]">
+              Transparansi
+            </h4>
+            <ul className="space-y-2 text-sm text-[#f4f8f3]/80">
+              <li>
+                <Link to="/transparansi" className="hover:text-white transition-colors">
+                  Laporan Kas Real-Time
+                </Link>
+              </li>
+              <li>
+                <Link to="/transparansi" className="hover:text-white transition-colors">
+                  Distribusi 8 Asnaf
+                </Link>
+              </li>
+              <li>
+                <Link to="/transparansi" className="hover:text-white transition-colors">
+                  Berkas BAST & Penyaluran
+                </Link>
+              </li>
+              <li>
+                <Link to="/tata-kelola" className="hover:text-white transition-colors">
+                  Portal Pengawas & DPS
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          {/* Col 4: Data Kriptografi / Audit */}
+          <div className="space-y-3">
+            <h4 className="font-serif text-sm font-bold uppercase tracking-wider text-[#c4ed70]">
+              Audit On-Chain
+            </h4>
+            <ul className="space-y-2 text-xs text-[#f4f8f3]/70 font-mono">
+              <li>
+                <a
+                  href="https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-[#c4ed70] transition-colors flex items-center gap-1"
+                >
+                  <span>Sepolia Contract</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-[#c4ed70] transition-colors flex items-center gap-1"
+                >
+                  <span>Safe Multisig DPS</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </li>
+              <li>
+                <span className="text-[#f4f8f3]/50">Jaringan: Sepolia L1</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        {/* Bottom bar */}
+        <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#f4f8f3]/60">
+          <p>© {new Date().getFullYear()} TAWF Zakat Protocol. Amanah, Transparan, dan Terbuka.</p>
+          <p className="text-[11px]">
+            Dibangun untuk kebaikan umat dengan integritas data anti-korupsi.
+          </p>
+        </div>
+      </Container>
+    </footer>
+  );
+}

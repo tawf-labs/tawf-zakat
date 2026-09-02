@@ -1,6 +1,6 @@
 import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
-import { Navbar } from "../components/Navbar";
-import { Footer } from "../components/Footer";
+import { Navbar } from "../components/layout/Navbar";
+import { Footer } from "../components/layout/Footer";
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConnectKitProvider } from "connectkit";
@@ -24,7 +24,12 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "Tawf Zakat — Transparent Syariah Protocol",
+        title: "Tawf Zakat — Protokol Zakat Transparan & Syariah",
+      },
+      {
+        name: "description",
+        content:
+          "Salurkan zakat, infaq, dan sedekah secara amanah dengan transparansi 100% dan pengawasan Dewan Pengawas Syariah.",
       },
     ],
     links: [
