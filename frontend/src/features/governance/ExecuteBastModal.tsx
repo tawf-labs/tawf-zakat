@@ -71,7 +71,7 @@ export function ExecuteBastModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-2xl">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-2xl">
         <DialogHeader className="space-y-1.5 border-b border-[#dbe7dd]/60 pb-4">
           <DialogTitle className="font-serif text-2xl font-bold text-[#17332c]">
             Eksekusi Penyaluran & Unggah BAST

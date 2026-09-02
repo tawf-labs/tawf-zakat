@@ -55,18 +55,18 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-3xl bg-white p-6 md:p-8 shadow-2xl border border-[#dbe7dd] duration-200 animate-in fade-in-0 zoom-in-95",
+          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-lg max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 rounded-3xl bg-white p-6 md:p-8 shadow-2xl border border-[#dbe7dd] duration-200 animate-in fade-in-0 zoom-in-95",
           className
         )}
         {...props}
       >
-        {children}
         {showCloseButton && (
-          <DialogPrimitive.Close className="absolute top-5 right-5 rounded-full p-1.5 text-[#5e7a70] hover:text-[#17332c] hover:bg-[#eaf3e8] transition-colors focus:outline-none">
+          <DialogPrimitive.Close className="absolute top-5 right-5 z-20 rounded-full p-1.5 text-[#5e7a70] hover:text-[#17332c] hover:bg-[#eaf3e8] transition-colors focus:outline-none bg-white/80 backdrop-blur-xs">
             <X className="w-5 h-5" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         )}
+        {children}
       </DialogPrimitive.Content>
     </DialogPortal>
   );

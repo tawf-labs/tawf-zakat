@@ -80,18 +80,50 @@ export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreatePropos
         encodePacked(["string", "string", "bytes32"], [nik, beneficiaryName, salt as Hex])
       );
 
-      // 3. Submit proposal on-chain to Sepolia L1
-      setStatusText("Mengirim transaksi pengajuan ke smart contract Sepolia...");
+      // 3. Submit proposal on-chain to Arbitrum Sepolia
+      setStatusText("Mengirim transaksi pengajuan ke smart contract Arbitrum...");
       const numAmount = Number(amount);
-      const parsedAmount = currencyType === 1 ? parseUnits(amount, 6) : BigInt(numAmount);
+      const currentPeriodId = 202609;
 
-      const txHash = await proposeDisbursementOnChain(
+      const res = await proposeDisbursementOnChain({
         currencyType,
-        parsedAmount,
-        asnafId,
+        amount: numAmount,
+        asnafCategory: asnafId,
         beneficiaryHash,
-        cid
-      );
+        ipfsProofCID: cid,
+        periodId: currentPeriodId,
+        usdcRecipient: address,
+      });
+
+      // 4. Synchronize proposal into backend database
+      setStatusText("Menyimpan berkas usulan ke basis data...");
+      try {
+        await fetch("http://localhost:3001/api/proposals/intake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            programTitle: title,
+            currencyType,
+            amount: numAmount,
+            asnafCategory: asnafId,
+            beneficiaryName,
+            beneficiaryNIK: nik,
+            secretSalt: salt,
+            evidenceFiles: [
+              {
+                fileName: file ? file.name : "berkas_survei_mustahik.pdf",
+                fileType: file ? file.type : "application/pdf",
+                description: "Dokumen survei kelayakan asnaf BAZNAS",
+                cid,
+              },
+            ],
+            periodId: currentPeriodId,
+            usdcRecipient: address,
+          }),
+        });
+      } catch (syncErr) {
+        console.warn("Backend proposal sync error:", syncErr);
+      }
 
       toast.success(`Proposal #${title} berhasil diajukan ke antrean DPS!`);
       onSuccess?.();
@@ -107,7 +139,7 @@ export function CreateProposalModal({ isOpen, onClose, onSuccess }: CreatePropos
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-xl rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-2xl">
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-2xl">
         <DialogHeader className="space-y-1.5 border-b border-[#dbe7dd]/60 pb-4">
           <DialogTitle className="font-serif text-2xl font-bold text-[#17332c]">
             Pengajuan Penyaluran Zakat Baru
