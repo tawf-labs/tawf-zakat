@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
+import { getWsBaseUrl } from "./contracts";
 
 export type WebSocketStatus = "connected" | "connecting" | "disconnected";
 
@@ -32,16 +33,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
 
-  const getWsUrl = () => {
-    if (typeof window === "undefined") return "ws://localhost:3001/ws";
-    const host = window.location.hostname;
-    // If running in development (port 5173 / 3000), point to backend on 3001
-    if (window.location.port && window.location.port !== "80" && window.location.port !== "443") {
-      return `ws://${host}:3001/ws`;
-    }
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}/ws`;
-  };
+  const getWsUrl = () => `${getWsBaseUrl()}/ws`;
 
   const connect = useCallback(() => {
     if (typeof window === "undefined") return;

@@ -16,6 +16,12 @@ export function getIpfsUrl(cid?: string | null, preferredGateway = PINATA_DEDICA
 }
 
 export function getApiBaseUrl(): string {
+  // Explicit override — required whenever the frontend is deployed on a
+  // different origin than the backend (e.g. Vercel frontend + VPS API),
+  // since relative-path fetches would otherwise hit the frontend's own domain.
+  const envUrl = (import.meta as any).env?.VITE_API_BASE_URL as string | undefined;
+  if (envUrl) return envUrl.replace(/\/$/, "");
+
   if (typeof window === "undefined") {
     return "http://localhost:3001";
   }
@@ -25,8 +31,18 @@ export function getApiBaseUrl(): string {
       return "http://localhost:3001";
     }
   }
-  // In production behind Nginx or on VPS domain/IP, use relative path ""
+  // In production behind Nginx on the same domain as the API, use relative path ""
   return "";
+}
+
+export function getWsBaseUrl(): string {
+  const base = getApiBaseUrl();
+  if (base) {
+    return base.replace(/^http/, "ws");
+  }
+  if (typeof window === "undefined") return "ws://localhost:3001";
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
 }
 
 export const ERC20_ABI = [
