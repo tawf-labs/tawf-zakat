@@ -319,6 +319,31 @@ export const dbService = {
     return Array.from(dataStore.batches.values());
   },
 
+  async getBatchByNumber(batchNumber: number) {
+    if (db) {
+      try {
+        const rows = await db
+          .select()
+          .from(schema.merkleBatches)
+          .where(eq(schema.merkleBatches.batchNumber, batchNumber));
+        if (rows.length > 0) {
+          const r = rows[0];
+          return {
+            batchId: r.batchNumber,
+            merkleRoot: r.merkleRoot as Hex,
+            totalAmountIDR: r.totalAmountIDR,
+            itemCount: r.itemCount,
+            settledAt: r.settledAt ? r.settledAt.toISOString() : new Date().toISOString(),
+            txHash: r.txHash || undefined,
+          };
+        }
+      } catch (err) {
+        console.error("Failed to fetch batch by number from Neon DB:", err);
+      }
+    }
+    return dataStore.batches.get(batchNumber) || null;
+  },
+
   async getProposals() {
     if (db) {
       try {

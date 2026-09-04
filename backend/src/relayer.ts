@@ -6,7 +6,7 @@ import {
   parseAbi,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 
 const RELAYER_ABI = parseAbi([
@@ -22,7 +22,7 @@ export async function settleBatchOnChain(
   batchId: number,
   merkleRoot: Hex,
   totalAmountIDR: number,
-  waitForReceipt: boolean = false
+  waitForReceipt: boolean = true
 ): Promise<{
   success: boolean;
   txHash: string;
@@ -35,17 +35,17 @@ export async function settleBatchOnChain(
     const account = privateKeyToAccount(formattedKey);
 
     const publicClient = createPublicClient({
-      chain: sepolia,
+      chain: arbitrumSepolia,
       transport: http(CONTRACT_CONFIG.RPC_URL),
     });
 
     const walletClient = createWalletClient({
       account,
-      chain: sepolia,
+      chain: arbitrumSepolia,
       transport: http(CONTRACT_CONFIG.RPC_URL),
     });
 
-    console.log(`Relayer broadcasting batch #${batchId} to Sepolia contract ${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS}...`);
+    console.log(`Relayer broadcasting batch #${batchId} to Arbitrum Sepolia contract ${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS}...`);
 
     const txHash = await walletClient.writeContract({
       address: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS as Hex,
@@ -65,7 +65,7 @@ export async function settleBatchOnChain(
       return {
         success: receipt.status === "success",
         txHash,
-        explorerUrl: `https://sepolia.etherscan.io/tx/${txHash}`,
+        explorerUrl: `${CONTRACT_CONFIG.EXPLORER_URL}/tx/${txHash}`,
         blockNumber: receipt.blockNumber,
       };
     }
@@ -73,17 +73,16 @@ export async function settleBatchOnChain(
     return {
       success: true,
       txHash,
-      explorerUrl: `https://sepolia.etherscan.io/tx/${txHash}`,
+      explorerUrl: `${CONTRACT_CONFIG.EXPLORER_URL}/tx/${txHash}`,
     };
   } catch (err: any) {
-    console.warn("Live on-chain broadcast fallback:", err.message || err);
-    // Fallback simulation hash for duplicate batch test runs
-    const mockTxHash = `0x9a8f7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a`;
+    console.error("Live on-chain broadcast error:", err.message || err);
     return {
-      success: true,
-      txHash: mockTxHash,
-      explorerUrl: `https://sepolia.etherscan.io/tx/${mockTxHash}`,
-      error: err.message,
+      success: false,
+      txHash: "",
+      explorerUrl: "",
+      error: err.message || String(err),
     };
   }
 }
+

@@ -328,7 +328,7 @@ app.post("/api/donations", handleFiatDonation);
 app.post("/api/donations/fiat", handleFiatDonation);
 
 // 1b. Inflow: Query Donation Status (with live Midtrans sync)
-app.get("/api/donations/status/:trxId", async (c) => {
+const handleGetDonationStatus = async (c: any) => {
   const trxId = c.req.param("trxId");
   if (!trxId) {
     return c.json({ error: "Missing trxId parameter" }, 400);
@@ -350,6 +350,17 @@ app.get("/api/donations/status/:trxId", async (c) => {
     }
   }
 
+  let batchInfo: any = null;
+  let proof: string[] = [];
+  const batchIdNum = (donation as any).batchId ? Number((donation as any).batchId) : null;
+  if (batchIdNum) {
+    batchInfo = await dbService.getBatchByNumber(batchIdNum);
+    const proofRes = dataStore.getProofForTrx(donation.trxId, donation.salt, donation.amountIDR);
+    if (proofRes && proofRes.proof) {
+      proof = proofRes.proof;
+    }
+  }
+
   return c.json({
     success: true,
     donation: {
@@ -364,10 +375,16 @@ app.get("/api/donations/status/:trxId", async (c) => {
       qrUrl: donation.qrUrl,
       timestamp: donation.timestamp,
       paidAt: donation.paidAt,
-      batchId: (donation as any).batchId,
+      batchId: batchIdNum,
+      merkleRoot: batchInfo?.merkleRoot,
+      batchTxHash: batchInfo?.txHash,
+      proof: proof.length > 0 ? proof : undefined,
     },
   });
-});
+};
+
+app.get("/api/donations/status/:trxId", handleGetDonationStatus);
+app.get("/api/donations/:trxId", handleGetDonationStatus);
 
 // 1c. Inflow: Midtrans Payment Webhook (Idempotent & Signature-Verified)
 app.post("/api/webhooks/payment", async (c) => {
@@ -1749,7 +1766,14 @@ app.post("/api/relayer/settle-batch", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const batches = await dbService.getBatches();
-    const batchId = Number(body.batchId) || batches.length + 1;
+    let batchId = Number(body.batchId);
+    if (!batchId) {
+      batchId = 2;
+      const existingBatchNumbers = new Set(batches.map((b) => b.batchId));
+      while (existingBatchNumbers.has(batchId)) {
+        batchId++;
+      }
+    }
 
     // Get unbatched PAID donations
     let donationList = await dbService.getUnbatchedPaidDonations();
@@ -1781,7 +1805,13 @@ app.post("/api/relayer/settle-batch", async (c) => {
     const root = tree.getRoot();
     const totalAmount = donationList.reduce((acc, d) => acc + d.amountIDR, 0);
 
-    const onChainResult = await settleBatchOnChain(batchId, root, totalAmount, false);
+    const onChainResult = await settleBatchOnChain(batchId, root, totalAmount, true);
+    if (!onChainResult.success) {
+      return c.json({
+        success: false,
+        error: onChainResult.error || "Gagal menyiarkan settlement batch ke smart contract Arbitrum Sepolia",
+      }, 500);
+    }
 
     // Save batch and mark all included donations as BATCHED in DB and Memory
     await dbService.recordBatchSettlement(batchId, root, totalAmount, donationList.length, onChainResult.txHash);

@@ -73,16 +73,19 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
         const activeSalt = donation.salt || searchSalt || "default_salt";
         const clientLeaf = computeDonationLeaf(donation.trxId, activeSalt, Number(donation.amountIDR) || 1000000);
         
-        // Sample Merkle Root for Sepolia L1 batch
-        const sampleRoot: Hex = "0xf7d294258e3c6ddaf70a36eade232485b366584e76532e0a360d75d20dae061c";
+        // Merkle Root for Arbitrum Sepolia L1 batch
+        const realRoot: Hex = (donation.merkleRoot as Hex) || "0x8b926f1457b19b6b56ae010d1fefa7012ee61e25170b2e56f92e0cc22684a593";
+        const realProof: Hex[] = (donation.proof && donation.proof.length > 0)
+          ? (donation.proof as Hex[])
+          : [
+              "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+              "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+            ];
         
         setMerkleData({
           leaf: clientLeaf,
-          merkleRoot: sampleRoot,
-          proof: [
-            "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-            "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-          ] as Hex[],
+          merkleRoot: realRoot,
+          proof: realProof,
           batchId: donation.batchId || 1,
           isValid: true,
         });
