@@ -44,7 +44,11 @@ export const wagmiConfig = import.meta.env.SSR
       connectors: [
         injected(),
         coinbaseWallet({ appName: appMetadata.name, appLogoUrl: appMetadata.icons[0] }),
-        walletConnect({ projectId: walletConnectProjectId, metadata: appMetadata }),
+        walletConnect({
+          projectId: walletConnectProjectId,
+          showQrModal: false,
+          metadata: appMetadata,
+        }),
       ],
     });
 
