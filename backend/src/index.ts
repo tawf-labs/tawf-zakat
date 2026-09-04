@@ -1232,7 +1232,13 @@ const handleAuditAttest = async (c: any) => {
         chain: arbitrumSepolia,
         transport: http(CONTRACT_CONFIG.RPC_URL),
       });
-      const fees = await publicClient.estimateFeesPerGas();
+      const [fees, nonce] = await Promise.all([
+        publicClient.estimateFeesPerGas(),
+        publicClient.getTransactionCount({
+          address: relayerAccount.address,
+          blockTag: "pending",
+        }),
+      ]);
       const maxFeePerGas = fees.maxFeePerGas ? (fees.maxFeePerGas * 150n) / 100n : undefined;
       const maxPriorityFeePerGas = fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * 150n) / 100n : undefined;
 
@@ -1246,6 +1252,7 @@ const handleAuditAttest = async (c: any) => {
         to: relayerAccount.address,
         value: 0n,
         data: toHex(`AUDIT_${auditOpinion}:PROP_${proposalId}:${ipfsResult.cid}`),
+        nonce,
         maxFeePerGas,
         maxPriorityFeePerGas,
       });

@@ -75,7 +75,8 @@ export function AuditorRegistrationPanel() {
       return;
     }
     if (licenseFile.size > AUDIT_DOCUMENT_MAX_BYTES) {
-      toast.error("Berkas bukti izin melebihi batas ukuran 10MB.");
+      const sizeMb = (licenseFile.size / (1024 * 1024)).toFixed(2);
+      toast.error(`Berkas bukti izin melebihi batas ukuran 1MB (ukuran saat ini: ${sizeMb}MB). Harap kompres berkas PDF.`);
       return;
     }
 
@@ -85,10 +86,21 @@ export function AuditorRegistrationPanel() {
       const formData = new FormData();
       formData.append("file", licenseFile);
       formData.append("name", licenseFile.name);
-      const uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
-        method: "POST",
-        body: formData,
-      });
+      
+      let uploadRes: Response;
+      try {
+        uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
+          method: "POST",
+          body: formData,
+        });
+      } catch (netErr: any) {
+        throw new Error(`Gagal mengunggah berkas ke server: ${netErr?.message || netErr}. Pastikan ukuran PDF di bawah 1MB.`);
+      }
+
+      if (uploadRes.status === 413) {
+        throw new Error("Ukuran berkas melebihi batas maksimal server (1MB). Harap kompres berkas PDF terlebih dahulu.");
+      }
+
       const uploadJson = await uploadRes.json().catch(() => ({}));
       if (!uploadRes.ok || !uploadJson.success) {
         throw new Error(uploadJson.error || "Gagal mengunggah bukti izin ke IPFS");

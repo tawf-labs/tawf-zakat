@@ -44,14 +44,27 @@ async function uploadAuditDocument(file: File): Promise<string> {
   formData.append("file", file);
   formData.append("name", file.name);
 
-  const res = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
-    method: "POST",
-    body: formData,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-document`, {
+      method: "POST",
+      body: formData,
+    });
+  } catch (netErr: any) {
+    throw new Error(
+      `Gagal mengunggah ${file.name} ke server (${netErr?.message || "Koneksi terputus/ukuran melebihi batas server"}). Pastikan ukuran berkas PDF di bawah 1MB.`
+    );
+  }
+
+  if (res.status === 413) {
+    throw new Error(
+      `Ukuran berkas ${file.name} melebihi batas maksimal server (1MB). Harap kompres berkas PDF terlebih dahulu.`
+    );
+  }
 
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.success) {
-    throw new Error(json.error || `Gagal mengunggah ${file.name} ke IPFS`);
+    throw new Error(json.error || `Gagal mengunggah ${file.name} ke IPFS (HTTP ${res.status})`);
   }
   return json.cid as string;
 }
@@ -62,7 +75,10 @@ function validatePdfFile(file: File | null, label: string) {
     throw new Error(`${label} harus berupa berkas PDF`);
   }
   if (file.size > AUDIT_DOCUMENT_MAX_BYTES) {
-    throw new Error(`${label} melebihi batas ukuran 10MB`);
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+    throw new Error(
+      `${label} melebihi batas ukuran 1MB (ukuran berkas saat ini: ${sizeMb}MB). Harap kompres berkas PDF sebelum mengunggah.`
+    );
   }
 }
 
@@ -190,20 +206,25 @@ export function AuditorAttestationPanel({
       });
 
       // 3. Broadcast via Relayer API with Sponsored Gas
-      const res = await fetch(`${getApiBaseUrl()}/api/governance/attest-audit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId: pId,
-          auditorAddress: address,
-          auditOpinion: opinion,
-          auditNotes: notes || undefined,
-          laiDocumentCID,
-          financialStatementsCID,
-          timestamp: Number(timestamp),
-          signature,
-        }),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${getApiBaseUrl()}/api/governance/attest-audit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            proposalId: pId,
+            auditorAddress: address,
+            auditOpinion: opinion,
+            auditNotes: notes || undefined,
+            laiDocumentCID,
+            financialStatementsCID,
+            timestamp: Number(timestamp),
+            signature,
+          }),
+        });
+      } catch (postErr: any) {
+        throw new Error(`Gagal menghubungi server API: ${postErr?.message || postErr}`);
+      }
 
       if (!res.ok) {
         const errText = await res.text();

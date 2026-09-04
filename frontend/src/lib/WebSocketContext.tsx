@@ -33,7 +33,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
 
-  const getWsUrl = () => `${getWsBaseUrl()}/ws`;
+  const getWsUrl = () => {
+    const base = getWsBaseUrl();
+    return base.endsWith("/ws") ? base : `${base}/ws`;
+  };
 
   const connect = useCallback(() => {
     if (typeof window === "undefined") return;

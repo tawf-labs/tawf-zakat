@@ -39,11 +39,13 @@ export function getApiBaseUrl(): string {
 export function getWsBaseUrl(): string {
   const metaEnv = (import.meta as any).env || {};
   const explicitWsUrl = (metaEnv.VITE_WS_URL || metaEnv.VITE_PUBLIC_WS_URL) as string | undefined;
-  if (explicitWsUrl) return explicitWsUrl.replace(/\/$/, "");
+  if (explicitWsUrl) {
+    return explicitWsUrl.replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
 
   const base = getApiBaseUrl();
   if (base) {
-    return base.replace(/^http/, "ws");
+    return base.replace(/^http/, "ws").replace(/\/ws\/?$/, "").replace(/\/$/, "");
   }
   if (typeof window === "undefined") return "ws://localhost:3001";
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -342,7 +344,7 @@ export const GOVERNANCE_EIP712_TYPES = {
 } as const;
 
 export const AUDIT_STANDARD = "PSAK 109 & Fikih BAZNAS";
-export const AUDIT_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+export const AUDIT_DOCUMENT_MAX_BYTES = 1 * 1024 * 1024; // 1MB (matches server upload limit)
 export const AUDIT_OPINIONS = [
   { value: "WTP", label: "WTP — Wajar Tanpa Pengecualian" },
   { value: "WDP", label: "WDP — Wajar Dengan Pengecualian" },
