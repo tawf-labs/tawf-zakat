@@ -1,0 +1,65 @@
+# ADR-0018: A Deterministic Validator Decides, Never the Model
+
+## Status
+Accepted
+
+## Context
+An Amil compiling a period report does two jobs, and only one of them is worth a human's hours.
+
+The first is **the numbers** — collection per jenis dana, distribution per asnaf, the hak amil share against its ceiling. Those already exist in the ledger, yet they are copied out and re-added by hand.
+
+The second is **the sentences** — the narrative that makes the figures readable by a pimpinan, a DPS, an auditor. That takes hours per period and adds no new truth to the report.
+
+Handing the second job to a language model is the obvious move, and it is the move every AI reporting tool in this market has already made. It trades *a human mistypes a figure* for *a machine invents one*, and the second is worse: the invented figure arrives inside a fluent, confident sentence, and nothing downstream is built to doubt it. Meanwhile the first problem — nobody can prove the figures in a report came from the records underneath it — stays exactly where it was. That is not hypothetical either: two tables two pages apart in BAZNAS's own LPZN Akhir Tahun 2024 disagree by Rp668.020.210.274 (see ADR-0017).
+
+So the question this work answers is not *can a model write the narrative* — it plainly can — but **what decides whether the result may be signed.**
+
+## Decision
+
+1. **The model is never the last step, and its output is never trusted.** A draft is produced, then checked, then read by a human, then signed. Nothing skips the check. This ADR shapes every AI feature that follows in this codebase: a model may propose, it may never certify.
+
+2. **A deterministic validator decides.** `backend/src/report-validator.ts` is a pure function from `(period figures, draft) → verdict`. No model, no network, no clock, no randomness. Who wrote the draft is not part of its input, because who wrote it has never been what makes a number true. The same draft always earns the same verdict, and the verdict is reproducible by anyone holding the same ledger.
+
+3. **A draft is two parts, separated hard.** A **claim list** (figure name → value) and a **narrative**. This separation is a decision, not a convenience: it turns checking numbers into exact matching rather than reading prose for meaning.
+
+4. **Three checks, all deterministic.**
+   - **Claim match** — every claimed figure must exist among the computed figures and equal it exactly, unit included. There is no rounding tolerance; a zakat report does not do "about".
+   - **Narrative leak** — every rupiah-shaped number in the narrative must appear among the claims that *passed* the first check. This is what catches an invented figure smuggled into the middle of a sentence. A failed claim never licenses the number it claimed.
+   - **Invariant** — the hak amil share must not exceed the 12,5% ceiling, read off the ledger rather than off the draft, so a draft cannot pass by reporting a violation accurately. The same `MAX_AMIL_BPS = 1250` the contract locks is now also enforced at report level, closing the gap ADR-0017 left open.
+
+5. **Pass or reject, with no warning level.** A draft is signable or it is not. A warning is only a rejection that somebody in a hurry talks past. Every finding names the figure, the value claimed, and the value it should have been — enough to fix it rather than guess at it.
+
+6. **The figures are computed before the draft exists, and are the only figures claimable.** `backend/src/period-report.ts` takes rows and a reporting period and returns every figure under a stable machine name. It is pure — rows, not a connection — following the seam `merkle.ts` and `reconciliation.ts` already establish. This is also the boundary that lets the drafting step be replaced, or fail entirely, without touching the arithmetic.
+
+7. **A verdict never depends on the order the claims were written in.** Claims are grouped by figure name before anything is judged, and findings are returned in a fixed order. A figure claimed twice yields one finding about the name rather than a finding about whichever copy arrived first.
+
+8. **An undated row is counted in no period rather than in every one.** `backend/src/ledger-rows.ts` distinguishes `INSIDE` / `OUTSIDE` / `UNDATED` because the two callers want opposite things from the third case: reconciliation must never let a period filter hide a row, since an unseen row is an unreported discrepancy; a period report must never count one, since a row with no usable date would otherwise appear in every period. Nothing disappears quietly — the number of rows left out is itself a reported figure.
+
+9. **From the test suite's point of view there is no AI.** There is only a draft, and the tests write their own, including the deliberately wrong ones. The whole suite runs with no network and no API key.
+
+10. **Stateless, again.** No new tables, no Drizzle migration, no stored report history. Figures are computed and returned. Deploying this touches no data.
+
+11. **One wire codec, shared.** `backend/src/wire.ts` owns decoding and encoding for money and reporting periods, used by both the reconciliation and period report routes. Amounts cross the wire as decimal strings in both directions so trillion-scale rupiah survives JSON exactly, and units are refused by name rather than silently defaulted.
+
+## Consequences
+
+### Positive
+- An invented figure cannot reach a signature: it is caught by exact match, or by the narrative scan, or the report is not signable.
+- The check is a pure function, so its entire behaviour is testable in milliseconds and reproducible by a third party.
+- The hak amil ceiling is now enforced at report level as well as in the contract.
+- The demo is the product: a draft with a wrong figure is rejected by the system's own rule, in front of whoever is watching.
+- Swapping or losing the drafting step changes nothing about the arithmetic.
+
+### Negative / Known limits
+- **The validator checks numbers, not adjectives.** A narrative that misstates a trend without naming a figure passes. This is exactly why a human still reads and signs.
+- **`donations` carries no jenis dana column** and this work adds no migration, so every fiat donation counts as ZAKAT and the other four jenis dana report zero. The structure follows PerBAZNAS 1/2023; the split does not yet.
+- **USDC donations are reported on their own line** as an estimated rupiah value at a fixed rate, never added into collection per jenis dana — the same limitation ADR-0017 records.
+- **An asnaf label outside the known table lands in `LAINNYA`** rather than being guessed into one of the eight.
+- **Rupiah detection is shape-based.** It catches an `Rp` prefix, digits grouped in thousands, and a run of digits the sentence itself calls rupiah or IDR. Two consequences: "Rp1,5 miliar" is read as the number 1 and rejected as unclaimed, and an invented figure written as bare ungrouped digits with no `Rp` and no unit word ("dana sebesar 888000000") is not seen at all. Drafts are expected to write figures in full digits with the `Rp` prefix; the claim list, not the scan, is the primary defence.
+- **The hak amil ratio is floored to whole basis points**, so 12,50009% publishes as exactly `1250`. The money figures beside it are exact, and the invariant is decided by cross-multiplication rather than from this ratio, so no draft escapes on the rounding — the published ratio is simply lossier than the amounts it summarises.
+- **Nothing is stored**, so there is no history of which drafts were rejected and why beyond the response itself.
+
+## References
+- Spec: GitHub issue #61; tickets #62–#66
+- Related: ADR-0017 (pure core, integer money, decimal strings on the wire), ADR-0006 (separation of DPS and Auditor powers), ADR-0012 (feature-driven frontend), ADR-0016 (technology vendor positioning)
+- Evidence: `docs/research/0002-baznas-pelaporan-audit-dan-ai.md`

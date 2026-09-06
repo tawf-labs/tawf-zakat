@@ -84,6 +84,10 @@ Indicative trajectory, with no licence and no custody: **Rp84 million (Y1) → R
 - **Keep the blockchain layer invisible in the UI.** Lead with hours saved and audit confidence; disclose the ledger only when a buyer asks *how* a figure can be proven.
 - **Never describe fees as a share of hak amil.** The correct wording is a subscription paid from the institution's operational budget, recorded in the RKAT.
 
+#### 4.3.1 When the on-chain layer is foregrounded, and when it is not (added with Spec #61)
+
+"Keep the blockchain layer invisible in the UI" above is a rule about *buyers*, not a rule about every audience, and the distinction is worth stating rather than leaving to instinct. **In front of a buyer** — an institution's leadership deciding on a subscription — the ledger stays behind the answer: lead with hours saved and with the fact that every figure in the report was checked against the records underneath it, and disclose the chain only when they ask *how* that can be proven. A buyer who has to understand the mechanism before they can value the outcome has been sold the wrong thing. **In front of a jury, a regulator, or an auditor** — anyone whose question is *why should I believe this* — the ledger is the answer and is shown first, because what they are assessing is precisely the mechanism: the immutability of the block number behind a timestamp, the contract-locked 12,5% hak amil ceiling, and now (ADR-0018) the fact that a model's output is never the last step. The same is true of the deterministic validator: a buyer is shown a report they can sign, an assessor is shown a wrong draft being rejected by the system's own rule.
+
 ---
 
 ## 5. Consequences

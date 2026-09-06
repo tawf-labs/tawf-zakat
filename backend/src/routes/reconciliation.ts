@@ -2,9 +2,8 @@
  * Reconciliation routes (Spec #55) - mounted as its own module under
  * /api/reconciliation, deliberately outside the monolithic route file.
  *
- * The engine speaks `bigint`; JSON does not. Every `Money.amount` therefore
- * crosses the wire as a decimal string, in both directions, so trillion-scale
- * rupiah survives the round trip exactly.
+ * Decoding and encoding live in `../wire`, shared with the period report route
+ * so neither copies the other's rules for money and reporting periods.
  */
 
 import { Hono } from "hono";
@@ -24,46 +23,16 @@ import {
   INTERNAL_BUCKETS,
   INTERNAL_UNITS,
 } from "../reconciliation-internal";
+import {
+  asRecord,
+  describePeriod,
+  fail,
+  parseMoney,
+  parseReportingPeriod as parsePeriod,
+  serializeQuantity as serializeMoney,
+  WireInputError,
+} from "../wire";
 import { dbService } from "../db/index";
-
-type WireMoney = { amount: string; unit: string };
-
-const PERIOD_KINDS = ["SEMESTER", "AKHIR_TAHUN"] as const;
-
-function fail(message: string): never {
-  throw new ReconciliationInputError(message);
-}
-
-function asRecord(value: unknown, what: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    fail(`${what} harus berupa objek.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function parseAmount(raw: unknown, where: string): bigint {
-  if (typeof raw === "bigint") return raw;
-  if (typeof raw === "number") {
-    if (!Number.isInteger(raw)) fail(`${where} memiliki jumlah yang bukan bilangan bulat: ${raw}.`);
-    return BigInt(raw);
-  }
-  if (typeof raw !== "string" || !/^-?\d+$/.test(raw.trim())) {
-    fail(
-      `${where} memiliki jumlah yang bukan bilangan bulat: ${JSON.stringify(raw)}. ` +
-        `Tulis rupiah penuh tanpa titik atau desimal, sebagai teks angka.`
-    );
-  }
-  return BigInt(raw.trim());
-}
-
-function parseMoney(raw: unknown, where: string): Money {
-  const record = asRecord(raw, `${where}: nilai`);
-  const unit = record.unit ?? "IDR";
-  if (unit !== "IDR" && unit !== "USDC_6DP") {
-    fail(`${where} memakai unit tidak dikenal: ${JSON.stringify(unit)}. Gunakan "IDR" atau "USDC_6DP".`);
-  }
-  return { amount: parseAmount(record.amount, where), unit };
-}
 
 function parseEntry(raw: unknown, sideLabel: string, index: number, isTotal: boolean): LedgerEntry {
   const record = asRecord(raw, `${sideLabel}: baris pada index ${index}`);
@@ -89,23 +58,6 @@ function parseEntry(raw: unknown, sideLabel: string, index: number, isTotal: boo
     ...(typeof record.label === "string" ? { label: record.label } : {}),
   };
 }
-
-function parsePeriod(raw: unknown, what: string): ReportingPeriod {
-  const record = asRecord(raw, what);
-  if (!PERIOD_KINDS.includes(record.kind as (typeof PERIOD_KINDS)[number])) {
-    fail(
-      `${what} memakai jenis periode pelaporan tidak dikenal: ${JSON.stringify(record.kind)}. ` +
-        `Gunakan "SEMESTER" (1 Januari-30 Juni) atau "AKHIR_TAHUN" (1 Januari-31 Desember).`
-    );
-  }
-  const year = record.year;
-  if (typeof year !== "number" || !Number.isInteger(year) || year < 2000 || year > 2100) {
-    fail(`${what} memakai tahun periode pelaporan yang tidak masuk akal: ${JSON.stringify(year)}.`);
-  }
-  return { kind: record.kind as ReportingPeriod["kind"], year };
-}
-
-const describePeriod = (period: ReportingPeriod): string => `${period.kind} ${period.year}`;
 
 /** A ledger side on the wire may declare the period its report came from. */
 function parseSide(raw: unknown, role: "claim" | "source"): { side: LedgerSide; period?: ReportingPeriod } {
@@ -169,11 +121,6 @@ function parseOptions(raw: unknown): ReconciliationOptions {
     ...(allowedBuckets ? { allowedBuckets: allowedBuckets as string[] } : {}),
   };
 }
-
-const serializeMoney = (value: Money): WireMoney => ({
-  amount: value.amount.toString(),
-  unit: value.unit,
-});
 
 export function serializeReport(report: ReconciliationReport) {
   return {
@@ -250,6 +197,10 @@ function parseInternalRequest(payload: unknown): {
   };
 }
 
+/** Everything the caller could have sent differently answers with 400. */
+const isBadRequest = (error: unknown): boolean =>
+  error instanceof WireInputError || error instanceof ReconciliationInputError;
+
 const reconciliationRoutes = new Hono();
 
 // Mode Antar-Lembaga: stateless, read-only. Claim = Laporan Zakat Wilayah,
@@ -270,7 +221,7 @@ reconciliationRoutes.post("/antar-lembaga", async (c) => {
     const report = reconcile(claim, source, options);
     return c.json({ success: true, report: serializeReport(report) });
   } catch (error: any) {
-    if (error instanceof ReconciliationInputError) {
+    if (isBadRequest(error)) {
       return c.json({ success: false, error: error.message }, 400);
     }
     return c.json(
@@ -295,7 +246,7 @@ reconciliationRoutes.post("/internal", async (c) => {
   try {
     request = parseInternalRequest(payload);
   } catch (error: any) {
-    if (error instanceof ReconciliationInputError) {
+    if (isBadRequest(error)) {
       return c.json({ success: false, error: error.message }, 400);
     }
     throw error;
@@ -355,7 +306,7 @@ reconciliationRoutes.post("/internal", async (c) => {
       reports,
     });
   } catch (error: any) {
-    if (error instanceof ReconciliationInputError) {
+    if (isBadRequest(error)) {
       return c.json({ success: false, error: error.message }, 400);
     }
     return c.json(

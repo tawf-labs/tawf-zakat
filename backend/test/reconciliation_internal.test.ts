@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import app from "../src/index";
 import { reconcile, type ReconciliationOptions } from "../src/reconciliation";
+import { periodBounds } from "../src/ledger-rows";
 import {
   buildInternalLedgerSides,
-  periodBounds,
   snapshotFromRows,
   INTERNAL_BUCKETS,
   INTERNAL_UNITS,

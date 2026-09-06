@@ -30,6 +30,7 @@ import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } fr
 import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
 import reconciliationRoutes from "./routes/reconciliation";
+import periodReportRoutes from "./routes/period-report";
 
 export const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
@@ -178,6 +179,9 @@ app.get("/ws", createWebSocketHandler());
 
 // Reconciliation Engine (Spec #55) - lives in its own route module
 app.route("/api/reconciliation", reconciliationRoutes);
+
+// Laporan Periode Terverifikasi (Spec #61) - likewise its own route module
+app.route("/api/period-report", periodReportRoutes);
 
 // Real IPFS File Upload Endpoint (ADR-0010)
 app.post("/api/ipfs/upload-file", async (c) => {

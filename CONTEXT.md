@@ -192,6 +192,31 @@ Mesin murni yang menerima dua **sisi ledger** dan mengembalikan setiap titik per
 
 **Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless).
 
+### L. Laporan Periode Terverifikasi — Validator Deterministik (ADR-0018)
+
+Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem menghitung angka periode dari ledger, sebuah draf disusun terhadap angka itu, lalu validator deterministik memutuskan: lolos atau ditolak. Keluaran AI tidak pernah menjadi langkah terakhir dan tidak pernah dipercaya tanpa diperiksa.
+
+**Modul murni** (tanpa basis data, `store`, `viem`, atau jaringan):
+
+| Modul | Peran |
+| :--- | :--- |
+| `backend/src/period-report.ts` | Menerima baris (donasi, proposal) dan periode pelaporan, mengembalikan seluruh **angka periode** di bawah nama mesin yang stabil — satu-satunya angka yang boleh diklaim sebuah draf. |
+| `backend/src/report-validator.ts` | Menerima angka periode dan sebuah draf, mengembalikan **vonis**. Fungsi murni: tanpa model, jaringan, jam, maupun keacakan. |
+| `backend/src/wire.ts` | Kodek kawat bersama untuk uang dan periode pelaporan, dipakai route rekonsiliasi dan route laporan periode. Jumlah melintas sebagai teks desimal di kedua arah. |
+| `backend/src/ledger-rows.ts` | Pembacaan baris tersimpan yang dipakai bersama: jumlah tersimpan menjadi `bigint`, serta penempatan stempel waktu terhadap periode (`INSIDE` / `OUTSIDE` / `UNDATED`). |
+
+**Kontrak draf**: dua bagian yang dipisahkan tegas — **daftar klaim** (nama angka → nilai) dan **narasi**. Pemisahan ini membuat pemeriksaan angka menjadi pencocokan tepat, bukan penafsiran teks.
+
+**Tiga pemeriksaan validator**: (1) **kecocokan klaim** — sama persis, tanpa toleransi pembulatan; (2) **kebocoran narasi** — setiap angka berbentuk rupiah di narasi harus ada di daftar klaim yang sudah lolos; (3) **invariant** — porsi hak amil tidak boleh melampaui plafon 12,5%, dibaca dari ledger, bukan dari draf.
+
+**Kelas temuan**: `KLAIM_TIDAK_COCOK`, `KLAIM_TIDAK_DIKENAL`, `KLAIM_GANDA`, `ANGKA_NARASI_TIDAK_DIKLAIM`, `PLAFON_HAK_AMIL_TERLAMPAUI`. Vonis bersifat **lolos atau ditolak** — tidak ada tingkat peringatan.
+
+**Endpoint**: `POST /api/period-report/verify` — stateless, tanpa tabel baru dan tanpa migrasi. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
+
+**Baris tanpa tanggal** dikeluarkan dari setiap periode — bukan dihitung di semuanya — dan jumlahnya dilaporkan sebagai angka `baris.tanpa_tanggal`, sehingga tidak ada yang hilang diam-diam. Rekonsiliasi tetap memakai aturan longgarnya sendiri, karena baris yang tersembunyi di sana berarti selisih yang tak terlaporkan.
+
+**Batas yang diketahui**: validator memeriksa angka, bukan kata sifat; `donations` tidak menyimpan jenis dana sehingga seluruh donasi fiat dihitung sebagai Zakat; donasi USDC dilaporkan terpisah sebagai estimasi rupiah; label asnaf di luar tabel yang dikenal masuk ke `LAINNYA`; angka rupiah tanpa awalan `Rp`, tanpa titik ribuan, dan tanpa kata satuan tidak terdeteksi oleh pemindai narasi.
+
 ---
 
 ## 5. Completed Tasks & Current Project Status
