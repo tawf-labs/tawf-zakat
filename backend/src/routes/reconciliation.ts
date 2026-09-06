@@ -18,6 +18,14 @@ import {
   type ReconciliationReport,
   type ReportingPeriod,
 } from "../reconciliation";
+import {
+  buildInternalLedgerSides,
+  withinPeriod,
+  INTERNAL_BUCKETS,
+  INTERNAL_UNITS,
+  type InternalSnapshot,
+} from "../reconciliation-internal";
+import { dbService } from "../db/index";
 
 type WireMoney = { amount: string; unit: string };
 
@@ -212,6 +220,37 @@ export function parseInterInstitutionRequest(payload: unknown): {
   return { claim: claim.side, source: source.side, options };
 }
 
+function parseInternalRequest(payload: unknown): {
+  period: ReportingPeriod | undefined;
+  fromBlock: number | undefined;
+  toBlock: number | undefined;
+  tolerance: Money | undefined;
+} {
+  const body = asRecord(payload ?? {}, "Badan permintaan");
+
+  const readBlock = (raw: unknown, what: string): number | undefined => {
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+      fail(`${what} harus berupa nomor blok bulat yang tidak negatif.`);
+    }
+    return raw;
+  };
+
+  const fromBlock = readBlock(body.fromBlock, "fromBlock");
+  const toBlock = readBlock(body.toBlock, "toBlock");
+  if (fromBlock !== undefined && toBlock !== undefined && fromBlock > toBlock) {
+    fail(`Rentang blok terbalik: fromBlock ${fromBlock} lebih besar daripada toBlock ${toBlock}.`);
+  }
+
+  return {
+    period: body.period !== undefined ? parsePeriod(body.period, "Periode pelaporan") : undefined,
+    fromBlock,
+    toBlock,
+    tolerance:
+      body.tolerance !== undefined ? parseMoney(body.tolerance, "Toleransi") : undefined,
+  };
+}
+
 const reconciliationRoutes = new Hono();
 
 // Mode Antar-Lembaga: stateless, read-only. Claim = Laporan Zakat Wilayah,
@@ -237,6 +276,119 @@ reconciliationRoutes.post("/antar-lembaga", async (c) => {
     }
     return c.json(
       { success: false, error: error?.message || "Rekonsiliasi gagal dijalankan." },
+      500
+    );
+  }
+});
+
+// Mode Internal: the caller sends no ledger at all. The server builds both sides
+// itself - PostgreSQL as the claim, the indexed chain as the source - and runs
+// them through the same pure engine, once per currency unit.
+reconciliationRoutes.post("/internal", async (c) => {
+  let payload: unknown = {};
+  try {
+    payload = await c.req.text().then((raw) => (raw.trim() === "" ? {} : JSON.parse(raw)));
+  } catch {
+    return c.json({ success: false, error: "Badan permintaan bukan JSON yang sah." }, 400);
+  }
+
+  let request: ReturnType<typeof parseInternalRequest>;
+  try {
+    request = parseInternalRequest(payload);
+  } catch (error: any) {
+    if (error instanceof ReconciliationInputError) {
+      return c.json({ success: false, error: error.message }, 400);
+    }
+    throw error;
+  }
+
+  try {
+    const indexerState = await dbService.getIndexerState();
+    const lastIndexedBlock = Number(indexerState.lastIndexedBlock);
+
+    // The chain is only reconcilable as far as the indexer has actually read.
+    const fromBlock = request.fromBlock ?? 0;
+    const toBlock = Math.min(request.toBlock ?? lastIndexedBlock, lastIndexedBlock);
+
+    const [donationRows, batchRows, proposalRows, eventRows] = await Promise.all([
+      dbService.getDonationRows(),
+      dbService.getBatches(),
+      dbService.getProposalRows(),
+      toBlock >= fromBlock
+        ? dbService.getOnchainEventsInRange(fromBlock, toBlock)
+        : Promise.resolve([]),
+    ]);
+
+    const period = request.period;
+    const keep = (timestamp: Date | string | null | undefined) =>
+      !period || withinPeriod(timestamp, period);
+
+    const snapshot: InternalSnapshot = {
+      donations: donationRows
+        .filter((row: any) => keep(row.createdAt))
+        .map((row: any) => ({
+          trxId: row.trxId,
+          amountIDR: Number(row.amountIDR),
+          batchId: row.batchId ?? null,
+          status: row.status,
+          paymentMethod: row.paymentMethod,
+          createdAt: row.createdAt,
+        })),
+      batches: batchRows
+        .filter((row: any) => keep(row.settledAt))
+        .map((row: any) => ({
+          batchNumber: Number(row.batchId ?? row.batchNumber),
+          totalAmountIDR: Number(row.totalAmountIDR),
+          txHash: row.txHash ?? null,
+          status: row.txHash ? "settled_onchain" : "pending",
+          settledAt: row.settledAt ?? null,
+        })),
+      proposals: proposalRows
+        .filter((row: any) => keep(row.createdAt))
+        .map((row: any) => ({
+          proposalIdOnChain: Number(row.proposalIdOnChain),
+          currencyType: Number(row.currencyType),
+          amount: Number(row.amount),
+          status: row.status,
+          txHash: row.txHash ?? null,
+          createdAt: row.createdAt,
+          executedAt: row.executedAt,
+        })),
+      events: eventRows.map((row: any) => ({
+        eventName: row.eventName,
+        txHash: row.txHash,
+        blockNumber: Number(row.blockNumber),
+        logIndex: Number(row.logIndex ?? 0),
+        argsJson: row.argsJson,
+      })),
+    };
+
+    const reports: Record<string, ReturnType<typeof serializeReport>> = {};
+    for (const unit of INTERNAL_UNITS) {
+      const { claim, source } = buildInternalLedgerSides(snapshot, unit);
+      const options: ReconciliationOptions = {
+        period: period ?? { kind: "AKHIR_TAHUN", year: new Date().getUTCFullYear() },
+        allowedBuckets: INTERNAL_BUCKETS,
+        ...(request.tolerance && request.tolerance.unit === unit
+          ? { tolerance: request.tolerance }
+          : {}),
+      };
+      reports[unit] = serializeReport(reconcile(claim, source, options));
+    }
+
+    return c.json({
+      success: true,
+      lastIndexedBlock,
+      blockRange: { fromBlock, toBlock },
+      indexerStatus: indexerState.status,
+      reports,
+    });
+  } catch (error: any) {
+    if (error instanceof ReconciliationInputError) {
+      return c.json({ success: false, error: error.message }, 400);
+    }
+    return c.json(
+      { success: false, error: error?.message || "Rekonsiliasi internal gagal dijalankan." },
       500
     );
   }

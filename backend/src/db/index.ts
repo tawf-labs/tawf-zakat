@@ -5,7 +5,7 @@ import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
 import { type Hex, createPublicClient, http, parseAbi } from "viem";
 import { arbitrumSepolia } from "viem/chains";
-import { desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 
 const syncPublicClient = createPublicClient({
@@ -868,6 +868,67 @@ export const dbService = {
           .limit(limit);
       } catch (err) {
         console.error("Failed to fetch onchain events:", err);
+      }
+    }
+    return [];
+  },
+
+  /**
+   * Raw donation rows, as stored. Reconciliation needs the whole population
+   * including batched ones, which the batching read paths deliberately exclude.
+   */
+  async getDonationRows() {
+    if (db) {
+      try {
+        return await db.select().from(schema.donations).orderBy(asc(schema.donations.id));
+      } catch (err) {
+        console.error("Failed to fetch donation rows:", err);
+      }
+    }
+    return [];
+  },
+
+  /**
+   * Raw proposal rows, as stored. Unlike `getProposals` this reads nothing from
+   * the chain and writes nothing back: a reconciliation must compare the
+   * database as it stands, not a database it just repaired.
+   */
+  async getProposalRows() {
+    if (db) {
+      try {
+        return await db
+          .select()
+          .from(schema.disbursementProposals)
+          .orderBy(asc(schema.disbursementProposals.proposalIdOnChain));
+      } catch (err) {
+        console.error("Failed to fetch proposal rows:", err);
+      }
+    }
+    return [];
+  },
+
+  /**
+   * Every indexed event inside a block range, oldest first.
+   *
+   * Additive to `getOnchainEvents`, which returns only the newest rows and is
+   * shaped for the activity feed. Reconciliation needs the whole population of a
+   * range instead, so it reads through here and leaves the feed path untouched.
+   */
+  async getOnchainEventsInRange(fromBlock: number, toBlock: number) {
+    if (db) {
+      try {
+        return await db
+          .select()
+          .from(schema.onchainEvents)
+          .where(
+            and(
+              gte(schema.onchainEvents.blockNumber, fromBlock),
+              lte(schema.onchainEvents.blockNumber, toBlock)
+            )
+          )
+          .orderBy(asc(schema.onchainEvents.blockNumber), asc(schema.onchainEvents.logIndex));
+      } catch (err) {
+        console.error("Failed to fetch onchain events in range:", err);
       }
     }
     return [];
