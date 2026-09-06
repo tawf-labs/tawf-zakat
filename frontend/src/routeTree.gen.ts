@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as DonasiRouteImport } from './routes/donasi'
+import { Route as RekonsiliasiRouteImport } from './routes/rekonsiliasi'
 import { Route as TataKelolaRouteImport } from './routes/tata-kelola'
 import { Route as TransparansiRouteImport } from './routes/transparansi'
 import { Route as VerifikasiRouteImport } from './routes/verifikasi'
@@ -31,6 +32,11 @@ const AboutRoute = AboutRouteImport.update({
 const DonasiRoute = DonasiRouteImport.update({
   id: '/donasi',
   path: '/donasi',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RekonsiliasiRoute = RekonsiliasiRouteImport.update({
+  id: '/rekonsiliasi',
+  path: '/rekonsiliasi',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TataKelolaRoute = TataKelolaRouteImport.update({
@@ -63,6 +69,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
+  '/rekonsiliasi': typeof RekonsiliasiRoute
   '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
@@ -73,6 +80,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
+  '/rekonsiliasi': typeof RekonsiliasiRoute
   '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
@@ -84,6 +92,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/donasi': typeof DonasiRoute
+  '/rekonsiliasi': typeof RekonsiliasiRoute
   '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
@@ -96,6 +105,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/donasi'
+    | '/rekonsiliasi'
     | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/donasi'
+    | '/rekonsiliasi'
     | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/donasi'
+    | '/rekonsiliasi'
     | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
@@ -127,6 +139,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
   DonasiRoute: typeof DonasiRoute
+  RekonsiliasiRoute: typeof RekonsiliasiRoute
   TataKelolaRoute: typeof TataKelolaRoute
   TransparansiRoute: typeof TransparansiRouteWithChildren
   VerifikasiRoute: typeof VerifikasiRoute
@@ -154,6 +167,13 @@ declare module '@tanstack/react-router' {
       path: '/donasi'
       fullPath: '/donasi'
       preLoaderRoute: typeof DonasiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rekonsiliasi': {
+      id: '/rekonsiliasi'
+      path: '/rekonsiliasi'
+      fullPath: '/rekonsiliasi'
+      preLoaderRoute: typeof RekonsiliasiRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/tata-kelola': {
@@ -210,6 +230,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   DonasiRoute: DonasiRoute,
+  RekonsiliasiRoute: RekonsiliasiRoute,
   TataKelolaRoute: TataKelolaRoute,
   TransparansiRoute: TransparansiRouteWithChildren,
   VerifikasiRoute: VerifikasiRoute,

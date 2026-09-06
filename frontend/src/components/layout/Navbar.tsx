@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
-import { Menu, X, Shield, HeartHandshake, Eye, CheckCircle2, Home, Landmark } from "lucide-react";
+import { Menu, X, Shield, HeartHandshake, Eye, CheckCircle2, Home, Landmark, Scale } from "lucide-react";
 import { useWebSocket } from "../../lib/WebSocketContext";
 
 export function Navbar() {
@@ -13,6 +13,7 @@ export function Navbar() {
     { to: "/donasi", label: "Salurkan Zakat", icon: HeartHandshake },
     { to: "/transparansi", label: "Transparansi", icon: Eye },
     { to: "/verifikasi", label: "Cek Bukti", icon: CheckCircle2 },
+    { to: "/rekonsiliasi", label: "Rekonsiliasi", icon: Scale },
     { to: "/tata-kelola", label: "Portal Pengawas", icon: Landmark },
   ];
 

@@ -1,5 +1,8 @@
 {
   "include": ["**/*.ts", "**/*.tsx"],
+  // Test files run under `bun test`, which supplies its own globals and module
+  // resolution; they are not part of the Vite build the app compiler checks.
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "node_modules", "dist"],
   "compilerOptions": {
     "target": "ES2022",
     "jsx": "react-jsx",
