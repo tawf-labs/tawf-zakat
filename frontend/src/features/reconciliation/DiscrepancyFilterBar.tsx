@@ -1,7 +1,7 @@
 import React from "react";
 import { Download, FilterX } from "lucide-react";
 import { bucketLabel, DISCREPANCY_LABELS } from "./format";
-import type { DiscrepancyFilters } from "./reconciliationTools";
+import { hasActiveFilters, type DiscrepancyFilters } from "./reconciliationTools";
 import type { DiscrepancyKind } from "./types";
 
 interface DiscrepancyFilterBarProps {
@@ -33,7 +33,7 @@ export function DiscrepancyFilterBar({
   const toggle = <T extends string>(list: T[], value: T): T[] =>
     list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 
-  const isFiltered = filters.buckets.length > 0 || filters.kinds.length > 0;
+  const isFiltered = hasActiveFilters(filters);
 
   return (
     <div className="space-y-3 rounded-2xl border border-[#dbe7dd] bg-white p-4 shadow-xs">

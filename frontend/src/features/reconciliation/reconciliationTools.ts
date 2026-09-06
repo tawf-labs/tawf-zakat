@@ -6,7 +6,13 @@
  * testable without rendering anything.
  */
 
-import { bucketLabel, DISCREPANCY_LABELS, deltaDirection, periodLabel } from "./format";
+import {
+  BALANCE_SHEET_LABELS,
+  bucketLabel,
+  DISCREPANCY_LABELS,
+  deltaDirection,
+  periodLabel,
+} from "./format";
 import {
   isEntryLevelKind,
   type DiscrepancyKind,
@@ -113,14 +119,7 @@ export function toCsv({
     csvRow(["Periode pelaporan", periodLabel(report.period)]),
     csvRow(["Sisi klaim", report.claimLabel]),
     csvRow(["Sisi sumber", report.sourceLabel]),
-    csvRow([
-      "Posisi neraca",
-      balanceSheet === "ON"
-        ? "On balance sheet"
-        : balanceSheet === "OFF"
-          ? "Off balance sheet"
-          : "Seluruh posisi",
-    ]),
+    csvRow(["Posisi neraca", balanceSheet ? BALANCE_SHEET_LABELS[balanceSheet] : "Seluruh posisi"]),
     csvRow(["Waktu pemeriksaan", checkedAt.toISOString()]),
     csvRow(["Cakupan baris", filtered ? "Sesuai filter yang aktif" : "Seluruh selisih"]),
     csvRow(["Total selisih bersih", netDelta, unit]),

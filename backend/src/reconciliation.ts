@@ -121,7 +121,7 @@ const matchKeyOf = (entry: LedgerEntry): MatchKey =>
 
 const abs = (value: bigint): bigint => (value < 0n ? -value : value);
 
-const money = (amount: bigint, unit: CurrencyUnit): Money => ({ amount, unit });
+export const money = (amount: bigint, unit: CurrencyUnit): Money => ({ amount, unit });
 
 function rowLocation(
   side: LedgerSide,
@@ -197,7 +197,7 @@ function validateSide(
 }
 
 type SideIndex = {
-  first: Map<MatchKey, LedgerEntry>;
+  firstByMatchKey: Map<MatchKey, LedgerEntry>;
   duplicates: Discrepancy[];
 };
 
@@ -234,7 +234,7 @@ function indexSide(side: LedgerSide, role: SideRole, unit: CurrencyUnit): SideIn
     });
   }
 
-  return { first, duplicates };
+  return { firstByMatchKey: first, duplicates };
 }
 
 function scopeToBalanceSheet(
@@ -267,7 +267,7 @@ function totalIntegrityDiscrepancies(
   const byBucket = new Map<string, bigint>();
   const byPosition = new Map<BalanceSheetPosition, bigint>();
 
-  for (const entry of index.first.values()) {
+  for (const entry of index.firstByMatchKey.values()) {
     const bucketId = `${entry.bucket}|${entry.balanceSheet}`;
     byBucket.set(bucketId, (byBucket.get(bucketId) ?? 0n) + entry.value.amount);
     byPosition.set(
@@ -295,6 +295,60 @@ function totalIntegrityDiscrepancies(
       claimValue: declared.value,
       sourceValue: money(computed, unit),
       label: declared.label ?? side.label,
+    });
+  }
+
+  return findings;
+}
+
+/** Key of the finding that compares the two sides' own printed grand totals. */
+export const crossSideGrandTotalKey = (position: BalanceSheetPosition): string =>
+  `GRAND_TOTAL:${position}`;
+
+const declaredGrandTotals = (side: LedgerSide): Map<BalanceSheetPosition, LedgerEntry> => {
+  const totals = new Map<BalanceSheetPosition, LedgerEntry>();
+  for (const declared of side.declaredTotals ?? []) {
+    if (declared.bucket !== GRAND_TOTAL_BUCKET) continue;
+    if (!totals.has(declared.balanceSheet)) totals.set(declared.balanceSheet, declared);
+  }
+  return totals;
+};
+
+/**
+ * Compares the grand total each side prints for itself.
+ *
+ * This is the only comparison that survives when the two sides are cut along
+ * different dimensions - one per jenis dana, the other per jenis Pengelola
+ * Zakat - and so no single entry can be matched against another. It is reported
+ * per balance sheet position, and kept out of `netDelta` because the entries
+ * underneath those totals are already counted there.
+ */
+function crossSideGrandTotalDiscrepancies(
+  claim: LedgerSide,
+  source: LedgerSide,
+  unit: CurrencyUnit,
+  isMaterial: (delta: bigint) => boolean
+): Discrepancy[] {
+  const claimTotals = declaredGrandTotals(claim);
+  const sourceTotals = declaredGrandTotals(source);
+  const findings: Discrepancy[] = [];
+
+  for (const position of ["ON", "OFF"] as const) {
+    const claimTotal = claimTotals.get(position);
+    const sourceTotal = sourceTotals.get(position);
+    if (!claimTotal || !sourceTotal) continue;
+
+    const delta = claimTotal.value.amount - sourceTotal.value.amount;
+    if (!isMaterial(delta)) continue;
+
+    findings.push({
+      kind: "GRAND_TOTAL_MISMATCH",
+      key: crossSideGrandTotalKey(position),
+      bucket: GRAND_TOTAL_BUCKET,
+      delta: money(delta, unit),
+      claimValue: claimTotal.value,
+      sourceValue: sourceTotal.value,
+      label: `${claim.label} vs ${source.label}`,
     });
   }
 
@@ -344,11 +398,12 @@ export function reconcile(
     ...sourceIndex.duplicates,
     ...totalIntegrityDiscrepancies(scopedClaim, claimIndex, reportUnit, isMaterial),
     ...totalIntegrityDiscrepancies(scopedSource, sourceIndex, reportUnit, isMaterial),
+    ...crossSideGrandTotalDiscrepancies(scopedClaim, scopedSource, reportUnit, isMaterial),
   ];
   let matched = 0;
 
-  for (const [id, claimEntry] of claimIndex.first) {
-    const sourceEntry = sourceIndex.first.get(id);
+  for (const [id, claimEntry] of claimIndex.firstByMatchKey) {
+    const sourceEntry = sourceIndex.firstByMatchKey.get(id);
 
     if (!sourceEntry) {
       const delta = claimEntry.value.amount;
@@ -381,8 +436,8 @@ export function reconcile(
     }
   }
 
-  for (const [id, sourceEntry] of sourceIndex.first) {
-    if (claimIndex.first.has(id)) continue;
+  for (const [id, sourceEntry] of sourceIndex.firstByMatchKey) {
+    if (claimIndex.firstByMatchKey.has(id)) continue;
     const delta = -sourceEntry.value.amount;
     if (isMaterial(delta)) {
       discrepancies.push({

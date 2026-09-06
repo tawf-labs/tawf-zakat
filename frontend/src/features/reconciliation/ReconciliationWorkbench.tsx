@@ -1,334 +1,79 @@
-import React, { useMemo, useState } from "react";
-import { AlertOctagon, PlayCircle, Sparkles } from "lucide-react";
+import React from "react";
+import { AlertOctagon, PlayCircle } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { LedgerSideEditor } from "./LedgerSideEditor";
-import { ReconciliationSummary } from "./ReconciliationSummary";
-import { DiscrepancyTable } from "./DiscrepancyTable";
-import { bucketsUsed, parseLedgerText } from "./ledgerText";
-import {
-  runInterInstitutionReconciliation,
-  ReconciliationRequestError,
-} from "./reconciliationClient";
-import {
-  LPZN_2024_CLAIM_LABEL,
-  LPZN_2024_CLAIM_TEXT,
-  LPZN_2024_SOURCE_LABEL,
-  LPZN_2024_SOURCE_TEXT,
-} from "./lpznDemo";
-import { DiscrepancyFilterBar } from "./DiscrepancyFilterBar";
+import { LedgerFormatHelp } from "./LedgerFormatHelp";
+import { ReconciliationControls } from "./ReconciliationControls";
+import { ReconciliationResult } from "./ReconciliationResult";
 import { InternalModePanel } from "./InternalModePanel";
-import {
-  bucketsInReport,
-  exportFileName,
-  filterDiscrepancies,
-  hasActiveFilters,
-  kindsInReport,
-  toCsv,
-  EMPTY_FILTERS,
-  type DiscrepancyFilters,
-} from "./reconciliationTools";
-import { isEntryLevelKind, type ReconciliationReport, type ReportingPeriod } from "./types";
-
-const CURRENT_YEAR = new Date().getFullYear();
-const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
-
-type BalanceSheetScope = "ALL" | "ON" | "OFF";
-
-const BALANCE_SHEET_SCOPES: { value: BalanceSheetScope; label: string }[] = [
-  { value: "ALL", label: "Seluruh posisi" },
-  { value: "ON", label: "On balance sheet" },
-  { value: "OFF", label: "Off balance sheet" },
-];
-
-/** Hands the file to the browser without routing it through a server. */
-function downloadCsv(fileName: string, csv: string) {
-  const blob = new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  URL.revokeObjectURL(url);
-}
+import { useInterInstitutionReconciliation } from "./useInterInstitutionReconciliation";
 
 export function ReconciliationWorkbench() {
-  const [periodKind, setPeriodKind] = useState<ReportingPeriod["kind"]>("AKHIR_TAHUN");
-  const [year, setYear] = useState<number>(CURRENT_YEAR - 1);
-
-  const [claimLabel, setClaimLabel] = useState("Rekap Laporan Zakat Wilayah");
-  const [claimText, setClaimText] = useState("");
-  const [sourceLabel, setSourceLabel] = useState("Laporan Kinerja Pengelola Zakat");
-  const [sourceText, setSourceText] = useState("");
-
-  const [balanceSheetScope, setBalanceSheetScope] = useState<BalanceSheetScope>("ALL");
-
-  const [report, setReport] = useState<ReconciliationReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
-  const [filters, setFilters] = useState<DiscrepancyFilters>(EMPTY_FILTERS);
-
-  const claim = useMemo(() => parseLedgerText(claimText, claimLabel), [claimText, claimLabel]);
-  const source = useMemo(() => parseLedgerText(sourceText, sourceLabel), [sourceText, sourceLabel]);
-
-  const canRun =
-    !isRunning &&
-    claim.side.entries.length + (claim.side.declaredTotals?.length ?? 0) > 0 &&
-    source.side.entries.length + (source.side.declaredTotals?.length ?? 0) > 0;
-
-  const visible = useMemo(
-    () => (report ? filterDiscrepancies(report.discrepancies, filters) : []),
-    [report, filters]
-  );
-  const entryGaps = useMemo(() => visible.filter((d) => isEntryLevelKind(d.kind)), [visible]);
-  const totalFindings = useMemo(() => visible.filter((d) => !isEntryLevelKind(d.kind)), [visible]);
-
-  const loadLpznDemo = () => {
-    setClaimLabel(LPZN_2024_CLAIM_LABEL);
-    setClaimText(LPZN_2024_CLAIM_TEXT);
-    setSourceLabel(LPZN_2024_SOURCE_LABEL);
-    setSourceText(LPZN_2024_SOURCE_TEXT);
-    setPeriodKind("AKHIR_TAHUN");
-    setYear(2024);
-    setReport(null);
-    setError(null);
-    setFilters(EMPTY_FILTERS);
-  };
-
-  const changeScope = (scope: BalanceSheetScope) => {
-    setBalanceSheetScope(scope);
-    // On and off balance sheet are reconciled separately, so narrowing the scope
-    // means running the reconciliation again rather than hiding rows.
-    if (report) void run(scope);
-  };
-
-  const exportResult = () => {
-    if (!report) return;
-    const checkedAt = new Date();
-    downloadCsv(
-      exportFileName(report, checkedAt),
-      toCsv({
-        report,
-        discrepancies: visible,
-        balanceSheet: balanceSheetScope === "ALL" ? null : balanceSheetScope,
-        checkedAt,
-        filtered: hasActiveFilters(filters),
-      })
-    );
-  };
-
-  const run = async (scope: BalanceSheetScope = balanceSheetScope) => {
-    setIsRunning(true);
-    setError(null);
-    try {
-      const result = await runInterInstitutionReconciliation({
-        claim: claim.side,
-        source: source.side,
-        options: {
-          period: { kind: periodKind, year },
-          allowedBuckets: bucketsUsed(claim.side, source.side),
-          ...(scope === "ALL" ? {} : { balanceSheet: scope }),
-        },
-      });
-      setReport(result);
-      setFilters(EMPTY_FILTERS);
-    } catch (caught) {
-      setReport(null);
-      setError(
-        caught instanceof ReconciliationRequestError
-          ? caught.message
-          : caught instanceof Error
-            ? caught.message
-            : "Rekonsiliasi gagal dijalankan."
-      );
-    } finally {
-      setIsRunning(false);
-    }
-  };
+  const workbench = useInterInstitutionReconciliation();
 
   return (
     <div className="space-y-8">
-      {/* Reporting period */}
-      <div className="flex flex-col gap-4 rounded-2xl border border-[#dbe7dd] bg-white p-5 shadow-xs sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
-              Periode pelaporan
-            </label>
-            <select
-              value={periodKind}
-              onChange={(event) => setPeriodKind(event.target.value as ReportingPeriod["kind"])}
-              className="mt-1.5 rounded-xl border border-[#dbe7dd] bg-[#f9fbf9] px-3 py-2 text-sm text-[#17332c] outline-none focus:border-[#1b765e]"
-            >
-              <option value="SEMESTER">Semester (1 Januari-30 Juni)</option>
-              <option value="AKHIR_TAHUN">Akhir tahun (1 Januari-31 Desember)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
-              Tahun
-            </label>
-            <select
-              value={year}
-              onChange={(event) => setYear(Number(event.target.value))}
-              className="mt-1.5 rounded-xl border border-[#dbe7dd] bg-[#f9fbf9] px-3 py-2 text-sm text-[#17332c] outline-none focus:border-[#1b765e]"
-            >
-              {YEAR_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
-              Posisi neraca
-            </label>
-            <select
-              value={balanceSheetScope}
-              onChange={(event) => changeScope(event.target.value as BalanceSheetScope)}
-              className="mt-1.5 rounded-xl border border-[#dbe7dd] bg-[#f9fbf9] px-3 py-2 text-sm text-[#17332c] outline-none focus:border-[#1b765e]"
-            >
-              {BALANCE_SHEET_SCOPES.map((scope) => (
-                <option key={scope.value} value={scope.value}>
-                  {scope.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+      <ReconciliationControls
+        periodKind={workbench.periodKind}
+        onPeriodKindChange={workbench.setPeriodKind}
+        year={workbench.year}
+        onYearChange={workbench.setYear}
+        scope={workbench.scope}
+        onScopeChange={workbench.changeScope}
+        onLoadDemo={workbench.loadLpznDemo}
+      />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={loadLpznDemo} type="button">
-            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            Muat contoh LPZN 2024
-          </Button>
-          <a
-            href="/contoh/lpzn-2024-tabel-2-2-per-jenis-dana.csv"
-            download
-            className="text-[11px] font-semibold text-[#1b765e] underline underline-offset-2 hover:text-[#17332c]"
-          >
-            Berkas contoh (Tabel 2.2)
-          </a>
-          <a
-            href="/contoh/lpzn-2024-tabel-2-3-per-jenis-pengelola-zakat.csv"
-            download
-            className="text-[11px] font-semibold text-[#1b765e] underline underline-offset-2 hover:text-[#17332c]"
-          >
-            Berkas contoh (Tabel 2.3)
-          </a>
-        </div>
-      </div>
-
-      {/* The two sides */}
       <div className="grid gap-6 lg:grid-cols-2">
         <LedgerSideEditor
           title="Rekap yang Anda susun"
           hint="Laporan Zakat Wilayah - angka yang akan Anda kirim ke BAZNAS pusat."
-          label={claimLabel}
-          onLabelChange={setClaimLabel}
-          text={claimText}
-          onTextChange={setClaimText}
-          entryCount={claim.side.entries.length}
-          declaredTotalCount={claim.side.declaredTotals?.length ?? 0}
-          issues={claim.issues}
+          draft={workbench.claimDraft}
+          onDraftChange={workbench.setClaimDraft}
+          parsed={workbench.claim}
         />
         <LedgerSideEditor
           title="Laporan yang mendasarinya"
           hint="Laporan Kinerja dari Pengelola Zakat kabupaten/kota di wilayah Anda."
-          label={sourceLabel}
-          onLabelChange={setSourceLabel}
-          text={sourceText}
-          onTextChange={setSourceText}
-          entryCount={source.side.entries.length}
-          declaredTotalCount={source.side.declaredTotals?.length ?? 0}
-          issues={source.issues}
+          draft={workbench.sourceDraft}
+          onDraftChange={workbench.setSourceDraft}
+          parsed={workbench.source}
         />
       </div>
 
-      <div className="rounded-2xl border border-[#dbe7dd] bg-[#f4f8f3] px-5 py-4 text-xs leading-relaxed text-[#5e7a70]">
-        <strong className="text-[#17332c]">Format satu baris:</strong> kode PZ; nama PZ; jenis dana;
-        posisi neraca; jumlah. Pemisah boleh titik koma, koma, atau tab. Kolom posisi neraca boleh
-        dikosongkan (dianggap <em>on balance sheet</em>). Baris yang diawali{" "}
-        <code className="rounded bg-white px-1 py-0.5">TOTAL</code> atau{" "}
-        <code className="rounded bg-white px-1 py-0.5">GRAND TOTAL</code> diperlakukan sebagai total
-        yang dideklarasikan, sehingga penjumlahan di dalam rekap Anda sendiri ikut diperiksa.
-      </div>
+      <LedgerFormatHelp />
 
       <div className="flex justify-center">
-        <Button size="lg" onClick={() => void run()} disabled={!canRun} type="button">
+        <Button
+          size="lg"
+          onClick={() => void workbench.run()}
+          disabled={!workbench.canRun}
+          type="button"
+        >
           <PlayCircle className="mr-2 h-4 w-4" />
-          {isRunning ? "Merekonsiliasi..." : "Jalankan rekonsiliasi"}
+          {workbench.isRunning ? "Merekonsiliasi..." : "Jalankan rekonsiliasi"}
         </Button>
       </div>
 
-      {error && (
+      {workbench.error && (
         <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-5">
           <AlertOctagon className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
           <div>
             <p className="text-sm font-bold text-red-900">Rekonsiliasi ditolak</p>
-            <p className="mt-1 text-sm leading-relaxed text-red-800">{error}</p>
+            <p className="mt-1 text-sm leading-relaxed text-red-800">{workbench.error}</p>
           </div>
         </div>
       )}
 
-      {report && (
-        <div className="space-y-6">
-          <ReconciliationSummary
-            report={report}
-            visibleEntryGaps={entryGaps}
-            totalFindingCount={totalFindings.length}
-            filtered={hasActiveFilters(filters)}
-          />
-
-          {report.discrepancies.length > 0 && (
-            <DiscrepancyFilterBar
-              buckets={bucketsInReport(report)}
-              kinds={kindsInReport(report)}
-              filters={filters}
-              onFiltersChange={setFilters}
-              shownCount={visible.length}
-              totalCount={report.discrepancies.length}
-              onExport={exportResult}
-            />
-          )}
-
-          <section className="space-y-3">
-            <h3 className="font-serif text-xl font-bold text-[#17332c]">
-              Rincian selisih per entri
-            </h3>
-            <p className="text-sm text-[#5e7a70]">
-              Terurut dari selisih terbesar. Setiap baris menunjuk Pengelola Zakat, jenis dana, dan
-              nilai rupiahnya - itulah yang menentukan kabupaten mana yang perlu dihubungi.
-            </p>
-            <DiscrepancyTable
-              discrepancies={entryGaps}
-              claimLabel={report.claimLabel}
-              sourceLabel={report.sourceLabel}
-              emptyMessage="Tidak ada selisih per entri."
-            />
-          </section>
-
-          {totalFindings.length > 0 && (
-            <section className="space-y-3">
-              <h3 className="font-serif text-xl font-bold text-[#17332c]">
-                Selisih pada total yang dideklarasikan
-              </h3>
-              <p className="text-sm text-[#5e7a70]">
-                Ini bukan selisih antar-lembaga, melainkan penjumlahan di dalam satu laporan yang
-                tidak konsisten dengan rinciannya sendiri.
-              </p>
-              <DiscrepancyTable
-                discrepancies={totalFindings}
-                claimLabel="Total tercetak"
-                sourceLabel="Jumlah rincian"
-                emptyMessage="Semua total konsisten dengan rinciannya."
-              />
-            </section>
-          )}
-        </div>
-      )}
+      {workbench.results.map((block) => (
+        <ReconciliationResult
+          key={block.position ?? "ALL"}
+          report={block.report}
+          position={block.position}
+          filters={workbench.filters}
+          onFiltersChange={workbench.setFilters}
+          onExport={() => workbench.exportBlock(block)}
+        />
+      ))}
 
       <InternalModePanel />
     </div>

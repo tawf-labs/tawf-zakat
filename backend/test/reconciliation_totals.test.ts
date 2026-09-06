@@ -155,6 +155,62 @@ describe("Reconciliation Engine - total integrity", () => {
     ]);
   });
 
+  it("compares the grand total each side prints for itself", () => {
+    const claim = side("Rekap", [entry("PZ-1401", "ZAKAT", 600_000_000n)], [
+      entry("TOTAL-ON", GRAND_TOTAL_BUCKET, 600_000_000n),
+    ]);
+    const source = side("Laporan", [entry("PZ-1401", "ZAKAT", 500_000_000n)], [
+      entry("TOTAL-ON", GRAND_TOTAL_BUCKET, 500_000_000n),
+    ]);
+
+    const report = reconcile(claim, source, AKHIR_TAHUN_2024);
+    const crossSide = report.discrepancies.find((d) => d.key === "GRAND_TOTAL:ON");
+
+    expect(crossSide).toBeDefined();
+    expect(crossSide!.kind).toBe("GRAND_TOTAL_MISMATCH");
+    expect(crossSide!.delta).toEqual(idr(100_000_000n));
+    expect(crossSide!.claimValue).toEqual(idr(600_000_000n));
+    expect(crossSide!.sourceValue).toEqual(idr(500_000_000n));
+    expect(crossSide!.label).toBe("Rekap vs Laporan");
+    // The entries underneath are already counted, so this stays out of the net.
+    expect(report.netDelta).toEqual(idr(100_000_000n));
+  });
+
+  it("compares grand totals per balance sheet position, never across them", () => {
+    const declare = (on: bigint, off: bigint) => [
+      entry("TOTAL-ON", GRAND_TOTAL_BUCKET, on),
+      entry("TOTAL-OFF", GRAND_TOTAL_BUCKET, off, { balanceSheet: "OFF" }),
+    ];
+
+    const report = reconcile(
+      side("Rekap", [], declare(1_000n, 5_000n)),
+      side("Laporan", [], declare(1_400n, 4_600n)),
+      AKHIR_TAHUN_2024
+    );
+
+    const crossSide = Object.fromEntries(
+      report.discrepancies
+        .filter((d) => d.key.startsWith("GRAND_TOTAL:"))
+        .map((d) => [d.key, d.delta.amount])
+    );
+    // Claim is Rp400 short on balance sheet and Rp400 over off it. Netted
+    // together they would vanish; per position both stay visible.
+    expect(crossSide["GRAND_TOTAL:ON"]).toBe(-400n);
+    expect(crossSide["GRAND_TOTAL:OFF"]).toBe(400n);
+  });
+
+  it("says nothing about grand totals when only one side declares one", () => {
+    const report = reconcile(
+      side("Rekap", [entry("PZ-1401", "ZAKAT", 1_000n)], [
+        entry("TOTAL-ON", GRAND_TOTAL_BUCKET, 1_000n),
+      ]),
+      side("Laporan", [entry("PZ-1401", "ZAKAT", 1_000n)]),
+      AKHIR_TAHUN_2024
+    );
+
+    expect(report.discrepancies).toEqual([]);
+  });
+
   it("can be restricted to a single balance sheet position", () => {
     const claim = side("Rekap", [
       entry("PZ-1401", "ZAKAT", 600_000_000n),
@@ -227,9 +283,39 @@ describe("Golden fixture - LPZN Akhir Tahun 2024", () => {
 
     // Not one jenis dana row can be matched against a jenis Pengelola Zakat row.
     expect(report.entryCounts.matched).toBe(0);
-    expect(new Set(kindsOf(report))).toEqual(new Set(["MISSING_IN_CLAIM", "MISSING_IN_SOURCE"]));
-    // Yet the net gap between the two published totals is still exact.
+
+    // The two printed grand totals are still compared head to head, and that
+    // comparison does not depend on the entries lining up at all.
+    const crossSide = report.discrepancies.find((d) => d.key === "GRAND_TOTAL:ON");
+    expect(crossSide).toBeDefined();
+    expect(crossSide!.delta.amount).toBe(668_020_210_274n);
+    expect(crossSide!.claimValue!.amount).toBe(11_622_127_523_247n);
+    expect(crossSide!.sourceValue!.amount).toBe(10_954_107_312_973n);
+
+    // And the entry-level net says the same, because both tables happen to be
+    // internally consistent.
     expect(report.netDelta.amount).toBe(668_020_210_274n);
+  });
+
+  it("still compares the printed totals when a side's own arithmetic is broken", () => {
+    // Tabel 2.2 with one row understated: its entries no longer sum to the
+    // printed total, so the entry-level net alone would be misleading.
+    const brokenClaim = {
+      ...TABEL_2_2_PER_JENIS_DANA,
+      entries: TABEL_2_2_PER_JENIS_DANA.entries.map((entry, index) =>
+        index === 0 ? { ...entry, value: { ...entry.value, amount: 0n } } : entry
+      ),
+    };
+
+    const report = reconcile(brokenClaim, TABEL_2_3_PER_JENIS_PENGELOLA_ZAKAT, lpznOptions("ON"));
+
+    const crossSide = report.discrepancies.find((d) => d.key === "GRAND_TOTAL:ON");
+    expect(crossSide!.delta.amount).toBe(668_020_210_274n);
+
+    const ownArithmetic = report.discrepancies.find(
+      (d) => d.kind === "GRAND_TOTAL_MISMATCH" && d.key === "TOTAL-ON-2.2"
+    );
+    expect(ownArithmetic!.delta.amount).toBe(4_350_099_606_318n);
   });
 
   it("records where every fixture figure came from", () => {

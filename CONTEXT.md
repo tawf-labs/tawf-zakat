@@ -159,9 +159,10 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
    - `/verifikasi`: Cek bukti donasi digital (pencarian via ID Transaksi / Hash NIK, verifikasi Merkle inclusion proof instan, unduh sertifikat/kwitansi zakat).
    - `/tata-kelola`: Portal operasional terpadu untuk Amil (pengajuan & BAST upload), Dewan Pengawas Syariah (DPS Safe Multisig approval), Auditor Independen (Gasless EIP-712 WTP Attestation).
    - `/tata-kelola/roles`: Roster transparansi dan manajemen peran on-chain.
+   - `/rekonsiliasi`: Mesin rekonsiliasi (ADR-0017) — bandingkan rekap Laporan Zakat Wilayah dengan Laporan Kinerja kabupaten/kota, plus panel mode internal (basis data versus ledger on-chain) untuk Auditor Independen.
 2. **Feature-Driven / Vertical Slice Structure**:
    - `src/components/ui/`: UI Primitives (Button, Dialog, Card, Badge, Input, Tabs, Table) berbasis Tailwind + Radix.
-   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
+   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`, `evidence/`, `reconciliation/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
 3. **Indonesian Islamic Fiqh Copywriting**:
    - Memprioritaskan bahasa fikih dan filantropi Islam Indonesia yang menenangkan bagi Muzakki awam.
    - Menjadikan kapabilitas kriptografi/web3 sebagai bukti jaminan syariah otomatis, dengan opsi penelusuran data teknis on-chain di tab/accordion sekunder bagi auditor.
@@ -169,6 +170,27 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
    - Menghitung Zakat Penghasilan & Zakat Maal berdasarkan nisab emas BAZNAS, dengan tombol integrasi langsung ke formulir donasi.
 5. **State & Render Optimization**:
    - Isolasi form state pada leaf components, TanStack Query v5 granular caching, dan WebSocket thin invalidation tanpa trigger re-render masif.
+
+### K. Reconciliation Engine v0 (ADR-0017)
+
+Mesin murni yang menerima dua **sisi ledger** dan mengembalikan setiap titik perbedaan beserta entri penyebabnya. Satu inti, dua pemanggil: mode antar-lembaga (data diunggah pengguna) dan mode internal (server membangun sendiri kedua sisi dari PostgreSQL dan event on-chain terindeks).
+
+**Kosakata domain** (mengikuti PerBAZNAS 1/2023 dan LPZN):
+
+| Istilah | Arti dalam sistem ini |
+| :--- | :--- |
+| **Pengelola Zakat (PZ)** | Lembaga zakat berizin: BAZNAS pusat/provinsi/kab-kota dan LAZ pada tiap tingkat. |
+| **Laporan Zakat Wilayah** | Rekapitulasi seluruh PZ di satu provinsi yang wajib disusun BAZNAS Provinsi (Pasal 6 ayat (7), tenggat 31 Januari). Menjadi **sisi klaim**. |
+| **Laporan Kinerja** | Laporan tiap PZ kabupaten/kota yang mendasari rekap tersebut. Menjadi **sisi sumber**. |
+| **Sisi klaim / sisi sumber** | Angka yang dilaporkan versus catatan yang mendasarinya. `delta` selalu bertanda: klaim dikurangi sumber. |
+| **Jenis dana** | Zakat, Fitrah, Infak/Sedekah, Kurban, DSKL. Dimensi bucket bawaan; dimensi lain (mis. jenis PZ) harus dinyatakan eksplisit. |
+| **Posisi neraca** | *On* atau *off balance sheet*. Direkonsiliasi terpisah agar selisih di satu sisi tidak menutupi selisih di sisi lain. |
+| **Periode pelaporan** | Semester (1 Jan–30 Jun) atau akhir tahun (1 Jan–31 Des). |
+| **LPZN** | Laporan Pengelola Zakat Nasional, publikasi resmi BAZNAS. Edisi Akhir Tahun 2024 dipakai sebagai fixture emas: Tabel 2.2 versus Tabel 2.3 berselisih **Rp668.020.210.274** *on balance sheet*. |
+
+**Kelas selisih**: `AMOUNT_MISMATCH`, `MISSING_IN_CLAIM`, `MISSING_IN_SOURCE` (tingkat entri, masuk `netDelta`); `BUCKET_TOTAL_MISMATCH`, `GRAND_TOTAL_MISMATCH`, `DUPLICATE_KEY` (tingkat total, dilaporkan terpisah agar tidak terhitung ganda).
+
+**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless).
 
 ---
 

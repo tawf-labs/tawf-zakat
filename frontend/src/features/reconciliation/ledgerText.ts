@@ -22,6 +22,19 @@ export type LedgerTextResult = {
   issues: LedgerTextIssue[];
 };
 
+/**
+ * Which vocabulary the bucket column is written in.
+ *
+ * `JENIS_DANA` is the default and the strict one: anything outside the five
+ * funds of PerBAZNAS 1/2023 is refused by line, so a typo cannot quietly become
+ * a legal bucket that then shows up as a missing entry. `BEBAS` is the opt-in
+ * for a report cut along another dimension - jenis Pengelola Zakat, say - where
+ * the institution's own labels are the vocabulary.
+ */
+export type BucketDimension = "JENIS_DANA" | "BEBAS";
+
+export const JENIS_DANA_TERBACA = "Zakat, Zakat Fitrah, Infak/Sedekah, Kurban, DSKL";
+
 const JENIS_DANA_ALIASES: Record<string, string> = {
   zakat: "ZAKAT",
   "zakat mal": "ZAKAT",
@@ -80,12 +93,15 @@ export function parseRupiah(raw: string): string | null {
   return String(BigInt(cleaned));
 }
 
-export function resolveJenisDana(raw: string): string | null {
+export function resolveJenisDana(
+  raw: string,
+  dimension: BucketDimension = "JENIS_DANA"
+): string | null {
   const key = normalise(raw);
   if (key === "") return null;
   if (JENIS_DANA_ALIASES[key]) return JENIS_DANA_ALIASES[key];
-  // An institution reconciling another dimension (jenis Pengelola Zakat, for
-  // instance) may name its own buckets; uppercase them into a stable code.
+  if (dimension === "JENIS_DANA") return null;
+  // Another dimension names its own buckets; uppercase them into a stable code.
   return key.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "") || null;
 }
 
@@ -134,7 +150,11 @@ const isHeaderLine = (line: string): boolean =>
  * read are collected as issues naming their line number rather than throwing, so
  * the Amil can fix them one by one instead of losing the whole paste.
  */
-export function parseLedgerText(text: string, label: string): LedgerTextResult {
+export function parseLedgerText(
+  text: string,
+  label: string,
+  dimension: BucketDimension = "JENIS_DANA"
+): LedgerTextResult {
   const entries: WireLedgerEntry[] = [];
   const declaredTotals: WireLedgerEntry[] = [];
   const issues: LedgerTextIssue[] = [];
@@ -186,11 +206,16 @@ export function parseLedgerText(text: string, label: string): LedgerTextResult {
     const isGrandTotal = GRAND_TOTAL_MARKERS.includes(kodeKey);
     const isTotal = isGrandTotal || TOTAL_MARKERS.includes(kodeKey);
 
-    const bucket = isGrandTotal ? GRAND_TOTAL_BUCKET : resolveJenisDana(row.jenisDana);
+    const bucket = isGrandTotal ? GRAND_TOTAL_BUCKET : resolveJenisDana(row.jenisDana, dimension);
     if (!bucket) {
       issues.push({
         line: lineNumber,
-        message: `Baris ${lineNumber} ("${row.kode}"): jenis dana kosong.`,
+        message:
+          row.jenisDana.trim() === ""
+            ? `Baris ${lineNumber} ("${row.kode}"): jenis dana kosong.`
+            : `Baris ${lineNumber} ("${row.kode}"): jenis dana "${row.jenisDana.trim()}" tidak dikenal. ` +
+              `Yang dikenal: ${JENIS_DANA_TERBACA}. Bila laporan ini memakai dimensi lain ` +
+              `(misalnya jenis Pengelola Zakat), ubah dimensi bucket sisi ini menjadi "Bebas".`,
       });
       return;
     }

@@ -64,9 +64,6 @@ export type InternalReconciliationResponse = {
   reports: Record<CurrencyUnit, ReconciliationReport>;
 };
 
-/** Jenis dana per PerBAZNAS 1/2023. */
-export const JENIS_DANA = ["ZAKAT", "FITRAH", "INFAK_SEDEKAH", "KURBAN", "DSKL"] as const;
-
 export const GRAND_TOTAL_BUCKET = "GRAND_TOTAL";
 
 /** Kinds that compare one entry across the two sides. */

@@ -17,6 +17,7 @@
  */
 
 import {
+  money,
   type CurrencyUnit,
   type LedgerEntry,
   type LedgerSide,
@@ -26,7 +27,7 @@ import {
 
 export type InternalDonationRow = {
   trxId: string;
-  amountIDR: number;
+  amountIDR: number | string;
   batchId?: number | null;
   status?: string;
   paymentMethod?: string | null;
@@ -35,7 +36,7 @@ export type InternalDonationRow = {
 
 export type InternalBatchRow = {
   batchNumber: number;
-  totalAmountIDR: number;
+  totalAmountIDR: number | string;
   txHash?: string | null;
   status?: string;
   settledAt?: Date | string | null;
@@ -44,7 +45,7 @@ export type InternalBatchRow = {
 export type InternalProposalRow = {
   proposalIdOnChain: number;
   currencyType: number; // 0: IDR, 1: USDC
-  amount: number;
+  amount: number | string;
   status: string; // 'Pending' | 'Approved' | 'Executed' | 'Cancelled'
   txHash?: string | null;
   createdAt?: Date | string | null;
@@ -81,15 +82,32 @@ const SOURCE_LABEL = "Event on-chain terindeks";
 
 const USDC_MINOR_UNIT_SCALE = 1_000_000n;
 
-const money = (amount: bigint, unit: CurrencyUnit): Money => ({ amount, unit });
+/**
+ * Amount columns are declared `bigint({ mode: "number" })`, so the driver hands
+ * back a JavaScript number and the boundary is already crossed by the time a row
+ * reaches here. This accepts the string form too, and refuses anything that is
+ * not a whole amount rather than rounding a fraction away in silence.
+ */
+function toWholeAmount(value: number | string, what: string): bigint {
+  if (typeof value === "string") {
+    if (!/^-?\d+$/.test(value.trim())) {
+      throw new Error(`${what} bukan bilangan bulat: "${value}".`);
+    }
+    return BigInt(value.trim());
+  }
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${what} bukan bilangan bulat: ${value}.`);
+  }
+  return BigInt(value);
+}
 
 /**
  * Proposal amounts are stored either as whole USDC or as 6-decimal minor units,
  * depending on which writer produced the row. This mirrors the heuristic the
  * proposal read path already uses, so both surfaces read a row the same way.
  */
-function toUsdcMinorUnits(amount: number): bigint {
-  const value = BigInt(Math.round(amount));
+function toUsdcMinorUnits(amount: number | string): bigint {
+  const value = toWholeAmount(amount, "Jumlah USDC");
   return value < USDC_MINOR_UNIT_SCALE ? value * USDC_MINOR_UNIT_SCALE : value;
 }
 
@@ -100,7 +118,7 @@ function unitOfCurrencyType(currencyType: number): CurrencyUnit {
 function proposalAmount(row: InternalProposalRow): Money {
   return row.currencyType === 1
     ? money(toUsdcMinorUnits(row.amount), "USDC_6DP")
-    : money(BigInt(Math.round(row.amount)), "IDR");
+    : money(toWholeAmount(row.amount, `Jumlah proposal #${row.proposalIdOnChain}`), "IDR");
 }
 
 function parseArgs(event: InternalEventRow): Record<string, any> {
@@ -147,14 +165,14 @@ export function buildInternalLedgerSides(
         entry(
           batchKey(batch.batchNumber),
           "MERKLE_BATCH",
-          money(BigInt(Math.round(batch.totalAmountIDR)), "IDR"),
+          money(toWholeAmount(batch.totalAmountIDR, `Total batch #${batch.batchNumber}`), "IDR"),
           `Batch Merkle #${batch.batchNumber}`
         )
       );
 
       const donationsInBatch = snapshot.donations.filter((d) => d.batchId === batch.batchNumber);
       const donationTotal = donationsInBatch.reduce(
-        (sum, d) => sum + BigInt(Math.round(d.amountIDR)),
+        (sum, d) => sum + toWholeAmount(d.amountIDR, `Donasi ${d.trxId}`),
         0n
       );
       claimEntries.push(
@@ -241,6 +259,72 @@ export function buildInternalLedgerSides(
   return {
     claim: { label: CLAIM_LABEL, entries: claimEntries },
     source: { label: SOURCE_LABEL, entries: sourceEntries },
+  };
+}
+
+/** Rows as the database hands them over, before this module shapes them. */
+export type InternalRowSources = {
+  donationRows: Array<Record<string, any>>;
+  /** Already mapped by `dbService.getBatches`, hence `batchId` rather than `batchNumber`. */
+  batchRows: Array<Record<string, any>>;
+  proposalRows: Array<Record<string, any>>;
+  eventRows: Array<Record<string, any>>;
+};
+
+/**
+ * Shapes raw rows into a snapshot, optionally narrowed to one reporting period.
+ *
+ * The period bound is applied to both sides - database rows by their own
+ * timestamps, indexed events by when the indexer recorded them - because
+ * narrowing only one side would invent discrepancies for everything outside it.
+ */
+export function snapshotFromRows(
+  sources: InternalRowSources,
+  period?: ReportingPeriod
+): InternalSnapshot {
+  const keep = (timestamp: Date | string | null | undefined) =>
+    !period || withinPeriod(timestamp, period);
+
+  return {
+    donations: sources.donationRows
+      .filter((row) => keep(row.createdAt))
+      .map((row) => ({
+        trxId: row.trxId,
+        amountIDR: row.amountIDR,
+        batchId: row.batchId ?? null,
+        status: row.status,
+        paymentMethod: row.paymentMethod ?? null,
+        createdAt: row.createdAt ?? null,
+      })),
+    batches: sources.batchRows
+      .filter((row) => keep(row.settledAt))
+      .map((row) => ({
+        batchNumber: Number(row.batchId ?? row.batchNumber),
+        totalAmountIDR: row.totalAmountIDR,
+        txHash: row.txHash ?? null,
+        status: row.txHash ? "settled_onchain" : "pending",
+        settledAt: row.settledAt ?? null,
+      })),
+    proposals: sources.proposalRows
+      .filter((row) => keep(row.createdAt))
+      .map((row) => ({
+        proposalIdOnChain: Number(row.proposalIdOnChain),
+        currencyType: Number(row.currencyType),
+        amount: row.amount,
+        status: row.status,
+        txHash: row.txHash ?? null,
+        createdAt: row.createdAt ?? null,
+        executedAt: row.executedAt ?? null,
+      })),
+    events: sources.eventRows
+      .filter((row) => keep(row.createdAt))
+      .map((row) => ({
+        eventName: row.eventName,
+        txHash: row.txHash,
+        blockNumber: Number(row.blockNumber),
+        logIndex: Number(row.logIndex ?? 0),
+        argsJson: row.argsJson,
+      })),
   };
 }
 

@@ -4,6 +4,7 @@ import { reconcile, type ReconciliationOptions } from "../src/reconciliation";
 import {
   buildInternalLedgerSides,
   periodBounds,
+  snapshotFromRows,
   INTERNAL_BUCKETS,
   INTERNAL_UNITS,
   type InternalSnapshot,
@@ -227,6 +228,66 @@ describe("Mode Internal - mapping PostgreSQL and the chain onto one ledger", () 
     const bounds = periodBounds({ kind: "AKHIR_TAHUN", year: 2026 });
     expect(bounds.from.toISOString()).toBe("2026-01-01T00:00:00.000Z");
     expect(bounds.to.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+  });
+});
+
+describe("snapshotFromRows", () => {
+  const rows = {
+    donationRows: [
+      { trxId: "TRX-IN", amountIDR: 1_000, batchId: 1, status: "BATCHED", createdAt: new Date("2026-03-01") },
+      { trxId: "TRX-OUT", amountIDR: 9_000, batchId: 1, status: "BATCHED", createdAt: new Date("2025-03-01") },
+    ],
+    batchRows: [
+      { batchId: 1, totalAmountIDR: 1_000, txHash: "0xb1", settledAt: new Date("2026-03-02") },
+      { batchId: 2, totalAmountIDR: 5_000, txHash: null, settledAt: new Date("2026-03-02") },
+    ],
+    proposalRows: [
+      { proposalIdOnChain: 1, currencyType: 0, amount: 500, status: "Executed", txHash: "0xp1", createdAt: new Date("2026-04-01") },
+    ],
+    eventRows: [
+      {
+        eventName: "FiatBatchSettled",
+        txHash: "0xb1",
+        blockNumber: 10,
+        logIndex: 0,
+        argsJson: JSON.stringify({ batchId: "1", totalAmountIDR: "1000" }),
+        createdAt: new Date("2026-03-02"),
+      },
+      {
+        eventName: "FiatBatchSettled",
+        txHash: "0xold",
+        blockNumber: 5,
+        logIndex: 0,
+        argsJson: JSON.stringify({ batchId: "99", totalAmountIDR: "7000" }),
+        createdAt: new Date("2025-03-02"),
+      },
+    ],
+  };
+
+  it("maps rows onto the snapshot the mapper consumes", () => {
+    const snapshot = snapshotFromRows(rows);
+    expect(snapshot.batches[0].batchNumber).toBe(1);
+    expect(snapshot.batches[0].status).toBe("settled_onchain");
+    expect(snapshot.batches[1].status).toBe("pending");
+    expect(snapshot.events).toHaveLength(2);
+  });
+
+  it("bounds both sides by the reporting period, never just one", () => {
+    const snapshot = snapshotFromRows({ ...rows, proposalRows: [] }, {
+      kind: "AKHIR_TAHUN",
+      year: 2026,
+    });
+
+    expect(snapshot.donations.map((d) => d.trxId)).toEqual(["TRX-IN"]);
+    // The 2025 event is dropped too - narrowing only the database side would
+    // report the older settlement as MISSING_IN_CLAIM out of nowhere.
+    expect(snapshot.events).toHaveLength(1);
+
+    const result = reconcile(
+      ...(Object.values(buildInternalLedgerSides(snapshot, "IDR")) as [any, any]),
+      { period: { kind: "AKHIR_TAHUN", year: 2026 }, allowedBuckets: INTERNAL_BUCKETS }
+    );
+    expect(result.balanced).toBe(true);
   });
 });
 

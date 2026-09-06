@@ -20,10 +20,9 @@ import {
 } from "../reconciliation";
 import {
   buildInternalLedgerSides,
-  withinPeriod,
+  snapshotFromRows,
   INTERNAL_BUCKETS,
   INTERNAL_UNITS,
-  type InternalSnapshot,
 } from "../reconciliation-internal";
 import { dbService } from "../db/index";
 
@@ -319,55 +318,16 @@ reconciliationRoutes.post("/internal", async (c) => {
         : Promise.resolve([]),
     ]);
 
-    const period = request.period;
-    const keep = (timestamp: Date | string | null | undefined) =>
-      !period || withinPeriod(timestamp, period);
-
-    const snapshot: InternalSnapshot = {
-      donations: donationRows
-        .filter((row: any) => keep(row.createdAt))
-        .map((row: any) => ({
-          trxId: row.trxId,
-          amountIDR: Number(row.amountIDR),
-          batchId: row.batchId ?? null,
-          status: row.status,
-          paymentMethod: row.paymentMethod,
-          createdAt: row.createdAt,
-        })),
-      batches: batchRows
-        .filter((row: any) => keep(row.settledAt))
-        .map((row: any) => ({
-          batchNumber: Number(row.batchId ?? row.batchNumber),
-          totalAmountIDR: Number(row.totalAmountIDR),
-          txHash: row.txHash ?? null,
-          status: row.txHash ? "settled_onchain" : "pending",
-          settledAt: row.settledAt ?? null,
-        })),
-      proposals: proposalRows
-        .filter((row: any) => keep(row.createdAt))
-        .map((row: any) => ({
-          proposalIdOnChain: Number(row.proposalIdOnChain),
-          currencyType: Number(row.currencyType),
-          amount: Number(row.amount),
-          status: row.status,
-          txHash: row.txHash ?? null,
-          createdAt: row.createdAt,
-          executedAt: row.executedAt,
-        })),
-      events: eventRows.map((row: any) => ({
-        eventName: row.eventName,
-        txHash: row.txHash,
-        blockNumber: Number(row.blockNumber),
-        logIndex: Number(row.logIndex ?? 0),
-        argsJson: row.argsJson,
-      })),
-    };
+    const snapshot = snapshotFromRows(
+      { donationRows, batchRows, proposalRows, eventRows },
+      request.period
+    );
 
     const reports: Record<string, ReturnType<typeof serializeReport>> = {};
     for (const unit of INTERNAL_UNITS) {
       const { claim, source } = buildInternalLedgerSides(snapshot, unit);
       const options: ReconciliationOptions = {
-        period: period ?? { kind: "AKHIR_TAHUN", year: new Date().getUTCFullYear() },
+        period: request.period ?? { kind: "AKHIR_TAHUN", year: new Date().getUTCFullYear() },
         allowedBuckets: INTERNAL_BUCKETS,
         ...(request.tolerance && request.tolerance.unit === unit
           ? { tolerance: request.tolerance }
@@ -376,11 +336,22 @@ reconciliationRoutes.post("/internal", async (c) => {
       reports[unit] = serializeReport(reconcile(claim, source, options));
     }
 
+    // Database rows carry no block number, so a narrowed block range bounds the
+    // chain side only. Saying so is better than letting the caller read the
+    // resulting one-sided gaps as real findings.
+    const blockRangeIsNarrowed = fromBlock > 0 || toBlock < lastIndexedBlock;
+    const scopeWarning = blockRangeIsNarrowed
+      ? `Rentang blok ${fromBlock}-${toBlock} hanya membatasi sisi on-chain; baris basis data ` +
+        `tidak menyimpan nomor blok sehingga baris di luar rentang akan tampak sebagai ` +
+        `MISSING_IN_SOURCE. Untuk pembatasan yang setara di kedua sisi, gunakan periode pelaporan.`
+      : null;
+
     return c.json({
       success: true,
       lastIndexedBlock,
       blockRange: { fromBlock, toBlock },
       indexerStatus: indexerState.status,
+      ...(scopeWarning ? { scopeWarning } : {}),
       reports,
     });
   } catch (error: any) {

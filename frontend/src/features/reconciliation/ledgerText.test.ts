@@ -133,9 +133,34 @@ describe("parseLedgerText", () => {
     expect(issues[0].message).toContain("kolom");
   });
 
-  it("accepts a caller's own bucket dimension, such as jenis Pengelola Zakat", () => {
-    const { side } = parseLedgerText("NASIONAL;BAZNAS Provinsi;BAZNAS Provinsi;on;925.076.124.372", "Tabel 2.3");
-    expect(side.entries[0].bucket).toBe("BAZNAS_PROVINSI");
+  it("refuses an unknown jenis dana by default, naming the line and what is expected", () => {
+    const { side, issues } = parseLedgerText(
+      ["PZ-1401;Kampar;Zakat;on;1.000", "PZ-1402;Rokan;Zakat Profesi;on;2.000"].join("\n"),
+      "Rekap"
+    );
+
+    expect(side.entries).toHaveLength(1);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].line).toBe(2);
+    expect(issues[0].message).toContain("Zakat Profesi");
+    expect(issues[0].message).toContain("Zakat Fitrah");
+  });
+
+  it("accepts another bucket dimension only when the caller asks for it", () => {
+    const strict = parseLedgerText(
+      "NASIONAL;BAZNAS Provinsi;BAZNAS Provinsi;on;925.076.124.372",
+      "Tabel 2.3"
+    );
+    expect(strict.side.entries).toHaveLength(0);
+    expect(strict.issues).toHaveLength(1);
+
+    const loose = parseLedgerText(
+      "NASIONAL;BAZNAS Provinsi;BAZNAS Provinsi;on;925.076.124.372",
+      "Tabel 2.3",
+      "BEBAS"
+    );
+    expect(loose.issues).toEqual([]);
+    expect(loose.side.entries[0].bucket).toBe("BAZNAS_PROVINSI");
   });
 });
 
@@ -154,7 +179,7 @@ describe("bucketsUsed", () => {
 describe("LPZN 2024 demo text", () => {
   it("parses into the figures printed in the official report", () => {
     const claim = parseLedgerText(LPZN_2024_CLAIM_TEXT, LPZN_2024_CLAIM_LABEL);
-    const source = parseLedgerText(LPZN_2024_SOURCE_TEXT, LPZN_2024_SOURCE_LABEL);
+    const source = parseLedgerText(LPZN_2024_SOURCE_TEXT, LPZN_2024_SOURCE_LABEL, "BEBAS");
 
     expect(claim.issues).toEqual([]);
     expect(source.issues).toEqual([]);
@@ -185,7 +210,8 @@ describe("the LPZN demo files an Amil can upload", () => {
     );
     const source = parseLedgerText(
       await read("public/contoh/lpzn-2024-tabel-2-3-per-jenis-pengelola-zakat.csv"),
-      "Tabel 2.3"
+      "Tabel 2.3",
+      "BEBAS"
     );
 
     expect(claim.issues).toEqual([]);

@@ -1,7 +1,8 @@
 import React from "react";
 import { CheckCircle2, Scale as ScaleIcon, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
-import { formatMoney, formatSignedMoney, periodLabel } from "./format";
+import { absoluteAmount, formatMoney, formatSignedMoney, periodLabel } from "./format";
+import { sumAmounts } from "./reconciliationTools";
 import type { ReconciliationReport, WireDiscrepancy } from "./types";
 
 interface ReconciliationSummaryProps {
@@ -10,11 +11,6 @@ interface ReconciliationSummaryProps {
   visibleEntryGaps: WireDiscrepancy[];
   totalFindingCount: number;
   filtered: boolean;
-}
-
-/** Sums signed decimal strings without going through a float. */
-function sumAmounts(values: string[]): string {
-  return values.reduce((total, value) => (BigInt(total) + BigInt(value)).toString(), "0");
 }
 
 export function ReconciliationSummary({
@@ -27,11 +23,13 @@ export function ReconciliationSummary({
   const netAmount = filtered
     ? sumAmounts(visibleEntryGaps.map((d) => d.delta.amount))
     : report.netDelta.amount;
-  const absoluteAmount = filtered
-    ? sumAmounts(visibleEntryGaps.map((d) => d.delta.amount.replace(/^-/, "")))
+  const absoluteTotal = filtered
+    ? sumAmounts(visibleEntryGaps.map((d) => absoluteAmount(d.delta.amount)))
     : report.absoluteDelta.amount;
 
-  const nothingToShow = visibleEntryGaps.length === 0 && totalFindingCount === 0;
+  // The positive confirmation is a claim about the whole reconciliation, never
+  // about what a filter happens to leave on screen.
+  const nothingToShow = report.balanced;
   const claimIsBigger = !netAmount.startsWith("-") && netAmount !== "0";
 
   if (nothingToShow) {
@@ -93,7 +91,7 @@ export function ReconciliationSummary({
               Nilai mutlak
             </dt>
             <dd className="mt-0.5 font-semibold text-[#17332c]">
-              {formatMoney({ amount: absoluteAmount, unit })}
+              {formatMoney({ amount: absoluteTotal, unit })}
             </dd>
           </div>
           <div>
