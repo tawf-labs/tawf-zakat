@@ -1,6 +1,7 @@
-import React from "react";
-import { AlertTriangle, FileSpreadsheet } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { AlertTriangle, FileSpreadsheet, Upload } from "lucide-react";
 import type { LedgerTextIssue } from "./ledgerText";
+import { isSupportedLedgerFile, unsupportedFileMessage } from "./reconciliationTools";
 
 interface LedgerSideEditorProps {
   title: string;
@@ -15,6 +16,8 @@ interface LedgerSideEditorProps {
   actions?: React.ReactNode;
 }
 
+const ACCEPTED_FILE_TYPES = ".csv,.tsv,.txt,text/csv,text/plain,text/tab-separated-values";
+
 export function LedgerSideEditor({
   title,
   hint,
@@ -27,6 +30,26 @@ export function LedgerSideEditor({
   issues,
   actions,
 }: LedgerSideEditorProps) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [loadedFileName, setLoadedFileName] = useState<string | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!isSupportedLedgerFile(file)) {
+      setFileError(unsupportedFileMessage(file));
+      setLoadedFileName(null);
+      return;
+    }
+    setFileError(null);
+    const text = await file.text();
+    onTextChange(text);
+    setLoadedFileName(file.name);
+    if (!label.trim() || label.startsWith("Rekap Laporan") || label.startsWith("Laporan Kinerja")) {
+      onLabelChange(file.name.replace(/\.[^.]+$/, ""));
+    }
+  };
+
   return (
     <div className="flex flex-col rounded-2xl border border-[#dbe7dd] bg-white p-5 shadow-xs">
       <div className="flex items-start justify-between gap-3">
@@ -48,9 +71,29 @@ export function LedgerSideEditor({
         placeholder="Rekap Laporan Zakat Wilayah Riau 2024"
       />
 
-      <label className="mt-4 block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
-        Data laporan
-      </label>
+      <div className="mt-4 flex items-end justify-between gap-3">
+        <label className="block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
+          Data laporan
+        </label>
+        <button
+          type="button"
+          onClick={() => fileInput.current?.click()}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[#dbe7dd] px-3 py-1 text-[11px] font-semibold text-[#1b765e] transition-colors hover:bg-[#f4f8f3]"
+        >
+          <Upload className="h-3 w-3" />
+          Unggah berkas
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept={ACCEPTED_FILE_TYPES}
+          className="hidden"
+          onChange={(event) => {
+            void handleFile(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
+      </div>
       <textarea
         value={text}
         onChange={(event) => onTextChange(event.target.value)}
@@ -64,9 +107,16 @@ export function LedgerSideEditor({
         <span>
           {entryCount} entri terbaca
           {declaredTotalCount > 0 ? ` - ${declaredTotalCount} baris total` : ""}
+          {loadedFileName ? ` - dari ${loadedFileName}` : ""}
         </span>
         {actions}
       </div>
+
+      {fileError && (
+        <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-800">
+          {fileError}
+        </p>
+      )}
 
       {issues.length > 0 && (
         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">

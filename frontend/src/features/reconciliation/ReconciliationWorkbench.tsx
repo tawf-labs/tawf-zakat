@@ -15,10 +15,43 @@ import {
   LPZN_2024_SOURCE_LABEL,
   LPZN_2024_SOURCE_TEXT,
 } from "./lpznDemo";
+import { DiscrepancyFilterBar } from "./DiscrepancyFilterBar";
+import { InternalModePanel } from "./InternalModePanel";
+import {
+  bucketsInReport,
+  exportFileName,
+  filterDiscrepancies,
+  hasActiveFilters,
+  kindsInReport,
+  toCsv,
+  EMPTY_FILTERS,
+  type DiscrepancyFilters,
+} from "./reconciliationTools";
 import { isEntryLevelKind, type ReconciliationReport, type ReportingPeriod } from "./types";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
+
+type BalanceSheetScope = "ALL" | "ON" | "OFF";
+
+const BALANCE_SHEET_SCOPES: { value: BalanceSheetScope; label: string }[] = [
+  { value: "ALL", label: "Seluruh posisi" },
+  { value: "ON", label: "On balance sheet" },
+  { value: "OFF", label: "Off balance sheet" },
+];
+
+/** Hands the file to the browser without routing it through a server. */
+function downloadCsv(fileName: string, csv: string) {
+  const blob = new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
 
 export function ReconciliationWorkbench() {
   const [periodKind, setPeriodKind] = useState<ReportingPeriod["kind"]>("AKHIR_TAHUN");
@@ -29,9 +62,12 @@ export function ReconciliationWorkbench() {
   const [sourceLabel, setSourceLabel] = useState("Laporan Kinerja Pengelola Zakat");
   const [sourceText, setSourceText] = useState("");
 
+  const [balanceSheetScope, setBalanceSheetScope] = useState<BalanceSheetScope>("ALL");
+
   const [report, setReport] = useState<ReconciliationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [filters, setFilters] = useState<DiscrepancyFilters>(EMPTY_FILTERS);
 
   const claim = useMemo(() => parseLedgerText(claimText, claimLabel), [claimText, claimLabel]);
   const source = useMemo(() => parseLedgerText(sourceText, sourceLabel), [sourceText, sourceLabel]);
@@ -41,14 +77,12 @@ export function ReconciliationWorkbench() {
     claim.side.entries.length + (claim.side.declaredTotals?.length ?? 0) > 0 &&
     source.side.entries.length + (source.side.declaredTotals?.length ?? 0) > 0;
 
-  const entryGaps = useMemo(
-    () => (report ? report.discrepancies.filter((d) => isEntryLevelKind(d.kind)) : []),
-    [report]
+  const visible = useMemo(
+    () => (report ? filterDiscrepancies(report.discrepancies, filters) : []),
+    [report, filters]
   );
-  const totalFindings = useMemo(
-    () => (report ? report.discrepancies.filter((d) => !isEntryLevelKind(d.kind)) : []),
-    [report]
-  );
+  const entryGaps = useMemo(() => visible.filter((d) => isEntryLevelKind(d.kind)), [visible]);
+  const totalFindings = useMemo(() => visible.filter((d) => !isEntryLevelKind(d.kind)), [visible]);
 
   const loadLpznDemo = () => {
     setClaimLabel(LPZN_2024_CLAIM_LABEL);
@@ -59,9 +93,32 @@ export function ReconciliationWorkbench() {
     setYear(2024);
     setReport(null);
     setError(null);
+    setFilters(EMPTY_FILTERS);
   };
 
-  const run = async () => {
+  const changeScope = (scope: BalanceSheetScope) => {
+    setBalanceSheetScope(scope);
+    // On and off balance sheet are reconciled separately, so narrowing the scope
+    // means running the reconciliation again rather than hiding rows.
+    if (report) void run(scope);
+  };
+
+  const exportResult = () => {
+    if (!report) return;
+    const checkedAt = new Date();
+    downloadCsv(
+      exportFileName(report, checkedAt),
+      toCsv({
+        report,
+        discrepancies: visible,
+        balanceSheet: balanceSheetScope === "ALL" ? null : balanceSheetScope,
+        checkedAt,
+        filtered: hasActiveFilters(filters),
+      })
+    );
+  };
+
+  const run = async (scope: BalanceSheetScope = balanceSheetScope) => {
     setIsRunning(true);
     setError(null);
     try {
@@ -71,9 +128,11 @@ export function ReconciliationWorkbench() {
         options: {
           period: { kind: periodKind, year },
           allowedBuckets: bucketsUsed(claim.side, source.side),
+          ...(scope === "ALL" ? {} : { balanceSheet: scope }),
         },
       });
       setReport(result);
+      setFilters(EMPTY_FILTERS);
     } catch (caught) {
       setReport(null);
       setError(
@@ -122,12 +181,44 @@ export function ReconciliationWorkbench() {
               ))}
             </select>
           </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-[#5e7a70]">
+              Posisi neraca
+            </label>
+            <select
+              value={balanceSheetScope}
+              onChange={(event) => changeScope(event.target.value as BalanceSheetScope)}
+              className="mt-1.5 rounded-xl border border-[#dbe7dd] bg-[#f9fbf9] px-3 py-2 text-sm text-[#17332c] outline-none focus:border-[#1b765e]"
+            >
+              {BALANCE_SHEET_SCOPES.map((scope) => (
+                <option key={scope.value} value={scope.value}>
+                  {scope.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <Button variant="ghost" size="sm" onClick={loadLpznDemo} type="button">
-          <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-          Muat contoh LPZN 2024
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={loadLpznDemo} type="button">
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            Muat contoh LPZN 2024
+          </Button>
+          <a
+            href="/contoh/lpzn-2024-tabel-2-2-per-jenis-dana.csv"
+            download
+            className="text-[11px] font-semibold text-[#1b765e] underline underline-offset-2 hover:text-[#17332c]"
+          >
+            Berkas contoh (Tabel 2.2)
+          </a>
+          <a
+            href="/contoh/lpzn-2024-tabel-2-3-per-jenis-pengelola-zakat.csv"
+            download
+            className="text-[11px] font-semibold text-[#1b765e] underline underline-offset-2 hover:text-[#17332c]"
+          >
+            Berkas contoh (Tabel 2.3)
+          </a>
+        </div>
       </div>
 
       {/* The two sides */}
@@ -166,7 +257,7 @@ export function ReconciliationWorkbench() {
       </div>
 
       <div className="flex justify-center">
-        <Button size="lg" onClick={run} disabled={!canRun} type="button">
+        <Button size="lg" onClick={() => void run()} disabled={!canRun} type="button">
           <PlayCircle className="mr-2 h-4 w-4" />
           {isRunning ? "Merekonsiliasi..." : "Jalankan rekonsiliasi"}
         </Button>
@@ -188,8 +279,20 @@ export function ReconciliationWorkbench() {
             report={report}
             visibleEntryGaps={entryGaps}
             totalFindingCount={totalFindings.length}
-            filtered={false}
+            filtered={hasActiveFilters(filters)}
           />
+
+          {report.discrepancies.length > 0 && (
+            <DiscrepancyFilterBar
+              buckets={bucketsInReport(report)}
+              kinds={kindsInReport(report)}
+              filters={filters}
+              onFiltersChange={setFilters}
+              shownCount={visible.length}
+              totalCount={report.discrepancies.length}
+              onExport={exportResult}
+            />
+          )}
 
           <section className="space-y-3">
             <h3 className="font-serif text-xl font-bold text-[#17332c]">
@@ -226,6 +329,8 @@ export function ReconciliationWorkbench() {
           )}
         </div>
       )}
+
+      <InternalModePanel />
     </div>
   );
 }

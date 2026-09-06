@@ -175,6 +175,29 @@ describe("LPZN 2024 demo text", () => {
   });
 });
 
+describe("the LPZN demo files an Amil can upload", () => {
+  const read = (path: string) => Bun.file(path).text();
+
+  it("parse from disk into the same figures as the pasted text", async () => {
+    const claim = parseLedgerText(
+      await read("public/contoh/lpzn-2024-tabel-2-2-per-jenis-dana.csv"),
+      "Tabel 2.2"
+    );
+    const source = parseLedgerText(
+      await read("public/contoh/lpzn-2024-tabel-2-3-per-jenis-pengelola-zakat.csv"),
+      "Tabel 2.3"
+    );
+
+    expect(claim.issues).toEqual([]);
+    expect(source.issues).toEqual([]);
+
+    const sum = (entries: { value: { amount: string } }[]) =>
+      entries.reduce((total, e) => total + BigInt(e.value.amount), 0n);
+
+    expect(sum(claim.side.entries) - sum(source.side.entries)).toBe(BigInt(LPZN_2024_EXPECTED_GAP));
+  });
+});
+
 describe("formatting figures", () => {
   it("groups rupiah the Indonesian way at trillion scale", () => {
     expect(groupDigits("11622127523247")).toBe("11.622.127.523.247");
