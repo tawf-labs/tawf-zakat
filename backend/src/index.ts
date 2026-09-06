@@ -29,6 +29,7 @@ import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTra
 import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
 import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
+import reconciliationRoutes from "./routes/reconciliation";
 
 export const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
@@ -174,6 +175,9 @@ app.use("/*", cors());
 
 // Realtime WebSocket Endpoint (ADR-0011)
 app.get("/ws", createWebSocketHandler());
+
+// Reconciliation Engine (Spec #55) - lives in its own route module
+app.route("/api/reconciliation", reconciliationRoutes);
 
 // Real IPFS File Upload Endpoint (ADR-0010)
 app.post("/api/ipfs/upload-file", async (c) => {
