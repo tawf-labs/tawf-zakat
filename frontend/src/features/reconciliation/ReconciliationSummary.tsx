@@ -1,7 +1,8 @@
 import React from "react";
 import { CheckCircle2, Scale as ScaleIcon, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
-import { absoluteAmount, formatMoney, formatSignedMoney, periodLabel } from "./format";
+import { absoluteAmount, formatMoney, formatSignedMoney } from "./format";
+import { periodLabel } from "../../lib/reporting";
 import { sumAmounts } from "./reconciliationTools";
 import type { ReconciliationReport, WireDiscrepancy } from "./types";
 

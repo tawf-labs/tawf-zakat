@@ -4,7 +4,7 @@ import {
   runInterInstitutionReconciliation,
   ReconciliationRequestError,
 } from "./reconciliationClient";
-import { downloadCsv } from "./download";
+import { downloadCsv } from "../../lib/download";
 import {
   exportFileName,
   filterDiscrepancies,

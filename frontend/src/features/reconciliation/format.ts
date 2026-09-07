@@ -1,35 +1,14 @@
 /**
  * Presentation helpers for reconciliation figures.
  *
- * Amounts arrive as decimal strings and are formatted straight from those
- * strings: at national scale a rupiah figure runs past what a JavaScript number
- * can hold exactly, so nothing here converts to `number`.
+ * The digit-level rendering lives in `lib/reporting`, shared with the period
+ * report slice; what stays here is the reconciliation vocabulary built on top.
  */
 
+import { formatQuantity } from "../../lib/reporting";
 import type { DiscrepancyKind, WireMoney } from "./types";
 
-/** Groups a decimal string with Indonesian thousand separators. */
-export function groupDigits(amount: string): string {
-  const negative = amount.startsWith("-");
-  const digits = negative ? amount.slice(1) : amount;
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return negative ? `-${grouped}` : grouped;
-}
-
-export function formatMoney(money: WireMoney): string {
-  if (money.unit === "USDC_6DP") return `${formatUsdc(money.amount)} USDC`;
-  return `Rp${groupDigits(money.amount)}`;
-}
-
-/** Renders 6-decimal USDC minor units as a human figure, without floats. */
-export function formatUsdc(amount: string): string {
-  const negative = amount.startsWith("-");
-  const digits = (negative ? amount.slice(1) : amount).padStart(7, "0");
-  const whole = digits.slice(0, -6);
-  const fraction = digits.slice(-6).replace(/0+$/, "");
-  const rendered = fraction ? `${groupDigits(whole)},${fraction}` : groupDigits(whole);
-  return negative ? `-${rendered}` : rendered;
-}
+export const formatMoney = (money: WireMoney): string => formatQuantity(money);
 
 /** Signed rendering, so the direction of a gap is never ambiguous. */
 export function formatSignedMoney(money: WireMoney): string {
@@ -79,11 +58,6 @@ export const BALANCE_SHEET_LABELS: Record<string, string> = {
   ON: "On balance sheet",
   OFF: "Off balance sheet",
 };
-
-export const periodLabel = (period: { kind: string; year: number }): string =>
-  period.kind === "SEMESTER"
-    ? `Semester I ${period.year} (1 Januari-30 Juni)`
-    : `Akhir Tahun ${period.year} (1 Januari-31 Desember)`;
 
 /** Which side a gap leans towards, in the Amil's own words. */
 export function deltaDirection(kind: DiscrepancyKind, amount: string): string {

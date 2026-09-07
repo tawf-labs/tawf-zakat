@@ -11,8 +11,8 @@ import {
   bucketLabel,
   DISCREPANCY_LABELS,
   deltaDirection,
-  periodLabel,
 } from "./format";
+import { periodLabel } from "../../lib/reporting";
 import {
   isEntryLevelKind,
   type DiscrepancyKind,

@@ -160,9 +160,11 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
    - `/tata-kelola`: Portal operasional terpadu untuk Amil (pengajuan & BAST upload), Dewan Pengawas Syariah (DPS Safe Multisig approval), Auditor Independen (Gasless EIP-712 WTP Attestation).
    - `/tata-kelola/roles`: Roster transparansi dan manajemen peran on-chain.
    - `/rekonsiliasi`: Mesin rekonsiliasi (ADR-0017) — bandingkan rekap Laporan Zakat Wilayah dengan Laporan Kinerja kabupaten/kota, plus panel mode internal (basis data versus ledger on-chain) untuk Auditor Independen.
+   - `/laporan-periode`: Laporan periode terverifikasi (ADR-0018) — pilih periode, lihat angka yang dihitung dari ledger, mintakan narasinya, lalu baca vonis validator. Draf yang ditolak tidak menyediakan jalan untuk tetap ditandatangani.
 2. **Feature-Driven / Vertical Slice Structure**:
    - `src/components/ui/`: UI Primitives (Button, Dialog, Card, Badge, Input, Tabs, Table) berbasis Tailwind + Radix.
-   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`, `evidence/`, `reconciliation/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
+   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`, `evidence/`, `reconciliation/`, `periodReport/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
+   - `src/lib/reporting.ts` dan `src/lib/download.ts`: penyajian angka (digit rupiah, USDC, basis poin, label periode) dan penyerahan berkas ke peramban, dipakai bersama irisan `reconciliation/` dan `periodReport/` agar tidak disalin dua kali. Seluruh nilai uang diformat langsung dari teks desimalnya dan tidak pernah melewati bilangan pecahan.
 3. **Indonesian Islamic Fiqh Copywriting**:
    - Memprioritaskan bahasa fikih dan filantropi Islam Indonesia yang menenangkan bagi Muzakki awam.
    - Menjadikan kapabilitas kriptografi/web3 sebagai bukti jaminan syariah otomatis, dengan opsi penelusuran data teknis on-chain di tab/accordion sekunder bagi auditor.
@@ -217,6 +219,8 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 
 - `POST /api/period-report/verify` — memvonis draf yang ditulis pemanggil. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
 - `POST /api/period-report/draft` — angka periode dihitung lebih dulu, diserahkan ke `claude-opus-5` sebagai satu-satunya sumber angka, lalu draf yang kembali dilewatkan validator. Kunci API tinggal di server. Kegagalan AI tidak pernah membuat permintaan gagal: angka tetap kembali dan ketiadaan narasi dinyatakan lewat `draftUnavailable`. Draf yang ditolak tetap dikembalikan beserta alasannya.
+
+**Antarmuka**: irisan fitur `frontend/src/features/periodReport/` pada route `/laporan-periode` (ADR-0012). Modul murninya — `verdictText.ts` (penyajian vonis, dan `canSign` yang menutup jalan tanda tangan bagi draf yang tidak lolos) dan `reportDocument.ts` (berkas unduhan, hanya terbentuk untuk laporan yang lolos) — diuji tanpa merender komponen.
 
 **Kunci API**: `ANTHROPIC_API_KEY` pada lingkungan server. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia.
 

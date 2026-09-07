@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseLedgerText, parseRupiah, bucketsUsed } from "./ledgerText";
-import { formatMoney, formatSignedMoney, formatUsdc, groupDigits } from "./format";
+import { formatMoney, formatSignedMoney } from "./format";
+import { formatUsdc, groupDigits } from "../../lib/reporting";
 import {
   LPZN_2024_CLAIM_LABEL,
   LPZN_2024_CLAIM_TEXT,
