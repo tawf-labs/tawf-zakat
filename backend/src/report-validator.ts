@@ -24,7 +24,15 @@
 
 import type { FigureUnit, FigureValue, PeriodFigures } from "./period-report";
 
-export type DraftClaim = { name: string; value: FigureValue };
+/**
+ * A claim as the draft stated it. `value: null` carries a draft that stated an
+ * amount which is not a whole number at all - "100.000.000" rather than
+ * "100000000". That is a rejection, not a lost draft: silently reinterpreting
+ * the digits would be the system inventing the very figure it exists to check.
+ */
+export type DraftClaim =
+  | { name: string; value: FigureValue; statedAmount?: undefined }
+  | { name: string; value: null; statedAmount: string };
 
 export type ReportDraft = {
   /** Named figures the draft asserts. Checked one by one. */
@@ -36,6 +44,7 @@ export type ReportDraft = {
 /** Ordered by how the findings are presented, which also fixes their sort. */
 export const FINDING_KINDS = [
   "KLAIM_TIDAK_COCOK",
+  "KLAIM_TIDAK_TERBACA",
   "KLAIM_TIDAK_DIKENAL",
   "KLAIM_GANDA",
   "ANGKA_NARASI_TIDAK_DIKLAIM",
@@ -141,6 +150,19 @@ export function validateDraft(figures: PeriodFigures, draft: ReportDraft): Verdi
     }
 
     const claim = claims[0]!;
+
+    if (claim.value === null) {
+      findings.push({
+        kind: "KLAIM_TIDAK_TERBACA",
+        figureName: name,
+        message:
+          `Angka "${expected.label}" diklaim sebagai "${claim.statedAmount}", yang bukan bilangan ` +
+          `bulat sehingga tidak bisa dicocokkan. Tulis nilainya sebagai digit penuh tanpa titik.`,
+        expected: expected.value,
+        excerpt: claim.statedAmount,
+      });
+      continue;
+    }
 
     if (!sameValue(claim.value, expected.value)) {
       findings.push({

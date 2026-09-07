@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { computePeriodFigures, type PeriodFigures, type PeriodRows } from "../src/period-report";
+import {
+  computePeriodFigures,
+  type FigureUnit,
+  type PeriodFigures,
+  type PeriodRows,
+} from "../src/period-report";
 import {
   rupiahMentions,
   validateDraft,
@@ -41,9 +46,16 @@ const LEDGER: PeriodRows = {
 
 const figuresOf = (rows: PeriodRows = LEDGER): PeriodFigures => computePeriodFigures(rows, PERIOD);
 
-const claim = (name: string, amount: bigint, unit = "IDR"): DraftClaim => ({
+const claim = (name: string, amount: bigint, unit: FigureUnit = "IDR"): DraftClaim => ({
   name,
-  value: { amount, unit: unit as DraftClaim["value"]["unit"] },
+  value: { amount, unit },
+});
+
+/** A claim whose amount the draft wrote in a form that is not a whole number. */
+const unreadableClaim = (name: string, statedAmount: string): DraftClaim => ({
+  name,
+  value: null,
+  statedAmount,
 });
 
 const draft = (claims: DraftClaim[], narrative = ""): ReportDraft => ({ claims, narrative });
@@ -150,6 +162,33 @@ describe("Validator draf - vonis deterministik atas angka, bukan atas kata sifat
 
     expect(verdict.outcome).toBe("DITOLAK");
     expect(verdict.findings[0]!.kind).toBe("KLAIM_GANDA");
+  });
+
+  it("menolak klaim yang jumlahnya bukan bilangan bulat, alih-alih menafsirkan digitnya", () => {
+    const verdict = validateDraft(
+      figuresOf(),
+      draft([unreadableClaim("pengumpulan.total", "100.000.000")])
+    );
+
+    expect(verdict.outcome).toBe("DITOLAK");
+    expect(verdict.findings[0]).toMatchObject({
+      kind: "KLAIM_TIDAK_TERBACA",
+      figureName: "pengumpulan.total",
+      excerpt: "100.000.000",
+      expected: { amount: 100_000_000n, unit: "IDR" },
+    });
+  });
+
+  it("tidak memakai klaim yang tidak terbaca sebagai izin bagi angka di narasi", () => {
+    const verdict = validateDraft(
+      figuresOf(),
+      draft([unreadableClaim("pengumpulan.total", "100.000.000")], "Pengumpulan Rp100.000.000.")
+    );
+
+    expect(verdict.findings.map((f) => f.kind).sort()).toEqual([
+      "ANGKA_NARASI_TIDAK_DIKLAIM",
+      "KLAIM_TIDAK_TERBACA",
+    ]);
   });
 
   it("menolak nilai USDC yang diklaim sebagai rupiah alih-alih mengonversinya", () => {

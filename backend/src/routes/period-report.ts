@@ -3,10 +3,14 @@
  * /api/period-report, deliberately outside the monolithic route file.
  *
  * Stateless: nothing is written, no table is added, no migration is run. The
- * ledger rows are read, the figures are computed, the draft the caller sent is
- * put through the validator, and the verdict goes back. A draft is optional -
- * without one the figures still stand on their own, which is what keeps the
- * report useful when the drafting step (ticket #63) has nothing to offer.
+ * ledger rows are read, the figures are computed, a draft is put through the
+ * validator, and the verdict goes back.
+ *
+ * Two ways in, one rule. `/verify` judges a draft the caller wrote; `/draft`
+ * asks the model to write one first. Either way the figures are computed before
+ * the draft exists and the validator has the last word - the difference between
+ * the two routes is only who holds the pen, which is precisely what the verdict
+ * does not depend on.
  *
  * Decoding and encoding live in `../wire`, shared with the reconciliation route.
  */
@@ -14,11 +18,12 @@
 import { Hono } from "hono";
 import {
   computePeriodFigures,
+  FIGURE_UNITS,
   type Figure,
-  type FigureUnit,
   type FigureValue,
   type PeriodFigures,
 } from "../period-report";
+import { draftReport } from "../report-drafter";
 import {
   validateDraft,
   type DraftClaim,
@@ -35,8 +40,7 @@ import {
   WireInputError,
 } from "../wire";
 import { dbService } from "../db/index";
-
-const FIGURE_UNITS: readonly FigureUnit[] = ["IDR", "USDC_6DP", "BPS", "COUNT"];
+import type { ReportingPeriod } from "../reconciliation";
 
 const parseFigureValue = (raw: unknown, where: string): FigureValue =>
   parseQuantity(raw, where, FIGURE_UNITS, "IDR");
@@ -102,57 +106,101 @@ export const serializeVerdict = (verdict: Verdict) => ({
 });
 
 export const serializeDraft = (draft: ReportDraft) => ({
-  claims: draft.claims.map((claim) => ({ name: claim.name, value: serializeQuantity(claim.value) })),
+  claims: draft.claims.map((claim) =>
+    claim.value === null
+      ? { name: claim.name, value: null, statedAmount: claim.statedAmount }
+      : { name: claim.name, value: serializeQuantity(claim.value) }
+  ),
   narrative: draft.narrative,
 });
+
+/** Reads the ledger and computes the period's figures. Shared by both routes. */
+async function periodFiguresFor(period: ReportingPeriod): Promise<PeriodFigures> {
+  const [donationRows, proposalRows] = await Promise.all([
+    dbService.getDonationRows(),
+    dbService.getProposalRows(),
+  ]);
+  return computePeriodFigures({ donations: donationRows, proposals: proposalRows }, period);
+}
+
+/**
+ * The one response shape both routes return. Figures always stand; a draft and
+ * its verdict appear together or not at all, and when there is no draft the
+ * reason is stated rather than left as a silent null.
+ */
+export function periodReportBody(
+  figures: PeriodFigures,
+  draft: ReportDraft | null,
+  unavailable: string | null
+) {
+  return {
+    success: true,
+    period: figures.period,
+    figures: serializeFigures(figures),
+    // A rejected draft is returned with its reasons rather than hidden: the
+    // reader is entitled to see what was refused and why.
+    draft: draft ? serializeDraft(draft) : null,
+    verdict: draft ? serializeVerdict(validateDraft(figures, draft)) : null,
+    ...(unavailable ? { draftUnavailable: unavailable } : {}),
+  };
+}
+
+/** Decodes a request body down to its reporting period. */
+async function readPeriod(c: any): Promise<ReportingPeriod> {
+  const body = asRecord(await c.req.json(), "Badan permintaan");
+  return parseReportingPeriod(body.period, "Periode pelaporan");
+}
+
+const badRequest = (c: any, message: string) => c.json({ success: false, error: message }, 400);
+const serverError = (c: any, error: any) =>
+  c.json({ success: false, error: error?.message || "Laporan periode gagal dihitung." }, 500);
 
 const periodReportRoutes = new Hono();
 
 periodReportRoutes.post("/verify", async (c) => {
-  let payload: unknown;
-  try {
-    payload = await c.req.json();
-  } catch {
-    return c.json({ success: false, error: "Badan permintaan bukan JSON yang sah." }, 400);
-  }
-
-  let period: ReturnType<typeof parseReportingPeriod>;
+  let period: ReportingPeriod;
   let draft: ReportDraft | null;
   try {
-    const body = asRecord(payload, "Badan permintaan");
-    period = parseReportingPeriod(body.period, "Periode pelaporan");
-    draft = body.draft === undefined || body.draft === null ? null : parseDraft(body.draft);
-  } catch (error: any) {
-    if (error instanceof WireInputError) {
-      return c.json({ success: false, error: error.message }, 400);
-    }
-    throw error;
+    const payload = asRecord(await c.req.json(), "Badan permintaan");
+    period = parseReportingPeriod(payload.period, "Periode pelaporan");
+    draft = payload.draft === undefined || payload.draft === null ? null : parseDraft(payload.draft);
+  } catch (error: unknown) {
+    if (error instanceof WireInputError) return badRequest(c, error.message);
+    return badRequest(c, "Badan permintaan bukan JSON yang sah.");
   }
 
   try {
-    const [donationRows, proposalRows] = await Promise.all([
-      dbService.getDonationRows(),
-      dbService.getProposalRows(),
-    ]);
-
-    const figures = computePeriodFigures(
-      { donations: donationRows, proposals: proposalRows },
-      period
-    );
-
-    return c.json({
-      success: true,
-      period,
-      figures: serializeFigures(figures),
-      draft: draft ? serializeDraft(draft) : null,
-      verdict: draft ? serializeVerdict(validateDraft(figures, draft)) : null,
-      ...(draft ? {} : { draftUnavailable: "Tidak ada draf yang dikirim, sehingga tidak ada vonis." }),
-    });
-  } catch (error: any) {
+    const figures = await periodFiguresFor(period);
     return c.json(
-      { success: false, error: error?.message || "Laporan periode gagal dihitung." },
-      500
+      periodReportBody(
+        figures,
+        draft,
+        draft ? null : "Tidak ada draf yang dikirim, sehingga tidak ada vonis."
+      )
     );
+  } catch (error: any) {
+    return serverError(c, error);
+  }
+});
+
+// The model writes the draft, the validator judges it, and the caller sees both.
+// A drafting failure never fails this request: the figures were computed from the
+// ledger before the model was asked, and they stand whether or not it answered.
+periodReportRoutes.post("/draft", async (c) => {
+  let period: ReportingPeriod;
+  try {
+    period = await readPeriod(c);
+  } catch (error: unknown) {
+    if (error instanceof WireInputError) return badRequest(c, error.message);
+    return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  }
+
+  try {
+    const figures = await periodFiguresFor(period);
+    const attempt = await draftReport(figures);
+    return c.json(periodReportBody(figures, attempt.draft, attempt.unavailable));
+  } catch (error: any) {
+    return serverError(c, error);
   }
 });
 

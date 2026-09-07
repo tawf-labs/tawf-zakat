@@ -205,13 +205,20 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 | `backend/src/wire.ts` | Kodek kawat bersama untuk uang dan periode pelaporan, dipakai route rekonsiliasi dan route laporan periode. Jumlah melintas sebagai teks desimal di kedua arah. |
 | `backend/src/ledger-rows.ts` | Pembacaan baris tersimpan yang dipakai bersama: jumlah tersimpan menjadi `bigint`, serta penempatan stempel waktu terhadap periode (`INSIDE` / `OUTSIDE` / `UNDATED`). |
 
+**Penyusun draf** (`backend/src/report-drafter.ts`) — satu-satunya modul pada fitur ini yang menyentuh jaringan, sehingga sengaja diletakkan di luar tabel modul murni di atas. Ia memanggil `claude-opus-5` di sisi server dengan structured output, tanpa abstraksi penyedia dan tanpa suntikan dependensi. Yang diuji adalah kedua sisinya: perintah yang dibentuk dari angka periode, dan draf yang dibentuk dari respons. `draftReport` tidak pernah melempar galat.
+
 **Kontrak draf**: dua bagian yang dipisahkan tegas — **daftar klaim** (nama angka → nilai) dan **narasi**. Pemisahan ini membuat pemeriksaan angka menjadi pencocokan tepat, bukan penafsiran teks.
 
 **Tiga pemeriksaan validator**: (1) **kecocokan klaim** — sama persis, tanpa toleransi pembulatan; (2) **kebocoran narasi** — setiap angka berbentuk rupiah di narasi harus ada di daftar klaim yang sudah lolos; (3) **invariant** — porsi hak amil tidak boleh melampaui plafon 12,5%, dibaca dari ledger, bukan dari draf.
 
-**Kelas temuan**: `KLAIM_TIDAK_COCOK`, `KLAIM_TIDAK_DIKENAL`, `KLAIM_GANDA`, `ANGKA_NARASI_TIDAK_DIKLAIM`, `PLAFON_HAK_AMIL_TERLAMPAUI`. Vonis bersifat **lolos atau ditolak** — tidak ada tingkat peringatan.
+**Kelas temuan**: `KLAIM_TIDAK_COCOK`, `KLAIM_TIDAK_TERBACA`, `KLAIM_TIDAK_DIKENAL`, `KLAIM_GANDA`, `ANGKA_NARASI_TIDAK_DIKLAIM`, `PLAFON_HAK_AMIL_TERLAMPAUI`. Vonis bersifat **lolos atau ditolak** — tidak ada tingkat peringatan.
 
-**Endpoint**: `POST /api/period-report/verify` — stateless, tanpa tabel baru dan tanpa migrasi. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
+**Endpoint** (keduanya stateless, tanpa tabel baru dan tanpa migrasi):
+
+- `POST /api/period-report/verify` — memvonis draf yang ditulis pemanggil. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
+- `POST /api/period-report/draft` — angka periode dihitung lebih dulu, diserahkan ke `claude-opus-5` sebagai satu-satunya sumber angka, lalu draf yang kembali dilewatkan validator. Kunci API tinggal di server. Kegagalan AI tidak pernah membuat permintaan gagal: angka tetap kembali dan ketiadaan narasi dinyatakan lewat `draftUnavailable`. Draf yang ditolak tetap dikembalikan beserta alasannya.
+
+**Kunci API**: `ANTHROPIC_API_KEY` pada lingkungan server. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia.
 
 **Baris tanpa tanggal** dikeluarkan dari setiap periode — bukan dihitung di semuanya — dan jumlahnya dilaporkan sebagai angka `baris.tanpa_tanggal`, sehingga tidak ada yang hilang diam-diam. Rekonsiliasi tetap memakai aturan longgarnya sendiri, karena baris yang tersembunyi di sana berarti selisih yang tak terlaporkan.
 

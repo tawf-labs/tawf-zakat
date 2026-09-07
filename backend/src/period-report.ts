@@ -28,7 +28,13 @@ import { JENIS_DANA, type CurrencyUnit, type ReportingPeriod } from "./reconcili
  * points and a plain count are the other two. Figures are never added across
  * units, so a comparison is always `(amount, unit)` against `(amount, unit)`.
  */
-export type FigureUnit = CurrencyUnit | "BPS" | "COUNT";
+export const FIGURE_UNITS = ["IDR", "USDC_6DP", "BPS", "COUNT"] as const satisfies readonly (
+  | CurrencyUnit
+  | "BPS"
+  | "COUNT"
+)[];
+
+export type FigureUnit = (typeof FIGURE_UNITS)[number];
 
 export type FigureValue = { amount: bigint; unit: FigureUnit };
 

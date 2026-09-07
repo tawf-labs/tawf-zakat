@@ -35,11 +35,17 @@ So the question this work answers is not *can a model write the narrative* — i
 
 8. **An undated row is counted in no period rather than in every one.** `backend/src/ledger-rows.ts` distinguishes `INSIDE` / `OUTSIDE` / `UNDATED` because the two callers want opposite things from the third case: reconciliation must never let a period filter hide a row, since an unseen row is an unreported discrepancy; a period report must never count one, since a row with no usable date would otherwise appear in every period. Nothing disappears quietly — the number of rows left out is itself a reported figure.
 
-9. **From the test suite's point of view there is no AI.** There is only a draft, and the tests write their own, including the deliberately wrong ones. The whole suite runs with no network and no API key.
+9. **The drafting step is a direct call, not an abstraction.** `backend/src/report-drafter.ts` calls `claude-opus-5` through the official Anthropic SDK with structured output (`output_config.format`), so the claim list and narrative come back already separated rather than parsed out of prose. There is no provider interface, no dependency injection, and nothing to mock — the model choice and call shape were taken from the current Claude API reference at implementation time, not from memory. Credentials are read from the server environment and never appear in a response; the browser never sees a key because the browser never makes the call.
 
-10. **Stateless, again.** No new tables, no Drizzle migration, no stored report history. Figures are computed and returned. Deploying this touches no data.
+10. **A drafting failure is never a request failure.** The figures are computed before the model is asked, so a missing key, a timeout, a refusal (`stop_reason: "refusal"`), or a malformed response all resolve the same way: the figures are returned, and the absence of a narrative is stated in the open rather than disguised as an empty report. `draftReport` never throws.
 
-11. **One wire codec, shared.** `backend/src/wire.ts` owns decoding and encoding for money and reporting periods, used by both the reconciliation and period report routes. Amounts cross the wire as decimal strings in both directions so trillion-scale rupiah survives JSON exactly, and units are refused by name rather than silently defaulted.
+11. **A rejected draft is returned, not hidden.** The response carries the figures, the draft, and the verdict together, whatever the verdict says. A reader is entitled to see what was refused and why — hiding a rejected draft would make the validator unfalsifiable. This extends to a draft the reader cannot even parse: a claim whose amount arrives as `"100.000.000"` rather than `"100000000"` is carried through as an *unreadable* claim and rejected by the validator (`KLAIM_TIDAK_TERBACA`), rather than discarded as though the service had been unreachable. Two things follow. Reinterpreting those digits would be the system inventing the very figure it exists to check; and reporting a bad draft as an outage would hide the one event the product is built to show. It is also the likeliest slip the model will make, since it is told to write rupiah as `Rp1.500.000` in the narrative.
+
+12. **From the test suite's point of view there is no AI.** There is only a draft, and the tests write their own, including the deliberately wrong ones. The whole suite runs with no network and no API key.
+
+13. **Stateless, again.** No new tables, no Drizzle migration, no stored report history. Figures are computed and returned. Deploying this touches no data.
+
+14. **One wire codec, shared.** `backend/src/wire.ts` owns decoding and encoding for money and reporting periods, used by both the reconciliation and period report routes. Amounts cross the wire as decimal strings in both directions so trillion-scale rupiah survives JSON exactly, and units are refused by name rather than silently defaulted.
 
 ## Consequences
 
@@ -58,6 +64,8 @@ So the question this work answers is not *can a model write the narrative* — i
 - **Rupiah detection is shape-based.** It catches an `Rp` prefix, digits grouped in thousands, and a run of digits the sentence itself calls rupiah or IDR. Two consequences: "Rp1,5 miliar" is read as the number 1 and rejected as unclaimed, and an invented figure written as bare ungrouped digits with no `Rp` and no unit word ("dana sebesar 888000000") is not seen at all. Drafts are expected to write figures in full digits with the `Rp` prefix; the claim list, not the scan, is the primary defence.
 - **The hak amil ratio is floored to whole basis points**, so 12,50009% publishes as exactly `1250`. The money figures beside it are exact, and the invariant is decided by cross-multiplication rather than from this ratio, so no draft escapes on the rounding — the published ratio is simply lossier than the amounts it summarises.
 - **Nothing is stored**, so there is no history of which drafts were rejected and why beyond the response itself.
+- **The live drafting call is not covered by an automated test.** The suite runs with no network and no API key by design, so what is tested is everything either side of the call — the prompt the figures become, the draft the response becomes, and every failure path (exercised against a dead loopback address). Whether the model obeys the prompt is a question only a real call can answer.
+- **Server-side refusal fallbacks are not enabled.** Combining `fallbacks` with structured-output parsing is not documented, and a refusal here degrades gracefully by design — the figures still stand and the missing narrative is stated — so the undocumented combination was not worth the risk of a request shape that fails silently. `stop_reason: "refusal"` is handled explicitly instead.
 
 ## References
 - Spec: GitHub issue #61; tickets #62–#66
