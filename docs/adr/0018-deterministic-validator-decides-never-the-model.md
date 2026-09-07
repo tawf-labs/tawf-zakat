@@ -25,7 +25,7 @@ So the question this work answers is not *can a model write the narrative* — i
 4. **Three checks, all deterministic.**
    - **Claim match** — every claimed figure must exist among the computed figures and equal it exactly, unit included. There is no rounding tolerance; a zakat report does not do "about".
    - **Narrative leak** — every rupiah-shaped number in the narrative must appear among the claims that *passed* the first check. This is what catches an invented figure smuggled into the middle of a sentence. A failed claim never licenses the number it claimed.
-   - **Invariant** — the hak amil share must not exceed the 12,5% ceiling, read off the ledger rather than off the draft, so a draft cannot pass by reporting a violation accurately. The same `MAX_AMIL_BPS = 1250` the contract locks is now also enforced at report level, closing the gap ADR-0017 left open.
+   - **Invariant** — the hak amil share must not exceed the 12,5% ceiling, read off the ledger rather than off the draft, so a draft cannot pass by reporting a violation accurately. The same `MAX_AMIL_BPS = 1250` the contract locks is now also enforced in the IDR period report. This does not assess the separate reconciliation inputs from ADR-0017; spec #55 US-23 remains open for those inputs.
 
 5. **Pass or reject, with no warning level.** A draft is signable or it is not. A warning is only a rejection that somebody in a hurry talks past. Every finding names the figure, the value claimed, and the value it should have been — enough to fix it rather than guess at it.
 
@@ -62,7 +62,7 @@ So the question this work answers is not *can a model write the narrative* — i
 ### Positive
 - An invented figure cannot reach a signature: it is caught by exact match, or by the narrative scan, or the report is not signable.
 - The check is a pure function, so its entire behaviour is testable in milliseconds and reproducible by a third party.
-- The hak amil ceiling is now enforced at report level as well as in the contract.
+- The hak amil ceiling is now enforced in the IDR period report as well as in the contract; a reconciliation result is not covered by this verdict.
 - The demo is the product: a draft with a wrong figure is rejected by the system's own rule, in front of whoever is watching.
 - Swapping or losing the drafting step changes nothing about the arithmetic.
 

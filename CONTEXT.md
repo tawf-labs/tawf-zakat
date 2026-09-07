@@ -192,7 +192,7 @@ Mesin murni yang menerima dua **sisi ledger** dan mengembalikan setiap titik per
 
 **Kelas selisih**: `AMOUNT_MISMATCH`, `MISSING_IN_CLAIM`, `MISSING_IN_SOURCE` (tingkat entri, masuk `netDelta`); `BUCKET_TOTAL_MISMATCH`, `GRAND_TOTAL_MISMATCH`, `DUPLICATE_KEY` (tingkat total, dilaporkan terpisah agar tidak terhitung ganda).
 
-**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless).
+**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless). Hasil rekonsiliasi yang seimbang belum merupakan vonis plafon hak amil: pemeriksaan pada bagian L hanya mencakup angka IDR laporan periode, bukan data unggahan atau kedua sisi rekonsiliasi.
 
 ### L. Laporan Periode Terverifikasi — Validator Deterministik (ADR-0018)
 

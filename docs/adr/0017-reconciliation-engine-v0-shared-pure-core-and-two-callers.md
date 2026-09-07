@@ -51,7 +51,7 @@ Per ADR-0016 this is the one feature candidate that neither SiMBA nor the incumb
 - **A narrowed block range bounds the chain side only.** Database rows carry no block number, so rows outside the range would read as `MISSING_IN_SOURCE`; the endpoint returns an explicit `scopeWarning` and points at the reporting period, which bounds both sides symmetrically.
 - **Results are not stored.** Every run is recomputed, and there is no history to compare across time.
 - **No tenant separation or authentication in v0**, so the inter-institution endpoint works on whatever the caller uploads.
-- **The hak amil 12.5% ceiling is not yet checked at report level** (spec #55 US-23); it remains enforced only by the contract invariant.
+- **Reconciliation does not yet assess the hak amil 12.5% ceiling** (spec #55 US-23). ADR-0018 adds an IDR ceiling check to the separate period report, but not to the ledger sides reconciled here. Uploaded ledger entries carry no hak amil amount, and the internal mapper does not retain asnaf. A balanced reconciliation is therefore not a ceiling-compliance verdict.
 
 ## References
 - Spec: GitHub issue #55; tickets #56–#60
