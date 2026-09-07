@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
 import { Input } from "../../components/ui/Input";
-import { useAccount, useSignTypedData } from "wagmi";
+import { useAccount } from "wagmi";
+import { uploadGovernanceFile, useGovernanceTransaction } from "./useGovernanceTransaction";
 import { Upload, Loader2, CheckCircle2, FileText, Sparkles } from "lucide-react";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, getApiBaseUrl } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface ExecuteBastModalProps {
@@ -20,7 +20,7 @@ export function ExecuteBastModal({
   onSuccess,
 }: ExecuteBastModalProps) {
   const { address, isConnected } = useAccount();
-  const { signTypedDataAsync } = useSignTypedData();
+  const submitTransaction = useGovernanceTransaction();
 
   const [bankRef, setBankRef] = useState("TRF-BANK-001");
   const [file, setFile] = useState<File | null>(null);
@@ -41,66 +41,8 @@ export function ExecuteBastModal({
     setStatusText("Mengunggah berkas BAST ke Pinata IPFS...");
 
     try {
-      let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-      if (file) {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("docType", "BAST_RECEIPT");
-        const uploadRes = await fetch(`${getApiBaseUrl()}/api/ipfs/upload-file`, {
-          method: "POST",
-          body: formData,
-        });
-        if (uploadRes.ok) {
-          const uploadJson = await uploadRes.json();
-          cid = uploadJson.cid || cid;
-        }
-      }
-
-      setStatusText("Silakan konfirmasi tanda tangan digital otorisasi di dompet...");
-      const timestamp = BigInt(Math.floor(Date.now() / 1000));
-      const signature = await signTypedDataAsync({
-        domain: GOVERNANCE_EIP712_DOMAIN,
-        types: GOVERNANCE_EIP712_TYPES,
-        primaryType: "AmilExecution",
-        message: {
-          proposalId: BigInt(pId),
-          disbursementReceiptCID: cid,
-          timestamp,
-        },
-      });
-
-      setStatusText("Memproses eksekusi penyaluran via Relayer...");
-      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId: pId,
-          disbursementReceiptCID: cid,
-          timestamp: Number(timestamp),
-          signature,
-          signerAddress: address,
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || "Gagal mengeksekusi pencairan via Relayer.");
-      }
-
-      // Also record the BAST disbursement receipt metadata in IPFS pipeline
-      try {
-        await fetch(`${getApiBaseUrl()}/api/disbursements/execute-bast`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            proposalId: pId,
-            receiptCID: cid,
-            bankTransferRef: bankRef,
-          }),
-        });
-      } catch (syncErr) {
-        console.warn("Backend execution sync fallback:", syncErr);
-      }
+      const cid = await uploadGovernanceFile(file);
+      await submitTransaction("execute", [BigInt(pId)], Number(pId), { disbursementReceiptCID: cid }, setStatusText);
 
       toast.success(`Pencairan Program #${pId} berhasil dicatat on-chain & BAST terunggah!`);
       onSuccess?.();
@@ -142,6 +84,7 @@ export function ExecuteBastModal({
             <div className="relative border-2 border-dashed border-[#dbe7dd] rounded-2xl p-4 text-center hover:bg-[#f4f8f3] transition-colors">
               <input
                 type="file"
+                required
                 accept=".pdf,image/*"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"

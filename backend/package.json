@@ -9,7 +9,6 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/indexer.ts --outdir ./dist --target bun"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
     "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.4",

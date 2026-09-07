@@ -31,6 +31,8 @@ import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
 import reconciliationRoutes from "./routes/reconciliation";
 import periodReportRoutes from "./routes/period-report";
+import { GOVERNANCE_ACTIONS } from "./governance-chain";
+import { GOVERNANCE_ROLE_HASHES } from "./governance-roles";
 
 export const AUDITOR_EIP712_DOMAIN = {
   name: "Tawf Zakat Protocol",
@@ -63,13 +65,6 @@ export const AUDITOR_EIP712_TYPES = {
 const VALID_AUDIT_OPINIONS = ["WTP", "WDP", "TW", "TMP"] as const;
 type AuditOpinion = (typeof VALID_AUDIT_OPINIONS)[number];
 
-const GOVERNANCE_ROLE_HASHES: Record<string, Hex> = {
-  DEFAULT_ADMIN_ROLE: "0x0000000000000000000000000000000000000000000000000000000000000000",
-  SHARIA_SUPERVISOR_ROLE: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
-  AUDITOR_ROLE: "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c",
-  RELAYER_ROLE: "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
-};
-
 const HAS_ROLE_ABI = parseAbi(["function hasRole(bytes32 role, address account) view returns (bool)"]);
 
 const rolePublicClient = createPublicClient({
@@ -82,7 +77,7 @@ const rolePublicClient = createPublicClient({
 // never trusts a bare address in the request body on its own.
 async function isAddressAuthorizedForRole(address: string, roleName: string): Promise<boolean> {
   const normalized = address.toLowerCase();
-  const roleHash = GOVERNANCE_ROLE_HASHES[roleName];
+  const roleHash = GOVERNANCE_ROLE_HASHES[roleName as keyof typeof GOVERNANCE_ROLE_HASHES];
   if (!roleHash) return false;
 
   try {
@@ -164,7 +159,7 @@ export const GOVERNANCE_EIP712_TYPES = {
 // Start background indexer polling for Sepolia L1 events
 // Can be disabled via ENABLE_EMBEDDED_INDEXER=false when running a dedicated standalone indexer worker in production
 const shouldRunEmbeddedIndexer =
-  process.env.ENABLE_EMBEDDED_INDEXER !== "false" && process.env.NODE_ENV !== "test";
+  process.env.ENABLE_EMBEDDED_INDEXER !== "false" && process.env.NODE_ENV !== "test" && process.env.DEPLOYMENT_PENDING !== "true";
 
 if (shouldRunEmbeddedIndexer) {
   indexerEngine.start();
@@ -173,6 +168,40 @@ if (shouldRunEmbeddedIndexer) {
 const app = new Hono();
 
 app.use("/*", cors());
+
+app.use("/api/*", async (c, next) => {
+  if (process.env.DEPLOYMENT_PENDING === "true") {
+    return c.json({ success: false, error: "Deployment baru belum dikonfigurasi. Database sedang dalam mode reset." }, 503);
+  }
+  // Legacy endpoints accepted fabricated hashes or unverified state transitions.
+  if (c.req.method === "POST" && (
+    c.req.path.startsWith("/api/governance/gasless-") ||
+    /^\/api\/proposals(?:\/(?:intake|\d+\/(?:sync-tx|approve|cancel|execute|bast)))?$/.test(c.req.path)
+  )) {
+    return c.json({ success: false, error: "Jalur simulasi dinonaktifkan. Kirim transaksi wallet ke kontrak lalu konfirmasi receipt melalui /api/governance/confirm." }, 410);
+  }
+  return next();
+});
+
+app.post("/api/governance/confirm", async c => {
+  try {
+    const body = await c.req.json();
+    if (!Object.hasOwn(GOVERNANCE_ACTIONS, body.action ?? "") || typeof body.txHash !== "string" ||
+      (body.proposalId !== undefined && (!Number.isSafeInteger(body.proposalId) || body.proposalId < 1))) {
+      return c.json({ success: false, error: "Invalid transaction confirmation" }, 400);
+    }
+    if (body.metadata && (typeof body.metadata !== "object" || Array.isArray(body.metadata) ||
+      Object.entries(body.metadata).some(([key, value]) => !["beneficiaryName", "beneficiaryNIKMasked", "disbursementReceiptCID"].includes(key) || typeof value !== "string" || value.length > 256))) {
+      return c.json({ success: false, error: "Invalid metadata" }, 400);
+    }
+    const action = body.action as keyof typeof GOVERNANCE_ACTIONS;
+    const proposal = await dbService.confirmGovernance(action, body.txHash, body.proposalId, body.metadata, body.metadataSignature);
+    eventBus.broadcast({ propose: "PROPOSAL_CREATED", approve: "PROPOSAL_APPROVED", execute: "PROPOSAL_EXECUTED", cancel: "PROPOSAL_CANCELLED" }[action], proposal);
+    return c.json({ success: true, proposal });
+  } catch {
+    return c.json({ success: false, error: "Receipt belum dapat diverifikasi pada kontrak aktif. Status tidak dikonfirmasi; coba sinkronkan lagi setelah transaksi berhasil." }, 409);
+  }
+});
 
 // Realtime WebSocket Endpoint (ADR-0011)
 app.get("/ws", createWebSocketHandler());
@@ -260,6 +289,9 @@ app.get("/health", (c) => {
   return c.json({
     status: "ok",
     service: "zakat-protocol-backend",
+    deploymentPending: process.env.DEPLOYMENT_PENDING === "true",
+    contractAddress: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS,
+    chainId: CONTRACT_CONFIG.CHAIN_ID,
     timestamp: new Date().toISOString(),
   });
 });
@@ -1186,6 +1218,10 @@ const handleAuditAttest = async (c: any) => {
       return c.json({ error: "Disbursement proposal not found", success: false }, 404);
     }
 
+    if (targetProposal.status !== "Executed" || !targetProposal.chainVerified) {
+      return c.json({ error: "Audit hanya tersedia setelah eksekusi terverifikasi pada kontrak aktif", success: false }, 409);
+    }
+
     const auditorName = auditorProfile.name;
     const standardString = "PSAK 109 & Fikih BAZNAS";
     const eip712Timestamp = timestamp ? BigInt(timestamp) : BigInt(Math.floor(Date.now() / 1000));
@@ -1330,42 +1366,7 @@ app.post("/api/governance/attest-audit", handleAuditAttest);
 // --- UNIVERSAL GASLESS EIP-712 GOVERNANCE ENGINE FOR AMIL & DPS (Ticket #50 & ADR-0015) ---
 
 async function broadcastGovernanceRelayerTx(dataString: string): Promise<string> {
-  if (process.env.PRIVATE_KEY) {
-    try {
-      const relayerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as Hex);
-      const publicClient = createPublicClient({
-        chain: arbitrumSepolia,
-        transport: http(CONTRACT_CONFIG.RPC_URL),
-      });
-      const [fees, nonce] = await Promise.all([
-        publicClient.estimateFeesPerGas(),
-        publicClient.getTransactionCount({
-          address: relayerAccount.address,
-          blockTag: "pending",
-        }),
-      ]);
-      const maxFeePerGas = fees.maxFeePerGas ? (fees.maxFeePerGas * 150n) / 100n : undefined;
-      const maxPriorityFeePerGas = fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * 150n) / 100n : undefined;
-
-      const relayerClient = createWalletClient({
-        account: relayerAccount,
-        chain: arbitrumSepolia,
-        transport: http(CONTRACT_CONFIG.RPC_URL),
-      });
-
-      return await relayerClient.sendTransaction({
-        to: relayerAccount.address,
-        value: 0n,
-        data: toHex(dataString),
-        nonce,
-        maxFeePerGas,
-        maxPriorityFeePerGas,
-      });
-    } catch (relayerErr) {
-      console.warn("Relayer sponsored governance broadcast fallback:", relayerErr);
-    }
-  }
-  return `0x${toHex(`GASLESS_TX_${Date.now()}_${Math.random()}`).slice(2).padStart(64, "0")}`;
+  throw new Error("Legacy gasless governance is disabled; submit a contract transaction and confirm its receipt");
 }
 
 // 1. Gasless Propose (Amil)

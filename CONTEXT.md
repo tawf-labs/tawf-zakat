@@ -135,6 +135,14 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
 3. **Graceful Error Boundary**: Komponen penangkap crash UI di level halaman untuk menjaga kestabilan aplikasi.
 
 ### G. Universal Gasless EIP-712 Governance for Amil, DPS, & Auditor (ADR-0009 & ADR-0015)
+**Manual-test override (ADR-0019, 2026-09-08):** Pengajuan, persetujuan DPS,
+pembatalan, dan eksekusi memakai transaksi wallet ke kontrak dan konfirmasi receipt
+terverifikasi. Endpoint gasless simulasi dinonaktifkan; wallet membutuhkan ETH
+testnet. Bagian universal gasless di bawah adalah keputusan historis, bukan
+jaminan perilaku implementasi saat ini. Deployment baru aktif sejak 2026-09-08;
+alamat, role, dan hasil verifikasi dicatat di
+`docs/deployments/2026-09-08-arbitrum-sepolia.md`.
+
 1. **EIP-712 Typed Structured Data**: Standar tanda tangan digital human-readable di pop-up dompet (MetaMask/Rabby/Coinbase) untuk seluruh aksi tata kelola:
    - **Amil**: Pembuatan proposal (`AmilProposal`), eksekusi pencairan (`AmilExecution`), dan pembatalan (`ProposalCancellation`).
    - **DPS**: Persetujuan kelayakan syariah (`DpsApproval`) dan pembatalan syariah (`ProposalCancellation`).
@@ -210,7 +218,7 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 | `backend/src/ledger-rows.ts` | Pembacaan baris tersimpan yang dipakai bersama: jumlah tersimpan menjadi `bigint`, serta penempatan stempel waktu terhadap periode (`INSIDE` / `OUTSIDE` / `UNDATED`). |
 | `backend/src/disbursement-duration.ts` | **Durasi penyaluran**: mengubah stempel waktu dan nomor blok yang sudah tersimpan menjadi jejak tahap demi tahap per penyaluran, lalu meratakannya menjadi agregat periode. |
 
-**Penyusun draf** (`backend/src/report-drafter.ts`) — satu-satunya modul pada fitur ini yang menyentuh jaringan, sehingga sengaja diletakkan di luar tabel modul murni di atas. Ia memanggil `claude-opus-5` di sisi server dengan structured output, tanpa abstraksi penyedia dan tanpa suntikan dependensi. Yang diuji adalah kedua sisinya: perintah yang dibentuk dari angka periode, dan draf yang dibentuk dari respons. `draftReport` tidak pernah melempar galat.
+**Penyusun draf** (`backend/src/report-drafter.ts`) — satu-satunya modul pada fitur ini yang menyentuh jaringan, sehingga sengaja diletakkan di luar tabel modul murni di atas. Ia memanggil DeepSeek langsung di sisi server, bawaan `deepseek-v4-flash` dengan mode non-thinking dan JSON output, tanpa abstraksi penyedia atau fallback ke penyedia lain. Zod memeriksa bentuk respons sebelum draf diteruskan ke validator angka. Satu permintaan dibatasi 30 detik dan 4.096 token keluaran, tanpa retry otomatis. Tes mengganti batas HTTP dengan respons simulasi, sementara perintah, pembacaan draf, dan validator tetap berjalan. `draftReport` tidak pernah melempar galat.
 
 **Kontrak draf**: dua bagian yang dipisahkan tegas — **daftar klaim** (nama angka → nilai) dan **narasi**. Pemisahan ini membuat pemeriksaan angka menjadi pencocokan tepat, bukan penafsiran teks.
 
@@ -221,11 +229,11 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 **Endpoint** (keduanya stateless, tanpa tabel baru dan tanpa migrasi):
 
 - `POST /api/period-report/verify` — memvonis draf yang ditulis pemanggil. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
-- `POST /api/period-report/draft` — angka periode dihitung lebih dulu, diserahkan ke `claude-opus-5` sebagai satu-satunya sumber angka, lalu draf yang kembali dilewatkan validator. Kunci API tinggal di server. Kegagalan AI tidak pernah membuat permintaan gagal: angka tetap kembali dan ketiadaan narasi dinyatakan lewat `draftUnavailable`. Draf yang ditolak tetap dikembalikan beserta alasannya.
+- `POST /api/period-report/draft` — angka periode dihitung lebih dulu, diserahkan ke DeepSeek sebagai satu-satunya sumber angka, lalu draf yang kembali dilewatkan validator. Kunci API tinggal di server. Kegagalan AI tidak pernah membuat permintaan gagal: angka tetap kembali dan ketiadaan narasi dinyatakan lewat `draftUnavailable`. Draf yang ditolak tetap dikembalikan beserta alasannya.
 
 **Antarmuka**: irisan fitur `frontend/src/features/periodReport/` pada route `/laporan-periode` (ADR-0012). Modul murninya — `verdictText.ts` (penyajian vonis, dan `canSign` yang menutup jalan tanda tangan bagi draf yang tidak lolos) dan `reportDocument.ts` (berkas unduhan, hanya terbentuk untuk laporan yang lolos) — diuji tanpa merender komponen.
 
-**Kunci API**: `ANTHROPIC_API_KEY` pada lingkungan server. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia.
+**Konfigurasi AI**: `DEEPSEEK_API_KEY` pada lingkungan server; `DEEPSEEK_BASE_URL` dan `DEEPSEEK_MODEL` opsional dengan bawaan pada `backend/.env.example`. Variabel `ANTHROPIC_*` tidak dipakai. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia. Badan galat dari penyedia dan detail exception tidak diteruskan ke browser.
 
 **Durasi penyaluran** (tiket #65) menjawab pertanyaan yang selama ini tidak bisa dijawab lembaga tentang dirinya sendiri: berapa lama, sebenarnya, dari pengajuan sampai atestasi, dan di tahap mana waktu paling banyak hilang. Tahapnya mengikuti pemisahan kewenangan ADR-0006 — **pengajuan → persetujuan DPS → eksekusi → atestasi** — dan rata-ratanya menjadi angka periode bersatuan `JAM`, sehingga klaim AI atasnya diperiksa validator yang sama dengan yang memeriksa angka rupiah.
 

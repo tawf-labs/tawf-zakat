@@ -6,6 +6,7 @@ import { Input } from "../../components/ui/Input";
 import { BastModal } from "./BastModal";
 import { UniversalEvidenceModal } from "../evidence/UniversalEvidenceModal";
 import { Link } from "@tanstack/react-router";
+import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 
 interface ProposalRecord {
   id: number;
@@ -161,7 +162,7 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
                 </TableCell>
                 <TableCell>
                   <a
-                    href="https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b"
+                    href={`${SEPOLIA_EXPLORER_URL}/address/${ZAKAT_PROTOCOL_L1_ADDRESS}`}
                     target="_blank"
                     rel="noreferrer"
                     className="text-xs font-mono text-[#5e7a70] hover:text-[#1b765e] hover:underline flex items-center gap-1"

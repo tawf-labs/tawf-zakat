@@ -11,6 +11,7 @@ import { Toaster } from "sonner";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { RoleProvider } from "../features/governance";
 import React, { useState } from "react";
+import { DeploymentGate } from "../components/DeploymentGate";
 
 import appCss from "../styles.css?url";
 
@@ -113,6 +114,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 "--ck-dropdown-box-shadow": "0px 12px 32px rgba(27, 118, 94, 0.12)",
               }}
             >
+              <DeploymentGate>
               <WalletProvider>
                 <RoleProvider>
                   <WebSocketProvider>
@@ -125,6 +127,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                   </WebSocketProvider>
                 </RoleProvider>
               </WalletProvider>
+              </DeploymentGate>
             </SafeConnectKitProvider>
           </QueryClientProvider>
         </WagmiProvider>

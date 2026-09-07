@@ -1,4 +1,5 @@
 import React from "react";
+import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 import { ShieldCheck, CheckCircle2, AlertCircle, ExternalLink, Cpu } from "lucide-react";
 
 interface OnChainIntegrityBadgeProps {
@@ -67,7 +68,7 @@ export function OnChainIntegrityBadge({ cid, onChainContext }: OnChainIntegrityB
       <div className="flex items-center justify-between text-[11px] text-[#5e7a70] pt-1">
         <span className="font-mono">CID: {cid.slice(0, 10)}...{cid.slice(-8)}</span>
         <a
-          href="https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b"
+          href={`${SEPOLIA_EXPLORER_URL}/address/${ZAKAT_PROTOCOL_L1_ADDRESS}`}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1 font-bold text-[#1b765e] hover:underline"

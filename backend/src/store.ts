@@ -5,12 +5,13 @@ export interface SettledBatch {
   batchId: number;
   merkleRoot: Hex;
   totalAmountIDR: number;
-  itemCount: number;
+  itemCount: number | null;
   settledAt: string;
   txHash?: string;
 }
 
 export interface ProposalRecord {
+  chainVerified?: boolean;
   proposalId: number;
   currencyType: 0 | 1; // 0 = IDR, 1 = USDC
   amount: number;

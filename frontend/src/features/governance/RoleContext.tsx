@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "../../lib/web3Client";
-import { GOVERNANCE_ROLES, ZAKAT_PROTOCOL_L1_ADDRESS, getApiBaseUrl } from "../../lib/contracts";
+import { GOVERNANCE_ROLES, ZAKAT_PROTOCOL_L1_ADDRESS } from "../../lib/contracts";
 import { parseAbi } from "viem";
 
 export type GovernancePersona = "AUTO" | "AMIL" | "DPS" | "AUDITOR" | "PUBLIC";
@@ -63,27 +63,11 @@ const HAS_ROLE_ABI = parseAbi([
 export function RoleProvider({ children }: { children: React.ReactNode }) {
   const { address, isConnected } = useAccount();
   const [persona, setPersona] = useState<GovernancePersona>("AUTO");
-  const [roleMembers, setRoleMembers] = useState<GovernanceRoleInfo[]>([]);
   const [onChainRoles, setOnChainRoles] = useState<string[]>([]);
-
-  // 1. Fetch registered role members from backend
-  useEffect(() => {
-    const fetchRoles = async () => {
-      try {
-        const res = await fetch(`${getApiBaseUrl()}/api/governance/roles`);
-        if (res.ok) {
-          const json = await res.json();
-          setRoleMembers(json.roles || []);
-        }
-      } catch (err) {
-        console.warn("Failed to fetch governance roles from backend:", err);
-      }
-    };
-    fetchRoles();
-  }, [address]);
 
   // 2. Fetch live on-chain roles directly from Arbitrum contract
   useEffect(() => {
+    setOnChainRoles([]);
     if (!address) {
       setOnChainRoles([]);
       return;
@@ -130,33 +114,10 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     };
   }, [address]);
 
-  // Determine detected roles combining on-chain + backend records + deployer super-role
+  // UI personas and the historical deployer address must never grant permissions.
   const detectedRoles = useMemo(() => {
-    if (!address) return [];
-    const addrLower = address.toLowerCase();
-
-    // Deployer 0x5e9b... retains all roles in testnet
-    const isDeployer = addrLower === "0x5e9b652c4e8a013f6fab69f0b55377c408b59968".toLowerCase();
-
-    const dbMatches = roleMembers
-      .filter((r) => r.accountAddress?.toLowerCase() === addrLower)
-      .map((r) => r.roleName);
-
-    const merged = Array.from(new Set([...onChainRoles, ...dbMatches]));
-
-    if (isDeployer) {
-      return Array.from(
-        new Set([
-          ...merged,
-          "DEFAULT_ADMIN_ROLE",
-          "SHARIA_SUPERVISOR_ROLE",
-          "AUDITOR_ROLE",
-          "RELAYER_ROLE",
-        ])
-      );
-    }
-    return merged;
-  }, [address, roleMembers, onChainRoles]);
+    return address ? onChainRoles : [];
+  }, [address, onChainRoles]);
 
   // Determine effective role based on persona simulator or wallet
   const effectiveRole = useMemo<"AMIL" | "DPS" | "AUDITOR" | "PUBLIC">(() => {
@@ -173,10 +134,10 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     return "PUBLIC";
   }, [persona, isConnected, address, detectedRoles]);
 
-  const canCreateProposal = effectiveRole === "AMIL";
-  const canApproveDps = effectiveRole === "DPS";
-  const canExecuteBast = effectiveRole === "AMIL";
-  const canAttestAudit = effectiveRole === "AUDITOR";
+  const canCreateProposal = effectiveRole === "AMIL" && detectedRoles.includes("DEFAULT_ADMIN_ROLE");
+  const canApproveDps = effectiveRole === "DPS" && detectedRoles.includes("SHARIA_SUPERVISOR_ROLE");
+  const canExecuteBast = effectiveRole === "AMIL" && detectedRoles.includes("DEFAULT_ADMIN_ROLE");
+  const canAttestAudit = effectiveRole === "AUDITOR" && detectedRoles.includes("AUDITOR_ROLE");
 
   const getRestrictionReason = defaultRoleValue.getRestrictionReason;
 

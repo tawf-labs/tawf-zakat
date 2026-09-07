@@ -15,8 +15,7 @@ const RELAYER_ABI = parseAbi([
 ]);
 
 const privateKey = (process.env.RELAYER_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  "0xa405eefba6b7795f28a6ca2cb3fb55bdafbb6a4efba7b7b9e047f113f4a28d61") as Hex;
+  process.env.PRIVATE_KEY) as Hex | undefined;
 
 export async function settleBatchOnChain(
   batchId: number,
@@ -31,6 +30,8 @@ export async function settleBatchOnChain(
   error?: string;
 }> {
   try {
+    if (process.env.DEPLOYMENT_PENDING === "true") throw new Error("Deployment pending; settlement disabled");
+    if (!privateKey) throw new Error("RELAYER_PRIVATE_KEY is required");
     const formattedKey = privateKey.startsWith("0x") ? privateKey : (`0x${privateKey}` as Hex);
     const account = privateKeyToAccount(formattedKey);
 
@@ -85,4 +86,3 @@ export async function settleBatchOnChain(
     };
   }
 }
-

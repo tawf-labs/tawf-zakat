@@ -2,6 +2,7 @@ import React from "react";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "../../components/ui/Accordion";
 import { ShieldCheck, Cpu, Hash, Layers, ExternalLink } from "lucide-react";
 import { type Hex } from "viem";
+import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 
 interface MerkleProofDetailsProps {
   leaf?: Hex;
@@ -79,7 +80,7 @@ export function MerkleProofDetails({
 
             <div className="pt-1 flex justify-end">
               <a
-                href="https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b"
+                href={`${SEPOLIA_EXPLORER_URL}/address/${ZAKAT_PROTOCOL_L1_ADDRESS}`}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1b765e] hover:underline"

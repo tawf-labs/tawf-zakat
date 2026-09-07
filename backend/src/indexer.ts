@@ -12,14 +12,12 @@ import { CONTRACT_CONFIG } from "./config";
 import { dbService } from "./db/index";
 import { dataStore } from "./store";
 import { eventBus } from "./ws";
+import { GOVERNANCE_ROLE_HASHES } from "./governance-roles";
 
 // Known Role Hash Dictionary
-export const KNOWN_ROLES: Record<string, string> = {
-  "0x0000000000000000000000000000000000000000000000000000000000000000": "DEFAULT_ADMIN_ROLE",
-  "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5": "SHARIA_SUPERVISOR_ROLE",
-  "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c": "AUDITOR_ROLE",
-  "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4": "RELAYER_ROLE",
-};
+export const KNOWN_ROLES: Record<string, string> = Object.fromEntries(
+  Object.entries(GOVERNANCE_ROLE_HASHES).map(([name, hash]) => [hash, name]),
+);
 
 // ABI items for event decoding
 export const INDEXED_EVENT_ABIS = [
@@ -39,7 +37,7 @@ export class IndexerEngine {
   private isRunning: boolean = false;
   private timer: NodeJS.Timeout | null = null;
   private readonly contractAddress: Hex;
-  private readonly startBlock: number = 304590800;
+  private readonly startBlock: number = CONTRACT_CONFIG.INDEXER_START_BLOCK;
   private readonly chunkSize: number = 2000;
   private readonly pollIntervalMs: number = 10000;
 
@@ -56,6 +54,8 @@ export class IndexerEngine {
     toBlock: number;
     eventsProcessed: number;
   }> {
+    if (process.env.DEPLOYMENT_PENDING === "true") throw new Error("Deployment pending; indexer is disabled");
+    if (!Number.isSafeInteger(this.startBlock) || this.startBlock < 1) throw new Error("Set INDEXER_START_BLOCK to the new contract deployment block");
     const state = await dbService.getIndexerState();
     const currentL1Block = Number(await this.client.getBlockNumber());
     const fromBlock = Math.max(state.lastIndexedBlock + 1, this.startBlock);
@@ -284,6 +284,8 @@ export class IndexerEngine {
   }
 
   public start() {
+    if (process.env.DEPLOYMENT_PENDING === "true") return;
+    if (!Number.isSafeInteger(this.startBlock) || this.startBlock < 1) throw new Error("Set INDEXER_START_BLOCK before starting the indexer");
     if (this.isRunning) return;
     this.isRunning = true;
     console.log(`[Indexer] Background poller started for contract ${this.contractAddress} on Sepolia`);

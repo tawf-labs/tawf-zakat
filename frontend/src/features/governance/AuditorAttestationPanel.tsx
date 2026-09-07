@@ -103,7 +103,7 @@ export function AuditorAttestationPanel({
 
   // Executed proposals that can receive auditor attestation
   const executedProposals = proposals.filter(
-    (p) => p.status === "Executed" || p.status === "EXECUTED" || p.status === "Approved" || p.status === "APPROVED"
+    (p) => p.chainVerified === true && p.status === "Executed"
   );
 
   useEffect(() => {
@@ -342,7 +342,7 @@ export function AuditorAttestationPanel({
                       <strong className="text-[#17332c]">
                         {p.amountIDR ? `Rp ${Number(p.amountIDR).toLocaleString("id-ID")}` : `${p.amountUSDC} USDC`}
                       </strong>{" "}
-                      | BAST IPFS: <span className="font-mono">{p.disbursementReceiptCID?.slice(0, 12) || "QmXoy...uco"}</span>
+                      | BAST IPFS: <span className="font-mono">{p.disbursementReceiptCID?.slice(0, 12) || "Belum tersedia"}</span>
                     </p>
                   </div>
 

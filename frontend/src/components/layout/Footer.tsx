@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "@tanstack/react-router";
 import { ShieldCheck, ExternalLink, HeartHandshake, FileText, CheckCircle2 } from "lucide-react";
 import { Container } from "./Container";
+import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 
 export function Footer() {
   return (
@@ -98,7 +99,7 @@ export function Footer() {
             <ul className="space-y-2 text-xs text-[#5e7a70] font-mono">
               <li>
                 <a
-                  href="https://sepolia.arbiscan.io/address/0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b"
+                  href={`${SEPOLIA_EXPLORER_URL}/address/${ZAKAT_PROTOCOL_L1_ADDRESS}`}
                   target="_blank"
                   rel="noreferrer"
                   className="hover:text-[#1b765e] transition-colors flex items-center gap-1.5"

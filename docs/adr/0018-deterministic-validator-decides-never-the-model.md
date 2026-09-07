@@ -3,6 +3,10 @@
 ## Status
 Accepted
 
+Updated 2026-09-07: at the user's request, the demo uses DeepSeek instead of
+Anthropic. This replaces the original provider choice in decision 9, not the
+deterministic validation policy.
+
 ## Context
 An Amil compiling a period report does two jobs, and only one of them is worth a human's hours.
 
@@ -35,13 +39,13 @@ So the question this work answers is not *can a model write the narrative* — i
 
 8. **An undated row is counted in no period rather than in every one.** `backend/src/ledger-rows.ts` distinguishes `INSIDE` / `OUTSIDE` / `UNDATED` because the two callers want opposite things from the third case: reconciliation must never let a period filter hide a row, since an unseen row is an unreported discrepancy; a period report must never count one, since a row with no usable date would otherwise appear in every period. Nothing disappears quietly — the number of rows left out is itself a reported figure.
 
-9. **The drafting step is a direct call, not an abstraction.** `backend/src/report-drafter.ts` calls `claude-opus-5` through the official Anthropic SDK with structured output (`output_config.format`), so the claim list and narrative come back already separated rather than parsed out of prose. There is no provider interface, no dependency injection, and nothing to mock — the model choice and call shape were taken from the current Claude API reference at implementation time, not from memory. Credentials are read from the server environment and never appear in a response; the browser never sees a key because the browser never makes the call.
+9. **The drafting step is a direct call, not an abstraction.** `backend/src/report-drafter.ts` calls DeepSeek's `/chat/completions` with native `fetch`, defaulting to `deepseek-v4-flash`, `thinking: { type: "disabled" }` and `response_format: { type: "json_object" }`. JSON mode guarantees neither our schema nor truthful claims: the prompt includes the schema and a JSON example, Zod checks the returned structure, and only then does the deterministic validator judge the numbers. This uses the existing HTTP and Zod primitives without a provider interface or SDK. `DEEPSEEK_API_KEY` stays in the server environment; optional `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL` override the defaults. Legacy Anthropic settings are ignored. A 30-second timeout covers the request and response reading, output is capped at 4,096 tokens, and no automatic retry or fallback provider adds latency or cost. The call format is checked against the current DeepSeek API reference linked below.
 
-10. **A drafting failure is never a request failure.** The figures are computed before the model is asked, so a missing key, a timeout, a refusal (`stop_reason: "refusal"`), or a malformed response all resolve the same way: the figures are returned, and the absence of a narrative is stated in the open rather than disguised as an empty report. `draftReport` never throws.
+10. **A drafting failure is never a request failure.** The figures are computed before the model is asked, so a missing key, insufficient balance, rate limit, timeout, refusal (`finish_reason: "content_filter"`), incomplete completion, or malformed response all resolve the same way: the figures are returned, and the absence of a narrative is stated in the open rather than disguised as an empty report. Only a completed response (`finish_reason: "stop"`) with a valid schema and nonblank narrative is used. Upstream error bodies and exception details are never reflected to the browser. `draftReport` never throws.
 
 11. **A rejected draft is returned, not hidden.** The response carries the figures, the draft, and the verdict together, whatever the verdict says. A reader is entitled to see what was refused and why — hiding a rejected draft would make the validator unfalsifiable. This extends to a draft the reader cannot even parse: a claim whose amount arrives as `"100.000.000"` rather than `"100000000"` is carried through as an *unreadable* claim and rejected by the validator (`KLAIM_TIDAK_TERBACA`), rather than discarded as though the service had been unreachable. Two things follow. Reinterpreting those digits would be the system inventing the very figure it exists to check; and reporting a bad draft as an outage would hide the one event the product is built to show. It is also the likeliest slip the model will make, since it is told to write rupiah as `Rp1.500.000` in the narrative.
 
-12. **From the test suite's point of view there is no AI.** There is only a draft, and the tests write their own, including the deliberately wrong ones. The whole suite runs with no network and no API key.
+12. **From the test suite's point of view there is no AI.** There is only a draft, and the tests write their own, including the deliberately wrong ones. Drafting tests stub the HTTP boundary with fake credentials and completions, exercising the real request shape, parsing, error handling and deterministic validator without a live AI service or real API key.
 
 13. **Stateless, again.** No new tables, no Drizzle migration, no stored report history. Figures are computed and returned. Deploying this touches no data.
 
@@ -79,10 +83,11 @@ So the question this work answers is not *can a model write the narrative* — i
 - **The rupiah scanner now stops short of a duration word.** `1.200 jam` is a figure the report is entitled to state, and rejecting it as unclaimed rupiah would be the validator refusing a true number. An `Rp` prefix still wins over the exception. The narrow cost: an invented rupiah figure written as grouped digits and immediately followed by "jam" or "hari" escapes the scan — the claim list remains the primary defence.
 - **What is measured is the process inside this system**, from proposal row to attestation — not the hours a lembaga spends drafting its report. The two are different and the distinction is stated in the notes, in the drafting prompt, and on the screen, because equating them would mislead every reader of the figure.
 - **Nothing is stored**, so there is no history of which drafts were rejected and why beyond the response itself.
-- **The live drafting call is not covered by an automated test.** The suite runs with no network and no API key by design, so what is tested is everything either side of the call — the prompt the figures become, the draft the response becomes, and every failure path (exercised against a dead loopback address). Whether the model obeys the prompt is a question only a real call can answer.
-- **Server-side refusal fallbacks are not enabled.** Combining `fallbacks` with structured-output parsing is not documented, and a refusal here degrades gracefully by design — the figures still stand and the missing narrative is stated — so the undocumented combination was not worth the risk of a request shape that fails silently. `stop_reason: "refusal"` is handled explicitly instead.
+- **The live drafting call is not covered by an automated test.** Transport tests use simulated completions, not a paid model call. Whether DeepSeek follows the Indonesian reporting prompt consistently and responds fast enough for a demo still requires a live rehearsal.
+- **JSON output is not schema enforcement.** DeepSeek can return empty content or an incomplete response; schema validation and finish-reason checks must remain in the server. A refusal or unavailable draft has no provider fallback: the figures still stand and the missing narrative is stated.
 
 ## References
 - Spec: GitHub issue #61; tickets #62–#66
 - Related: ADR-0017 (pure core, integer money, decimal strings on the wire), ADR-0006 (separation of DPS and Auditor powers), ADR-0012 (feature-driven frontend), ADR-0016 (technology vendor positioning)
 - Evidence: `docs/research/0002-baznas-pelaporan-audit-dan-ai.md`
+- DeepSeek: [Chat completions](https://api-docs.deepseek.com/api/create-chat-completion/), [JSON output](https://api-docs.deepseek.com/guides/json_mode/), [thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/)

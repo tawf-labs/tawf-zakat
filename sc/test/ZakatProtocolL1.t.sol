@@ -35,6 +35,10 @@ contract ZakatProtocolL1Test is Test {
         usdc.approve(address(protocol), type(uint256).max);
     }
 
+    function test_MockUSDCUsesSixDecimals() public view {
+        assertEq(usdc.decimals(), 6);
+    }
+
     function test_InitialRoles() public view {
         assertTrue(protocol.hasRole(protocol.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(protocol.hasRole(protocol.RELAYER_ROLE(), relayer));

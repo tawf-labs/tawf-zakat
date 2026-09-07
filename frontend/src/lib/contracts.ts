@@ -1,5 +1,8 @@
-export const ZAKAT_PROTOCOL_L1_ADDRESS = "0x5f2394e6bc3dd842831c66253d4433f4f72b4e7b";
-export const SEPOLIA_USDC_ADDRESS = "0xdb10a1ee7a3a628353d0d29db60f99d46d41e30d" as const;
+import { keccak256, toHex } from "viem";
+
+const deploymentEnv = (import.meta as any).env || {};
+export const ZAKAT_PROTOCOL_L1_ADDRESS = (deploymentEnv.VITE_ZAKAT_PROTOCOL_L1_ADDRESS || "0x0d6cec28a574aca41b879767b081f6f2b4e9a849") as `0x${string}`;
+export const SEPOLIA_USDC_ADDRESS = (deploymentEnv.VITE_SEPOLIA_USDC_ADDRESS || "0x1f439a83354ae624a4e8acbc4e9873eaa2e1f852") as `0x${string}`;
 
 export const ARBITRUM_SEPOLIA_CHAIN_ID = 421614;
 export const SEPOLIA_CHAIN_ID = 421614;
@@ -282,8 +285,8 @@ export const ZAKAT_PROTOCOL_ABI = [
 
 export const GOVERNANCE_ROLES = {
   DEFAULT_ADMIN_ROLE: "0x0000000000000000000000000000000000000000000000000000000000000000",
-  SHARIA_SUPERVISOR_ROLE: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
-  AUDITOR_ROLE: "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c",
+  SHARIA_SUPERVISOR_ROLE: keccak256(toHex("SHARIA_SUPERVISOR_ROLE")),
+  AUDITOR_ROLE: keccak256(toHex("AUDITOR_ROLE")),
   RELAYER_ROLE: "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
 } as const;
 
@@ -351,4 +354,3 @@ export const AUDIT_OPINIONS = [
   { value: "TW", label: "TW — Tidak Wajar" },
   { value: "TMP", label: "TMP — Tidak Memberikan Pendapat" },
 ] as const;
-

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import app from "../src/index";
 import { periodReportBody } from "../src/routes/period-report";
 import { computePeriodFigures, type PeriodRows } from "../src/period-report";
@@ -18,21 +18,22 @@ const post = (body: unknown) =>
   );
 
 /**
- * The whole suite runs with no network and no API key, so these take the
- * credentials away rather than pretending to hold them. That is also the path
- * that matters most: the endpoint has to stay useful when the model cannot be
- * reached at all.
+ * Stub only HTTP: no live model, credentials, or external requests. The route
+ * still computes figures, parses the completion and runs the real validator.
  */
 const savedEnv: Record<string, string | undefined> = {};
+let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
 beforeEach(() => {
-  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+  for (const key of ["DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL"]) {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Network disabled in tests"));
 });
 
 afterEach(() => {
+  fetchSpy.mockRestore();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -62,22 +63,36 @@ describe("POST /api/period-report/draft", () => {
   });
 
   it("never lets the API key reach the browser", async () => {
-    // A credential is present and the service is a dead loopback address, so the
-    // whole failure path runs without a packet leaving the machine.
-    process.env.ANTHROPIC_API_KEY = "sk-ant-not-a-real-key-for-tests";
-    process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
-    try {
-      const res = await post({ period: PERIOD });
-      const raw = await res.text();
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(new Response("Invalid token: deepseek-test-key", { status: 401 }));
+    const res = await post({ period: PERIOD });
+    const raw = await res.text();
 
-      expect(res.status).toBe(200);
-      expect(raw).not.toContain("sk-ant-not-a-real-key-for-tests");
-      expect(raw).not.toContain("ANTHROPIC_AUTH_TOKEN");
-      expect(JSON.parse(raw).draftUnavailable).toBeTruthy();
-    } finally {
-      delete process.env.ANTHROPIC_API_KEY;
-      delete process.env.ANTHROPIC_BASE_URL;
-    }
+    expect(res.status).toBe(200);
+    expect(raw).not.toContain("deepseek-test-key");
+    expect(JSON.parse(raw).draftUnavailable).toContain("Kredensial layanan AI ditolak");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a generated draft and its rejecting verdict, not an AI outage", async () => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(Response.json({ choices: [{
+      finish_reason: "stop",
+      message: { content: JSON.stringify({
+        claims: [{ name: "pengumpulan.total", amount: "100.000.000", unit: "IDR" }],
+        narrative: "Pengumpulan Rp100.000.000.",
+      }) },
+    }] }));
+
+    const res = await post({ period: PERIOD });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.figures.figures.length).toBeGreaterThan(0);
+    expect(body.draft.narrative).toBe("Pengumpulan Rp100.000.000.");
+    expect(body.verdict.outcome).toBe("DITOLAK");
+    expect(body.verdict.findings.map((finding: { kind: string }) => finding.kind)).toContain("KLAIM_TIDAK_TERBACA");
+    expect(body).not.toHaveProperty("draftUnavailable");
   });
 
   it("carries every amount as a decimal string, as the verify route does", async () => {

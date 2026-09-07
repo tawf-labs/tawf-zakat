@@ -6,36 +6,23 @@
  * use, and whatever comes back goes through `report-validator` before anyone
  * reads it. The model proposes; it never certifies.
  *
- * There is no provider abstraction, no dependency injection and nothing to mock.
- * Credentials are read from the environment and the call is made directly, which
- * is why this module has no unit tests around the network: from the test
- * suite's point of view there is no AI, only a draft. What *is* tested is
- * everything either side of the call - the prompt the figures become, and the
- * draft the response becomes.
+ * DeepSeek is called directly with server-only credentials. Tests stub the HTTP
+ * boundary; the prompt, response parsing and validator run without a live model.
  *
  * `draftReport` never throws and never rejects. A missing key, a timeout, a
  * refusal and a malformed response all come back the same way: no draft, and a
  * reason stated in the open. The period figures stand on their own without it.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { FIGURE_UNITS, type PeriodFigures } from "./period-report";
 import type { DraftClaim, ReportDraft } from "./report-validator";
 
-/** Anthropic's most capable widely available model; 1M context. */
-export const DRAFT_MODEL = "claude-opus-5";
+export const DRAFT_MODEL = "deepseek-v4-flash";
 
-/**
- * Generous enough for an adaptive-thinking turn, bounded enough that a browser
- * is not left hanging: the SDK retries, so the worst case is roughly
- * `timeout x (retries + 1)`.
- */
-const DRAFT_TIMEOUT_MS = 90_000;
-const DRAFT_MAX_RETRIES = 1;
-
-const MAX_TOKENS = 16_000;
+// One non-thinking request, with no automatic retries or second-provider costs.
+const DRAFT_TIMEOUT_MS = 30_000;
+const MAX_TOKENS = 4096;
 
 /**
  * Amounts cross as decimal strings, exactly as they do on the wire, because
@@ -51,7 +38,14 @@ const DraftSchema = z.object({
       })
     )
     .describe("Setiap angka yang dipakai di dalam narasi, disalin persis."),
-  narrative: z.string().describe("Narasi laporan periode dalam bahasa Indonesia."),
+  narrative: z.string().trim().min(1).describe("Narasi laporan periode dalam bahasa Indonesia."),
+});
+
+const CompletionSchema = z.object({
+  choices: z.array(z.object({
+    finish_reason: z.string(),
+    message: z.object({ content: z.string().nullable() }),
+  })).min(1),
 });
 
 export type RawDraft = z.infer<typeof DraftSchema>;
@@ -77,6 +71,10 @@ export const DRAFTING_SYSTEM = [
   "Draf Anda diperiksa sebuah validator deterministik sebelum dibaca manusia. Validator itu mencocokkan setiap klaim dengan hitungan dari ledger dan memindai narasi Anda untuk angka rupiah yang tidak Anda klaim. Satu angka yang menyimpang menolak seluruh draf, jadi lebih baik menyebut sedikit angka yang benar daripada banyak angka yang tidak Anda salin dengan tepat.",
   "",
   "Tulis narasi dalam bahasa Indonesia yang tenang dan lugas. Jelaskan komposisi pengumpulan dan penyaluran, posisi hak amil terhadap plafonnya, serta lamanya proses penyaluran bila angkanya tersedia. Jangan memuji lembaga dan jangan menyimpulkan tren yang tidak didukung angka yang diberikan.",
+  "",
+  "Kembalikan hanya objek JSON, tanpa pagar kode atau teks di luar JSON, sesuai skema berikut:",
+  JSON.stringify(z.toJSONSchema(DraftSchema)),
+  'Contoh bentuk JSON untuk periode tanpa angka yang dikutip: {"claims":[],"narrative":"Belum ada penyaluran pada periode ini."}. Isi narasi harus mengikuti angka periode yang diberikan, bukan menyalin contoh ini.',
 ].join("\n");
 
 /** Renders the figures as the model receives them: names, labels, exact digits. */
@@ -126,78 +124,80 @@ export function toReportDraft(raw: RawDraft): ReportDraft {
   return { claims, narrative: raw.narrative };
 }
 
-const hasCredentials = (): boolean =>
-  Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+const unavailable = (reason: string): { draft: null; unavailable: string } => ({
+  draft: null,
+  unavailable: `${reason} Angka periode tetap dihitung dari ledger.`,
+});
 
 /**
  * Asks the model for a draft over the given figures. Never throws: every
  * failure becomes an absent draft with a stated reason.
  */
 export async function draftReport(figures: PeriodFigures): Promise<DraftAttempt> {
-  if (!hasCredentials()) {
-    return {
-      draft: null,
-      unavailable:
-        "Kredensial layanan AI tidak tersedia di server (ANTHROPIC_API_KEY belum disetel), " +
-        "sehingga narasi tidak disusun. Angka periode di bawah tetap dihitung dari ledger.",
-    };
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
+  if (!apiKey) {
+    return unavailable(
+      "Kredensial layanan AI tidak tersedia di server (DEEPSEEK_API_KEY belum disetel), sehingga narasi tidak disusun."
+    );
   }
 
   try {
-    const client = new Anthropic({ timeout: DRAFT_TIMEOUT_MS, maxRetries: DRAFT_MAX_RETRIES });
-
-    const response = await client.messages.parse({
-      model: DRAFT_MODEL,
-      max_tokens: MAX_TOKENS,
-      system: DRAFTING_SYSTEM,
-      messages: [{ role: "user", content: figuresForPrompt(figures) }],
-      output_config: { format: zodOutputFormat(DraftSchema) },
+    const baseUrl = process.env.DEEPSEEK_BASE_URL?.trim() || "https://api.deepseek.com";
+    const endpoint = new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+    const response = await fetch(endpoint.href, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(DRAFT_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: process.env.DEEPSEEK_MODEL?.trim() || DRAFT_MODEL,
+        max_tokens: MAX_TOKENS,
+        thinking: { type: "disabled" },
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: DRAFTING_SYSTEM },
+          { role: "user", content: figuresForPrompt(figures) },
+        ],
+      }),
     });
 
-    if (response.stop_reason === "refusal") {
-      return {
-        draft: null,
-        unavailable: `Layanan AI menolak menyusun narasi (${
-          response.stop_details?.category ?? "tanpa kategori"
-        }). Angka periode tetap dihitung dari ledger.`,
-      };
+    if (!response.ok) {
+      // Do not expose upstream bodies: they can echo credentials or request data.
+      await response.body?.cancel();
+      if (response.status === 401 || response.status === 403) {
+        return unavailable("Kredensial layanan AI ditolak, sehingga narasi tidak disusun.");
+      }
+      if (response.status === 402) {
+        return unavailable("Saldo layanan AI tidak mencukupi, sehingga narasi tidak disusun.");
+      }
+      if (response.status === 429) {
+        return unavailable("Layanan AI sedang membatasi permintaan, sehingga narasi belum bisa disusun.");
+      }
+      return unavailable(`Layanan AI mengembalikan galat (${response.status}), sehingga narasi tidak disusun.`);
     }
 
-    if (!response.parsed_output) {
-      return {
-        draft: null,
-        unavailable:
-          "Layanan AI mengembalikan draf yang tidak sesuai bentuk yang diminta, sehingga tidak dipakai. " +
-          "Angka periode tetap dihitung dari ledger.",
-      };
+    const completion = CompletionSchema.parse(await response.json());
+    const choice = completion.choices[0]!;
+    if (choice.finish_reason === "content_filter") {
+      return unavailable("Layanan AI menolak menyusun narasi, sehingga draf tidak dipakai.");
+    }
+    if (choice.finish_reason !== "stop") {
+      return unavailable("Layanan AI berhenti sebelum draf selesai, sehingga draf tidak dipakai.");
     }
 
-    return { draft: toReportDraft(response.parsed_output), unavailable: null };
+    const raw = DraftSchema.parse(JSON.parse(choice.message.content ?? ""));
+    return { draft: toReportDraft(raw), unavailable: null };
   } catch (error: unknown) {
     return { draft: null, unavailable: describeFailure(error) };
   }
 }
 
 export function describeFailure(error: unknown): string {
-  const tail = " Angka periode tetap dihitung dari ledger.";
-
-  if (error instanceof Anthropic.AuthenticationError) {
-    return "Kredensial layanan AI ditolak, sehingga narasi tidak disusun." + tail;
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return unavailable("Layanan AI melewati batas waktu, sehingga narasi tidak disusun.").unavailable;
   }
-  if (error instanceof Anthropic.RateLimitError) {
-    return "Layanan AI sedang membatasi permintaan, sehingga narasi belum bisa disusun." + tail;
+  if (error instanceof SyntaxError || error instanceof z.ZodError) {
+    return unavailable("Layanan AI mengembalikan draf yang tidak sesuai bentuk yang diminta, sehingga tidak dipakai.").unavailable;
   }
-  if (error instanceof Anthropic.APIConnectionTimeoutError) {
-    return "Layanan AI melewati batas waktu, sehingga narasi tidak disusun." + tail;
-  }
-  if (error instanceof Anthropic.APIConnectionError) {
-    return "Layanan AI tidak dapat dihubungi, sehingga narasi tidak disusun." + tail;
-  }
-  if (error instanceof Anthropic.APIError) {
-    return `Layanan AI mengembalikan galat (${error.status ?? "tanpa status"}), sehingga narasi tidak disusun.${tail}`;
-  }
-  return (
-    (error instanceof Error ? `Penyusunan narasi gagal: ${error.message}` : "Penyusunan narasi gagal.") +
-    tail
-  );
+  return unavailable("Layanan AI tidak dapat dihubungi atau penyusunan narasi gagal.").unavailable;
 }

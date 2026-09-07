@@ -3,22 +3,16 @@ import postgres from "postgres";
 import * as schema from "./schema";
 import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
-import { type Hex, createPublicClient, http, parseAbi } from "viem";
-import { arbitrumSepolia } from "viem/chains";
+import { type Hex } from "viem";
 import { and, asc, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 import { STAGE_EVENT_NAMES } from "../disbursement-duration";
+import { governanceChain, type GOVERNANCE_ACTIONS, type GovernanceMetadata } from "../governance-chain";
 
-const syncPublicClient = createPublicClient({
-  chain: arbitrumSepolia,
-  transport: http(CONTRACT_CONFIG.RPC_URL),
-});
+const indexerKeyForDeployment = () => `${CONTRACT_CONFIG.CHAIN_ID}:${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase()}`;
 
-const PROPOSAL_SYNC_ABI = parseAbi([
-  "function proposals(uint256) view returns (uint256 proposalId, uint8 currencyType, uint256 amount, uint8 asnafCategory, bytes32 beneficiaryHash, string ipfsProofCID, uint256 periodId, address usdcRecipient, uint256 approvalCount, uint8 status)",
-]);
-
-const databaseUrl = process.env.DATABASE_URL;
+// Test imports must never connect to (or run startup DDL against) the demo DB.
+const databaseUrl = process.env.NODE_ENV === "test" ? undefined : process.env.DATABASE_URL;
 
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
@@ -29,6 +23,7 @@ if (databaseUrl) {
     console.log("Connected to Neon PostgreSQL database via Drizzle ORM");
     // Ensure new columns & indexer tables exist
     const initStatements = [
+      `CREATE UNIQUE INDEX IF NOT EXISTS disbursement_proposals_proposal_id_on_chain_unique ON disbursement_proposals (proposal_id_on_chain);`,
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS disbursement_receipt_cid text;`,
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS tx_hash text;`,
       `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS audit_status text DEFAULT 'PENDING';`,
@@ -99,6 +94,49 @@ export const db = dbInstance;
 
 // Helper DB Services
 export const dbService = {
+  async confirmGovernance(action: keyof typeof GOVERNANCE_ACTIONS, txHash: string, proposalId?: number, metadata?: GovernanceMetadata, signature?: Hex) {
+    const confirmed = await governanceChain.confirm(action, txHash, proposalId, metadata, signature);
+    const p = confirmed.proposal;
+    const canonical = {
+      currencyType: p.currencyType, amount: p.amount, asnafCategory: p.asnafLabel,
+      beneficiaryHash: p.beneficiaryHash, ipfsProofCID: p.ipfsProofCID,
+      periodId: p.periodId, approvalCount: p.approvalCount, status: p.status,
+      txHash, ...(action === "execute" ? { executedAt: new Date(confirmed.timestamp) } : {}),
+      ...(action === "cancel" ? { cancelReason: confirmed.cancelReason } : {}),
+      ...(action === "propose" && metadata ? { beneficiaryName: metadata.beneficiaryName ?? "", beneficiaryNIKMasked: metadata.beneficiaryNIKMasked ?? "" } : {}),
+      ...(action === "execute" && metadata?.disbursementReceiptCID ? { disbursementReceiptCID: metadata.disbursementReceiptCID } : {}),
+    };
+    if (db) {
+      // The chain ID is the only proposal key; a database serial ID is not interchangeable.
+      await db.transaction(async tx => {
+        const existing = await tx.select().from(schema.disbursementProposals)
+          .where(eq(schema.disbursementProposals.proposalIdOnChain, p.proposalId));
+        if (existing.length) {
+          if (existing.some(row => row.beneficiaryHash.toLowerCase() !== p.beneficiaryHash.toLowerCase())) {
+            throw new Error("Database proposal belongs to another deployment; reset required");
+          }
+          await tx.update(schema.disbursementProposals).set(canonical)
+            .where(eq(schema.disbursementProposals.proposalIdOnChain, p.proposalId));
+        } else {
+          await tx.insert(schema.disbursementProposals).values({
+            beneficiaryName: "", beneficiaryNIKMasked: "", ...canonical, proposalIdOnChain: p.proposalId,
+            approvedBy: "[]", createdAt: action === "propose" ? new Date(confirmed.timestamp) : null,
+          }).onConflictDoUpdate({ target: schema.disbursementProposals.proposalIdOnChain, set: canonical });
+        }
+      });
+    }
+    const memory = dataStore.proposals.get(p.proposalId);
+    const record = { ...memory, ...p, currencyType: p.currencyType as 0 | 1,
+      beneficiaryName: metadata?.beneficiaryName ?? memory?.beneficiaryName ?? "", beneficiaryNIKMasked: metadata?.beneficiaryNIKMasked ?? memory?.beneficiaryNIKMasked ?? "",
+      disbursementReceiptCID: metadata?.disbursementReceiptCID ?? memory?.disbursementReceiptCID,
+      approvedBy: memory?.approvedBy ?? [], txHash,
+      ...(action === "execute" ? { executedAt: confirmed.timestamp } : {}),
+      ...(action === "cancel" ? { cancelReason: confirmed.cancelReason } : {}),
+    };
+    dataStore.proposals.set(p.proposalId, record);
+    return record;
+  },
+
   async recordDonation(record: DonationRecord, batchNumber?: number) {
     // In-memory update
     dataStore.recordDonation(record, batchNumber);
@@ -196,7 +234,10 @@ export const dbService = {
         const rows = await db
           .select()
           .from(schema.donations)
-          .where(eq(schema.donations.status, "PAID"));
+          .where(and(
+            eq(schema.donations.status, "PAID"),
+            eq(schema.donations.paymentMethod, "QRIS"),
+          ));
         
         const unbatched = rows.filter((r) => r.batchId === null || r.batchId === undefined);
         if (unbatched.length > 0) {
@@ -220,7 +261,7 @@ export const dbService = {
     }
 
     return Array.from(dataStore.donations.values()).filter(
-      (d) => d.status === "PAID" && (!d.batchId || d.batchId === 0)
+      (d) => d.status === "PAID" && (d.paymentMethod || "QRIS") === "QRIS" && (!d.batchId || d.batchId === 0)
     );
   },
 
@@ -349,44 +390,24 @@ export const dbService = {
     if (db) {
       try {
         const rows = await db.select().from(schema.disbursementProposals).orderBy(desc(schema.disbursementProposals.proposalIdOnChain));
-        // Auto-sync pending proposals with on-chain smart contract (only if beneficiaryHash matches)
+        const verified = new Map<number, Awaited<ReturnType<typeof governanceChain.readProposal>>>();
+        // Reconcile every status, including a previously incorrect Executed row.
         for (const r of rows) {
-          if (r.status === "Pending" && r.proposalIdOnChain > 0 && r.beneficiaryHash) {
-            try {
-              const onchainP = await syncPublicClient.readContract({
-                address: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS,
-                abi: PROPOSAL_SYNC_ABI,
-                functionName: "proposals",
-                args: [BigInt(r.proposalIdOnChain)],
-              });
-              const onchainBenHash = onchainP[4] as string;
-              const onchainStatus = Number(onchainP[9]);
-              const onchainApprovals = Number(onchainP[8]);
-
-              // Verify that the on-chain proposal record actually matches this database proposal's beneficiaryHash
-              if (
-                onchainBenHash &&
-                r.beneficiaryHash &&
-                onchainBenHash.toLowerCase() === r.beneficiaryHash.toLowerCase()
-              ) {
-                if (onchainStatus === 1 || onchainApprovals >= 2) {
-                  r.status = "Approved";
-                  r.approvalCount = onchainApprovals;
-                  r.safeStatus = "EXECUTED_ONCHAIN";
-                  r.safeConfirmationsCount = 2;
-                  r.approvedBy = JSON.stringify(["Amil Internal (Pengusul)", "Dewan Pengawas Syariah (DPS)"]);
-                  
-                  // Update database
-                  db.update(schema.disbursementProposals).set({
-                    status: "Approved",
-                    approvalCount: onchainApprovals,
-                    approvedBy: r.approvedBy,
-                    safeStatus: "EXECUTED_ONCHAIN",
-                    safeConfirmationsCount: 2,
-                  }).where(eq(schema.disbursementProposals.id, r.id)).catch(() => {});
-                }
-              }
-            } catch (err) {}
+          try {
+            const p = await governanceChain.readProposal(r.proposalIdOnChain);
+            if (p.beneficiaryHash.toLowerCase() !== r.beneficiaryHash.toLowerCase()) continue;
+            verified.set(r.id, p);
+            if (r.status !== p.status || r.approvalCount !== p.approvalCount) {
+              await db.update(schema.disbursementProposals).set({
+                status: p.status, approvalCount: p.approvalCount,
+                ...(p.status !== "Executed" ? { executedAt: null } : {}),
+              }).where(eq(schema.disbursementProposals.id, r.id));
+              r.status = p.status;
+              r.approvalCount = p.approvalCount;
+              if (p.status !== "Executed") r.executedAt = null;
+            }
+          } catch {
+            // A failed RPC must not certify stale data as ready for audit.
           }
         }
 
@@ -408,7 +429,8 @@ export const dbService = {
               amount: amountVal,
               amountIDR: !isUSDC ? amountVal : undefined,
               amountUSDC: amountUSDCVal,
-              asnafCategory: 0,
+              chainVerified: verified.has(r.id),
+              asnafCategory: verified.get(r.id)?.asnafCategory ?? 0,
               asnafLabel: r.asnafCategory || "Fakir Miskin",
               asnafType: r.asnafCategory || "Fakir Miskin",
               beneficiaryName: r.beneficiaryName,
@@ -778,7 +800,7 @@ export const dbService = {
   },
 
   // --- INDEXER & ON-CHAIN EVENT PERSISTENCE (ADR-0008) ---
-  async getIndexerState(indexerKey: string = "sepolia_zakat_l1") {
+  async getIndexerState(indexerKey: string = indexerKeyForDeployment()) {
     if (db) {
       try {
         const rows = await db
@@ -794,7 +816,7 @@ export const dbService = {
     return {
       id: 1,
       indexerKey,
-      lastIndexedBlock: 11569000,
+      lastIndexedBlock: Math.max(0, CONTRACT_CONFIG.INDEXER_START_BLOCK - 1),
       lastSyncAt: new Date(),
       status: "SYNCING",
       totalEventsIndexed: 0,
@@ -805,7 +827,7 @@ export const dbService = {
     lastIndexedBlock: number,
     status: string = "SYNCED",
     eventsIncrement: number = 0,
-    indexerKey: string = "sepolia_zakat_l1"
+    indexerKey: string = indexerKeyForDeployment()
   ) {
     if (db) {
       try {
@@ -1051,31 +1073,8 @@ export const dbService = {
         console.error("Failed to fetch role members from DB:", err);
       }
     }
-    // Fallback default known members
-    return [
-      {
-        id: 1,
-        roleHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
-        roleName: "DEFAULT_ADMIN_ROLE",
-        accountAddress: "0x5e9b652c4e8a013f6fab69f0b55377c408b59968",
-        isActive: true,
-        grantedAtBlock: 11569000,
-        revokedAtBlock: null,
-        txHash: null,
-        updatedAt: new Date(),
-      },
-      {
-        id: 2,
-        roleHash: "0x59a1c48e5837ad7a7f3dcedcbe129bf3249ec4fbf651fd4f5e2600ead39fe2f5",
-        roleName: "SHARIA_SUPERVISOR_ROLE",
-        accountAddress: "0xb4e4253e2affdc0710cb9394b8c4e935f11b00f1",
-        isActive: true,
-        grantedAtBlock: 11569000,
-        revokedAtBlock: null,
-        txHash: null,
-        updatedAt: new Date(),
-      },
-    ];
+    // An empty registry or unavailable database must not invent privileged wallets.
+    return [];
   },
 
   // --- AUDITOR IDENTITY REGISTRY (one-time onboarding, source of truth for attestations) ---
@@ -1214,5 +1213,3 @@ export const dbService = {
     return { success: true, record, trxId };
   },
 };
-
-

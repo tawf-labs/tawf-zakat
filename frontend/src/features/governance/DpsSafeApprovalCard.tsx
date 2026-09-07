@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle, XCircle } from "lucide-react";
-import { useAccount, useSignTypedData } from "wagmi";
+import { useAccount } from "wagmi";
+import { useGovernanceTransaction } from "./useGovernanceTransaction";
 import { useGovernanceRole } from "./RoleContext";
-import { GOVERNANCE_EIP712_DOMAIN, GOVERNANCE_EIP712_TYPES, getApiBaseUrl } from "../../lib/contracts";
 import { toast } from "sonner";
 
 interface DpsSafeApprovalCardProps {
@@ -12,7 +12,7 @@ interface DpsSafeApprovalCardProps {
 
 export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeApprovalCardProps) {
   const { address, isConnected } = useAccount();
-  const { signTypedDataAsync } = useSignTypedData();
+  const submitTransaction = useGovernanceTransaction();
   const { canApproveDps, getRestrictionReason } = useGovernanceRole();
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
@@ -33,37 +33,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
 
     setLoadingId(proposalId);
     try {
-      toast.info("Silakan konfirmasi tanda tangan digital persetujuan di dompet...");
-      const timestamp = BigInt(Math.floor(Date.now() / 1000));
-      const signature = await signTypedDataAsync({
-        domain: GOVERNANCE_EIP712_DOMAIN,
-        types: GOVERNANCE_EIP712_TYPES,
-        primaryType: "DpsApproval",
-        message: {
-          proposalId: BigInt(proposalId),
-          decision: "APPROVED",
-          notes: "Memenuhi kriteria Asnaf sesuai fatwa DSN-MUI.",
-          timestamp,
-        },
-      });
-
-      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId,
-          decision: "APPROVED",
-          notes: "Memenuhi kriteria Asnaf sesuai fatwa DSN-MUI.",
-          timestamp: Number(timestamp),
-          signature,
-          signerAddress: address,
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || "Gagal mencatat persetujuan syariah.");
-      }
+      await submitTransaction("approve", [BigInt(proposalId)], proposalId);
 
       toast.success(`Proposal #${proposalId} berhasil disetujui on-chain!`);
       onActionComplete();
@@ -94,34 +64,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
     setLoadingId(proposalId);
     try {
       toast.info("Silakan konfirmasi pembatalan proposal di dompet...");
-      const timestamp = BigInt(Math.floor(Date.now() / 1000));
-      const signature = await signTypedDataAsync({
-        domain: GOVERNANCE_EIP712_DOMAIN,
-        types: GOVERNANCE_EIP712_TYPES,
-        primaryType: "ProposalCancellation",
-        message: {
-          proposalId: BigInt(proposalId),
-          reason,
-          timestamp,
-        },
-      });
-
-      const res = await fetch(`${getApiBaseUrl()}/api/governance/gasless-cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId,
-          reason,
-          timestamp: Number(timestamp),
-          signature,
-          signerAddress: address,
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || "Gagal membatalkan proposal.");
-      }
+      await submitTransaction("cancel", [BigInt(proposalId), reason], proposalId);
 
       toast.success(`Proposal #${proposalId} berhasil ditolak/dibatalkan.`);
       onActionComplete();
@@ -145,7 +88,7 @@ export function DpsSafeApprovalCard({ proposals, onActionComplete }: DpsSafeAppr
               Antrean Verifikasi Dewan Pengawas Syariah (DPS)
             </h3>
             <p className="text-xs text-[#5e7a70]">
-              Otorisasi 2-of-3 Safe Multisig sebelum dana zakat dapat dicairkan.
+              Persetujuan DPS sebelum penyaluran zakat.
             </p>
           </div>
         </div>

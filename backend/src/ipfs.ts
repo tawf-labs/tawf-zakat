@@ -68,7 +68,10 @@ export async function uploadFileToIPFS(
     }
   }
 
-  // Cryptographic content CID fallback
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Unggahan Pinata gagal atau PINATA_JWT belum dikonfigurasi. Berkas tidak disimpan ke IPFS.");
+  }
+  // Test-only fixture; never report a fabricated CID as a successful live upload.
   const rawBytes = file instanceof Blob ? await file.arrayBuffer() : file;
   const mockContent = typeof rawBytes === "string" ? rawBytes : Buffer.from(rawBytes as any).toString("base64");
   const mockCIDHash = keccak256(encodePacked(["string", "string"], [fileName, mockContent]));

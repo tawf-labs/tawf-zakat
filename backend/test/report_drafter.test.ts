@@ -1,5 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import Anthropic from "@anthropic-ai/sdk";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { computePeriodFigures, type PeriodRows } from "../src/period-report";
 import { validateDraft } from "../src/report-validator";
 import {
@@ -33,25 +32,207 @@ const LEDGER: PeriodRows = {
 const figures = () => computePeriodFigures(LEDGER, PERIOD);
 
 /**
- * The drafting step reads credentials from the environment and nothing else -
- * there is no provider abstraction and nothing is injected. These tests take the
- * credentials away instead, which is also what keeps them from ever spending
- * money or reaching the network.
+ * Fake credentials and a stubbed HTTP boundary keep these tests off the network.
+ * The real prompt, response parsing and deterministic validator still run.
  */
 const savedEnv: Record<string, string | undefined> = {};
+let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
 beforeEach(() => {
-  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+  for (const key of [
+    "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+  ]) {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Network disabled in tests"));
 });
 
 afterEach(() => {
+  fetchSpy.mockRestore();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+});
+
+describe("DeepSeek report drafting", () => {
+  it("uses Flash JSON output without thinking and returns a verifiable draft", async () => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(Response.json({
+      choices: [{
+        finish_reason: "stop",
+        message: { content: JSON.stringify({
+          claims: [{ name: "pengumpulan.total", amount: "100000000", unit: "IDR" }],
+          narrative: "Pengumpulan Rp100.000.000.",
+        }) },
+      }],
+    }));
+
+    const computed = figures();
+    const attempt = await draftReport(computed);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://api.deepseek.com/chat/completions");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer deepseek-test-key");
+    const request = JSON.parse(init?.body as string);
+    expect(request.model).toBe("deepseek-v4-flash");
+    expect(request.thinking).toEqual({ type: "disabled" });
+    expect(request.response_format).toEqual({ type: "json_object" });
+    expect(request.max_tokens).toBe(4096);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(request.messages).toEqual([
+      { role: "system", content: DRAFTING_SYSTEM },
+      { role: "user", content: figuresForPrompt(computed) },
+    ]);
+    expect(DRAFTING_SYSTEM).toContain("JSON");
+    expect(attempt.unavailable).toBeNull();
+    expect(attempt.draft?.narrative).toBe("Pengumpulan Rp100.000.000.");
+    expect(validateDraft(computed, attempt.draft!).outcome).toBe("LOLOS");
+  });
+
+  it("uses only DeepSeek configuration even when legacy credentials are present", async () => {
+    process.env.ANTHROPIC_API_KEY = "legacy-key";
+    process.env.ANTHROPIC_AUTH_TOKEN = "legacy-token";
+    process.env.ANTHROPIC_BASE_URL = "https://legacy.invalid";
+    process.env.DEEPSEEK_API_KEY = "   ";
+
+    expect((await draftReport(figures())).unavailable).toContain("DEEPSEEK_API_KEY");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    process.env.DEEPSEEK_API_KEY = " deepseek-test-key ";
+    process.env.DEEPSEEK_BASE_URL = " http://127.0.0.1:9999/v1/ ";
+    process.env.DEEPSEEK_MODEL = "deepseek-v4-pro";
+    await draftReport(figures());
+
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("http://127.0.0.1:9999/v1/chat/completions");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer deepseek-test-key");
+    expect(JSON.parse(init?.body as string).model).toBe("deepseek-v4-pro");
+  });
+
+  it.each([
+    [401, /kredensial/i],
+    [403, /kredensial/i],
+    [402, /saldo/i],
+    [429, /membatasi permintaan/i],
+    [500, /500/],
+    [503, /503/],
+  ] as const)("handles HTTP %s without exposing upstream errors or retrying", async (status, reason) => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(new Response("upstream echoed deepseek-test-key", { status }));
+
+    const attempt = await draftReport(figures());
+
+    expect(attempt.draft).toBeNull();
+    expect(attempt.unavailable).toMatch(reason);
+    expect(attempt.unavailable).toContain("Angka periode tetap dihitung dari ledger");
+    expect(attempt.unavailable).not.toContain("deepseek-test-key");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["invalid JSON", "{not JSON"],
+    ["empty content", ""],
+    ["null content", null],
+    ["missing claims", JSON.stringify({ narrative: "Narasi." })],
+    ["numeric amount", JSON.stringify({ claims: [{ name: "pengumpulan.total", amount: 100000000, unit: "IDR" }], narrative: "Narasi." })],
+    ["unknown unit", JSON.stringify({ claims: [{ name: "pengumpulan.total", amount: "100000000", unit: "USD" }], narrative: "Narasi." })],
+    ["blank narrative", JSON.stringify({ claims: [], narrative: "  " })],
+  ])("discards %s without losing period figures", async (_name, content) => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(Response.json({
+      choices: [{ finish_reason: "stop", message: { content } }],
+    }));
+
+    const attempt = await draftReport(figures());
+
+    expect(attempt.draft).toBeNull();
+    expect(attempt.unavailable).toContain("tidak sesuai bentuk");
+    expect(attempt.unavailable).toContain("Angka periode tetap dihitung dari ledger");
+  });
+
+  it.each(["length", "content_filter", "insufficient_system_resource", "tool_calls"])(
+    "never accepts a partial or refused completion (%s), even with valid JSON",
+    async (finish_reason) => {
+      process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+      fetchSpy.mockResolvedValue(Response.json({ choices: [{
+        finish_reason,
+        message: { content: JSON.stringify({ claims: [], narrative: "Narasi." }) },
+      }] }));
+
+      const attempt = await draftReport(figures());
+
+      expect(attempt.draft).toBeNull();
+      expect(attempt.unavailable).toContain(finish_reason === "content_filter" ? "menolak" : "berhenti sebelum draf selesai");
+    }
+  );
+
+  it.each([{}, { choices: [] }, { choices: [{ message: { content: "{}" } }] }])(
+    "handles a malformed completion envelope: %j",
+    async (envelope) => {
+      process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+      fetchSpy.mockResolvedValue(Response.json(envelope));
+
+      const attempt = await draftReport(figures());
+
+      expect(attempt.draft).toBeNull();
+      expect(attempt.unavailable).toContain("tidak sesuai bentuk");
+    }
+  );
+
+  it("rejects a non-JSON HTTP body without reflecting it to the browser", async () => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(new Response("<html>deepseek-test-key</html>"));
+
+    const attempt = await draftReport(figures());
+
+    expect(attempt.draft).toBeNull();
+    expect(attempt.unavailable).toContain("tidak sesuai bentuk");
+    expect(attempt.unavailable).not.toContain("deepseek-test-key");
+  });
+
+  it("bounds the request at 30 seconds and reports cancellation as timeout", async () => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    const timeoutSpy = spyOn(AbortSignal, "timeout").mockReturnValue(
+      AbortSignal.abort(new DOMException("deepseek-test-key", "TimeoutError"))
+    );
+    fetchSpy.mockImplementation(Object.assign(async (_url: URL | RequestInfo, init?: RequestInit) => {
+      init?.signal?.throwIfAborted();
+      throw new Error("Expected an aborted signal");
+    }, { preconnect: fetch.preconnect }));
+    try {
+      const attempt = await draftReport(figures());
+
+      expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+      expect(attempt.draft).toBeNull();
+      expect(attempt.unavailable).toMatch(/batas waktu/);
+      expect(attempt.unavailable).not.toContain("deepseek-test-key");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves unreadable model amounts for the validator to reject", async () => {
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockResolvedValue(Response.json({ choices: [{
+      finish_reason: "stop",
+      message: { content: JSON.stringify({
+        claims: [{ name: "pengumpulan.total", amount: "100.000.000", unit: "IDR" }],
+        narrative: "Pengumpulan Rp100.000.000.",
+      }) },
+    }] }));
+
+    const attempt = await draftReport(figures());
+
+    expect(attempt.unavailable).toBeNull();
+    expect(attempt.draft?.claims[0]?.value).toBeNull();
+    expect(validateDraft(figures(), attempt.draft!).findings[0]?.kind).toBe("KLAIM_TIDAK_TERBACA");
+  });
 });
 
 describe("Perintah penyusunan draf - angka diserahkan, bukan diminta dihitung", () => {
@@ -189,28 +370,23 @@ describe("Ketiadaan layanan AI", () => {
     const attempt = await draftReport(figures());
 
     expect(attempt.draft).toBeNull();
-    expect(attempt.unavailable).toMatch(/kredensial|ANTHROPIC_API_KEY/i);
+    expect(attempt.unavailable).toContain("DEEPSEEK_API_KEY");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("menyerap kegagalan layanan dan tetap menunjuk ke angka periode", async () => {
-    // Credentials present, but the service is a dead address on loopback - the
-    // failure path without leaving the machine.
-    process.env.ANTHROPIC_API_KEY = "sk-ant-not-a-real-key-for-tests";
-    process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
-    try {
-      const attempt = await draftReport(figures());
+    process.env.DEEPSEEK_API_KEY = "deepseek-test-key";
+    fetchSpy.mockRejectedValue(new Error("connection failed for deepseek-test-key"));
+    const attempt = await draftReport(figures());
 
-      expect(attempt.draft).toBeNull();
-      expect(attempt.unavailable).toMatch(/Angka periode tetap dihitung dari ledger/);
-    } finally {
-      delete process.env.ANTHROPIC_API_KEY;
-      delete process.env.ANTHROPIC_BASE_URL;
-    }
+    expect(attempt.draft).toBeNull();
+    expect(attempt.unavailable).toMatch(/Angka periode tetap dihitung dari ledger/);
+    expect(attempt.unavailable).not.toContain("deepseek-test-key");
   });
 
   it("menyebut batas waktu sebagai batas waktu, bukan sebagai galat umum", () => {
     const message = describeFailure(
-      new Anthropic.APIConnectionTimeoutError({ message: "Request timed out." })
+      new DOMException("Request timed out.", "TimeoutError")
     );
 
     expect(message).toMatch(/batas waktu/i);
@@ -219,8 +395,8 @@ describe("Ketiadaan layanan AI", () => {
 
   it("menjelaskan setiap kegagalan dengan kalimat yang menunjuk ke angka periode", () => {
     const failures: unknown[] = [
-      new Anthropic.AuthenticationError(401, undefined, "unauthorized", new Headers()),
-      new Anthropic.APIConnectionError({ message: "connection refused" }),
+      new TypeError("connection refused"),
+      new Error("deepseek-test-key"),
       new Error("koneksi putus"),
       "bukan sebuah Error",
       null,
@@ -229,7 +405,7 @@ describe("Ketiadaan layanan AI", () => {
     for (const error of failures) {
       const message = describeFailure(error);
       expect(message).toMatch(/Angka periode tetap dihitung dari ledger/);
-      expect(message).not.toMatch(/sk-ant/);
+      expect(message).not.toContain("deepseek-test-key");
     }
   });
 });

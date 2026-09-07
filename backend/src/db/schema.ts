@@ -6,7 +6,8 @@ export const merkleBatches = pgTable("merkle_batches", {
   batchNumber: integer("batch_number").notNull().unique(),
   merkleRoot: text("merkle_root").notNull(),
   totalAmountIDR: bigint("total_amount_idr", { mode: "number" }).notNull(),
-  itemCount: integer("item_count").notNull(),
+  // Historical onchain batches do not expose their donation count.
+  itemCount: integer("item_count"),
   txHash: text("tx_hash"),
   status: text("status").notNull().default("pending"), // 'pending' | 'settled_onchain'
   settledAt: timestamp("settled_at").defaultNow(),
@@ -32,7 +33,7 @@ export const donations = pgTable("donations", {
 // 3. Disbursement Proposals Table
 export const disbursementProposals = pgTable("disbursement_proposals", {
   id: serial("id").primaryKey(),
-  proposalIdOnChain: integer("proposal_id_on_chain").notNull(),
+  proposalIdOnChain: integer("proposal_id_on_chain").notNull().unique(),
   currencyType: integer("currency_type").notNull().default(0), // 0: IDR, 1: USDC
   amount: bigint("amount", { mode: "number" }).notNull(),
   asnafCategory: text("asnaf_category").notNull(),
