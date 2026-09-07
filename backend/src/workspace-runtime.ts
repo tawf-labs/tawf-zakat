@@ -23,6 +23,7 @@ import type { EvidenceStore } from "./evidence-store";
 import type { PrivateFileStore } from "./evidence-files";
 
 export type WorkspaceRuntime = {
+  registry?: import("./registry-recording").RegistryRuntime;
   store: WorkspaceStore;
   ethCall: EthCall;
   /** Unix seconds. */

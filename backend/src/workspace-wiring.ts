@@ -27,6 +27,7 @@ import { createEvidenceStore } from "./evidence-store";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
+import { registryFromEnvironment } from "./registry-wiring";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
@@ -66,12 +67,15 @@ export function installWorkspaceRuntime(): void {
 
   // Server-only onboarding configuration; HTTP callers cannot supply policy flags.
   const reportAmilRules = AmilRulesSchema.parse(JSON.parse(process.env.REPORT_AMIL_RULES_JSON ?? "[]"));
+  const registry = registryFromEnvironment(db);
   configureWorkspace({
+    registry,
     reportAmilRules,
     store,
     evidence,
     ...(key ? { files: createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key }) } : {}),
-    ethCall,
+    // Institutional contract accounts are checked on the explicitly configured registry chain.
+    ethCall: registry?.chain.accountSignatureCall ?? ethCall,
     now: nowInSeconds,
     challengeTtlSeconds: CHALLENGE_TTL_SECONDS,
     sessionTtlSeconds: SESSION_TTL_SECONDS,
@@ -82,6 +86,7 @@ export function installWorkspaceRuntime(): void {
   store
     .ensureSchema()
     .then(() => evidence.ensureSchema())
+    .then(() => registry?.store.ensureSchema())
     .then(() => console.log("Workspace tenancy and evidence schema ready"))
     .catch((error) => console.error("Workspace schema failed:", error));
 }

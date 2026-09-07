@@ -210,6 +210,7 @@ export type ReportReview = {
   policy: { id: string };
 };
 export type SavedReportPackage = Pick<ReportReview, "figures" | "limitations" | "disclosure" | "policy"> & {
+  institutionId: string; snapshot: unknown; reconciliation: unknown;
   id: string; reportId: string; version: string; status: "DRAFT" | "FROZEN"; digest: string;
   predecessor: string | null; correctionReason: string | null;
   draft: { narrative: string; claims: { name: string; value: WireQuantity | null; statedAmount?: string }[] } | null;

@@ -1,3 +1,4 @@
+import { RecordingPanel } from "./RecordingPanel";
 import { verifyReportCommitment } from "./reportCommitment";
 import { useEffect, useState } from "react";
 import { Button } from "../../components/ui/Button";
@@ -87,7 +88,7 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
     </select></label>
     {saved && <div className="space-y-2 border-t pt-3">
       <p className="font-semibold">{saved.reportId} · versi {saved.version} · {saved.verdict.outcome} · {saved.status === "FROZEN" ? "Dibekukan" : "Draf tersimpan"}</p>
-      <p role="status">{saved.status === "FROZEN" && saved.verdict.outcome === "LOLOS" ? "Siap untuk pengesahan; belum disahkan atau diterbitkan." : "Belum siap untuk pengesahan penerbitan."}</p>
+      <p role="status">{saved.status === "FROZEN" && saved.verdict.outcome === "LOLOS" ? "Paket beku siap ditinjau. Pencatatan bukti dan penerbitan memerlukan pengesahan berbeda." : "Draf ditolak tetap dapat dicatat sebagai bukti setelah dibekukan; belum siap untuk pengesahan penerbitan."}</p>
       <p className="text-xs">Commitment paket cocok dengan isi yang ditampilkan.</p>
       <p className="break-all text-xs">Paket {saved.id}<br />Digest {saved.digest}</p>
       {saved.aiUnavailable && <p role="alert">{saved.aiUnavailable}</p>}
@@ -100,6 +101,7 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
       <ul className="list-disc pl-5 text-xs">{saved.limitations.map((note, i) => <li key={i}>{note}</li>)}</ul>
       {saved.verdict.prerequisites.map((note, i) => <p key={i} className="text-sm text-red-700">{note}</p>)}
       {saved.verdict.findings.map((f, i) => <p key={i} className="text-sm text-red-700">{f.message}{f.expected && ` Diharapkan: ${formatQuantity(f.expected)}.`}{f.claimed && ` Diklaim: ${formatQuantity(f.claimed)}.`}</p>)}
+      {saved.status === "FROZEN" && <RecordingPanel key={`${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
       <div className="flex flex-wrap gap-2">
         {canPrepare && saved.status !== "FROZEN" && <Button disabled={!!pending} onClick={() => act("Membekukan paket…", async () => { await acceptSaved((await freezeReport(preparationId, saved.id, token)).package); setHistory((await listReports(preparationId, token)).packages); })}>Bekukan paket untuk review pengesahan</Button>}
         <Button variant="outline" onClick={download}>Unduh draf terbatas</Button>

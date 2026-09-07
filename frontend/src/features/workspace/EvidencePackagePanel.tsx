@@ -322,7 +322,7 @@ function PreparationDetail({
 
       <p className="border-t border-stone-100 pt-3 text-xs text-stone-500">
         Commitment <span className="font-mono">{preparation.commitment.slice(0, 18)}…</span> (
-        {preparation.commitmentScheme}). Pencatatan bukti di rantai, pengesahan lembaga, dan atestasi auditor adalah tindakan terpisah yang belum tersedia pada rilis ini.
+        {preparation.commitmentScheme}). Pencatatan bukti dan pengesahan lembaga tersedia pada paket laporan beku di bawah. Penerbitan laporan dan atestasi auditor merupakan tindakan terpisah.
       </p>
     </div>
   );
