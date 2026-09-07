@@ -45,6 +45,13 @@ import {
   WireInputError,
 } from "../wire";
 import { dbService } from "../db/index";
+import {
+  coverageIsComplete,
+  coverageOf,
+  describeUnread,
+  rowsOf,
+  type SourceCoverage,
+} from "../source-read";
 import type { ReportingPeriod } from "../reconciliation";
 
 const parseFigureValue = (raw: unknown, where: string): FigureValue =>
@@ -158,17 +165,40 @@ export const serializeDraft = (draft: ReportDraft) => ({
   narrative: draft.narrative,
 });
 
-/** Reads the ledger and computes the period's figures. Shared by both routes. */
-async function periodFiguresFor(period: ReportingPeriod): Promise<PeriodFigures> {
-  const [donationRows, proposalRows, stageEvents] = await Promise.all([
-    dbService.getDonationRows(),
-    dbService.getProposalRows(),
-    dbService.getProposalStageEvents(),
+/**
+ * Reads the ledger and computes the period's figures. Shared by both routes.
+ *
+ * The reads say whether each source answered (Spec #68, ticket #70). Figures
+ * are still computed from what *was* read, because a partial reading is real
+ * evidence and withholding it helps nobody - but the coverage travels with them
+ * so a zero is never presented as a period that was successfully found empty.
+ */
+async function periodFiguresFor(
+  period: ReportingPeriod
+): Promise<{ figures: PeriodFigures; sources: SourceCoverage[] }> {
+  const [donations, proposals, events] = await Promise.all([
+    dbService.readDonationRows(),
+    dbService.readProposalRows(),
+    dbService.readProposalStageEvents(),
   ]);
-  return computePeriodFigures(
-    { donations: donationRows, proposals: proposalRows, events: stageEvents },
-    period
-  );
+
+  const sources = [
+    coverageOf("donasi", donations),
+    coverageOf("proposal penyaluran", proposals),
+    coverageOf("event tahapan", events),
+  ];
+
+  return {
+    sources,
+    figures: computePeriodFigures(
+      {
+        donations: rowsOf(donations) ?? [],
+        proposals: rowsOf(proposals) ?? [],
+        events: rowsOf(events) ?? [],
+      },
+      period
+    ),
+  };
 }
 
 /**
@@ -179,16 +209,32 @@ async function periodFiguresFor(period: ReportingPeriod): Promise<PeriodFigures>
 export function periodReportBody(
   figures: PeriodFigures,
   draft: ReportDraft | null,
-  unavailable: string | null
+  unavailable: string | null,
+  sources: SourceCoverage[] = []
 ) {
+  // A source that was never read leaves its part of the period unexamined. The
+  // figures below still stand for what was read; this says what they do not
+  // cover, so an unread source cannot pass as a period that held nothing.
+  const sourceWarning = describeUnread(sources);
+  const verdict = draft ? validateDraft(figures, draft) : null;
+  if (verdict && !coverageIsComplete(sources)) {
+    verdict.outcome = "DITOLAK";
+    verdict.findings.push({
+      kind: "SUMBER_TIDAK_TERSEDIA", figureName: null,
+      message: sourceWarning ?? "Sumber laporan belum lengkap; angka belum dapat dinyatakan lolos.",
+    });
+  }
   return {
     success: true,
     period: figures.period,
-    figures: serializeFigures(figures),
+    sources,
+    sourcesComplete: coverageIsComplete(sources),
+    ...(sourceWarning ? { sourceWarning } : {}),
+    figures: serializeFigures({ ...figures, notes: [...figures.notes, ...(sourceWarning ? [sourceWarning] : [])] }),
     // A rejected draft is returned with its reasons rather than hidden: the
     // reader is entitled to see what was refused and why.
     draft: draft ? serializeDraft(draft) : null,
-    verdict: draft ? serializeVerdict(validateDraft(figures, draft)) : null,
+    verdict: verdict ? serializeVerdict(verdict) : null,
     ...(unavailable ? { draftUnavailable: unavailable } : {}),
   };
 }
@@ -218,12 +264,13 @@ periodReportRoutes.post("/verify", async (c) => {
   }
 
   try {
-    const figures = await periodFiguresFor(period);
+    const { figures, sources } = await periodFiguresFor(period);
     return c.json(
       periodReportBody(
         figures,
         draft,
-        draft ? null : "Tidak ada draf yang dikirim, sehingga tidak ada vonis."
+        draft ? null : "Tidak ada draf yang dikirim, sehingga tidak ada vonis.",
+        sources
       )
     );
   } catch (error: any) {
@@ -244,9 +291,9 @@ periodReportRoutes.post("/draft", async (c) => {
   }
 
   try {
-    const figures = await periodFiguresFor(period);
+    const { figures, sources } = await periodFiguresFor(period);
     const attempt = await draftReport(figures);
-    return c.json(periodReportBody(figures, attempt.draft, attempt.unavailable));
+    return c.json(periodReportBody(figures, attempt.draft, attempt.unavailable, sources));
   } catch (error: any) {
     return serverError(c, error);
   }

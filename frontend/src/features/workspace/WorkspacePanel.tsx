@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { useWorkspace } from "./useWorkspace";
 import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
+import { EvidencePackagePanel } from "./EvidencePackagePanel";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -18,7 +19,7 @@ import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
  * tests that prove it call the API directly rather than through this page.
  */
 export function WorkspacePanel() {
-  const { address, isConnected, isSignedIn, workspace, error, busy, signIn, signOut } = useWorkspace();
+  const { address, isConnected, isSignedIn, token, workspace, error, busy, signIn, signOut } = useWorkspace();
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
 
@@ -149,11 +150,7 @@ export function WorkspacePanel() {
         </div>
       )}
 
-      <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-6 text-sm text-stone-600">
-        Belum ada paket bukti pada ruang kerja ini. Data donasi dan penyaluran yang tercatat sebelum
-        lembaga dibuat tidak dimasukkan ke ruang kerja mana pun — kepemilikannya dicatat, bukan
-        ditebak.
-      </div>
+      {token && <EvidencePackagePanel key={token} token={token} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />}
 
       {error && (
         <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">

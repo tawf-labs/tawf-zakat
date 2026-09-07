@@ -31,7 +31,7 @@
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { sha256, toHex, type Hex } from "viem";
+import { toHex, type Hex } from "viem";
 import { verifyAccountSignature } from "../account-signature";
 import {
   accessChallenge,
@@ -44,9 +44,14 @@ import {
   resolveTenant,
   WORKSPACE_EIP712_DOMAIN,
   WORKSPACE_EIP712_TYPES,
-  type Capability,
-  type WorkspaceRole,
 } from "../tenancy";
+import {
+  authenticateWorkspace as authenticate,
+  badRequest,
+  bearerToken,
+  hashToken,
+  refuse,
+} from "../workspace-session";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 
 const workspaceRoutes = new Hono();
@@ -56,41 +61,6 @@ const TOKEN_PREFIX = "tawf_ws_";
 
 const randomHex = (bytes: number): Hex =>
   toHex(crypto.getRandomValues(new Uint8Array(bytes)));
-
-const hashToken = (token: string): string => sha256(toHex(token));
-
-/** Refusal reasons are a closed vocabulary, so a message can never leak a row. */
-type Refusal =
-  | "no-membership"
-  | "membership-inactive"
-  | "cross-institution"
-  | "expired"
-  | "replayed"
-  | "not-yet-valid"
-  | "unknown-challenge"
-  | "signature-rejected"
-  | "malformed-signature"
-  | "forbidden"
-  | "unauthenticated";
-
-const MESSAGES: Record<Refusal, string> = {
-  "no-membership": "Akun ini tidak terdaftar pada ruang kerja lembaga mana pun.",
-  "membership-inactive": "Keanggotaan akun ini sudah dinonaktifkan.",
-  "cross-institution": "Permintaan menyebut lembaga lain daripada lembaga sesi ini.",
-  expired: "Tantangan sudah kedaluwarsa. Minta tantangan baru.",
-  replayed: "Tantangan sudah pernah dipakai.",
-  "not-yet-valid": "Tantangan belum berlaku.",
-  "unknown-challenge": "Tantangan tidak dikenal.",
-  "signature-rejected": "Tanda tangan tidak sah untuk akun tersebut.",
-  "malformed-signature": "Tanda tangan tidak berbentuk heksadesimal yang sah.",
-  forbidden: "Peran Anda tidak berwenang melakukan tindakan ini.",
-  unauthenticated: "Sesi ruang kerja tidak ditemukan atau sudah berakhir.",
-};
-
-const refuse = (c: Context, status: 400 | 401 | 403 | 404, reason: Refusal) =>
-  c.json({ success: false, reason, error: MESSAGES[reason] }, status);
-
-const badRequest = (c: Context, error: string) => c.json({ success: false, error }, 400);
 
 const unconfigured = (c: Context) =>
   c.json(
@@ -111,12 +81,6 @@ workspaceRoutes.use("*", async (c, next) => {
   if (!workspaceRuntime()) return unconfigured(c);
   return next();
 });
-
-/** Reads the bearer credential. The header is the only place a token is accepted. */
-const bearerToken = (c: Context): string => {
-  const header = c.req.header("Authorization") ?? "";
-  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-};
 
 /** Safe after the middleware above; the gate is what makes this non-null. */
 const runtimeOf = (): WorkspaceRuntime => workspaceRuntime()!;
@@ -158,38 +122,6 @@ const signingPayload = (challenge: ReturnType<typeof accessChallenge>) => {
     },
   };
 };
-
-type Session = { institutionId: string; account: string; role: WorkspaceRole };
-
-/**
- * Resolves the caller from the `Authorization` header, then checks that any
- * institution they named agrees with the one their session is for.
- */
-async function authenticate(
-  c: Context,
-  runtime: WorkspaceRuntime,
-  requestedInstitutionId: string | undefined
-): Promise<{ ok: true; session: Session } | { ok: false; response: Response }> {
-  const token = bearerToken(c);
-  if (token === "") return { ok: false, response: refuse(c, 401, "unauthenticated") };
-
-  const stored = await runtime.store.sessionFor(hashToken(token), runtime.now());
-  if (!stored) return { ok: false, response: refuse(c, 401, "unauthenticated") };
-
-  // The session is only a claim about the account; the membership is re-read on
-  // every request, so revoking one takes effect without waiting for expiry.
-  const membership = await runtime.store.activeMembershipFor(stored.account);
-  const tenant = resolveTenant(membership, { requestedInstitutionId });
-  if (!tenant.ok) return { ok: false, response: refuse(c, 403, tenant.reason) };
-  if (tenant.institutionId !== stored.institutionId) {
-    return { ok: false, response: refuse(c, 403, "cross-institution") };
-  }
-
-  return {
-    ok: true,
-    session: { institutionId: tenant.institutionId, account: stored.account, role: tenant.role },
-  };
-}
 
 workspaceRoutes.post("/challenge", async (c) => {
   const runtime = runtimeOf();
@@ -282,8 +214,7 @@ workspaceRoutes.post("/session", async (c) => {
 workspaceRoutes.delete("/session", async (c) => {
   const runtime = runtimeOf();
 
-  const header = c.req.header("Authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const token = bearerToken(c);
   if (token === "") return refuse(c, 401, "unauthenticated");
 
   await runtime.store.revokeSession(hashToken(token), runtime.now());
@@ -309,6 +240,12 @@ workspaceRoutes.get("/", async (c) => {
     members: authorize(auth.session.role, "manageMembers")
       ? await runtime.store.membersOf(auth.session.institutionId)
       : undefined,
+    // The institution's own frozen preparations (Spec #68, ticket #70). An
+    // empty list where evidence storage is unconfigured is honest: there is
+    // nowhere for a preparation to be, so there are none.
+    evidencePackages: runtime.evidence
+      ? await runtime.evidence.listPreparations(auth.session.institutionId)
+      : [],
   });
 });
 

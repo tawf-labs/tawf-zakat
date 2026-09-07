@@ -23,12 +23,17 @@ import { createPublicClient, http, type Hex } from "viem";
 import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { createWorkspaceStore } from "./tenancy-store";
+import { createEvidenceStore } from "./evidence-store";
+import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
 const CHALLENGE_TTL_SECONDS = 300;
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
+
+/** Where restricted source documents are kept, as ciphertext. */
+const EVIDENCE_FILE_DIRECTORY = process.env.EVIDENCE_FILE_DIR ?? ".evidence-files";
 
 export function installWorkspaceRuntime(): void {
   const databaseUrl = process.env.NODE_ENV === "test" ? undefined : process.env.DATABASE_URL;
@@ -45,8 +50,23 @@ export function installWorkspaceRuntime(): void {
     return returned ?? "0x";
   };
 
+  const evidence = createEvidenceStore(db);
+
+  // No key, no file store. The routes then record every offered document as
+  // FAILED with that reason, which is the truth - rather than writing an
+  // institution's identity documents to disk in the clear.
+  const key = evidenceKeyFromEnv();
+  if (!key) {
+    console.warn(
+      "EVIDENCE_FILE_KEY belum disetel: dokumen terbatas tidak akan disimpan. " +
+        "Snapshot dan hasil rekonsiliasi tetap tersimpan."
+    );
+  }
+
   configureWorkspace({
     store,
+    evidence,
+    ...(key ? { files: createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key }) } : {}),
     ethCall,
     now: nowInSeconds,
     challengeTtlSeconds: CHALLENGE_TTL_SECONDS,
@@ -57,6 +77,7 @@ export function installWorkspaceRuntime(): void {
   // that already exist. Failure is logged, not swallowed into a fake success.
   store
     .ensureSchema()
-    .then(() => console.log("Workspace tenancy schema ready"))
-    .catch((error) => console.error("Workspace tenancy schema failed:", error));
+    .then(() => evidence.ensureSchema())
+    .then(() => console.log("Workspace tenancy and evidence schema ready"))
+    .catch((error) => console.error("Workspace schema failed:", error));
 }

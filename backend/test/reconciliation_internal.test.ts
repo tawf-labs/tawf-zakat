@@ -336,36 +336,44 @@ describe("POST /api/reconciliation/internal", () => {
       })
     );
 
-  it("runs without any ledger payload from the caller", async () => {
+  /**
+   * This process has no `DATABASE_URL`, so every ledger source is MISSING.
+   *
+   * That used to produce two reports of nothing, `balanced: true`, and HTTP 200
+   * - a verdict about a population the endpoint had never read. The reads now
+   * say so (Spec #68, ticket #70), and a verdict is withheld rather than
+   * invented.
+   */
+  it("withholds a balance verdict when the ledger sources were never read", async () => {
     const res = await post();
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
 
     const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.period).toBeNull();
-    expect(typeof body.lastIndexedBlock).toBe("number");
-    expect(body.reports.IDR).toBeDefined();
-    expect(body.reports.USDC_6DP).toBeDefined();
-    expect(body.reports.IDR.netDelta.unit).toBe("IDR");
-    expect(body.reports.USDC_6DP.netDelta.unit).toBe("USDC_6DP");
-    expect(typeof body.reports.IDR.balanced).toBe("boolean");
+    expect(body.success).toBe(false);
+    expect(body.reports).toBeUndefined();
+    expect(body.error).toMatch(/belum terperiksa/i);
   });
 
-  it("states the block range the report is valid up to", async () => {
+  it("names each source and why it could not be read", async () => {
+    const body = await (await post()).json();
+    const byName = Object.fromEntries(body.sources.map((s: any) => [s.name, s]));
+
+    for (const name of ["donasi", "batch merkle", "proposal penyaluran", "event onchain"]) {
+      expect(byName[name].status).toBe("MISSING");
+      expect(byName[name].detail).toMatch(/DATABASE_URL/);
+      // A row count is absent, never zero: nothing was counted.
+      expect(byName[name].rowCount).toBeNull();
+    }
+  });
+
+  it("still states the block range and indexer position it would have used", async () => {
     const body = await (await post({ fromBlock: 0, toBlock: 999_999_999 })).json();
+    expect(typeof body.lastIndexedBlock).toBe("number");
     expect(body.blockRange.fromBlock).toBe(0);
     expect(body.blockRange.toBlock).toBeLessThanOrEqual(body.lastIndexedBlock);
   });
 
-  it("can be narrowed to a reporting period", async () => {
-    const res = await post({ period: { kind: "AKHIR_TAHUN", year: 2026 } });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.reports.IDR.period).toEqual({ kind: "AKHIR_TAHUN", year: 2026 });
-    expect(body.period).toEqual({ kind: "AKHIR_TAHUN", year: 2026 });
-  });
-
-  it("rejects a block range that runs backwards", async () => {
+  it("rejects a block range that runs backwards before reading anything", async () => {
     const res = await post({ fromBlock: 900, toBlock: 100 });
     expect(res.status).toBe(400);
     const body = await res.json();

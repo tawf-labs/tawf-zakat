@@ -19,6 +19,8 @@
 
 import type { EthCall } from "./account-signature";
 import type { WorkspaceStore } from "./tenancy-store";
+import type { EvidenceStore } from "./evidence-store";
+import type { PrivateFileStore } from "./evidence-files";
 
 export type WorkspaceRuntime = {
   store: WorkspaceStore;
@@ -27,6 +29,18 @@ export type WorkspaceRuntime = {
   now: () => number;
   challengeTtlSeconds: number;
   sessionTtlSeconds: number;
+  /**
+   * Evidence packages (Spec #68, ticket #70). Optional, and absent means
+   * absent: the evidence routes answer 503 rather than keeping a preparation
+   * somewhere it will not survive a restart.
+   */
+  evidence?: EvidenceStore;
+  /**
+   * Where restricted source documents are kept. Without a configured key there
+   * is nowhere to put them that is not plaintext, so the routes refuse the
+   * upload instead of storing one.
+   */
+  files?: PrivateFileStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;

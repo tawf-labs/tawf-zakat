@@ -151,6 +151,10 @@ export function useWorkspace() {
   return {
     address,
     isConnected,
+    // The evidence panel makes its own authorized requests, so it needs the
+    // credential. It is handed down rather than re-read from storage, so there
+    // stays one place that decides whether a session is still usable.
+    token: session?.token ?? null,
     isSignedIn: Boolean(session && workspace),
     workspace,
     error,

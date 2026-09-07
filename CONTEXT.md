@@ -100,6 +100,22 @@ _Avoid_: Bukti lolos, untuk keberadaan catatan temuan.
 Salinan tetap dari data dan bukti yang digunakan untuk menyusun atau memeriksa suatu laporan.
 _Avoid_: Data terbaru, untuk sumber yang sudah terikat pada laporan tertentu.
 
+**Persiapan bukti**:
+Satu identitas yang mengikat [[Manifest sumber]], baris normalisasi kedua sisi, hasil rekonsiliasi, dan temuannya. Disimpan dan dibaca sebagai satu kesatuan; separuh persiapan bukan persiapan yang lebih kecil.
+_Avoid_: Paket bukti laporan, sebelum ada versi laporan, pengesahan, dan registry yang mengikatnya.
+
+**Manifest sumber**:
+Keterangan yang menyertai satu sisi ledger: asal, lembaga/unit dan tingkat cakupannya, jenis dana, posisi neraca, unit mata uang, periode, cut-off, format, versi pemetaan, serta apakah rincian transaksinya tersedia.
+_Avoid_: Judul berkas, untuk keterangan asal dan cakupan sumber.
+
+**Keadaan sumber**:
+Bagaimana suatu sumber menjawab ketika dibaca: `READ` (berhasil, boleh tanpa baris), `MISSING` (sumbernya belum ada), atau `FAILED` (dibaca dan gagal). Ketiganya berbeda; hanya yang pertama membuat angka nol berarti nol.
+_Avoid_: Daftar kosong, sebagai jawaban atas sumber yang tidak terbaca.
+
+**Commitment paket**:
+Nilai yang mengikat isi snapshot, dihitung dengan salt per snapshot sehingga sumber berentropi rendah tidak dapat ditebak dari nilainya. Salt merupakan material terbatas, bukan bagian [[Ringkasan publik]].
+_Avoid_: Hash dokumen tanpa salt, sebagai mekanisme privasi.
+
 **Pengesahan lembaga**:
 Pernyataan pihak berwenang di lembaga atas catatan yang menjadi tanggung jawabnya.
 _Avoid_: Atestasi auditor, vonis validator.

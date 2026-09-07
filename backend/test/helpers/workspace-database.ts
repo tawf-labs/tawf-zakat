@@ -34,8 +34,12 @@ const LEGACY_SCHEMA = `
   );
 `;
 
-/** The tables this ticket adds, newest first, for truncation between tests. */
+/** The tables these tickets add, newest first, for truncation between tests. */
 const WORKSPACE_TABLES = [
+  "evidence_files",
+  "evidence_findings",
+  "evidence_sources",
+  "evidence_preparations",
   "workspace_sessions",
   "workspace_challenges",
   "institution_memberships",
@@ -83,6 +87,10 @@ export async function createTestWorkspaceDatabase(): Promise<TestWorkspaceDataba
 
     async reset() {
       for (const table of WORKSPACE_TABLES) {
+        // A test file that only installs the tenancy schema has no evidence
+        // tables; skipping those is right, inventing them here would not be.
+        const exists: any = await db.execute(sql`SELECT to_regclass(${`public.${table}`}) AS found`);
+        if (!(exists.rows ?? exists)[0]?.found) continue;
         await db.execute(sql.raw(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`));
       }
     },

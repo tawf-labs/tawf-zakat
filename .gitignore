@@ -457,3 +457,6 @@ frontend/.env
 backend/dist/
 frontend/.output/
 
+
+# Encrypted restricted source documents; deployment storage, never source code.
+.evidence-files/

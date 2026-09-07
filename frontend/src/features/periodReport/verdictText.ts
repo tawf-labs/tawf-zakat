@@ -17,6 +17,7 @@ const FINDING_LABELS: Record<FindingKind, string> = {
   KLAIM_GANDA: "Satu angka diklaim lebih dari sekali",
   ANGKA_NARASI_TIDAK_DIKLAIM: "Narasi menyebut angka yang tidak diklaim",
   PLAFON_HAK_AMIL_TERLAMPAUI: "Porsi hak amil melampaui plafon 12,5%",
+  SUMBER_TIDAK_TERSEDIA: "Sumber laporan belum tersedia atau gagal dibaca",
 };
 
 /** The fallback is not dead code: the wire is untrusted and may name a kind this build has never heard of. */

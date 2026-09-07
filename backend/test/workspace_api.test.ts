@@ -219,8 +219,10 @@ describe("opening a session", () => {
     const body = await (await get("", token)).json();
 
     expect(body.institution.isSynthetic).toBe(true);
-    // Evidence packages are #70 surface; this ticket ships no placeholder for them.
-    expect(body.evidencePackages).toBeUndefined();
+    // Evidence packages arrived with #70. This runtime configures no evidence
+    // store, so the list is empty - and empty is the honest answer: the
+    // donations recorded before institutions existed are adopted by nobody.
+    expect(body.evidencePackages).toEqual([]);
   });
 
   it("refuses an account nobody onboarded", async () => {

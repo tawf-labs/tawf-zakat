@@ -190,6 +190,75 @@ export const workspaceSessions = pgTable("workspace_sessions", {
   revokedAt: bigint("revoked_at", { mode: "number" }),
 });
 
+// 9. Period Evidence Preparations (Spec #68, ticket #70)
+// Declared here so `drizzle-kit` knows these tables are managed. The runtime
+// creates them from `EVIDENCE_SCHEMA_STATEMENTS` in `../evidence-store.ts`,
+// which stays the source of truth for the CHECK constraints Drizzle cannot
+// express here - the ones that stop an unread source holding rows, and stop a
+// file row claiming to be both stored and failed.
+export const evidencePreparations = pgTable("evidence_preparations", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull(),
+  preparedBy: text("prepared_by").notNull(),
+  label: text("label").notNull(),
+  periodKind: text("period_kind").notNull(),
+  periodYear: integer("period_year").notNull(),
+  currencyUnit: text("currency_unit").notNull(), // 'IDR' | 'USDC_6DP'
+  outcome: text("outcome").notNull(), // 'RECONCILED' | 'INCOMPLETE'
+  commitment: text("commitment").notNull(),
+  commitmentScheme: text("commitment_scheme").notNull(),
+  // Restricted: what an authorised reader verifies the commitment with, and
+  // what stops anyone else guessing a low-entropy source from it.
+  commitmentSalt: text("commitment_salt").notNull(),
+  canonicalSnapshot: text("canonical_snapshot").notNull(),
+  resultJson: text("result_json"),
+  publicSummaryJson: text("public_summary_json").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const evidenceSources = pgTable("evidence_sources", {
+  preparationId: text("preparation_id").notNull(),
+  role: text("role").notNull(), // 'CLAIM' | 'SOURCE'
+  status: text("status").notNull(), // 'READ' | 'MISSING' | 'FAILED'
+  detail: text("detail"),
+  manifestJson: text("manifest_json").notNull(),
+  rowsJson: text("rows_json").notNull(),
+  rowCount: integer("row_count").notNull(),
+});
+
+export const evidenceFindings = pgTable("evidence_findings", {
+  preparationId: text("preparation_id").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  kind: text("kind").notNull(),
+  entryKey: text("entry_key").notNull(),
+  bucket: text("bucket").notNull(),
+  deltaAmount: text("delta_amount").notNull(),
+  deltaUnit: text("delta_unit").notNull(),
+  claimAmount: text("claim_amount"),
+  sourceAmount: text("source_amount"),
+  label: text("label"),
+});
+
+export const evidenceFiles = pgTable("evidence_files", {
+  id: text("id").primaryKey(),
+  preparationId: text("preparation_id").notNull(),
+  institutionId: text("institution_id").notNull(),
+  role: text("role").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256"),
+  storageStatus: text("storage_status").notNull(), // 'STORED' | 'FAILED'
+  // The private locator. Never leaves the deployment.
+  storageRef: text("storage_ref"),
+  failureReason: text("failure_reason"),
+});
+
+export type EvidencePreparation = typeof evidencePreparations.$inferSelect;
+export type EvidenceSource = typeof evidenceSources.$inferSelect;
+export type EvidenceFinding = typeof evidenceFindings.$inferSelect;
+export type EvidenceFile = typeof evidenceFiles.$inferSelect;
+
 export type Institution = typeof institutions.$inferSelect;
 export type NewInstitution = typeof institutions.$inferInsert;
 

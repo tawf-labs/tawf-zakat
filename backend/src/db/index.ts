@@ -8,11 +8,19 @@ import { and, asc, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 import { STAGE_EVENT_NAMES } from "../disbursement-duration";
 import { governanceChain, type GOVERNANCE_ACTIONS, type GovernanceMetadata } from "../governance-chain";
+import { attemptRead, sourceMissing, type SourceRead } from "../source-read";
 
 const indexerKeyForDeployment = () => `${CONTRACT_CONFIG.CHAIN_ID}:${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase()}`;
 
 // Test imports must never connect to (or run startup DDL against) the demo DB.
 const databaseUrl = process.env.NODE_ENV === "test" ? undefined : process.env.DATABASE_URL;
+
+/** The narrow projection `readProposalStageEvents` returns. */
+type StageEventRow = { eventName: string; blockNumber: number; argsJson: string };
+
+/** Why a source is MISSING rather than empty: there is no ledger to read at all. */
+const NO_DATABASE =
+  "Deployment ini tidak memiliki basis data ledger (DATABASE_URL belum disetel), sehingga periode ini belum pernah dibaca.";
 
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
@@ -955,6 +963,96 @@ export const dbService = {
       }
     }
     return [];
+  },
+
+  /**
+   * The honest readers (Spec #68, ticket #70).
+   *
+   * Their `get*` counterparts above answer every question with a list, so a
+   * query that threw is indistinguishable from a period that held no rows -
+   * and the report built on top calls both `0`. These say which of the three
+   * things happened instead, and leave it to the caller to decide what a
+   * missing or failed source means for the figures it was about to publish.
+   *
+   * `MISSING` is reserved for a deployment with no database configured at all.
+   * It is knowledge this module has before it tries, never inferred from an
+   * exception, which is why it is not produced by `attemptRead`.
+   */
+  async readDonationRows(): Promise<SourceRead<schema.Donation>> {
+    if (!db) return sourceMissing(NO_DATABASE);
+    return attemptRead(() => db!.select().from(schema.donations).orderBy(asc(schema.donations.id)));
+  },
+
+  async readProposalRows(): Promise<SourceRead<schema.DisbursementProposal>> {
+    if (!db) return sourceMissing(NO_DATABASE);
+    return attemptRead(() =>
+      db!
+        .select()
+        .from(schema.disbursementProposals)
+        .orderBy(asc(schema.disbursementProposals.proposalIdOnChain))
+    );
+  },
+
+  async readOnchainEventsInRange(
+    fromBlock: number,
+    toBlock: number
+  ): Promise<SourceRead<schema.OnchainEvent>> {
+    if (!db) return sourceMissing(NO_DATABASE);
+    // An inverted range is not a failure: it is a range that selects nothing,
+    // which the indexer legitimately produces before it has read a first block.
+    if (toBlock < fromBlock) return { status: "READ", rows: [] };
+    return attemptRead(() =>
+      db!
+        .select()
+        .from(schema.onchainEvents)
+        .where(
+          and(
+            gte(schema.onchainEvents.blockNumber, fromBlock),
+            lte(schema.onchainEvents.blockNumber, toBlock)
+          )
+        )
+        .orderBy(asc(schema.onchainEvents.blockNumber), asc(schema.onchainEvents.logIndex))
+    );
+  },
+
+  async readProposalStageEvents(): Promise<SourceRead<StageEventRow>> {
+    if (!db) return sourceMissing(NO_DATABASE);
+    return attemptRead(() =>
+      db!
+        .select({
+          eventName: schema.onchainEvents.eventName,
+          blockNumber: schema.onchainEvents.blockNumber,
+          argsJson: schema.onchainEvents.argsJson,
+        })
+        .from(schema.onchainEvents)
+        .where(inArray(schema.onchainEvents.eventName, STAGE_EVENT_NAMES))
+        .orderBy(asc(schema.onchainEvents.blockNumber), asc(schema.onchainEvents.logIndex))
+    );
+  },
+
+  /**
+   * Settled batches, read from the database only.
+   *
+   * `getBatches` falls back to the in-process store when the database holds no
+   * rows, which is right for the activity feed and wrong for a report: an empty
+   * table would silently become whatever this process happens to remember.
+   */
+  async readBatches(): Promise<SourceRead<SettledBatch>> {
+    if (!db) return sourceMissing(NO_DATABASE);
+    return attemptRead(async () => {
+      const rows = await db!
+        .select()
+        .from(schema.merkleBatches)
+        .orderBy(desc(schema.merkleBatches.batchNumber));
+      return rows.map((r) => ({
+        batchId: r.batchNumber,
+        merkleRoot: r.merkleRoot as Hex,
+        totalAmountIDR: r.totalAmountIDR,
+        itemCount: r.itemCount,
+        settledAt: r.settledAt ? r.settledAt.toISOString() : new Date().toISOString(),
+        txHash: r.txHash || undefined,
+      }));
+    });
   },
 
   /**

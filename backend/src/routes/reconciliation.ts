@@ -34,6 +34,12 @@ import {
   WireInputError,
 } from "../wire";
 import { dbService } from "../db/index";
+import {
+  coverageIsComplete,
+  coverageOf,
+  describeUnread,
+  rowsOf,
+} from "../source-read";
 
 function parseEntry(raw: unknown, sideLabel: string, index: number, isTotal: boolean): LedgerEntry {
   const record = asRecord(raw, `${sideLabel}: baris pada index ${index}`);
@@ -272,14 +278,43 @@ reconciliationRoutes.post("/internal", async (c) => {
     const fromBlock = request.fromBlock ?? 0;
     const toBlock = Math.min(request.toBlock ?? lastIndexedBlock, lastIndexedBlock);
 
-    const [donationRows, batchRows, proposalRows, eventRows] = await Promise.all([
-      dbService.getDonationRows(),
-      dbService.getBatches(),
-      dbService.getProposalRows(),
-      toBlock >= fromBlock
-        ? dbService.getOnchainEventsInRange(fromBlock, toBlock)
-        : Promise.resolve([]),
+    const [donations, batches, proposals, events] = await Promise.all([
+      dbService.readDonationRows(),
+      dbService.readBatches(),
+      dbService.readProposalRows(),
+      dbService.readOnchainEventsInRange(fromBlock, toBlock),
     ]);
+
+    // A source that was never read cannot be reconciled, and the shape of this
+    // endpoint's answer - `balanced`, a net delta, a list of discrepancies - is
+    // a verdict about a whole population. Returning one over sources that are
+    // missing or broken would state that nothing disagrees, when in truth
+    // nothing was compared. The verdict is withheld and the reason named
+    // instead (Spec #68, ticket #70).
+    const sources = [
+      coverageOf("donasi", donations),
+      coverageOf("batch merkle", batches),
+      coverageOf("proposal penyaluran", proposals),
+      coverageOf("event onchain", events),
+    ];
+    if (!coverageIsComplete(sources)) {
+      return c.json(
+        {
+          success: false,
+          error: describeUnread(sources),
+          sources,
+          lastIndexedBlock,
+          blockRange: { fromBlock, toBlock },
+          indexerStatus: indexerState.status,
+        },
+        503
+      );
+    }
+
+    const donationRows = rowsOf(donations)!;
+    const batchRows = rowsOf(batches)!;
+    const proposalRows = rowsOf(proposals)!;
+    const eventRows = rowsOf(events)!;
 
     const snapshot = snapshotFromRows(
       { donationRows, batchRows, proposalRows, eventRows },
@@ -315,6 +350,7 @@ reconciliationRoutes.post("/internal", async (c) => {
       period: request.period ?? null,
       blockRange: { fromBlock, toBlock },
       indexerStatus: indexerState.status,
+      sources,
       ...(scopeWarning ? { scopeWarning } : {}),
       reports,
     });

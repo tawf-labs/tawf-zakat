@@ -12,6 +12,7 @@
 
 import { getApiBaseUrl } from "../../lib/contracts";
 import { describeRefusal, type WorkspaceRole } from "./workspaceSession";
+import type { EvidenceSummary } from "./evidenceClient";
 
 export class WorkspaceRequestError extends Error {
   constructor(
@@ -45,7 +46,7 @@ export type Workspace = {
   role: WorkspaceRole;
   capabilities: Capabilities;
   members?: { account: string; role: WorkspaceRole }[];
-  evidencePackages: unknown[];
+  evidencePackages: EvidenceSummary[];
 };
 
 export type AccessChallengeResponse = {

@@ -117,6 +117,7 @@ export const FINDING_KINDS = [
   "KLAIM_GANDA",
   "ANGKA_NARASI_TIDAK_DIKLAIM",
   "PLAFON_HAK_AMIL_TERLAMPAUI",
+  "SUMBER_TIDAK_TERSEDIA",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];

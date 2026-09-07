@@ -29,6 +29,17 @@ const figureNamed = (figures: any, name: string) =>
   figures.figures.find((item: any) => item.name === name);
 
 describe("POST /api/period-report/verify", () => {
+  it("does not pass zero claims when the required ledger sources were never read", async () => {
+    const response = await post({ period: PERIOD, draft: {
+      claims: [{ name: "pengumpulan.total", value: { amount: "0", unit: "IDR" } }], narrative: "",
+    } });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.sourcesComplete).toBe(false);
+    expect(body.verdict.outcome).toBe("DITOLAK");
+    expect(body.verdict.findings).toContainEqual(expect.objectContaining({ kind: "SUMBER_TIDAK_TERSEDIA" }));
+  });
+
   it("returns period figures with no draft, and says why there is no verdict", async () => {
     const res = await post({ period: PERIOD });
     expect(res.status).toBe(200);
@@ -41,6 +52,25 @@ describe("POST /api/period-report/verify", () => {
     expect(body.draftUnavailable).toBeTruthy();
     expect(body.figures.figures.length).toBeGreaterThan(0);
     expect(body.figures.notes.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * This process has no `DATABASE_URL`, so the ledger sources were never read.
+   * The figures are still returned - they are honest about what was read - but
+   * the response says so, rather than letting zero pass for a period that was
+   * successfully found empty (Spec #68, ticket #70).
+   */
+  it("says which ledger sources were read, and never counts an unread one as empty", async () => {
+    const body = await (await post({ period: PERIOD })).json();
+
+    expect(body.sourcesComplete).toBe(false);
+    expect(body.sourceWarning).toMatch(/belum terperiksa/i);
+
+    const byName = Object.fromEntries(body.sources.map((s: any) => [s.name, s]));
+    for (const name of ["donasi", "proposal penyaluran", "event tahapan"]) {
+      expect(byName[name].status).toBe("MISSING");
+      expect(byName[name].rowCount).toBeNull();
+    }
   });
 
   it("carries every amount as a decimal string so trillion-scale rupiah survives JSON", async () => {
@@ -202,7 +232,9 @@ describe("POST /api/period-report/verify", () => {
       period: PERIOD,
       draft: { claims: [{ name: sample.name, value: sample.value }], narrative: "" },
     });
-    expect((await passing.json()).verdict.outcome).toBe("LOLOS");
+    const matching = await passing.json();
+    expect(matching.verdict.outcome).toBe("DITOLAK");
+    expect(matching.verdict.findings.map((finding: any) => finding.kind)).toEqual(["SUMBER_TIDAK_TERSEDIA"]);
 
     const drifting = await post({
       period: PERIOD,
