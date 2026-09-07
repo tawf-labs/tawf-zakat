@@ -200,3 +200,24 @@ export async function downloadEvidenceFile(
 
   return response.blob();
 }
+
+export type ReportFigure = { name: string; label: string; value: WireQuantity };
+export type ReportReview = {
+  figures: ReportFigure[];
+  blockers: string[];
+  limitations: string[];
+  disclosure: unknown;
+  policy: { id: string };
+};
+export type SavedReportPackage = Pick<ReportReview, "figures" | "limitations" | "disclosure" | "policy"> & {
+  id: string; reportId: string; version: string; status: "DRAFT" | "FROZEN"; digest: string;
+  predecessor: string | null; correctionReason: string | null;
+  draft: { narrative: string; claims: { name: string; value: WireQuantity | null; statedAmount?: string }[] } | null;
+  verdict: { outcome: "LOLOS" | "DITOLAK"; prerequisites: string[]; findings: { kind: string; message: string; expected?: WireQuantity; claimed?: WireQuantity }[] };
+  aiUnavailable: string | null;
+};
+export const reviewReport = (id: string, token: string): Promise<ReportReview> => call(`/${id}/reports/review`, token);
+export const listReports = (id: string, token: string): Promise<{ packages: { id: string; digest: string }[] }> => call(`/${id}/reports`, token);
+export const readReport = (id: string, packageId: string, token: string): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}`, token);
+export const saveReport = (id: string, token: string, input: unknown): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports`, token, input);
+export const freezeReport = (id: string, packageId: string, token: string): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}/freeze`, token, {});

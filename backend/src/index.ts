@@ -33,6 +33,7 @@ import reconciliationRoutes from "./routes/reconciliation";
 import periodReportRoutes from "./routes/period-report";
 import workspaceRoutes from "./routes/workspace";
 import evidenceRoutes from "./routes/evidence";
+import reportPackageRoutes from "./routes/report-package";
 import { installWorkspaceRuntime } from "./workspace-wiring";
 import { GOVERNANCE_ACTIONS } from "./governance-chain";
 import { GOVERNANCE_ROLE_HASHES } from "./governance-roles";
@@ -220,6 +221,7 @@ app.route("/api/period-report", periodReportRoutes);
 // and stays unconfigured (503) rather than pretending to work without one.
 installWorkspaceRuntime();
 app.route("/api/workspace", workspaceRoutes);
+app.route("/api/evidence", reportPackageRoutes);
 app.route("/api/evidence", evidenceRoutes);
 
 // Real IPFS File Upload Endpoint (ADR-0010)

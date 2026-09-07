@@ -26,6 +26,7 @@ import { createWorkspaceStore } from "./tenancy-store";
 import { createEvidenceStore } from "./evidence-store";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
+import { AmilRulesSchema } from "./report-package";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
@@ -63,7 +64,10 @@ export function installWorkspaceRuntime(): void {
     );
   }
 
+  // Server-only onboarding configuration; HTTP callers cannot supply policy flags.
+  const reportAmilRules = AmilRulesSchema.parse(JSON.parse(process.env.REPORT_AMIL_RULES_JSON ?? "[]"));
   configureWorkspace({
+    reportAmilRules,
     store,
     evidence,
     ...(key ? { files: createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key }) } : {}),

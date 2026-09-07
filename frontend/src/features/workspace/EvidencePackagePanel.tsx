@@ -1,3 +1,4 @@
+import { ReportPackageForm } from "./ReportPackageForm";
 import { useEffect, useState } from "react";
 import { AlertTriangle, FileWarning, FileText, Lock, RefreshCw, ScrollText } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
@@ -321,8 +322,7 @@ function PreparationDetail({
 
       <p className="border-t border-stone-100 pt-3 text-xs text-stone-500">
         Commitment <span className="font-mono">{preparation.commitment.slice(0, 18)}…</span> (
-        {preparation.commitmentScheme}). Pencatatan bukti di rantai, pengesahan lembaga, vonis
-        validator, dan atestasi auditor adalah tindakan terpisah yang belum tersedia pada rilis ini.
+        {preparation.commitmentScheme}). Pencatatan bukti di rantai, pengesahan lembaga, dan atestasi auditor adalah tindakan terpisah yang belum tersedia pada rilis ini.
       </p>
     </div>
   );
@@ -436,11 +436,14 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
                 {isOpen && (
                   <div className="border-t border-stone-100 p-4">
                     {detail && detail.preparation.id === summary.id ? (
+                      <>
                       <PreparationDetail
                         preparation={detail.preparation}
                         commitmentVerified={detail.commitmentVerified}
                         token={token}
                       />
+                      <ReportPackageForm key={`${summary.id}:${token}`} preparationId={summary.id} token={token} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
+                      </>
                     ) : detailError ? (
                       <p role="alert" className="text-sm text-red-700">{detailError} Gunakan Muat ulang untuk mencoba lagi.</p>
                     ) : (

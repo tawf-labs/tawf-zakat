@@ -246,3 +246,13 @@ describe("the public summary", () => {
     expect(summary.summaryDigest).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
+
+it("matches the cross-component report serialization v1 vectors", async () => {
+  const vectors = (await import("../../shared/fixtures/report-serialization-v1.json")).default;
+  for (const vector of vectors) {
+    expect(canonicalJson(vector.value)).toBe(vector.canonical);
+    expect(commitmentFor(new TextEncoder().encode(vector.canonical), vector.salt)).toBe(vector.digest);
+    const reordered = Object.fromEntries(Object.entries(vector.value).reverse());
+    expect(canonicalJson(reordered)).toBe(vector.canonical);
+  }
+});

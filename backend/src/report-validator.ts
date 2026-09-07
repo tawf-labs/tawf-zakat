@@ -118,7 +118,7 @@ const describe = (value: FigureValue): string =>
 const sameValue = (a: FigureValue, b: FigureValue): boolean =>
   a.unit === b.unit && a.amount === b.amount;
 
-export function validateDraft(figures: PeriodFigures, draft: ReportDraft): Verdict {
+export function validateDraft(figures: Pick<PeriodFigures, "figures"> & { amilShare: PeriodFigures["amilShare"] | null }, draft: ReportDraft): Verdict {
   const findings: Finding[] = [];
   const known = new Map(figures.figures.map((item) => [item.name, item]));
 
@@ -207,7 +207,7 @@ export function validateDraft(figures: PeriodFigures, draft: ReportDraft): Verdi
 
   // 3. Invariant, read off the ledger rather than off the draft.
   const { amilShare } = figures;
-  if (!amilShare.withinCeiling) {
+  if (amilShare && !amilShare.withinCeiling) {
     findings.push({
       kind: "PLAFON_HAK_AMIL_TERLAMPAUI",
       figureName: "hak_amil.porsi_idr",

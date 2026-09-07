@@ -78,7 +78,9 @@ export const DRAFTING_SYSTEM = [
 ].join("\n");
 
 /** Renders the figures as the model receives them: names, labels, exact digits. */
-export function figuresForPrompt(figures: PeriodFigures): string {
+export type DraftFigures = Pick<PeriodFigures, "period" | "figures" | "notes"> & Partial<Pick<PeriodFigures, "amilShare" | "attestations" | "durations">>;
+
+export function figuresForPrompt(figures: DraftFigures): string {
   const lines = figures.figures.map(
     (figure) => `- ${figure.name} | ${figure.label} | ${figure.value.amount} | ${figure.value.unit}`
   );
@@ -89,13 +91,13 @@ export function figuresForPrompt(figures: PeriodFigures): string {
     "Angka periode (nama | keterangan | nilai | satuan):",
     ...lines,
     "",
-    `Plafon hak amil terlampaui: ${figures.amilShare.withinCeiling ? "tidak" : "ya"}`,
-    `Jumlah atestasi auditor pada periode ini: ${figures.attestations.length}`,
+    `Plafon hak amil terlampaui: ${figures.amilShare ? (figures.amilShare.withinCeiling ? "tidak" : "ya") : "belum diperiksa"}`,
+    `Jumlah atestasi auditor pada periode ini: ${figures.attestations?.length ?? "belum diperiksa"}`,
     // Named rather than left for the model to work out: picking the slowest
     // stage would be a comparison, and a comparison is a calculation.
     `Tahap yang paling banyak memakan waktu: ${
-      figures.durations.slowest
-        ? `${figures.durations.slowest.label} (durasi.${figures.durations.slowest.name}.rata_rata_jam)`
+      figures.durations?.slowest
+        ? `${figures.durations?.slowest.label} (durasi.${figures.durations?.slowest.name}.rata_rata_jam)`
         : "belum ada perbandingan tahap dari penyaluran yang sama pada periode ini"
     }`,
     "",
@@ -133,7 +135,7 @@ const unavailable = (reason: string): { draft: null; unavailable: string } => ({
  * Asks the model for a draft over the given figures. Never throws: every
  * failure becomes an absent draft with a stated reason.
  */
-export async function draftReport(figures: PeriodFigures): Promise<DraftAttempt> {
+export async function draftReport(figures: DraftFigures): Promise<DraftAttempt> {
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) {
     return unavailable(

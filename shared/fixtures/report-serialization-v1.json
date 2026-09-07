@@ -1,0 +1,48 @@
+[
+  {
+    "value": {
+      "serializationVersion": 1,
+      "predecessor": null,
+      "correctionReason": null,
+      "narrative": "Rekap café\r\nTetap  utuh.",
+      "claims": [
+        {
+          "name": "SOURCE.total",
+          "amount": "9007199254740993",
+          "unit": "IDR"
+        },
+        {
+          "name": "rekonsiliasi.selisih",
+          "amount": "-1",
+          "unit": "IDR"
+        }
+      ]
+    },
+    "canonical": "{\"claims\":[{\"amount\":\"9007199254740993\",\"name\":\"SOURCE.total\",\"unit\":\"IDR\"},{\"amount\":\"-1\",\"name\":\"rekonsiliasi.selisih\",\"unit\":\"IDR\"}],\"correctionReason\":null,\"narrative\":\"Rekap café\\r\\nTetap  utuh.\",\"predecessor\":null,\"serializationVersion\":1}",
+    "salt": "0x0303030303030303030303030303030303030303030303030303030303030303",
+    "digest": "0x7c06241d41e75d64b11fccb0579d40ca363a173e6cd1af2dc0d6ed3edfcf9add"
+  },
+  {
+    "value": {
+      "serializationVersion": 1,
+      "predecessor": "versi-1",
+      "correctionReason": "Koreksi",
+      "narrative": "Rekap café\nTetap utuh.",
+      "claims": [
+        {
+          "name": "rekonsiliasi.selisih",
+          "amount": "-1",
+          "unit": "IDR"
+        },
+        {
+          "name": "SOURCE.total",
+          "amount": "9007199254740993",
+          "unit": "IDR"
+        }
+      ]
+    },
+    "canonical": "{\"claims\":[{\"amount\":\"-1\",\"name\":\"rekonsiliasi.selisih\",\"unit\":\"IDR\"},{\"amount\":\"9007199254740993\",\"name\":\"SOURCE.total\",\"unit\":\"IDR\"}],\"correctionReason\":\"Koreksi\",\"narrative\":\"Rekap café\\nTetap utuh.\",\"predecessor\":\"versi-1\",\"serializationVersion\":1}",
+    "salt": "0x0303030303030303030303030303030303030303030303030303030303030303",
+    "digest": "0xb4b1ce70c2403c8bed222190d6396ca7a2e52449f66289835ea3df1012ea58f5"
+  }
+]

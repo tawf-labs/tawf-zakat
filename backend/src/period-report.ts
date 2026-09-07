@@ -419,3 +419,28 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
 
 export const figureByName = (figures: PeriodFigures, name: string): Figure | undefined =>
   figures.figures.find((item) => item.name === name);
+
+/** Reconciliation scope has ledger totals, never invented donations or asnaf. */
+export function computeSnapshotFigures(
+  snapshot: import("./evidence-snapshot").EvidenceSnapshot,
+  result: import("./reconciliation").ReconciliationReport | null,
+): Figure[] {
+  const figures: Figure[] = [];
+  for (const side of snapshot.sides) {
+    if (side.status !== "READ") continue;
+    const rows = side.rows.filter(r => !r.isDeclaredTotal && (snapshot.balanceSheetScope === "BOTH" || r.balanceSheet === snapshot.balanceSheetScope));
+    const add = (name: string, selected: typeof rows) => figures.push({ name, label: name,
+      value: { amount: selected.reduce((sum, row) => sum + BigInt(row.amount), 0n), unit: snapshot.currencyUnit } });
+    add(`${side.manifest.role}.total`, rows);
+    for (const bucket of [...side.manifest.fundTypes].sort()) {
+      for (const position of snapshot.balanceSheetScope === "BOTH" ? ["ON", "OFF"] : [snapshot.balanceSheetScope]) {
+        add(`${side.manifest.role}.${bucket}.${position}`, rows.filter(r => r.bucket === bucket && r.balanceSheet === position));
+      }
+    }
+  }
+  if (result) {
+    figures.push({ name: "rekonsiliasi.selisih", label: "Selisih klaim dikurangi sumber", value: result.netDelta });
+    figures.push({ name: "rekonsiliasi.selisih_absolut", label: "Jumlah selisih absolut", value: result.absoluteDelta });
+  }
+  return figures.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+}

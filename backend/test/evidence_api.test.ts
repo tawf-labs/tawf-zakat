@@ -876,3 +876,204 @@ describe("the workspace lists what it holds", () => {
     expect((await (await get(WORKSPACE, rivalToken)).json()).evidencePackages).toEqual([]);
   });
 });
+
+describe("snapshot report packages (#71)", () => {
+  it("saves a truthful discrepancy draft and reopens the same frozen package", async () => {
+    const token = await signIn(officer, SINAR);
+    const preparation = await prepared(token);
+    const url = `${EVIDENCE}/${preparation.id}/reports`;
+    const reviewed = await (await get(`${url}/review`, token)).json();
+    expect(reviewed.figures).toBeArray();
+    expect(reviewed.figures.find((f: any) => f.name === "rekonsiliasi.selisih").value.amount).toBe("300000000");
+    const response = await post(url, {
+      reportId: "laporan-2024", version: "1", mode: "HUMAN",
+      draft: { narrative: "Selisih tercantum dalam daftar klaim dan temuan terlampir.", claims: reviewed.figures.map((f: any) => ({ name: f.name, ...f.value })) },
+      disclosure: reviewed.disclosure,
+    }, token);
+    expect(response.status).toBe(201);
+    const saved = (await response.json()).package;
+    expect(saved.verdict.outcome).toBe("LOLOS");
+    expect(saved.reconciliation.balanced).toBe(false);
+    expect(saved.limitations).toContain("Penyaluran per asnaf dan durasi tidak tersedia dari baris ledger ini.");
+    const frozen = await (await post(`${url}/${saved.id}/freeze`, {}, token)).json();
+    expect(frozen.package.status).toBe("FROZEN");
+    const handle = await database.reopen();
+    store = createWorkspaceStore(handle); evidence = createEvidenceStore(handle as never); configure();
+    const reopened = await (await get(`${url}/${frozen.package.id}`, token)).json();
+    expect(reopened.package).toEqual(frozen.package);
+  });
+});
+
+async function reportFixture(token: string, source: unknown = KNOWN_GAP) {
+  const preparation = await prepared(token, source);
+  const url = `${EVIDENCE}/${preparation.id}/reports`;
+  const review = await (await get(`${url}/review`, token)).json();
+  const input = { reportId: "laporan-2024", version: "1", mode: "HUMAN",
+    draft: { narrative: "Daftar klaim, temuan, dan batas pemeriksaan merupakan bagian laporan ini.", claims: review.figures.map((f: any) => ({ name: f.name, ...f.value })) },
+    disclosure: review.disclosure };
+  return { url, review, input };
+}
+
+it("rejects empty and inexact claims while retaining expected values", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token);
+  const empty = await (await post(url, { ...input, draft: { ...input.draft, claims: [] } }, token)).json();
+  expect(empty.package.verdict.outcome).toBe("DITOLAK");
+  expect(empty.package.verdict.prerequisites.length).toBeGreaterThan(0);
+  input.draft.claims[0].amount = "2250000001";
+  const wrong = await (await post(url, input, token)).json();
+  expect(wrong.package.verdict.outcome).toBe("DITOLAK");
+  expect(wrong.package.verdict.findings[0]).toMatchObject({ kind: "KLAIM_TIDAK_COCOK", expected: { amount: "2250000000", unit: "IDR" } });
+  expect((await (await get(`${url}/${wrong.package.id}`, token)).json()).package).toEqual(wrong.package);
+});
+
+it("does not turn missing sources into passing zero reports", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input, review } = await reportFixture(token, { ...KNOWN_GAP,
+    source: { manifest: manifest("SOURCE"), status: "MISSING", detail: "Belum dikirim" } });
+  expect(review.figures.some((f: any) => f.name.startsWith("SOURCE."))).toBe(false);
+  const saved = await (await post(url, input, token)).json();
+  expect(saved.package.verdict.outcome).toBe("DITOLAK");
+  expect(saved.package.reconciliation).toBeNull();
+});
+
+it("retains figures and findings during an AI outage and accepts the human draft afterwards", async () => {
+  const key = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const token = await signIn(officer, SINAR);
+    const { url, input } = await reportFixture(token);
+    const ai = await (await post(url, { ...input, mode: "AI" }, token)).json();
+    expect(ai.package.draft).toBeNull();
+    expect(ai.package.aiUnavailable).toContain("Angka dan temuan tetap tersimpan");
+    expect(ai.package.verdict.outcome).toBe("DITOLAK");
+    expect(ai.package.reconciliation.discrepancies).toHaveLength(1);
+    expect(JSON.stringify(ai)).not.toContain("DEEPSEEK");
+    const human = await (await post(url, input, token)).json();
+    expect(human.package.verdict.outcome).toBe("LOLOS");
+  } finally { if (key !== undefined) process.env.DEEPSEEK_API_KEY = key; }
+});
+
+it("binds a changed narrative to a new digest and preserves the frozen predecessor", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token);
+  const first = (await (await post(url, input, token)).json()).package;
+  const frozen = (await (await post(`${url}/${first.id}/freeze`, {}, token)).json()).package;
+  input.draft.narrative = "Narasi yang diperbaiki; temuan tetap diungkapkan.";
+  const changed = (await (await post(url, { ...input, version: "2", predecessor: frozen.id, correctionReason: "Perbaikan narasi" }, token)).json()).package;
+  expect(changed.digest).not.toBe(frozen.digest);
+  expect(changed.predecessor).toBe(frozen.id);
+  expect((await (await get(`${url}/${frozen.id}`, token)).json()).package).toEqual(frozen);
+  const rival = await signIn(rivalOfficer, BAITUL);
+  expect((await get(`${url}/${frozen.id}`, rival)).status).toBe(404);
+  const readOnly = await signIn(reader, SINAR);
+  expect((await post(url, input, readOnly)).status).toBe(403);
+});
+
+it("requires the declared scope and findings to match the source manifests", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input, review } = await reportFixture(token, { ...KNOWN_GAP,
+    claim: { ...KNOWN_GAP.claim, manifest: manifest("CLAIM", { transactionDetail: "NOT_AVAILABLE" }) },
+    source: { ...KNOWN_GAP.source, manifest: manifest("SOURCE", { transactionDetail: "NOT_AVAILABLE" }) } });
+  expect(review.figures.some((f: any) => /asnaf|durasi|DSKL/.test(f.name))).toBe(false);
+  input.disclosure.sources[0].transactionDetail = "PRESENT";
+  const saved = (await (await post(url, input, token)).json()).package;
+  expect(saved.verdict.outcome).toBe("DITOLAK");
+});
+
+it("rejects a one-field package substitution against the original digest", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token);
+  const saved = (await (await post(url, input, token)).json()).package;
+  const { digest, ...body } = saved;
+  body.draft.narrative = "Narasi yang disubstitusi.";
+  await database.handle().execute(sql`UPDATE report_packages SET canonical = ${canonicalJson(body)} WHERE id = ${saved.id}`);
+  expect((await get(`${url}/${saved.id}`, token)).status).toBe(409);
+  expect((await post(`${url}/${saved.id}/freeze`, {}, token)).status).toBe(409);
+});
+
+it("keeps reconciliation tolerance out of exact draft claim matching", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token, { ...KNOWN_GAP, tolerance: { amount: "400000000", unit: "IDR" } });
+  input.draft.claims[0].amount = "2250000001";
+  const saved = (await (await post(url, input, token)).json()).package;
+  expect(saved.snapshot.tolerance.amount).toBe("400000000");
+  expect(saved.verdict.outcome).toBe("DITOLAK");
+});
+
+it("uses the configured fund basis rather than a universal amil ceiling or a caller flag", async () => {
+  const token = await signIn(officer, SINAR);
+  const source = { ...KNOWN_GAP,
+    claim: { manifest: manifest("CLAIM"), rows: [row("PZ", "1000", { amilAmount: { amount: "200", unit: "IDR" } })] },
+    source: { manifest: manifest("SOURCE"), rows: [row("PZ", "1000", { amilAmount: { amount: "200", unit: "IDR" } })] } };
+  const { url, input } = await reportFixture(token, source);
+  const withRule = (ceilingBps: number) => configureWorkspace({ store, evidence, files, ethCall, now: () => clock, challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
+    reportAmilRules: [{ institutionId: SINAR, version: "synthetic-policy-v1", basis: "SOURCE_COLLECTION_ROWS", fundType: "ZAKAT", ceilingBps }] });
+  withRule(2500);
+  input.disclosure = (await (await get(`${url}/review`, token)).json()).disclosure;
+  const allowed = (await (await post(url, input, token)).json()).package;
+  expect(allowed.verdict.outcome).toBe("LOLOS");
+  expect(allowed.policy.amilChecks[0]).toMatchObject({ basis: "1000", actual: "200", passed: true });
+  withRule(1250);
+  const rejected = (await (await post(url, input, token)).json()).package;
+  expect(rejected.verdict.outcome).toBe("DITOLAK");
+  expect((await post(url, { ...input, withinCeiling: true }, token)).status).toBe(400);
+});
+
+it("freezes the same draft idempotently", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token);
+  const saved = (await (await post(url, input, token)).json()).package;
+  const frozen = (await (await post(`${url}/${saved.id}/freeze`, {}, token)).json()).package;
+  const retried = (await (await post(`${url}/${saved.id}/freeze`, {}, token)).json()).package;
+  expect(retried).toEqual(frozen);
+});
+
+it("keeps totals inside the selected balance-sheet scope of a broader source", async () => {
+  const token = await signIn(officer, SINAR);
+  const broader = { ...KNOWN_GAP,
+    claim: { manifest: manifest("CLAIM", { balanceSheet: "BOTH" }), rows: [row("on", "1000"), row("off", "9000", { balanceSheet: "OFF" })] },
+    source: { manifest: manifest("SOURCE", { balanceSheet: "BOTH" }), rows: [row("on", "1000"), row("off", "9000", { balanceSheet: "OFF" })] } };
+  const { review } = await reportFixture(token, broader);
+  expect(review.figures.find((f: any) => f.name === "CLAIM.total").value.amount).toBe("1000");
+  expect(review.figures.find((f: any) => f.name === "SOURCE.total").value.amount).toBe("1000");
+});
+
+it("validates actual AI responses with the same rules as human drafts", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token);
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = "synthetic-ai-key";
+  globalThis.fetch = (async () => Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(input.draft) } }] })) as unknown as typeof fetch;
+  try {
+    const human = (await (await post(url, input, token)).json()).package;
+    const ai = (await (await post(url, { ...input, mode: "AI" }, token)).json()).package;
+    expect(ai.verdict).toEqual(human.verdict);
+    expect(ai.draft).toEqual(human.draft);
+    input.draft.claims = [];
+    const rejected = (await (await post(url, { ...input, mode: "AI" }, token)).json()).package;
+    expect(rejected.verdict.outcome).toBe("DITOLAK");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = originalKey;
+  }
+});
+
+it("refuses freezing when a committed source file becomes unavailable", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token, { ...KNOWN_GAP, files: [{ role: "SOURCE", fileName: "synthetic.csv", mimeType: "text/csv", contentBase64: Buffer.from("synthetic").toString("base64") }] });
+  const saved = (await (await post(url, input, token)).json()).package;
+  files = { put: fileStore.put, get: async () => null }; configure();
+  const result = await post(`${url}/${saved.id}/freeze`, {}, token);
+  expect(result.status).toBe(409);
+  expect((await (await get(`${url}/${saved.id}`, token)).json()).package.status).toBe("DRAFT");
+});
+
+it("allows a truthful negative discrepancy in the narrative", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token, { ...KNOWN_GAP, claim: KNOWN_GAP.source, source: KNOWN_GAP.claim });
+  input.draft.narrative = "Selisih klaim dikurangi sumber adalah Rp-300.000.000.";
+  const saved = (await (await post(url, input, token)).json()).package;
+  expect(saved.verdict.outcome).toBe("LOLOS");
+});

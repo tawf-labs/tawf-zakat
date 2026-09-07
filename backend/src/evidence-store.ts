@@ -184,6 +184,15 @@ export const EVIDENCE_SCHEMA_STATEMENTS = [
      CONSTRAINT evidence_files_failed_says_why
        CHECK ((storage_status = 'FAILED') = (failure_reason IS NOT NULL))
    );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS evidence_preparations_owner_id ON evidence_preparations (institution_id, id);`,
+  `CREATE TABLE IF NOT EXISTS report_packages (
+    id TEXT PRIMARY KEY,
+    institution_id TEXT NOT NULL,
+    preparation_id TEXT NOT NULL,
+    canonical TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    FOREIGN KEY (institution_id, preparation_id) REFERENCES evidence_preparations (institution_id, id)
+  );`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
@@ -226,6 +235,21 @@ const fileFrom = (row: any): StoredFile => ({
 
 export function createEvidenceStore(db: EvidenceDatabase) {
   return {
+    async saveReportPackage(institutionId: string, preparationId: string, id: string, canonical: string, digest: string) {
+      await db.execute(sql`INSERT INTO report_packages (id, institution_id, preparation_id, canonical, digest)
+        VALUES (${id}, ${institutionId}, ${preparationId}, ${canonical}, ${digest}) ON CONFLICT (id) DO NOTHING`);
+    },
+    async getReportPackage(institutionId: string, preparationId: string, id: string): Promise<{canonical: string; digest: string} | null> {
+      return rowsOf(await db.execute(sql`SELECT canonical, digest FROM report_packages
+        WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} AND id = ${id}`))[0] ?? null;
+    },
+    async findReportPackage(institutionId: string, id: string): Promise<{canonical: string} | null> {
+      return rowsOf(await db.execute(sql`SELECT canonical FROM report_packages WHERE institution_id = ${institutionId} AND id = ${id}`))[0] ?? null;
+    },
+    async listReportPackages(institutionId: string, preparationId: string): Promise<{id: string; digest: string}[]> {
+      return rowsOf(await db.execute(sql`SELECT id, digest FROM report_packages
+        WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} ORDER BY id`));
+    },
     async ensureSchema(): Promise<void> {
       for (const statement of EVIDENCE_SCHEMA_STATEMENTS) {
         await db.execute(sql.raw(statement));

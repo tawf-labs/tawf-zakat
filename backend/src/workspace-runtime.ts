@@ -41,6 +41,7 @@ export type WorkspaceRuntime = {
    * upload instead of storing one.
    */
   files?: PrivateFileStore;
+  reportAmilRules?: import("./report-package").AmilRule[];
 };
 
 let runtime: WorkspaceRuntime | null = null;
