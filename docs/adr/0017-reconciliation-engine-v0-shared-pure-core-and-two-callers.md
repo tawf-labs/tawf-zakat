@@ -38,6 +38,10 @@ Per ADR-0016 this is the one feature candidate that neither SiMBA nor the incumb
 
 10. **The LPZN 2024 case is a fixture, not a slide.** `backend/src/fixtures/lpzn-2024.ts` carries Tabel 2.2 and Tabel 2.3 transcribed from the official PDF, and the test suite asserts the gap is exactly `668_020_210_274`. It is simultaneously a regression test against real data and the demo asset.
 
+11. **Ceiling compliance is separate from arithmetic agreement** (spec #55 US-23). Each uploaded collection entry may carry `amilAmount`, in the same unit as its collection amount. The engine groups collection and hak amil by `(PZ key, balanceSheet)` across funds, excluding declared totals. It checks each side independently against 12.5%, using the same integer policy as ADR-0018. One PZ or balance sheet position cannot subsidise another's ceiling, and reconciliation tolerance cannot hide a violation. `balanced` retains its arithmetic meaning; `amilAssessment` reports `WITHIN_CEILING`, `EXCEEDED`, or `NOT_CHECKED`, with exact amounts and reasons per scope. Missing hak amil, duplicate entries, or an empty population never earns a ceiling pass. Both modes display this assessment and include it in downloads even when no monetary discrepancy exists; discrepancy filters never remove ceiling findings.
+
+    The internal mapper supplies a separate `amilBasis` because its batch, donation, proposal and execution streams cannot all be summed as collection. For IDR, the denominator is settled batches counted once; the numerator is executed AMIL proposals in that same reconciliation snapshot. This is a snapshot check, not a lifetime contract invariant or the differently scoped period report. Unknown asnaf or duplicate basis rows makes the check unavailable. The chain-side execution events lack asnaf and the USDC deposit mirror lacks native amounts, so those scopes explicitly remain `NOT_CHECKED`. External HTTP callers cannot upload `amilBasis` to replace the denominator derived from their entries. No schema changes are needed.
+
 ## Consequences
 
 ### Positive
@@ -51,10 +55,11 @@ Per ADR-0016 this is the one feature candidate that neither SiMBA nor the incumb
 - **A narrowed block range bounds the chain side only.** Database rows carry no block number, so rows outside the range would read as `MISSING_IN_SOURCE`; the endpoint returns an explicit `scopeWarning` and points at the reporting period, which bounds both sides symmetrically.
 - **Results are not stored.** Every run is recomputed, and there is no history to compare across time.
 - **No tenant separation or authentication in v0**, so the inter-institution endpoint works on whatever the caller uploads.
-- **Reconciliation does not yet assess the hak amil 12.5% ceiling** (spec #55 US-23). ADR-0018 adds an IDR ceiling check to the separate period report, but not to the ledger sides reconciled here. Uploaded ledger entries carry no hak amil amount, and the internal mapper does not retain asnaf. A balanced reconciliation is therefore not a ceiling-compliance verdict.
+- **Hak amil coverage depends on the available evidence.** Old uploads and the LPZN fixture contain no hak amil values; internal chain-side events contain no asnaf, and internal USDC collection is not available in native units. These scopes report `NOT_CHECKED`, not zero or a pass. An uploaded hak amil amount is still a declaration, not proof of payment. The internal check inherits the reconciliation snapshot's date/block limits above; it is not the contract's lifetime accounting.
 
 ## References
 - Spec: GitHub issue #55; tickets #56–#60
 - Evidence: `docs/research/0002-baznas-pelaporan-audit-dan-ai.md` §5 (data quality), Lampiran A (how to re-verify every figure)
 - Strategy: `docs/strategy/README.md` §6 (first release on the roadmap), ADR-0016 (technology vendor positioning)
 - Related: ADR-0006 (separation of DPS and Auditor powers), ADR-0008 (embedded indexer), ADR-0012 (feature-driven frontend)
+- Hak amil contract, verification, and remaining coverage: `docs/verification/0055-amil-ceiling.md`; native USDC deposit follow-up: #67.

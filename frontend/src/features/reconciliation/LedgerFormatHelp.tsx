@@ -5,7 +5,7 @@ export function LedgerFormatHelp() {
   return (
     <div className="rounded-2xl border border-[#dbe7dd] bg-[#f4f8f3] px-5 py-4 text-xs leading-relaxed text-[#5e7a70]">
       <strong className="text-[#17332c]">Format satu baris:</strong> kode PZ; nama PZ; jenis dana;
-      posisi neraca; jumlah. Pemisah boleh titik koma, koma, atau tab. Kolom posisi neraca boleh
+      posisi neraca; jumlah pengumpulan; hak amil (opsional). Pemisah boleh titik koma, koma, atau tab. Kolom posisi neraca boleh
       dikosongkan (dianggap <em>on balance sheet</em>). Baris yang diawali{" "}
       <code className="rounded bg-white px-1 py-0.5">TOTAL</code> atau{" "}
       <code className="rounded bg-white px-1 py-0.5">GRAND TOTAL</code> diperlakukan sebagai total

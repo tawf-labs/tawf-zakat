@@ -1,9 +1,9 @@
 import React, { useState } from "react";
-import { AlertOctagon, Blocks, CheckCircle2, DatabaseZap } from "lucide-react";
+import { AlertOctagon, Blocks, DatabaseZap } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
-import { DiscrepancyTable } from "./DiscrepancyTable";
-import { formatSignedMoney } from "./format";
+import { InternalReportResult } from "./InternalReportResult";
+import { internalPeriodLabel } from "./reconciliationTools";
 import {
   runInternalReconciliation,
   ReconciliationRequestError,
@@ -23,12 +23,14 @@ export function InternalModePanel() {
   const [result, setResult] = useState<InternalReconciliationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [checkedAt, setCheckedAt] = useState(new Date());
 
   const run = async () => {
     setIsRunning(true);
     setError(null);
     try {
       setResult(await runInternalReconciliation());
+      setCheckedAt(new Date());
     } catch (caught) {
       setResult(null);
       setError(
@@ -82,36 +84,12 @@ export function InternalModePanel() {
             {result.indexerStatus && <Badge variant="neutral">{result.indexerStatus}</Badge>}
           </div>
 
-          {(Object.keys(UNIT_LABELS) as CurrencyUnit[]).map((unit) => {
-            const report = result.reports[unit];
-            if (!report) return null;
+          <p className="text-sm font-semibold text-[#5e7a70]">{internalPeriodLabel(result.period)}</p>
+          {result.scopeWarning && <p className="text-sm text-amber-800">{result.scopeWarning}</p>}
 
-            return (
-              <div key={unit} className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="font-serif text-lg font-bold text-[#17332c]">
-                    {UNIT_LABELS[unit]}
-                  </h4>
-                  {report.balanced ? (
-                    <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-700">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Basis data cocok dengan ledger
-                    </span>
-                  ) : (
-                    <span className="font-mono text-sm font-bold text-amber-700">
-                      {formatSignedMoney(report.netDelta)}
-                    </span>
-                  )}
-                </div>
-                <DiscrepancyTable
-                  discrepancies={report.discrepancies}
-                  claimLabel={report.claimLabel}
-                  sourceLabel={report.sourceLabel}
-                  emptyMessage="Setiap catatan basis data punya event on-chain yang bersesuaian, dan sebaliknya."
-                />
-              </div>
-            );
-          })}
+          {(Object.keys(UNIT_LABELS) as CurrencyUnit[]).map((unit) => (
+            <InternalReportResult key={unit} result={result} unit={unit} label={UNIT_LABELS[unit]} checkedAt={checkedAt} />
+          ))}
         </div>
       )}
     </section>

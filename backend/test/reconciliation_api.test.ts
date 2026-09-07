@@ -39,6 +39,28 @@ const validPayload = {
 };
 
 describe("POST /api/reconciliation/antar-lembaga", () => {
+  it("menolak hak amil cacat dan basis pengumpulan yang dicoba diunggah terpisah", async () => {
+    for (const amilAmount of [null, { amount: "-1", unit: "IDR" }, { amount: 1.5, unit: "IDR" }, { amount: Number.MAX_SAFE_INTEGER + 1, unit: "IDR" }, { amount: "1", unit: "USDC_6DP" }]) {
+      const claim = { label: "Klaim", entries: [entry("PZ-1", "ZAKAT", "800", { amilAmount })] };
+      const response = await post({ ...validPayload, claim });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("PZ-1");
+    }
+    const response = await post({ ...validPayload, claim: { ...validPayload.claim, amilBasis: [] } });
+    expect(response.status).toBe(400);
+  });
+  it("membaca hak amil dan mengembalikan plafon sebagai string tepat", async () => {
+    const ledger = { label: "PZ", entries: [entry("PZ-1", "ZAKAT", "100000000", {
+      amilAmount: { amount: "12500001", unit: "IDR" },
+    })] };
+    const response = await post({ claim: ledger, source: ledger, options: validPayload.options });
+    expect(response.status).toBe(200);
+    const { report } = await response.json();
+    expect(report.amilAssessment.status).toBe("EXCEEDED");
+    expect(report.amilAssessment.checks[0].ceiling).toEqual({ amount: "12500000", unit: "IDR" });
+    expect(report.amilAssessment.checks[0].actual.amount).toBe("12500001");
+    expect(report.netDelta.amount).toBe("0");
+  });
   it("returns a reconciliation report for two ledger sides", async () => {
     const res = await post(validPayload);
     expect(res.status).toBe(200);

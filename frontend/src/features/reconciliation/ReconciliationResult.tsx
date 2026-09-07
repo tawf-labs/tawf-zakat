@@ -1,6 +1,7 @@
 import React from "react";
 import { Badge } from "../../components/ui/Badge";
 import { ReconciliationSummary } from "./ReconciliationSummary";
+import { AmilAssessmentPanel } from "./AmilAssessmentPanel";
 import { DiscrepancyFilterBar } from "./DiscrepancyFilterBar";
 import { DiscrepancyTable } from "./DiscrepancyTable";
 import { BALANCE_SHEET_LABELS } from "./format";
@@ -51,6 +52,8 @@ export function ReconciliationResult({
         totalFindingCount={totalFindings.length}
         filtered={filtered}
       />
+
+      <AmilAssessmentPanel report={report} onExport={report.discrepancies.length === 0 ? onExport : undefined} />
 
       {report.discrepancies.length > 0 && (
         <>

@@ -32,6 +32,8 @@ import {
 } from "./disbursement-duration";
 import { isAttested, placeInPeriod, proposalAmount, readableIso, toWholeAmount } from "./ledger-rows";
 import { JENIS_DANA, type CurrencyUnit, type ReportingPeriod } from "./reconciliation";
+import { AMIL_CEILING_BPS, assessAmilAmounts } from "./amil-policy";
+export { AMIL_CEILING_BPS } from "./amil-policy";
 
 /**
  * Units a period figure can carry. Money is one vocabulary; a ratio in basis
@@ -65,9 +67,6 @@ export const ASNAF = [
 ] as const;
 
 export type Asnaf = (typeof ASNAF)[number];
-
-/** The hak amil ceiling, in basis points - the same 12,5% the contract locks. */
-export const AMIL_CEILING_BPS = 1250n;
 
 export type DonationRow = {
   trxId?: string;
@@ -305,16 +304,16 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
 
   // --- Hak amil --------------------------------------------------------------
   const amilActual = distributedIDR.get("AMIL")!;
-  const amilCeiling = (collectedTotal * AMIL_CEILING_BPS) / 10_000n;
+  const amilAmounts = assessAmilAmounts(collectedTotal, amilActual);
   const amilShare: AmilShare = {
     collected: idr(collectedTotal),
-    ceiling: idr(amilCeiling),
+    ceiling: idr(amilAmounts.ceiling),
     actual: idr(amilActual),
     ceilingRatio: bps(AMIL_CEILING_BPS),
     actualRatio: bps(collectedTotal > 0n ? (amilActual * 10_000n) / collectedTotal : 0n),
     // Cross-multiplied, so a share taken with nothing collected is a violation
     // rather than a division nobody can perform.
-    withinCeiling: amilActual * 10_000n <= collectedTotal * AMIL_CEILING_BPS,
+    withinCeiling: amilAmounts.withinCeiling,
   };
 
   const amilFigures: Figure[] = [

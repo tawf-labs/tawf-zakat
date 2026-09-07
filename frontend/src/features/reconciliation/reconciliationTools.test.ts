@@ -45,6 +45,44 @@ const report: ReconciliationReport = {
   entryCounts: { claim: 12, source: 12, matched: 10 },
 };
 
+it("mengunduh pelanggaran plafon walau angka cocok dan filter selisih kosong", () => {
+  const csv = toCsv({
+    report: { ...report, balanced: true, discrepancies: [], netDelta: { amount: "0", unit: "IDR" },
+      amilAssessment: { status: "EXCEEDED", checks: [{
+        side: "claim", key: "PZ-1", balanceSheet: "ON", status: "EXCEEDED",
+        collected: { amount: "100000000", unit: "IDR" },
+        actual: { amount: "12500001", unit: "IDR" }, ceiling: { amount: "12500000", unit: "IDR" },
+      }] },
+    }, discrepancies: [], checkedAt: new Date("2026-01-01Z"), filtered: true,
+  });
+  expect(csv).toContain("Plafon hak amil;Melampaui plafon 12,5%");
+  expect(csv).toContain("12500001;12500000;IDR");
+  expect(csv).toContain("Total selisih bersih;0;IDR");
+});
+
+it("tidak menyebut hasil API lama sebagai lolos plafon", () => {
+  const csv = toCsv({ report, discrepancies: [], checkedAt: new Date("2026-01-01Z"), filtered: false });
+  expect(csv).toContain("Plafon hak amil;Belum dapat diperiksa");
+});
+
+it("menyertakan batas ledger dan keterbatasan cakupan pada unduhan internal", () => {
+  const csv = toCsv({ report, discrepancies: [], checkedAt: new Date("2026-01-01Z"), filtered: false,
+    ledgerScope: { lastIndexedBlock: 500, blockRange: { fromBlock: 100, toBlock: 400 },
+      scopeWarning: "Hanya sisi sumber dibatasi blok.", indexerStatus: "SYNCED" },
+  });
+  expect(csv).toContain("Blok terindeks terakhir;500");
+  expect(csv).toContain("Rentang blok sumber;100;400");
+  expect(csv).toContain("Hanya sisi sumber dibatasi blok.");
+});
+
+it("tidak memberi label tahun berjalan pada snapshot internal tanpa filter periode", () => {
+  const csv = toCsv({ report, discrepancies: [], checkedAt: new Date("2026-01-01Z"), filtered: false,
+    ledgerScope: { period: null, lastIndexedBlock: 500, blockRange: { fromBlock: 0, toBlock: 500 } },
+  });
+  expect(csv).toContain("Periode pelaporan;Snapshot tanpa filter periode");
+  expect(csv).not.toContain("Akhir Tahun 2024");
+});
+
 describe("filtering a reconciliation result", () => {
   it("returns everything when no filter is set", () => {
     expect(filterDiscrepancies(report.discrepancies, EMPTY_FILTERS)).toHaveLength(4);

@@ -30,6 +30,41 @@ const report = (snapshot: InternalSnapshot, unit: "IDR" | "USDC_6DP" = "IDR") =>
 };
 
 describe("Mode Internal - mapping PostgreSQL and the chain onto one ledger", () => {
+  it("tidak meloloskan klaim hak amil dari snapshot yang sepenuhnya kosong", () => {
+    const checks = report(emptySnapshot).amilAssessment.checks;
+    expect(checks.every((check) => check.status === "NOT_CHECKED")).toBe(true);
+    expect(checks.every((check) => check.actual === null)).toBe(true);
+  });
+  it("membawa asnaf dari baris asli dan menyatakan basis USDC atau asnaf tak dikenal belum tersedia", () => {
+    const snapshot = snapshotFromRows({ donationRows: [], eventRows: [], batchRows: [], proposalRows: [
+      { proposalIdOnChain: 1, currencyType: 0, amount: 1, status: "Executed", asnafCategory: "3" },
+    ] });
+    expect(report(snapshot).amilAssessment.status).toBe("EXCEEDED");
+    expect(report(snapshot, "USDC_6DP").amilAssessment.status).toBe("NOT_CHECKED");
+    snapshot.proposals[0].asnafCategory = "tidak dikenal";
+    const unknown = report(snapshot).amilAssessment.checks.find((c) => c.side === "claim")!;
+    expect(unknown.status).toBe("NOT_CHECKED");
+    expect(unknown.actual).toBeNull();
+  });
+  it("memeriksa hak amil dari snapshot IDR tanpa menghitung batch dan donasi dua kali", () => {
+    const result = report({
+      batches: [{ batchNumber: 1, totalAmountIDR: 1_000, txHash: "0xb1" }],
+      donations: [{ trxId: "T1", amountIDR: 1_000, batchId: 1 }],
+      proposals: [
+        { proposalIdOnChain: 1, currencyType: 0, amount: 126, status: "Executed", asnafCategory: "Amil" },
+        { proposalIdOnChain: 2, currencyType: 0, amount: 500, status: "Pending", asnafCategory: "Amil" },
+        { proposalIdOnChain: 3, currencyType: 1, amount: 1_000_000, status: "Executed", asnafCategory: "Amil" },
+      ],
+      events: [settledBatchEvent(1, "1000")],
+    });
+    expect(result.amilAssessment.status).toBe("EXCEEDED");
+    expect(result.amilAssessment.checks[0]).toMatchObject({
+      side: "claim", collected: { amount: 1000n, unit: "IDR" },
+      actual: { amount: 126n, unit: "IDR" }, ceiling: { amount: 125n, unit: "IDR" }, status: "EXCEEDED",
+    });
+    expect(result.amilAssessment.checks[1].status).toBe("NOT_CHECKED");
+    expect(result.amilAssessment.checks[1].reason).toContain("asnaf");
+  });
   it("reports a database that mirrors the chain as balanced", () => {
     const snapshot: InternalSnapshot = {
       batches: [
@@ -307,6 +342,7 @@ describe("POST /api/reconciliation/internal", () => {
 
     const body = await res.json();
     expect(body.success).toBe(true);
+    expect(body.period).toBeNull();
     expect(typeof body.lastIndexedBlock).toBe("number");
     expect(body.reports.IDR).toBeDefined();
     expect(body.reports.USDC_6DP).toBeDefined();
@@ -326,6 +362,7 @@ describe("POST /api/reconciliation/internal", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.reports.IDR.period).toEqual({ kind: "AKHIR_TAHUN", year: 2026 });
+    expect(body.period).toEqual({ kind: "AKHIR_TAHUN", year: 2026 });
   });
 
   it("rejects a block range that runs backwards", async () => {

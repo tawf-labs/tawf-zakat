@@ -2,7 +2,8 @@
  * Parses the tabular text an Amil actually has - a block pasted out of a
  * spreadsheet or a SiMBA export - into the ledger shape the engine reads.
  *
- * One row per line: kode PZ, nama PZ, jenis dana, posisi neraca, jumlah.
+ * One row per line: kode PZ, nama PZ, jenis dana, posisi neraca, jumlah,
+ * followed optionally by hak amil attributed to that collection row.
  * The posisi neraca column may be left out, in which case the row is treated as
  * on balance sheet. A row whose kode reads TOTAL or GRAND TOTAL declares a total
  * rather than an entry, which is how a recap's own arithmetic gets checked.
@@ -118,17 +119,19 @@ type Row = {
   jenisDana: string;
   posisi?: string;
   jumlah: string;
+  hakAmil?: string;
 };
 
 function toRow(columns: string[]): Row | null {
   // kode, nama, jenis dana, posisi, jumlah
-  if (columns.length >= 5) {
+  if (columns.length === 5 || columns.length === 6) {
     return {
       kode: columns[0],
       nama: columns[1],
       jenisDana: columns[2],
       posisi: columns[3],
       jumlah: columns[4],
+      hakAmil: columns[5],
     };
   }
   // kode, nama, jenis dana, jumlah
@@ -142,8 +145,11 @@ function toRow(columns: string[]): Row | null {
   return null;
 }
 
-const isHeaderLine = (line: string): boolean =>
-  /^(kode|no\b|nomor|pz\b|pengelola)/i.test(line.trim()) && /jumlah|nilai|rp/i.test(line);
+const isHeaderLine = (line: string): boolean => {
+  const row = toRow(splitColumns(line));
+  return Boolean(row && /^(kode(?: pz)?|no\.?|nomor|pz|pengelola(?: zakat)?)$/i.test(row.kode.trim())
+    && /^(jumlah|nilai|rp|pengumpulan)(?:\s*\((?:rp|idr)\))?$/i.test(row.jumlah.trim()));
+};
 
 /**
  * Turns pasted or uploaded text into one side of the ledger. Rows that cannot be
@@ -172,7 +178,7 @@ export function parseLedgerText(
     if (!row) {
       issues.push({
         line: lineNumber,
-        message: `Baris ${lineNumber} hanya punya ${columns.length} kolom. Format yang diharapkan: kode PZ, nama PZ, jenis dana, posisi neraca (opsional), jumlah.`,
+        message: `Baris ${lineNumber} punya ${columns.length} kolom. Format yang diharapkan: kode PZ, nama PZ, jenis dana, posisi neraca (opsional), pengumpulan, hak amil (opsional pada kolom keenam).`,
       });
       return;
     }
@@ -220,11 +226,18 @@ export function parseLedgerText(
       return;
     }
 
+    const hakAmil = row.hakAmil?.trim() ? parseRupiah(row.hakAmil) : undefined;
+    if (hakAmil === null || hakAmil?.startsWith("-") || (isTotal && hakAmil !== undefined)) {
+      issues.push({ line: lineNumber, message: `Baris ${lineNumber} ("${row.kode}"): hak amil harus rupiah bulat nonnegatif pada entri pengumpulan, bukan baris total.` });
+      return;
+    }
+
     const entry: WireLedgerEntry = {
       key: isTotal ? `${row.kode.trim().toUpperCase()}-${bucket}-${balanceSheet}` : row.kode.trim(),
       bucket,
       balanceSheet,
       value: { amount, unit: "IDR" },
+      ...(hakAmil === undefined ? {} : { amilAmount: { amount: hakAmil, unit: "IDR" as const } }),
       label: row.nama.trim() || row.kode.trim(),
     };
 

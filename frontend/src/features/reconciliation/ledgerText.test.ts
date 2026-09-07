@@ -29,6 +29,37 @@ describe("parseRupiah", () => {
 });
 
 describe("parseLedgerText", () => {
+  it("tidak menyembunyikan PZ yang hak amilnya ditulis dengan awalan Rp", () => {
+    const result = parseLedgerText("PZ-1;PZ Satu;Zakat;on;1000;Rp999\nPZ-2;PZ Dua;Zakat;on;1000;0", "Rekap");
+    expect(result.issues).toEqual([]);
+    expect(result.side.entries).toHaveLength(2);
+    expect(result.side.entries[0].amilAmount?.amount).toBe("999");
+  });
+  it("membaca kolom keenam hak amil dan membedakan nol dari data yang belum tersedia", () => {
+    const { side, issues } = parseLedgerText([
+      "Kode PZ;Nama;Jenis Dana;Posisi;Jumlah;Hak Amil",
+      "PZ-1;Kampar;Zakat;on;100.000.000;12.500.001",
+      "PZ-2;Siak;Zakat;on;1.000;0",
+      "PZ-3;Dumai;Zakat;on;1.000;",
+    ].join("\n"), "Rekap");
+    expect(issues).toEqual([]);
+    expect(side.entries[0].amilAmount).toEqual({ amount: "12500001", unit: "IDR" });
+    expect(side.entries[1].amilAmount?.amount).toBe("0");
+    expect(side.entries[2].amilAmount).toBeUndefined();
+  });
+  it("mengenali header pengumpulan dan menolak kolom hak amil yang cacat", () => {
+    const header = parseLedgerText("Kode PZ;Nama;Jenis dana;Posisi;Pengumpulan;Hak amil\nPZ-1;PZ;Zakat;on;1000;0", "Rekap");
+    expect(header.issues).toEqual([]);
+    for (const line of [
+      "PZ-1;PZ;Zakat;on;1000;-1", "PZ-1;PZ;Zakat;on;1000;12,5",
+      "TOTAL;PZ;Zakat;on;1000;0", "PZ-1;PZ;Zakat;on;1000;0;kolom asing",
+    ]) {
+      const parsed = parseLedgerText(line, "Rekap");
+      expect(parsed.issues).toHaveLength(1);
+      expect(parsed.issues[0].line).toBe(1);
+      expect(parsed.side.entries).toEqual([]);
+    }
+  });
   it("reads a semicolon separated recap into ledger entries", () => {
     const { side, issues } = parseLedgerText(
       [

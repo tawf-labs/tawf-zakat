@@ -8,6 +8,7 @@
 
 import { Hono } from "hono";
 import {
+  money,
   reconcile,
   ReconciliationInputError,
   type LedgerEntry,
@@ -55,6 +56,7 @@ function parseEntry(raw: unknown, sideLabel: string, index: number, isTotal: boo
     bucket: record.bucket,
     balanceSheet,
     value: parseMoney(record.value, where),
+    ...(record.amilAmount !== undefined ? { amilAmount: parseMoney(record.amilAmount, `${where}: hak amil`) } : {}),
     ...(typeof record.label === "string" ? { label: record.label } : {}),
   };
 }
@@ -66,6 +68,7 @@ function parseSide(raw: unknown, role: "claim" | "source"): { side: LedgerSide; 
     fail(`${roleName} (${role}) tidak ada di dalam permintaan.`);
   }
   const record = asRecord(raw, roleName);
+  if (record.amilBasis !== undefined) fail(`${roleName}: basis hak amil dihitung dari entri, bukan diunggah terpisah.`);
 
   const label = typeof record.label === "string" && record.label.trim() !== "" ? record.label : roleName;
   if (!Array.isArray(record.entries)) {
@@ -127,6 +130,15 @@ export function serializeReport(report: ReconciliationReport) {
     ...report,
     netDelta: serializeMoney(report.netDelta),
     absoluteDelta: serializeMoney(report.absoluteDelta),
+    amilAssessment: {
+      status: report.amilAssessment.status,
+      checks: report.amilAssessment.checks.map((check) => ({
+        ...check,
+        collected: check.collected ? serializeMoney(check.collected) : null,
+        actual: check.actual ? serializeMoney(check.actual) : null,
+        ceiling: check.ceiling ? serializeMoney(check.ceiling) : null,
+      })),
+    },
     discrepancies: report.discrepancies.map((discrepancy) => ({
       ...discrepancy,
       delta: serializeMoney(discrepancy.delta),
@@ -282,7 +294,7 @@ reconciliationRoutes.post("/internal", async (c) => {
         allowedBuckets: INTERNAL_BUCKETS,
         ...(request.tolerance && request.tolerance.unit === unit
           ? { tolerance: request.tolerance }
-          : {}),
+          : { tolerance: money(0n, unit) }),
       };
       reports[unit] = serializeReport(reconcile(claim, source, options));
     }
@@ -300,6 +312,7 @@ reconciliationRoutes.post("/internal", async (c) => {
     return c.json({
       success: true,
       lastIndexedBlock,
+      period: request.period ?? null,
       blockRange: { fromBlock, toBlock },
       indexerStatus: indexerState.status,
       ...(scopeWarning ? { scopeWarning } : {}),

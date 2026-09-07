@@ -13,10 +13,13 @@ import {
   deltaDirection,
 } from "./format";
 import { periodLabel } from "../../lib/reporting";
+import { amilStatusLabel } from "./amilText";
 import {
   isEntryLevelKind,
   type DiscrepancyKind,
   type ReconciliationReport,
+  type InternalReconciliationResponse,
+  type ReportingPeriod,
   type WireDiscrepancy,
 } from "./types";
 
@@ -28,6 +31,9 @@ export type DiscrepancyFilters = {
 };
 
 export const EMPTY_FILTERS: DiscrepancyFilters = { buckets: [], kinds: [] };
+
+export const internalPeriodLabel = (period: ReportingPeriod | null | undefined): string =>
+  period === null ? "Snapshot tanpa filter periode" : period ? periodLabel(period) : "Cakupan waktu tidak dinyatakan";
 
 export function filterDiscrepancies(
   discrepancies: WireDiscrepancy[],
@@ -97,6 +103,7 @@ export type ExportContext = {
   balanceSheet?: "ON" | "OFF" | null;
   checkedAt: Date;
   filtered: boolean;
+  ledgerScope?: Pick<InternalReconciliationResponse, "period" | "lastIndexedBlock" | "blockRange" | "scopeWarning" | "indexerStatus">;
 };
 
 /**
@@ -110,20 +117,37 @@ export function toCsv({
   balanceSheet,
   checkedAt,
   filtered,
+  ledgerScope,
 }: ExportContext): string {
   const netDelta = netDeltaOf(discrepancies);
   const unit = report.netDelta.unit;
 
   const preamble = [
     csvRow(["Laporan Rekonsiliasi"]),
-    csvRow(["Periode pelaporan", periodLabel(report.period)]),
+    csvRow(["Periode pelaporan", ledgerScope ? internalPeriodLabel(ledgerScope.period) : periodLabel(report.period)]),
     csvRow(["Sisi klaim", report.claimLabel]),
     csvRow(["Sisi sumber", report.sourceLabel]),
     csvRow(["Posisi neraca", balanceSheet ? BALANCE_SHEET_LABELS[balanceSheet] : "Seluruh posisi"]),
     csvRow(["Waktu pemeriksaan", checkedAt.toISOString()]),
+    ...(ledgerScope ? [
+      csvRow(["Blok terindeks terakhir", String(ledgerScope.lastIndexedBlock)]),
+      csvRow(["Rentang blok sumber", String(ledgerScope.blockRange.fromBlock), String(ledgerScope.blockRange.toBlock)]),
+      csvRow(["Status indexer", ledgerScope.indexerStatus ?? "Tidak tersedia"]),
+      csvRow(["Catatan cakupan", ledgerScope.scopeWarning ?? "Snapshot rekonsiliasi internal"]),
+    ] : []),
     csvRow(["Cakupan baris", filtered ? "Sesuai filter yang aktif" : "Seluruh selisih"]),
     csvRow(["Total selisih bersih", netDelta, unit]),
     csvRow(["Jumlah selisih", String(discrepancies.length)]),
+    csvRow(["Plafon hak amil", amilStatusLabel(report.amilAssessment?.status)]),
+    ...(report.amilAssessment?.checks.length ? [
+      csvRow(["Hak amil - seluruh cakupan, tidak mengikuti filter selisih"]),
+      csvRow(["Sisi", "Kode PZ / cakupan", "Posisi", "Pengumpulan", "Hak amil", "Plafon", "Unit", "Status", "Catatan"]),
+      ...report.amilAssessment.checks.map((check) => csvRow([
+        check.side === "claim" ? "Klaim" : "Sumber", check.key, check.balanceSheet,
+        check.collected?.amount ?? "", check.actual?.amount ?? "", check.ceiling?.amount ?? "",
+        check.collected?.unit ?? check.actual?.unit ?? unit, amilStatusLabel(check.status), check.reason ?? "",
+      ])),
+    ] : []),
     csvRow([]),
   ];
 

@@ -16,6 +16,7 @@ export type WireLedgerEntry = {
   bucket: string;
   balanceSheet: BalanceSheetPosition;
   value: WireMoney;
+  amilAmount?: WireMoney;
   label?: string;
 };
 
@@ -54,13 +55,32 @@ export type ReconciliationReport = {
   absoluteDelta: WireMoney;
   discrepancies: WireDiscrepancy[];
   entryCounts: { claim: number; source: number; matched: number };
+  /** Optional during rolling deployment; absent means not checked. */
+  amilAssessment?: AmilAssessment;
 };
+
+export type AmilStatus = "WITHIN_CEILING" | "EXCEEDED" | "NOT_CHECKED";
+export type AmilCheck = {
+  side: "claim" | "source";
+  key: string;
+  label?: string;
+  balanceSheet: BalanceSheetPosition;
+  collected: WireMoney | null;
+  actual: WireMoney | null;
+  ceiling: WireMoney | null;
+  status: AmilStatus;
+  reason?: string;
+};
+export type AmilAssessment = { status: AmilStatus; checks: AmilCheck[] };
 
 export type InternalReconciliationResponse = {
   success: boolean;
+  /** null is an explicitly unfiltered snapshot; absent supports older API versions. */
+  period?: ReportingPeriod | null;
   lastIndexedBlock: number;
   blockRange: { fromBlock: number; toBlock: number };
   indexerStatus?: string;
+  scopeWarning?: string;
   reports: Record<CurrencyUnit, ReconciliationReport>;
 };
 

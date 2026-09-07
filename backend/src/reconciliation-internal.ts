@@ -25,6 +25,8 @@ import {
   type ReportingPeriod,
 } from "./reconciliation";
 import { proposalAmount, toWholeAmount, unitOfCurrencyType, withinPeriod } from "./ledger-rows";
+import { asnafOf } from "./period-report";
+import type { AmilBasis } from "./reconciliation-amil";
 
 export type InternalDonationRow = {
   trxId: string;
@@ -48,6 +50,7 @@ export type InternalProposalRow = {
   currencyType: number; // 0: IDR, 1: USDC
   amount: number | string;
   status: string; // 'Pending' | 'Approved' | 'Executed' | 'Cancelled'
+  asnafCategory?: string | number | null;
   txHash?: string | null;
   createdAt?: Date | string | null;
   executedAt?: Date | string | null;
@@ -104,6 +107,27 @@ const entry = (
   value: Money,
   label: string
 ): LedgerEntry => ({ key, bucket, balanceSheet: "ON", value, label });
+
+function internalAmilBasis(snapshot: InternalSnapshot, unit: CurrencyUnit): AmilBasis {
+  const base: AmilBasis = {
+    key: "PROTOKOL", label: "Snapshot batch settled dan penyaluran tereksekusi",
+    balanceSheet: "ON", collected: null, actual: null,
+  };
+  if (unit !== "IDR") return { ...base, reason: "Jumlah deposit USDC asli belum tersimpan; estimasi IDR tidak dipakai sebagai basis plafon." };
+  const batches = snapshot.batches.filter(isSettled);
+  const executed = snapshot.proposals.filter((p) => p.status === "Executed" && p.currencyType === 0);
+  if (batches.length === 0 && executed.length === 0) return { ...base, reason: "Tidak ada data batch settled atau penyaluran IDR dalam snapshot ini." };
+  const duplicateBatch = new Set(batches.map((b) => b.batchNumber)).size !== batches.length;
+  const duplicateProposal = new Set(executed.map((p) => p.proposalIdOnChain)).size !== executed.length;
+  if (duplicateBatch || duplicateProposal) return { ...base, reason: "Baris batch atau penyaluran ganda membuat basis hak amil tidak dapat dipastikan." };
+  base.collected = money(batches.reduce((sum, b) => sum + toWholeAmount(b.totalAmountIDR, `Batch #${b.batchNumber}`), 0n), unit);
+  if (executed.some((p) => asnafOf(p.asnafCategory) === "LAINNYA")) {
+    return { ...base, reason: "Asnaf penyaluran tidak lengkap atau tidak dikenal; hak amil tidak dianggap nol." };
+  }
+  base.actual = money(executed.filter((p) => asnafOf(p.asnafCategory) === "AMIL")
+    .reduce((sum, p) => sum + proposalAmount(p).amount, 0n), unit);
+  return base;
+}
 
 /**
  * Builds both sides of the internal ledger for one currency unit. Rupiah and
@@ -217,8 +241,12 @@ export function buildInternalLedgerSides(
   }
 
   return {
-    claim: { label: CLAIM_LABEL, entries: claimEntries },
-    source: { label: SOURCE_LABEL, entries: sourceEntries },
+    claim: { label: CLAIM_LABEL, entries: claimEntries, amilBasis: [internalAmilBasis(snapshot, unit)] },
+    source: { label: SOURCE_LABEL, entries: sourceEntries, amilBasis: [{
+      key: "PROTOKOL", label: "Event penyaluran terindeks", balanceSheet: "ON",
+      collected: null, actual: null,
+      reason: "Event penyaluran tidak memuat asnaf; plafon hak amil sisi sumber belum dapat diperiksa.",
+    }] },
   };
 }
 
@@ -273,6 +301,7 @@ export function snapshotFromRows(
         amount: row.amount,
         status: row.status,
         txHash: row.txHash ?? null,
+        asnafCategory: row.asnafCategory ?? null,
         createdAt: row.createdAt ?? null,
         executedAt: row.executedAt ?? null,
       })),

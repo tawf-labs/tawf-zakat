@@ -9,6 +9,8 @@
  * both reconciliation modes (antar-lembaga and internal) share this one core.
  */
 
+import { assessReconciliationAmil, type AmilAssessment, type AmilBasis } from "./reconciliation-amil";
+
 export type CurrencyUnit = "IDR" | "USDC_6DP";
 
 export type Money = { amount: bigint; unit: CurrencyUnit };
@@ -20,6 +22,8 @@ export type LedgerEntry = {
   bucket: string; // jenis dana / kategori
   balanceSheet: BalanceSheetPosition;
   value: Money;
+  /** Hak amil attributed to this collection row; omitted means unknown, not zero. */
+  amilAmount?: Money;
   label?: string; // nama Pengelola Zakat / deskripsi, untuk ditampilkan
 };
 
@@ -27,6 +31,8 @@ export type LedgerSide = {
   label: string;
   entries: LedgerEntry[];
   declaredTotals?: LedgerEntry[]; // total yang diklaim, untuk diuji terhadap jumlah entri
+  /** Internal mapper only: ledger streams are not all collection and cannot be summed. */
+  amilBasis?: AmilBasis[];
 };
 
 export type ReportingPeriod = { kind: "SEMESTER" | "AKHIR_TAHUN"; year: number };
@@ -81,6 +87,8 @@ export type ReconciliationReport = {
   absoluteDelta: Money;
   discrepancies: Discrepancy[]; // urut: |delta| menurun, lalu key menaik
   entryCounts: { claim: number; source: number; matched: number };
+  /** Separate from arithmetic agreement: balanced does not mean within the ceiling. */
+  amilAssessment: AmilAssessment;
 };
 
 /** Jenis dana per PerBAZNAS 1/2023 - the default bucket dimension. */
@@ -191,8 +199,36 @@ function validateSide(
           `Satuan mata uang tidak pernah dikonversi diam-diam - rekonsiliasikan tiap unit secara terpisah.`
       );
     }
+    if (entry.amilAmount !== undefined) {
+      if (isTotal) throw new ReconciliationInputError(`${where}: hak amil tidak boleh diletakkan pada total.`);
+      if (!entry.amilAmount || typeof entry.amilAmount.amount !== "bigint" || entry.amilAmount.amount < 0n) {
+        throw new ReconciliationInputError(`${where}: hak amil harus berupa bilangan bulat nonnegatif.`);
+      }
+      if (entry.amilAmount.unit !== unit) {
+        throw new ReconciliationInputError(`${where}: unit hak amil harus sama dengan unit pengumpulan (${unit}).`);
+      }
+    }
   }
 
+  const basisKeys = new Set<string>();
+  for (const [index, basis] of (side.amilBasis ?? []).entries()) {
+    const where = `${side.label} (${role}): basis hak amil index ${index}, key "${basis.key}"`;
+    const id = JSON.stringify([basis.key, basis.balanceSheet]);
+    if (!basis.key?.trim() || !["ON", "OFF"].includes(basis.balanceSheet) || basisKeys.has(id)) {
+      throw new ReconciliationInputError(`${where}: key atau posisi neraca tidak sah, atau ganda.`);
+    }
+    basisKeys.add(id);
+    for (const value of [basis.collected, basis.actual]) {
+      if (value === null) continue;
+      if (!value || typeof value.amount !== "bigint" || value.amount < 0n) {
+        throw new ReconciliationInputError(`${where}: jumlah harus bilangan bulat nonnegatif.`);
+      }
+      if (!["IDR", "USDC_6DP"].includes(value.unit) || (unit !== null && value.unit !== unit)) {
+        throw new ReconciliationInputError(`${where}: unit tidak dikenal atau berbeda dari ledger.`);
+      }
+      unit = value.unit;
+    }
+  }
   return unit;
 }
 
@@ -245,6 +281,7 @@ function scopeToBalanceSheet(
   return {
     label: side.label,
     entries: side.entries.filter((entry) => entry.balanceSheet === position),
+    ...(side.amilBasis ? { amilBasis: side.amilBasis.filter((basis) => basis.balanceSheet === position) } : {}),
     ...(side.declaredTotals
       ? { declaredTotals: side.declaredTotals.filter((total) => total.balanceSheet === position) }
       : {}),
@@ -374,7 +411,7 @@ export function reconcile(
 
   let unit = validateSide(claim, "claim", allowedBuckets, null);
   unit = validateSide(source, "source", allowedBuckets, unit);
-  const reportUnit: CurrencyUnit = unit ?? "IDR";
+  const reportUnit: CurrencyUnit = unit ?? options.tolerance?.unit ?? "IDR";
 
   if (options.tolerance && options.tolerance.unit !== reportUnit) {
     throw new ReconciliationInputError(
@@ -469,6 +506,7 @@ export function reconcile(
     netDelta: money(netDelta, reportUnit),
     absoluteDelta: money(absoluteDelta, reportUnit),
     discrepancies,
+    amilAssessment: assessReconciliationAmil(scopedClaim, scopedSource, options.balanceSheet),
     entryCounts: {
       claim: scopedClaim.entries.length,
       source: scopedSource.entries.length,

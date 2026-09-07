@@ -40,10 +40,10 @@ export function ReconciliationSummary({
           <CheckCircle2 className="mt-0.5 h-8 w-8 shrink-0 text-emerald-600" />
           <div>
             <h2 className="font-serif text-2xl font-bold text-emerald-900">
-              Tidak ada selisih.
+              Tidak ada selisih pengumpulan.
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-emerald-800">
-              Setiap entri pada <strong>{report.claimLabel}</strong> cocok dengan{" "}
+              Nilai pengumpulan pada <strong>{report.claimLabel}</strong> cocok dengan{" "}
               <strong>{report.sourceLabel}</strong>, dan setiap total yang dideklarasikan sama
               dengan jumlah rinciannya. Periode {periodLabel(report.period)}.
             </p>

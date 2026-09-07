@@ -41,7 +41,7 @@ export function asRecord(value: unknown, what: string): Record<string, unknown> 
 export function parseWholeAmount(raw: unknown, where: string): bigint {
   if (typeof raw === "bigint") return raw;
   if (typeof raw === "number") {
-    if (!Number.isInteger(raw)) fail(`${where} memiliki jumlah yang bukan bilangan bulat: ${raw}.`);
+    if (!Number.isSafeInteger(raw)) fail(`${where} memiliki jumlah yang bukan bilangan bulat aman: ${raw}. Gunakan teks angka untuk menjaga presisi.`);
     return BigInt(raw);
   }
   if (typeof raw !== "string" || !/^-?\d+$/.test(raw.trim())) {

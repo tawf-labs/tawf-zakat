@@ -101,7 +101,7 @@ export function LedgerSideEditor({
         rows={10}
         spellCheck={false}
         className={`${fieldClass} resize-y font-mono text-[12px] leading-relaxed`}
-        placeholder={"PZ-1401;BAZNAS Kab. Kampar;Zakat;on;1.500.000.000\nGRAND TOTAL;Total tercetak;-;on;1.500.000.000"}
+        placeholder={"Kode PZ;Nama;Jenis dana;Posisi;Pengumpulan;Hak amil\nPZ-1401;BAZNAS Kab. Kampar;Zakat;on;1.500.000.000;150.000.000\nGRAND TOTAL;Total tercetak;-;on;1.500.000.000"}
       />
 
       <p className="mt-2 text-[11px] text-[#5e7a70]">

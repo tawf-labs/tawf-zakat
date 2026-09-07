@@ -192,7 +192,9 @@ Mesin murni yang menerima dua **sisi ledger** dan mengembalikan setiap titik per
 
 **Kelas selisih**: `AMOUNT_MISMATCH`, `MISSING_IN_CLAIM`, `MISSING_IN_SOURCE` (tingkat entri, masuk `netDelta`); `BUCKET_TOTAL_MISMATCH`, `GRAND_TOTAL_MISMATCH`, `DUPLICATE_KEY` (tingkat total, dilaporkan terpisah agar tidak terhitung ganda).
 
-**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless). Hasil rekonsiliasi yang seimbang belum merupakan vonis plafon hak amil: pemeriksaan pada bagian L hanya mencakup angka IDR laporan periode, bukan data unggahan atau kedua sisi rekonsiliasi.
+**Hak amil**: `amilAmount` opsional pada entri pengumpulan (kolom keenam teks bertabel) dijumlahkan per PZ dan posisi neraca. `amilAssessment` terpisah dari `balanced`: `WITHIN_CEILING`, `EXCEEDED`, atau `NOT_CHECKED`, dengan angka dan alasan pada tiap sisi. Toleransi dan filter selisih tidak menyembunyikan pelanggaran plafon. Mode internal memakai batch settled sekali sebagai basis IDR dan penyaluran AMIL tereksekusi dalam snapshot yang sama; aturan hitung 12,5% di `amil-policy.ts` juga dipakai laporan periode, tetapi populasi keduanya tetap berbeda.
+
+**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless). Hak amil yang tidak tersedia tidak dianggap nol: unggahan lama, asnaf yang tidak dikenal, sisi event tanpa asnaf, dan basis USDC internal yang belum tersedia menghasilkan `NOT_CHECKED`. Kecocokan angka ledger bukan vonis kepatuhan plafon.
 
 ### L. Laporan Periode Terverifikasi — Validator Deterministik (ADR-0018)
 
