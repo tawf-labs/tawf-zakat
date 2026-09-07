@@ -151,4 +151,70 @@ describe("POST /api/period-report/verify", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/unit tidak dikenal/i);
   });
+
+  it("returns the stage durations, with every span accounted for", async () => {
+    const figures = await figuresOf();
+    const { durations } = figures;
+
+    expect(durations.intervals.map((interval: any) => interval.name)).toEqual([
+      "pengajuan_ke_persetujuan",
+      "persetujuan_ke_eksekusi",
+      "pengajuan_ke_eksekusi",
+      "eksekusi_ke_atestasi",
+      "pengajuan_ke_atestasi",
+    ]);
+
+    for (const interval of durations.intervals) {
+      // An unmeasured span carries null, never a zero a reader could take for
+      // "instant", and every disbursement is accounted for one way or the other.
+      expect(interval.averageHours === null || /^\d+$/.test(interval.averageHours)).toBe(true);
+      expect(
+        interval.sampleCount +
+          interval.unmeasured.belumSelesai +
+          interval.unmeasured.tidakTercatat
+      ).toBe(durations.trails.length);
+    }
+
+    expect(durations.notes.length).toBeGreaterThan(0);
+  });
+
+  it("carries every disbursement trail with its four ADR-0006 stages", async () => {
+    const { durations } = await figuresOf();
+
+    for (const trail of durations.trails) {
+      expect(trail.marks.map((mark: any) => mark.stage)).toEqual([
+        "PENGAJUAN",
+        "PERSETUJUAN_DPS",
+        "EKSEKUSI",
+        "ATESTASI",
+      ]);
+      for (const mark of trail.marks) {
+        expect(mark.blockNumber === null || Number.isInteger(mark.blockNumber)).toBe(true);
+      }
+    }
+  });
+
+  it("accepts a duration claim in hours, and rejects one that drifts", async () => {
+    const figures = await figuresOf();
+    const sample = figureNamed(figures, "durasi.penyaluran_ditelusuri");
+
+    const passing = await post({
+      period: PERIOD,
+      draft: { claims: [{ name: sample.name, value: sample.value }], narrative: "" },
+    });
+    expect((await passing.json()).verdict.outcome).toBe("LOLOS");
+
+    const drifting = await post({
+      period: PERIOD,
+      draft: {
+        claims: [
+          { name: sample.name, value: { amount: String(Number(sample.value.amount) + 1), unit: sample.value.unit } },
+        ],
+        narrative: "",
+      },
+    });
+    const body = await drifting.json();
+    expect(body.verdict.outcome).toBe("DITOLAK");
+    expect(body.verdict.findings[0].kind).toBe("KLAIM_TIDAK_COCOK");
+  });
 });

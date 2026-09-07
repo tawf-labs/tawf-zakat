@@ -79,13 +79,34 @@ export function periodBounds(period: ReportingPeriod): { from: Date; to: Date } 
  */
 export type PeriodPlacement = "INSIDE" | "OUTSIDE" | "UNDATED";
 
+/**
+ * A stored timestamp as a `Date`, or null when there is no readable one.
+ *
+ * The single reader for every stored date column, so "this row has no usable
+ * date" means the same thing to a period filter, a period figure and a stage
+ * duration. Absent, empty and unparseable all collapse to null here on purpose:
+ * a caller that has to tell those apart is asking a question the column cannot
+ * answer.
+ */
+export function readableTime(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const at = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** The same timestamp as ISO text, or null when there is no readable one. */
+export const readableIso = (value: Date | string | null | undefined): string | null =>
+  readableTime(value)?.toISOString() ?? null;
+
+export const isAttested = (row: { auditStatus?: string | null }): boolean =>
+  Boolean(row.auditStatus) && String(row.auditStatus).toUpperCase() !== "PENDING";
+
 export function placeInPeriod(
   timestamp: Date | string | null | undefined,
   period: ReportingPeriod
 ): PeriodPlacement {
-  if (!timestamp) return "UNDATED";
-  const at = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  if (Number.isNaN(at.getTime())) return "UNDATED";
+  const at = readableTime(timestamp);
+  if (at === null) return "UNDATED";
   const { from, to } = periodBounds(period);
   return at >= from && at < to ? "INSIDE" : "OUTSIDE";
 }

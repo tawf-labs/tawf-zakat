@@ -4,6 +4,7 @@ import { PeriodPicker } from "./PeriodPicker";
 import { FigureTable } from "./FigureTable";
 import { AmilCeilingCard } from "./AmilCeilingCard";
 import { AttestationList } from "./AttestationList";
+import { DurationPanel } from "./DurationPanel";
 import { NarrativePanel } from "./NarrativePanel";
 import { VerdictBanner } from "./VerdictBanner";
 import { periodLabel } from "../../lib/reporting";
@@ -69,6 +70,7 @@ export function PeriodReportWorkbench() {
           </div>
 
           <AmilCeilingCard amilShare={figures.amilShare} />
+          <DurationPanel durations={figures.durations} />
           <AttestationList figures={figures} />
 
           <NarrativePanel

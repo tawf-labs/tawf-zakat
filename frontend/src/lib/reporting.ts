@@ -8,7 +8,7 @@
  */
 
 /** Every unit a reported quantity can carry across the wire. */
-export type ReportedUnit = "IDR" | "USDC_6DP" | "BPS" | "COUNT";
+export type ReportedUnit = "IDR" | "USDC_6DP" | "BPS" | "COUNT" | "JAM";
 
 export type ReportingPeriodLike = { kind: string; year: number };
 
@@ -44,6 +44,27 @@ export const formatUsdc = (amount: string): string => formatScaled(amount, 6);
 /** Basis points as the percentage a reader expects, without floats. */
 export const formatBps = (amount: string): string => `${formatScaled(amount, 2)}%`;
 
+/**
+ * Whole hours as the span a reader thinks in: days and hours, never a decimal.
+ * The stored figure stays the hour count it always was - this only chooses the
+ * words for it, so nothing here can drift from the number the validator checked.
+ */
+export function formatHours(amount: string): string {
+  const negative = amount.startsWith("-");
+  const hours = BigInt(negative ? amount.slice(1) : amount);
+  const days = hours / 24n;
+  const rest = hours % 24n;
+
+  const spoken =
+    days === 0n
+      ? `${rest} jam`
+      : rest === 0n
+        ? `${groupDigits(days.toString())} hari`
+        : `${groupDigits(days.toString())} hari ${rest} jam`;
+
+  return negative ? `-${spoken}` : spoken;
+}
+
 /** Renders any reported quantity in the words its unit calls for. */
 export function formatQuantity(quantity: ReportedQuantity): string {
   switch (quantity.unit) {
@@ -53,6 +74,8 @@ export function formatQuantity(quantity: ReportedQuantity): string {
       return formatBps(quantity.amount);
     case "COUNT":
       return groupDigits(quantity.amount);
+    case "JAM":
+      return formatHours(quantity.amount);
     default:
       return `Rp${groupDigits(quantity.amount)}`;
   }

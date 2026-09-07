@@ -23,6 +23,12 @@ const FIGURES: WirePeriodFigures = {
     actualRatio: { amount: "0", unit: "BPS" },
   },
   attestations: [],
+  durations: {
+    intervals: [],
+    slowest: null,
+    trails: [],
+    notes: [],
+  },
   notes: [],
 };
 

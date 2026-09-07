@@ -70,10 +70,13 @@ export const DRAFTING_SYSTEM = [
   "3. Setiap angka yang Anda tulis di dalam narasi harus Anda daftarkan di `claims` dengan nama dan nilai yang persis sama seperti yang diberikan.",
   "4. Jangan menjumlahkan nilai rupiah dengan nilai USDC. Keduanya satuan yang berbeda dan tidak ada kursnya di sini.",
   "5. Tulis angka rupiah lengkap dengan awalan Rp dan pemisah ribuan titik, misalnya Rp1.500.000.",
+  "6. Angka durasi bersatuan jam. Sebutkan apa adanya dalam jam dan jangan mengubahnya menjadi hari, minggu, atau bulan - konversi adalah perhitungan, dan Anda tidak menghitung apa pun.",
+  "7. Setiap rata-rata durasi punya angka jumlah sampelnya sendiri. Bila Anda menyebut sebuah rata-rata, sebutkan pula jumlah penyaluran yang mendasarinya, agar pembaca tidak membaca satu kejadian sebagai tren.",
+  "8. Durasi yang diukur adalah lamanya proses di dalam sistem ini, dari pengajuan sampai atestasi. Itu bukan jam kerja penyusunan laporan di lembaga, dan tidak boleh disebut demikian.",
   "",
   "Draf Anda diperiksa sebuah validator deterministik sebelum dibaca manusia. Validator itu mencocokkan setiap klaim dengan hitungan dari ledger dan memindai narasi Anda untuk angka rupiah yang tidak Anda klaim. Satu angka yang menyimpang menolak seluruh draf, jadi lebih baik menyebut sedikit angka yang benar daripada banyak angka yang tidak Anda salin dengan tepat.",
   "",
-  "Tulis narasi dalam bahasa Indonesia yang tenang dan lugas. Jelaskan komposisi pengumpulan dan penyaluran, serta posisi hak amil terhadap plafonnya. Jangan memuji lembaga dan jangan menyimpulkan tren yang tidak didukung angka yang diberikan.",
+  "Tulis narasi dalam bahasa Indonesia yang tenang dan lugas. Jelaskan komposisi pengumpulan dan penyaluran, posisi hak amil terhadap plafonnya, serta lamanya proses penyaluran bila angkanya tersedia. Jangan memuji lembaga dan jangan menyimpulkan tren yang tidak didukung angka yang diberikan.",
 ].join("\n");
 
 /** Renders the figures as the model receives them: names, labels, exact digits. */
@@ -90,6 +93,13 @@ export function figuresForPrompt(figures: PeriodFigures): string {
     "",
     `Plafon hak amil terlampaui: ${figures.amilShare.withinCeiling ? "tidak" : "ya"}`,
     `Jumlah atestasi auditor pada periode ini: ${figures.attestations.length}`,
+    // Named rather than left for the model to work out: picking the slowest
+    // stage would be a comparison, and a comparison is a calculation.
+    `Tahap yang paling banyak memakan waktu: ${
+      figures.durations.slowest
+        ? `${figures.durations.slowest.label} (durasi.${figures.durations.slowest.name}.rata_rata_jam)`
+        : "belum ada perbandingan tahap dari penyaluran yang sama pada periode ini"
+    }`,
     "",
     "Catatan batas laporan ini, sampaikan bila relevan:",
     ...figures.notes.map((note) => `- ${note}`),

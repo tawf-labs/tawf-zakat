@@ -5,6 +5,7 @@ import { validateDraft } from "../src/report-validator";
 import {
   describeFailure,
   draftReport,
+  DRAFTING_SYSTEM,
   figuresForPrompt,
   toReportDraft,
   type RawDraft,
@@ -62,6 +63,39 @@ describe("Perintah penyusunan draf - angka diserahkan, bukan diminta dihitung", 
     expect(prompt).toContain("penyaluran.fakir.idr");
     expect(prompt).toContain("40000000");
     expect(prompt).toContain("IDR");
+  });
+
+  it("menamai sendiri tahap paling lambat, alih-alih menyuruh model membandingkannya", () => {
+    const withDuration = computePeriodFigures(
+      {
+        donations: LEDGER.donations,
+        proposals: [
+          {
+            ...LEDGER.proposals[0]!,
+            createdAt: "2026-03-01T00:00:00.000Z",
+            executedAt: "2026-03-02T00:00:00.000Z",
+            auditStatus: "AUDITED_WTP",
+            auditedAt: "2026-03-04T00:00:00.000Z",
+          },
+        ],
+      },
+      PERIOD
+    );
+
+    const prompt = figuresForPrompt(withDuration);
+
+    expect(prompt).toContain("durasi.eksekusi_ke_atestasi.rata_rata_jam");
+    expect(prompt).toContain("JAM");
+    expect(prompt).toContain("Tahap yang paling banyak memakan waktu");
+  });
+
+  it("menyatakan tidak ada tahap terukur ketika periode belum punya durasi", () => {
+    expect(figuresForPrompt(figures())).toContain("belum ada perbandingan tahap");
+  });
+
+  it("melarang model mengubah satuan jam menjadi hari", () => {
+    expect(DRAFTING_SYSTEM).toContain("jangan mengubahnya menjadi hari");
+    expect(DRAFTING_SYSTEM).toContain("bukan jam kerja penyusunan laporan");
   });
 
   it("menyerahkan angka orde triliunan sebagai digit penuh, tanpa pembulatan", () => {

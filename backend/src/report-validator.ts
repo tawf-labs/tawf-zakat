@@ -71,6 +71,12 @@ export type RupiahMention = { excerpt: string; amount: bigint };
  * Rupiah as this report writes it: an `Rp` prefix, digits grouped in thousands,
  * or a run of digits the sentence itself calls rupiah. A bare `2026` is a year
  * and a `12,5%` is a ratio, so neither is treated as money.
+ *
+ * The grouped-digits branch stops short of a duration word. Period figures now
+ * include stage durations in hours, so `1.200 jam` is a number the report is
+ * entitled to state and rejecting it as unclaimed rupiah would be the validator
+ * refusing a true figure. An `Rp` prefix still wins over the exception, because
+ * a sentence that says rupiah means rupiah whatever follows it.
  */
 const RUPIAH_PATTERN =
   /Rp\.?\s*\d[\d.]*|\b\d{1,3}(?:\.\d{3})+\b|\b\d+(?=\s*(?:rupiah|IDR)\b)/gi;
@@ -78,6 +84,10 @@ const RUPIAH_PATTERN =
 export function rupiahMentions(narrative: string): RupiahMention[] {
   const mentions: RupiahMention[] = [];
   for (const match of narrative.matchAll(RUPIAH_PATTERN)) {
+    // Inspect the suffix after matching the full number, so the regex cannot
+    // backtrack into a shorter thousands group and mistake it for rupiah.
+    const suffix = narrative.slice(match.index! + match[0].length);
+    if (!/^Rp/i.test(match[0]) && /^\s*(?:jam|hari)\b/i.test(suffix)) continue;
     const excerpt = match[0].replace(/\.$/, "");
     const digits = excerpt.replace(/[^\d]/g, "");
     if (digits === "") continue;
@@ -91,6 +101,7 @@ const UNIT_LABELS: Record<FigureUnit, string> = {
   USDC_6DP: "USDC (satuan minor 6 desimal)",
   BPS: "basis poin",
   COUNT: "transaksi",
+  JAM: "jam",
 };
 
 /** Groups digits the Indonesian way, straight from the integer. */

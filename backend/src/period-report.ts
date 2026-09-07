@@ -7,7 +7,7 @@
  * Nothing here reads a database, a store, `viem`, or the network - it takes
  * rows, not a connection - so the whole of its behaviour is testable offline.
  *
- * Two limits are stated out loud in `notes` rather than papered over:
+ * Limits are stated out loud in `notes` rather than papered over:
  *
  * 1. `donations` carries no jenis dana column and this work adds no migration,
  *    so every fiat donation counts as ZAKAT and the other four jenis dana of
@@ -18,9 +18,19 @@
  * 3. A row with no usable timestamp is left out of every period rather than
  *    counted in all of them, and the number left out is reported as a figure of
  *    its own - so nothing disappears quietly on the way to a signature.
+ * 4. A stage duration is published only where both its ends carry a readable
+ *    timestamp. What is left unmeasured is counted and named instead - see
+ *    `disbursement-duration` for why a block number is not a clock.
  */
 
-import { placeInPeriod, proposalAmount, toWholeAmount } from "./ledger-rows";
+import {
+  disbursementTrail,
+  periodDurations,
+  stageBlocksByProposal,
+  type PeriodDurations,
+  type StageEventRow,
+} from "./disbursement-duration";
+import { isAttested, placeInPeriod, proposalAmount, readableIso, toWholeAmount } from "./ledger-rows";
 import { JENIS_DANA, type CurrencyUnit, type ReportingPeriod } from "./reconciliation";
 
 /**
@@ -28,10 +38,11 @@ import { JENIS_DANA, type CurrencyUnit, type ReportingPeriod } from "./reconcili
  * points and a plain count are the other two. Figures are never added across
  * units, so a comparison is always `(amount, unit)` against `(amount, unit)`.
  */
-export const FIGURE_UNITS = ["IDR", "USDC_6DP", "BPS", "COUNT"] as const satisfies readonly (
+export const FIGURE_UNITS = ["IDR", "USDC_6DP", "BPS", "COUNT", "JAM"] as const satisfies readonly (
   | CurrencyUnit
   | "BPS"
   | "COUNT"
+  | "JAM"
 )[];
 
 export type FigureUnit = (typeof FIGURE_UNITS)[number];
@@ -84,7 +95,16 @@ export type ProposalRow = {
   auditedAt?: Date | string | null;
 };
 
-export type PeriodRows = { donations: DonationRow[]; proposals: ProposalRow[] };
+export type PeriodRows = {
+  donations: DonationRow[];
+  proposals: ProposalRow[];
+  /**
+   * Indexed on-chain events, read only for the block number that fixed each
+   * stage. Optional: without them the durations still stand and the trails
+   * simply carry no block markers, rather than carrying invented ones.
+   */
+  events?: StageEventRow[];
+};
 
 export type Attestation = {
   proposalId: number;
@@ -119,6 +139,8 @@ export type PeriodFigures = {
   distribution: Figure[];
   amilShare: AmilShare;
   attestations: Attestation[];
+  /** How long each stage of this period's disbursements actually took. */
+  durations: PeriodDurations;
   /** Limits of this period's figures, said plainly rather than left implied. */
   notes: string[];
 };
@@ -127,6 +149,7 @@ const idr = (amount: bigint): FigureValue => ({ amount, unit: "IDR" });
 const usdc = (amount: bigint): FigureValue => ({ amount, unit: "USDC_6DP" });
 const bps = (amount: bigint): FigureValue => ({ amount, unit: "BPS" });
 const count = (amount: bigint): FigureValue => ({ amount, unit: "COUNT" });
+const jam = (amount: bigint): FigureValue => ({ amount, unit: "JAM" });
 
 const figure = (name: string, label: string, value: FigureValue): Figure => ({ name, label, value });
 
@@ -197,15 +220,6 @@ const isCollected = (row: DonationRow): boolean =>
 
 const isUsdcDonation = (row: DonationRow): boolean =>
   String(row.paymentMethod ?? "").toUpperCase() === "USDC";
-
-const isAttested = (row: ProposalRow): boolean =>
-  Boolean(row.auditStatus) && String(row.auditStatus).toUpperCase() !== "PENDING";
-
-const asIso = (value: Date | string | null | undefined): string | null => {
-  if (!value) return null;
-  const at = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(at.getTime()) ? null : at.toISOString();
-};
 
 export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod): PeriodFigures {
   let undatedRows = 0;
@@ -320,7 +334,7 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
       opinion: row.auditOpinion ?? null,
       reportCID: row.auditReportCID ?? null,
       txHash: row.auditTxHash ?? null,
-      auditedAt: asIso(row.auditedAt),
+      auditedAt: readableIso(row.auditedAt),
     }))
     .sort((a, b) => a.proposalId - b.proposalId);
 
@@ -340,18 +354,66 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
     ),
   ];
 
+  // --- Durasi penyaluran -----------------------------------------------------
+  //
+  // The population is exactly the disbursements the penyaluran figures above
+  // describe: executed, inside this period. A duration drawn from a different
+  // population than the amounts beside it would be two reports in one document.
+  const stageBlocks = stageBlocksByProposal(rows.events ?? []);
+  const durations = periodDurations(
+    executed.map((row) => disbursementTrail(row, stageBlocks.get(row.proposalIdOnChain) ?? {}))
+  );
+
+  const durationFigures: Figure[] = [
+    figure(
+      "durasi.penyaluran_ditelusuri",
+      "Penyaluran yang jejak waktunya ditelusuri",
+      count(BigInt(durations.trails.length))
+    ),
+    ...durations.intervals.flatMap((interval) => [
+      // The sample count is published for every interval, including the ones
+      // with no average at all - a zero there is what tells a reader the
+      // absence is measured rather than overlooked.
+      figure(
+        `durasi.${interval.name}.jumlah_sampel`,
+        `${interval.label}: jumlah penyaluran yang terukur`,
+        count(BigInt(interval.sampleCount))
+      ),
+      // An average is published only where one exists. A stage nobody has
+      // passed yet has no duration, and publishing zero hours for it would read
+      // as instant - the opposite of the truth.
+      ...(interval.averageHours === null
+        ? []
+        : [
+            figure(
+              `durasi.${interval.name}.rata_rata_jam`,
+              `${interval.label}: rata-rata (jam)`,
+              jam(interval.averageHours)
+            ),
+          ]),
+    ]),
+  ];
+
   return {
     period,
-    figures: [...collection, ...distribution, ...amilFigures, ...attestationFigures],
+    figures: [
+      ...collection,
+      ...distribution,
+      ...amilFigures,
+      ...attestationFigures,
+      ...durationFigures,
+    ],
     collection,
     distribution,
     amilShare,
     attestations,
+    durations,
     notes: [
       "Basis data tidak menyimpan jenis dana per donasi, sehingga seluruh donasi fiat dihitung sebagai Zakat dan jenis dana lainnya bernilai nol.",
       "Donasi USDC dicatat sebagai estimasi rupiah pada kurs tetap, sehingga dilaporkan terpisah dan tidak dijumlahkan ke pengumpulan per jenis dana.",
       "Penyaluran dihitung dari proposal berstatus Executed pada periode ini; rupiah dan USDC dilaporkan sebagai satuan yang berbeda.",
       "Baris tanpa tanggal yang dapat dibaca dikeluarkan dari periode ini - bukan dihitung di setiap periode - dan jumlahnya dilaporkan sebagai angka tersendiri.",
+      ...durations.notes,
     ],
   };
 }

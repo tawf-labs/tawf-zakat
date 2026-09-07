@@ -273,3 +273,89 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
     );
   });
 });
+
+describe("Durasi penyaluran sebagai angka periode", () => {
+  const traced = (overrides: Partial<ProposalRow> & { proposalIdOnChain: number }): ProposalRow =>
+    proposal({
+      amount: 1_000_000,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      executedAt: "2026-03-05T00:00:00.000Z",
+      auditStatus: "AUDITED_WTP",
+      auditedAt: "2026-03-07T00:00:00.000Z",
+      ...overrides,
+    });
+
+  it("menerbitkan rata-rata durasi sebagai angka yang bisa diklaim draf", () => {
+    const figures = computePeriodFigures(
+      rows([], [traced({ proposalIdOnChain: 1 })]),
+      AKHIR_TAHUN_2026
+    );
+
+    const average = figureByName(figures, "durasi.eksekusi_ke_atestasi.rata_rata_jam");
+    expect(average?.value).toEqual({ amount: 48n, unit: "JAM" });
+    expect(amountOf(figures, "durasi.eksekusi_ke_atestasi.jumlah_sampel")).toBe(1n);
+    expect(amountOf(figures, "durasi.penyaluran_ditelusuri")).toBe(1n);
+  });
+
+  it("menyertakan jumlah sampel meski tidak ada satu pun rata-rata yang terukur", () => {
+    const figures = computePeriodFigures(
+      rows([], [traced({ proposalIdOnChain: 1, auditStatus: "PENDING", auditedAt: null })]),
+      AKHIR_TAHUN_2026
+    );
+
+    expect(figureByName(figures, "durasi.eksekusi_ke_atestasi.rata_rata_jam")).toBeUndefined();
+    expect(amountOf(figures, "durasi.eksekusi_ke_atestasi.jumlah_sampel")).toBe(0n);
+  });
+
+  it("menelusuri penyaluran yang sama dengan yang mendasari angka penyaluran", () => {
+    const figures = computePeriodFigures(
+      rows(
+        [],
+        [
+          traced({ proposalIdOnChain: 1 }),
+          // Di luar periode, sehingga tidak boleh ikut ditelusuri.
+          traced({ proposalIdOnChain: 2, executedAt: "2025-03-05T00:00:00.000Z" }),
+          // Belum dieksekusi, sehingga belum menjadi penyaluran.
+          traced({ proposalIdOnChain: 3, status: "Approved", executedAt: null }),
+        ]
+      ),
+      AKHIR_TAHUN_2026
+    );
+
+    expect(figures.durations.trails.map((trail) => trail.proposalId)).toEqual([1]);
+  });
+
+  it("menempelkan nomor blok dari event terindeks ke jejak tiap tahap", () => {
+    const figures = computePeriodFigures(
+      {
+        donations: [],
+        proposals: [traced({ proposalIdOnChain: 4 })],
+        events: [
+          {
+            eventName: "DisbursementProposed",
+            blockNumber: 501,
+            argsJson: JSON.stringify({ proposalId: "4" }),
+          },
+          {
+            eventName: "DisbursementExecuted",
+            blockNumber: 555,
+            argsJson: JSON.stringify({ proposalId: "4" }),
+          },
+        ],
+      },
+      AKHIR_TAHUN_2026
+    );
+
+    const marks = figures.durations.trails[0]!.marks;
+    expect(marks.find((mark) => mark.stage === "PENGAJUAN")?.blockNumber).toBe(501);
+    expect(marks.find((mark) => mark.stage === "EKSEKUSI")?.blockNumber).toBe(555);
+  });
+
+  it("menyatakan batas pengukurannya di dalam catatan laporan", () => {
+    const figures = computePeriodFigures(rows(), AKHIR_TAHUN_2026);
+
+    expect(figures.notes.some((note) => note.includes("bukan jam kerja penyusunan laporan"))).toBe(
+      true
+    );
+  });
+});

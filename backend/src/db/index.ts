@@ -5,8 +5,9 @@ import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
 import { type Hex, createPublicClient, http, parseAbi } from "viem";
 import { arbitrumSepolia } from "viem/chains";
-import { and, asc, desc, eq, gte, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
+import { STAGE_EVENT_NAMES } from "../disbursement-duration";
 
 const syncPublicClient = createPublicClient({
   chain: arbitrumSepolia,
@@ -934,6 +935,36 @@ export const dbService = {
     return [];
   },
 
+  /**
+   * The indexed events that mark a disbursement's stages (Spec #61, ticket #65).
+   *
+   * Read-only and narrow: only the three events of the disbursement lifecycle,
+   * and only for the block number each one fixes a stage at. The attestation is
+   * relayed gasless and is not among the indexed events, so it has no row here
+   * and the period report reports its block number as absent rather than
+   * guessing one.
+   */
+  async getProposalStageEvents() {
+    if (db) {
+      try {
+        return await db
+          .select({
+            eventName: schema.onchainEvents.eventName,
+            blockNumber: schema.onchainEvents.blockNumber,
+            argsJson: schema.onchainEvents.argsJson,
+          })
+          .from(schema.onchainEvents)
+          .where(
+            inArray(schema.onchainEvents.eventName, STAGE_EVENT_NAMES)
+          )
+          .orderBy(asc(schema.onchainEvents.blockNumber), asc(schema.onchainEvents.logIndex));
+      } catch (err) {
+        console.error("Failed to fetch proposal stage events:", err);
+      }
+    }
+    return [];
+  },
+
   // --- ROLE REGISTRY METHODS (ADR-0008) ---
   async grantRoleMember(
     roleHash: string,
@@ -1183,6 +1214,5 @@ export const dbService = {
     return { success: true, record, trxId };
   },
 };
-
 
 

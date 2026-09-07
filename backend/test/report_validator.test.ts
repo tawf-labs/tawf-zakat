@@ -350,4 +350,21 @@ describe("Pemindai angka rupiah di dalam narasi", () => {
   it("tidak memperlakukan tahun dan persentase sebagai rupiah", () => {
     expect(rupiahMentions("Sepanjang 2026 porsi amil 12,5% dari plafon.")).toEqual([]);
   });
+
+  it("tidak memperlakukan durasi sebagai rupiah", () => {
+    // Durasi kini ikut menjadi angka periode, dan satuannya jam - bukan rupiah.
+    // Tanpa ini, "1.200 jam" akan ditolak sebagai rupiah yang tidak diklaim.
+    expect(rupiahMentions("rata-rata 1.200 jam dan 1.500 hari")).toEqual([]);
+    expect(rupiahMentions("selesai dalam 48 jam")).toEqual([]);
+  });
+
+  it("tidak memotong kelompok ribuan dari durasi panjang menjadi rupiah", () => {
+    expect(rupiahMentions("1.200.000 jam, lalu selisih 2.500 rupiah")).toEqual([
+      { excerpt: "2.500", amount: 2_500n },
+    ]);
+  });
+
+  it("tetap menangkap rupiah berawalan Rp meski diikuti kata satuan waktu", () => {
+    expect(rupiahMentions("Rp1.200 jam kerja").map((m) => m.amount)).toEqual([1_200n]);
+  });
 });

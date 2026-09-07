@@ -160,7 +160,7 @@ Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
    - `/tata-kelola`: Portal operasional terpadu untuk Amil (pengajuan & BAST upload), Dewan Pengawas Syariah (DPS Safe Multisig approval), Auditor Independen (Gasless EIP-712 WTP Attestation).
    - `/tata-kelola/roles`: Roster transparansi dan manajemen peran on-chain.
    - `/rekonsiliasi`: Mesin rekonsiliasi (ADR-0017) — bandingkan rekap Laporan Zakat Wilayah dengan Laporan Kinerja kabupaten/kota, plus panel mode internal (basis data versus ledger on-chain) untuk Auditor Independen.
-   - `/laporan-periode`: Laporan periode terverifikasi (ADR-0018) — pilih periode, lihat angka yang dihitung dari ledger, mintakan narasinya, lalu baca vonis validator. Draf yang ditolak tidak menyediakan jalan untuk tetap ditandatangani.
+   - `/laporan-periode`: Laporan periode terverifikasi (ADR-0018) — pilih periode, lihat angka yang dihitung dari ledger, durasi tiap tahap penyaluran beserta jejak waktunya, mintakan narasinya, lalu baca vonis validator. Draf yang ditolak tidak menyediakan jalan untuk tetap ditandatangani.
 2. **Feature-Driven / Vertical Slice Structure**:
    - `src/components/ui/`: UI Primitives (Button, Dialog, Card, Badge, Input, Tabs, Table) berbasis Tailwind + Radix.
    - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`, `evidence/`, `reconciliation/`, `periodReport/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
@@ -206,6 +206,7 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 | `backend/src/report-validator.ts` | Menerima angka periode dan sebuah draf, mengembalikan **vonis**. Fungsi murni: tanpa model, jaringan, jam, maupun keacakan. |
 | `backend/src/wire.ts` | Kodek kawat bersama untuk uang dan periode pelaporan, dipakai route rekonsiliasi dan route laporan periode. Jumlah melintas sebagai teks desimal di kedua arah. |
 | `backend/src/ledger-rows.ts` | Pembacaan baris tersimpan yang dipakai bersama: jumlah tersimpan menjadi `bigint`, serta penempatan stempel waktu terhadap periode (`INSIDE` / `OUTSIDE` / `UNDATED`). |
+| `backend/src/disbursement-duration.ts` | **Durasi penyaluran**: mengubah stempel waktu dan nomor blok yang sudah tersimpan menjadi jejak tahap demi tahap per penyaluran, lalu meratakannya menjadi agregat periode. |
 
 **Penyusun draf** (`backend/src/report-drafter.ts`) — satu-satunya modul pada fitur ini yang menyentuh jaringan, sehingga sengaja diletakkan di luar tabel modul murni di atas. Ia memanggil `claude-opus-5` di sisi server dengan structured output, tanpa abstraksi penyedia dan tanpa suntikan dependensi. Yang diuji adalah kedua sisinya: perintah yang dibentuk dari angka periode, dan draf yang dibentuk dari respons. `draftReport` tidak pernah melempar galat.
 
@@ -223,6 +224,12 @@ Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem me
 **Antarmuka**: irisan fitur `frontend/src/features/periodReport/` pada route `/laporan-periode` (ADR-0012). Modul murninya — `verdictText.ts` (penyajian vonis, dan `canSign` yang menutup jalan tanda tangan bagi draf yang tidak lolos) dan `reportDocument.ts` (berkas unduhan, hanya terbentuk untuk laporan yang lolos) — diuji tanpa merender komponen.
 
 **Kunci API**: `ANTHROPIC_API_KEY` pada lingkungan server. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia.
+
+**Durasi penyaluran** (tiket #65) menjawab pertanyaan yang selama ini tidak bisa dijawab lembaga tentang dirinya sendiri: berapa lama, sebenarnya, dari pengajuan sampai atestasi, dan di tahap mana waktu paling banyak hilang. Tahapnya mengikuti pemisahan kewenangan ADR-0006 — **pengajuan → persetujuan DPS → eksekusi → atestasi** — dan rata-ratanya menjadi angka periode bersatuan `JAM`, sehingga klaim AI atasnya diperiksa validator yang sama dengan yang memeriksa angka rupiah.
+
+Empat keadaan rentang, sengaja dibedakan: `SELESAI` (kedua ujungnya bertanggal), `BELUM_SELESAI` (tahapnya belum terlewati), `TIDAK_TERCATAT` (tahapnya terlewati tetapi tidak meninggalkan stempel waktu yang terbaca), dan `URUTAN_TERBALIK` (stempel waktu bertentangan dengan urutan tahap). **Rentang yang tidak terukur tidak pernah dilaporkan sebagai nol jam** — nol akan terbaca sebagai seketika, kebalikan dari yang benar. Setiap rata-rata disertai jumlah penyaluran yang mendasarinya dan jumlah yang dikeluarkan menurut alasannya. Tahap paling lambat hanya dibandingkan pada rentang yang tidak tumpang tindih dan diukur dari penyaluran yang sama; saat ini rentangnya sebelum dan sesudah dana keluar.
+
+**Nomor blok bukan jam.** Persetujuan DPS terjadi on-chain dan terindeks beserta nomor bloknya, tetapi tidak ada kolom stempel waktunya dan pekerjaan ini tidak menambah migrasi — sehingga kedua rentang di sekitarnya dilaporkan `TIDAK_TERCATAT`, bukan ditaksir dari nomor blok. Yang diukur adalah lamanya proses **di dalam sistem ini**, bukan jam kerja penyusunan laporan di lembaga. Jejak satu penyaluran dapat dibuka di layar dan di berkas unduhan, lengkap dengan nomor blok yang tertaut ke explorer.
 
 **Baris tanpa tanggal** dikeluarkan dari setiap periode — bukan dihitung di semuanya — dan jumlahnya dilaporkan sebagai angka `baris.tanpa_tanggal`, sehingga tidak ada yang hilang diam-diam. Rekonsiliasi tetap memakai aturan longgarnya sendiri, karena baris yang tersembunyi di sana berarti selisih yang tak terlaporkan.
 

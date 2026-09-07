@@ -16,6 +16,11 @@
  */
 
 import { Hono } from "hono";
+import type {
+  IntervalAggregate,
+  PeriodDurations,
+  StageInterval,
+} from "../disbursement-duration";
 import {
   computePeriodFigures,
   FIGURE_UNITS,
@@ -72,12 +77,51 @@ const serializeFigure = (figure: Figure) => ({
   value: serializeQuantity(figure.value),
 });
 
+/**
+ * Durations cross the wire as whole hours in a decimal string, the same shape
+ * every other quantity uses. A stage with no duration carries `null` and its
+ * reason in words - never a zero, which a reader would take for "instant".
+ */
+const serializeInterval = (interval: StageInterval) => ({
+  name: interval.name,
+  label: interval.label,
+  from: interval.from,
+  to: interval.to,
+  state: interval.state,
+  hours: interval.hours === null ? null : interval.hours.toString(),
+  reason: interval.reason,
+});
+
+const serializeAggregate = (aggregate: IntervalAggregate) => ({
+  name: aggregate.name,
+  label: aggregate.label,
+  from: aggregate.from,
+  to: aggregate.to,
+  averageHours: aggregate.averageHours === null ? null : aggregate.averageHours.toString(),
+  sampleCount: aggregate.sampleCount,
+  unmeasured: aggregate.unmeasured,
+});
+
+const serializeDurations = (durations: PeriodDurations) => ({
+  intervals: durations.intervals.map(serializeAggregate),
+  slowest: durations.slowest
+    ? { ...durations.slowest, averageHours: durations.slowest.averageHours.toString() }
+    : null,
+  trails: durations.trails.map((trail) => ({
+    proposalId: trail.proposalId,
+    marks: trail.marks,
+    intervals: trail.intervals.map(serializeInterval),
+  })),
+  notes: durations.notes,
+});
+
 export function serializeFigures(figures: PeriodFigures) {
   return {
     period: figures.period,
     figures: figures.figures.map(serializeFigure),
     collection: figures.collection.map(serializeFigure),
     distribution: figures.distribution.map(serializeFigure),
+    durations: serializeDurations(figures.durations),
     amilShare: {
       withinCeiling: figures.amilShare.withinCeiling,
       collected: serializeQuantity(figures.amilShare.collected),
@@ -116,11 +160,15 @@ export const serializeDraft = (draft: ReportDraft) => ({
 
 /** Reads the ledger and computes the period's figures. Shared by both routes. */
 async function periodFiguresFor(period: ReportingPeriod): Promise<PeriodFigures> {
-  const [donationRows, proposalRows] = await Promise.all([
+  const [donationRows, proposalRows, stageEvents] = await Promise.all([
     dbService.getDonationRows(),
     dbService.getProposalRows(),
+    dbService.getProposalStageEvents(),
   ]);
-  return computePeriodFigures({ donations: donationRows, proposals: proposalRows }, period);
+  return computePeriodFigures(
+    { donations: donationRows, proposals: proposalRows, events: stageEvents },
+    period
+  );
 }
 
 /**

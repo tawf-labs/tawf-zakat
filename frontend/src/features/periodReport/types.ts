@@ -32,6 +32,73 @@ export type WireAmilShare = {
   actualRatio: WireQuantity;
 };
 
+/** The four stages of ADR-0006, in the order authority passes through them. */
+export const DISBURSEMENT_STAGES = [
+  "PENGAJUAN",
+  "PERSETUJUAN_DPS",
+  "EKSEKUSI",
+  "ATESTASI",
+] as const;
+
+export type DisbursementStage = (typeof DISBURSEMENT_STAGES)[number];
+
+export type WireStageMark = {
+  stage: DisbursementStage;
+  label: string;
+  reached: boolean;
+  /** ISO wall-clock, or null when this system holds no readable one. */
+  at: string | null;
+  /** The block that fixed this stage on chain, or null when none was indexed. */
+  blockNumber: number | null;
+};
+
+/**
+ * `SELESAI` - measured. `BELUM_SELESAI` - the stage has not been passed yet.
+ * `TIDAK_TERCATAT` - no readable timestamp. `URUTAN_TERBALIK` - contradictory
+ * timestamps. Unmeasured intervals never stand in for a zero duration.
+ */
+export type IntervalState = "SELESAI" | "BELUM_SELESAI" | "TIDAK_TERCATAT" | "URUTAN_TERBALIK";
+
+export type WireStageInterval = {
+  name: string;
+  label: string;
+  from: DisbursementStage;
+  to: DisbursementStage;
+  state: IntervalState;
+  /** Whole hours as a decimal string, or null when there is no duration. */
+  hours: string | null;
+  reason: string | null;
+};
+
+export type WireDisbursementTrail = {
+  proposalId: number;
+  marks: WireStageMark[];
+  intervals: WireStageInterval[];
+};
+
+export type WireIntervalAggregate = {
+  name: string;
+  label: string;
+  from: DisbursementStage;
+  to: DisbursementStage;
+  /** Whole hours as a decimal string, or null when nothing was measurable. */
+  averageHours: string | null;
+  sampleCount: number;
+  unmeasured: { belumSelesai: number; tidakTercatat: number; urutanTerbalik: number };
+};
+
+export type WirePeriodDurations = {
+  intervals: WireIntervalAggregate[];
+  slowest: {
+    name: string;
+    label: string;
+    averageHours: string;
+    sampleCount: number;
+  } | null;
+  trails: WireDisbursementTrail[];
+  notes: string[];
+};
+
 export type WirePeriodFigures = {
   period: ReportingPeriod;
   figures: WireFigure[];
@@ -39,6 +106,7 @@ export type WirePeriodFigures = {
   distribution: WireFigure[];
   amilShare: WireAmilShare;
   attestations: WireAttestation[];
+  durations: WirePeriodDurations;
   notes: string[];
 };
 

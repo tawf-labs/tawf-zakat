@@ -42,6 +42,126 @@ const FIGURES: WirePeriodFigures = {
       auditedAt: "2026-04-01T00:00:00.000Z",
     },
   ],
+  durations: {
+    intervals: [
+      {
+        name: "pengajuan_ke_persetujuan",
+        label: "Pengajuan sampai persetujuan DPS",
+        from: "PENGAJUAN",
+        to: "PERSETUJUAN_DPS",
+        averageHours: null,
+        sampleCount: 0,
+        unmeasured: { belumSelesai: 0, tidakTercatat: 1, urutanTerbalik: 0 },
+      },
+      {
+        name: "persetujuan_ke_eksekusi",
+        label: "Persetujuan DPS sampai eksekusi penyaluran",
+        from: "PERSETUJUAN_DPS",
+        to: "EKSEKUSI",
+        averageHours: null,
+        sampleCount: 0,
+        unmeasured: { belumSelesai: 0, tidakTercatat: 1, urutanTerbalik: 0 },
+      },
+      {
+        name: "eksekusi_ke_atestasi",
+        label: "Eksekusi penyaluran sampai atestasi auditor",
+        from: "EKSEKUSI",
+        to: "ATESTASI",
+        averageHours: "50",
+        sampleCount: 1,
+        unmeasured: { belumSelesai: 0, tidakTercatat: 0, urutanTerbalik: 0 },
+      },
+      {
+        name: "pengajuan_ke_atestasi",
+        label: "Pengajuan sampai atestasi auditor",
+        from: "PENGAJUAN",
+        to: "ATESTASI",
+        averageHours: "192",
+        sampleCount: 1,
+        unmeasured: { belumSelesai: 0, tidakTercatat: 0, urutanTerbalik: 0 },
+      },
+    ],
+    slowest: {
+      name: "eksekusi_ke_atestasi",
+      label: "Eksekusi penyaluran sampai atestasi auditor",
+      averageHours: "50",
+      sampleCount: 1,
+    },
+    trails: [
+      {
+        proposalId: 1,
+        marks: [
+          {
+            stage: "PENGAJUAN",
+            label: "Pengajuan Amil",
+            reached: true,
+            at: "2026-03-01T00:00:00.000Z",
+            blockNumber: 501,
+          },
+          {
+            stage: "PERSETUJUAN_DPS",
+            label: "Persetujuan Dewan Pengawas Syariah",
+            reached: true,
+            at: null,
+            blockNumber: 540,
+          },
+          {
+            stage: "EKSEKUSI",
+            label: "Eksekusi penyaluran",
+            reached: true,
+            at: "2026-03-05T00:00:00.000Z",
+            blockNumber: 555,
+          },
+          {
+            stage: "ATESTASI",
+            label: "Atestasi Auditor Independen",
+            reached: true,
+            at: "2026-03-07T02:00:00.000Z",
+            blockNumber: null,
+          },
+        ],
+        intervals: [
+          {
+            name: "pengajuan_ke_persetujuan",
+            label: "Pengajuan sampai persetujuan DPS",
+            from: "PENGAJUAN",
+            to: "PERSETUJUAN_DPS",
+            state: "TIDAK_TERCATAT",
+            hours: null,
+            reason: "Sistem ini tidak menyimpan stempel waktu persetujuan DPS.",
+          },
+          {
+            name: "persetujuan_ke_eksekusi",
+            label: "Persetujuan DPS sampai eksekusi penyaluran",
+            from: "PERSETUJUAN_DPS",
+            to: "EKSEKUSI",
+            state: "TIDAK_TERCATAT",
+            hours: null,
+            reason: "Sistem ini tidak menyimpan stempel waktu persetujuan DPS.",
+          },
+          {
+            name: "eksekusi_ke_atestasi",
+            label: "Eksekusi penyaluran sampai atestasi auditor",
+            from: "EKSEKUSI",
+            to: "ATESTASI",
+            state: "SELESAI",
+            hours: "50",
+            reason: null,
+          },
+          {
+            name: "pengajuan_ke_atestasi",
+            label: "Pengajuan sampai atestasi auditor",
+            from: "PENGAJUAN",
+            to: "ATESTASI",
+            state: "SELESAI",
+            hours: "194",
+            reason: null,
+          },
+        ],
+      },
+    ],
+    notes: ["Durasi yang diukur adalah lamanya proses di dalam sistem ini."],
+  },
   notes: ["Catatan batas laporan."],
 };
 
@@ -125,5 +245,46 @@ describe("Berkas laporan yang bisa diunduh", () => {
     expect(reportFileName({ kind: "SEMESTER", year: 2025 })).toBe(
       "laporan-periode-semester-2025.txt"
     );
+  });
+});
+
+describe("Durasi penyaluran di dalam berkas unduhan", () => {
+  const text = () => buildReportDocument(FIGURES, DRAFT, passed)!;
+
+  it("menyebut rata-rata tiap tahap beserta jumlah penyalurannya", () => {
+    expect(text()).toContain("DURASI PENYALURAN");
+    expect(text()).toContain("Eksekusi penyaluran sampai atestasi auditor: 2 hari 2 jam");
+    expect(text()).toContain("bukan tren");
+  });
+
+  it("menuliskan tahap tanpa stempel waktu sebagai alasannya, bukan sebagai nol jam", () => {
+    const line = text()
+      .split("\n")
+      .find((row) => row.includes("Pengajuan sampai persetujuan DPS"))!;
+
+    expect(line).toContain("tidak terukur");
+    expect(line).not.toContain("0 jam");
+  });
+
+  it("menamai tahap tempat waktu paling banyak hilang", () => {
+    expect(text()).toContain("Waktu paling banyak hilang di tahap");
+  });
+
+  it("membuka jejak tiap penyaluran beserta nomor bloknya", () => {
+    const document = text();
+
+    expect(document).toContain("JEJAK WAKTU PENYALURAN");
+    expect(document).toContain("Penyaluran #1 - pengajuan sampai atestasi: 8 hari 2 jam");
+    expect(document).toContain("Pengajuan Amil:");
+    expect(document).toContain("blok #501");
+    expect(document).toContain("blok #540");
+    // Atestasi direlay gasless dan tidak punya event terindeks, sehingga tidak
+    // ada nomor blok yang boleh dikarang untuknya.
+    expect(document).toContain("Atestasi Auditor Independen:");
+    expect(document).not.toContain("blok #null");
+  });
+
+  it("menyebut tahap yang terlewati tanpa stempel waktu apa adanya", () => {
+    expect(text()).toContain("Terlewati, tanpa stempel waktu tersimpan");
   });
 });
