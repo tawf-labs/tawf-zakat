@@ -1,255 +1,181 @@
-# CONTEXT.md: Zakat Transparency & Anti-Corruption Protocol (ZAKAT-L1)
+# ZKT — Bukti dan Rekonsiliasi Pengelolaan Zakat
 
-## 1. Executive Summary & Problem Framing
+ZKT adalah layanan teknologi bagi Pengelola Zakat untuk menelusuri bukti, merekonsiliasi catatan, dan memeriksa angka laporan. Pengelolaan serta penyaluran dana merupakan tanggung jawab lembaga.
 
-- **Core Problem**: Korupsi dan ketidakpercayaan publik pada lembaga amil zakat (penggelapan dana masuk, penggelembungan hak operasional amil, penahanan dana gelap, serta mustahik fiktif).
-- **Target Audience**:
-  - **Primary (Web2/Awam)**: Muzakki Indonesia yang ingin berdonasi via fiat (QRIS / Virtual Account) tanpa perlu tahu apa itu gas fee, seed phrase, atau dompet Web3.
-  - **Secondary (Web3 Native)**: Komunitas kripto/diaspora yang ingin menyalurkan zakat secara on-chain langsung via token USDC.
-- **Core Architecture Strategy**: Multi-Unit Ledger Architecture (No Complex FX Oracle). Smart contract memisahkan pencatatan saldo akuntansi Fiat (IDR) dan custody aset nyata (USDC) secara independen.
-- **Target Network**: **Ethereum Sepolia Testnet** (Direct EVM L1 Data Availability).
-- **Technology Stack**:
-  - **Smart Contract**: Solidity v0.8.20 + Foundry (`sc/`).
-  - **Frontend**: TanStack Start / Vite + React 19 + Wagmi v3 + ConnectKit + Viem + TailwindCSS (`frontend/`).
-  - **Backend / Relayer**: Bun + Hono API + Drizzle ORM + Neon PostgreSQL (`backend/`).
+## Language
 
----
+### Pelaku
 
-## 2. Live Deployed Smart Contracts & Infrastructure (Sepolia L1)
+**Pengelola Zakat (PZ)**:
+Lembaga pengelola zakat berizin, mencakup BAZNAS pusat, provinsi, kabupaten/kota, serta LAZ pada tingkatnya.
 
-| **ZakatProtocolL1** | [`0x6014542ce8f759946aa6f3f9af54fb91685065a5`](https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5) | Core Vault, Multi-Sig 2-of-3, Invariant Split, Merkle Roots |
-| **Safe DPS Multisig** | [`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`](https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1) | 2-of-3 Institutional Sharia Supervisory Board Account |
-| **Official Sepolia USDC** | [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/token/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) | Circle Testnet ERC-20 Token |
-| **Database Cloud** | Neon Serverless PostgreSQL (`ep-calm-glade-...`) | Drizzle ORM Live Persistence (Clean Zero-Seed State) |
-| **Wallet Connector** | ConnectKit by Family + Wagmi v3 (Project ID: `b6808bd11499531c85eddbf3cbc72e65`) | EIP-6963 Multi-Injected Discovery |
+**Vendor teknologi**:
+Penyedia layanan teknologi bagi Pengelola Zakat; dalam konteks proyek ini, ZKT menempati peran tersebut.
+_Avoid_: Amil, pengelola dana zakat, jika yang dimaksud adalah tim penyedia teknologi.
 
----
+**Muzakki**:
+Pihak yang menunaikan zakat melalui Pengelola Zakat.
 
-## 3. Inflow Architecture: Dual-Gate Ingestion
+**Mustahik**:
+Penerima zakat yang memenuhi kriteria asnaf.
 
-```
-                ┌─────────────────────────────────────────────────────────┐
-                │                    ZAKAT INFLOW GATE                    │
-                └─────────────────────────────────────────────────────────┘
-                               │                           │
-                [JALUR A: FIAT QRIS / VA]        [JALUR B: WEB3 DIRECT USDC]
-                               │                           │
-               Payment Gateway (Midtrans/Xendit)  Direct Web3 Deposit (ERC-20 Transfer)
-                               │                           │
-                Rekening Escrow Bank Amil          Smart Contract Vault (On-Chain Custody)
-                               │                           │
-                   Off-Chain Batching Engine               │
-                  (Build Daily Merkle Tree)                │
-                               │                           │
-                               └─────────────┬─────────────┘
-                                             ▼
-                            ┌─────────────────────────────────┐
-                            │     ETHEREUM L1 SMART CONTRACT   │
-                            │        (ZakatProtocolL1.sol)    │
-                            └─────────────────────────────────┘
-```
+**Amil operasional**:
+Petugas lembaga yang menyiapkan pengajuan, catatan, dan bukti pengelolaan atau penyaluran dana.
+_Avoid_: Auditor, DPS, untuk peran pelaksana operasional.
 
-### A. Jalur Fiat (QRIS / Virtual Account)
-- **Karakteristik**: Uang fisik mengendap di rekening bank/escrow amil. Smart contract hanya mencatat State Root (Merkle Root) dan akumulasi nilai IDR untuk efisiensi gas fee L1.
-- **Batching Settlement**: Relayer mengagregasi ratusan donasi fiat harian menjadi 1 transaksi L1 (`recordFiatBatchSettlement`).
-- **Muzakki Verification**: Muzakki menerima Merkle Inclusion Proof di web client untuk memverifikasi donasinya tercatat pada Root yang terkunci di L1.
+**Dewan Pengawas Syariah (DPS)**:
+Pihak pengawas syariah lembaga yang menelaah kelayakan syariah pengajuan penyaluran.
 
-### B. Jalur Web3-Native (USDC Custody Vault)
-- **Karakteristik**: Smart contract bertindak sebagai Custodial Vault yang secara riil menampung token ERC-20 USDC (`usdcToken.safeTransferFrom(msg.sender, address(this), amount)`).
-- **Allowance Flow**: Frontend menerapkan 2-step automated allowance check (`approve` ➔ `depositUSDC`).
-- **EIP-6963 Protection**: Menggunakan `account.connector.getProvider()` untuk memisahkan ekstensi MetaMask dan Phantom tanpa konflik `window.ethereum`.
+**Auditor Independen**:
+Pihak yang memeriksa catatan dan bukti pengelolaan dana secara independen setelah kegiatan yang diperiksa berlangsung.
+_Avoid_: Pemberi persetujuan operasional, untuk peran auditor.
 
----
+**Ruang kerja lembaga**:
+Lingkup kerja privat milik satu Pengelola Zakat pada aplikasi ini. Lembaga yang diwakili seorang pengguna ditentukan oleh keanggotaannya, bukan oleh isi permintaan.
+_Avoid_: Tenant, workspace, dalam teks berbahasa Indonesia.
 
-## 4. Downstream Governance & Anti-Corruption Execution
+**Peran ruang kerja**:
+Kewenangan seseorang **di dalam** ruang kerja lembaganya. Tiga peran, disimpan sebagai `ADMIN`, `OFFICER`, dan `READER`:
 
-```mermaid
-flowchart TD
-    subgraph Invariant_Split ["1. Pembagian Alokasi Syariah (Code-is-Law)"]
-        A[Dana Masuk: IDR / USDC] --> B{Smart Contract Split}
-        B -->|Plafon Maksimal 12.5%| C[Amil Treasury Pool]
-        B -->|Minimal 87.5% Terkunci| D[Mustahik Vault Pool]
-    end
+- **Administrator lembaga** (`ADMIN`) — mengelola keanggotaan lembaganya. Administrator pertama ditetapkan lewat onboarding, tidak dicetak dari dalam aplikasi.
+- **Petugas** (`OFFICER`) — [[Amil operasional]] dalam peran ruang kerja; menyiapkan dan mengubah bukti lembaganya.
+- **Pembaca berwenang** (`READER`) — membaca sumber terbatas lembaganya, tanpa kewenangan membuat atau mengubah apa pun.
 
-    subgraph MultiSig_Governance ["2. Otorisasi Pengeluaran Multi-Sig 2-of-3"]
-        D -->|Pengajuan Program Bantuan| E[proposeDisbursement]
-        F[Amil Internal] -->|Approve 1| G{Multi-Sig Quorum >= 2}
-        H[Dewan Pengawas Syariah] -->|Approve 2| G
-        I[Auditor Independen] -->|Approve 3| G
-        E --> G
-    end
+_Avoid_: Menyamakan peran ruang kerja dengan role kontrak. Keduanya terpisah: peran ruang kerja mengatur akses offchain, sedangkan pencatatan bukti dan penerbitan laporan diperiksa registry di rantai (ADR-0022). Keanggotaan pada basis data tidak pernah menjadi cadangan bagi role rantai yang tidak sah.
 
-    subgraph Proof_Of_Disbursement ["3. Eksekusi & Bukti Penyaluran"]
-        G -->|Lolos Quorum 2-of-3| J[executeDisbursement]
-        J -->|KTP & Struk Penerima| K[Salted Hash Engine: NIK + Tanda Tangan]
-        K -->|Pinning Metadata| L[IPFS Storage]
-        L -->|Input CID ke L1| M[Immutable Event Log]
-        M -->|Update Invariant & Kunci Data| N[Public Transparency Dashboard]
-    end
-```
+**Tantangan akses**:
+Nonce sekali pakai yang diterbitkan server, mengikat tujuan aplikasi, akun, dan masa berlaku, lalu ditandatangani akun tersebut. Alamat yang disebut dalam permintaan bukan bukti identitas.
+_Avoid_: Menyebutnya login atau password.
 
-### A. Pembagian Hak Amil Otomatis (Invariant Lock) & 8 Asnaf BAZNAS
-Smart contract mengunci batas atas hak amil maksimal 12.5% (1/8) secara terprogram (`MAX_AMIL_BPS = 1250`). Sisanya (minimal 87.5%) mutlak terkunci hanya untuk 7 asnaf mustahik lainnya (Fakir, Miskin, Muallaf, Riqab, Gharimin, Fisabilillah, Ibnu Sabil) sesuai ketentuan syariah Islam dan regulasi BAZNAS Indonesia.
+### Dana dan penyaluran
 
-### B. Otorisasi Penyaluran & Pemisahan Kekuasaan (Separation of Powers - ADR-0006)
-Sesuai regulasi BAZNAS, DSN-MUI, dan standar akuntansi syariah (PSAK 109):
-1. **Pre-Disbursement Approval (Persetujuan Awal)**:
-   - **Amil Operasional** (`DEFAULT_ADMIN_ROLE`): Mengajukan proposal dan data survei kelayakan.
-   - **Dewan Pengawas Syariah (DPS)** (`SHARIA_SUPERVISOR_ROLE`): Komite kolektif (3-5 Ustadz) yang bertindak sebagai pemegang hak veto keabsahan fikih 8 Asnaf. DPS menggunakan **Safe.global Multisig Account** (kuorum 2-of-3 internal ustadz). Persetujuan DPS adalah syarat mutlak sebelum dana boleh keluar.
-2. **Ex-Post Independent Audit (Audit Pasca-Penyaluran)**:
-   - **Auditor Independen** (`AUDITOR_ROLE`): Bertindak setelah dana tersalurkan (*ex-post*). Auditor mencocokkan mutasi bank, BAST di IPFS, dan bukti on-chain, lalu menerbitkan **Cryptographic Attestation (Opini WTP)** di ledger L1 tanpa terlibat dalam konflik kepentingan persetujuan harian.
+**Jenis dana**:
+Kategori dana yang dibedakan dalam pencatatan dan pelaporan: Zakat, Fitrah, Infak/Sedekah, Kurban, dan Dana Sosial Keagamaan Lainnya (DSKL).
+_Avoid_: Mata uang, asnaf, untuk dimensi jenis dana.
 
-### C. Alur Pengajuan Proposal & Dual-Receipt IPFS Pipeline
-1. **Tahap 1 (Intake & Pre-Approval Metadata)**:
-   - Amil mengunggah data survei mustahik ke backend.
-   - Sistem menghasilkan `beneficiaryHash = Keccak256(NIK + Nama + SecretSalt)` (perlindungan privasi UU PDP & anti-doxxing) dan menyematkan dokumen survei/SKTM ke IPFS (`proposalMetadataCID`).
-   - Amil memanggil fungsi smart contract `proposeDisbursement(...)`.
-2. **Tahap 2 (Verifikasi Syariah oleh DPS)**:
-   - DPS menelaah dossier IPFS melalui portal web dan menandatangani persetujuan on-chain melalui Safe.global (`approveDisbursement(proposalId)`).
-3. **Tahap 3 (Eksekusi Penyaluran & Post-Disbursement BAST Receipt)**:
-   - **Jalur USDC (`currencyType = 1`)**: Kontrak mentransfer token USDC langsung ke dompet mustahik/vendor (`usdcRecipient`).
-   - **Jalur IDR (`currencyType = 0`)**: Amil mentransfer dana dari Rekening Escrow Bank ke rekening mustahik, mengunggah Berita Acara Serah Terima (BAST) & bukti transfer ke IPFS (`disbursementReceiptCID`), lalu memanggil `executeDisbursement(...)` untuk memperbarui ledger L1.
-4. **Tahap 4 (Jejak Audit & Attestation)**:
-   - Auditor menginspeksi dual-receipt di Public Explorer dan menerbitkan stempel atestasi kepatuhan syariah dan akuntansi.
-5. **Anti-Double Claim**: Smart contract mengunci mapping `hasReceivedZakat[beneficiaryHash][periodId] = true` untuk mencegah mustahik fiktif atau klaim ganda dalam satu periode bantuan.
+**Asnaf**:
+Kategori penerima zakat: Fakir, Miskin, Amil, Muallaf, Riqab, Gharimin, Fisabilillah, dan Ibnu Sabil.
 
-### D. Indexer & Automated On-Chain Synchronization (ADR-0008)
-1. **Embedded Viem Poller**: Background worker di backend Bun yang melakukan sinkronisasi blok Sepolia L1 setiap 10 detik.
-2. **Event Store & Multi-Table Persistence**:
-   - Menangkap `USDCDeposited` dan otomatis mengarsipkan ke tabel `donations`.
-   - Menangkap `DisbursementProposed`, `DisbursementApproved`, `DisbursementExecuted`, `DisbursementCancelled` untuk menyinkronkan status proposal di PostgreSQL.
-   - Menangkap `RoleGranted` dan `RoleRevoked` untuk mengelola data keanggotaan aktif (`role_members`).
-3. **API Endpoints**:
-   - `GET /api/indexer/status`: Status ketinggian block dan kesehatan indexer.
-   - `GET /api/events`: Log event on-chain publik.
-   - `GET /api/governance/roles`: Data pemegang peran DPS, Auditor, Admin, Relayer.
+**Hak amil**:
+Bagian dana untuk pengelolaan zakat oleh amil menurut kebijakan yang berlaku bagi dana dan lembaganya.
+_Avoid_: Pendapatan ZKT, biaya langganan vendor.
 
-### E. Public Role Governance Panel (`/admin/roles`)
-1. **Roster Transparansi Publik**: Menampilkan 4 peran kunci (`DEFAULT_ADMIN_ROLE`, `SHARIA_SUPERVISOR_ROLE`, `AUDITOR_ROLE`, `RELAYER_ROLE`).
-2. **Identifikasi Safe Multisig**: Menandai akun DPS Safe Global (`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`) dengan badge khusus dan link ke aplikasi Safe.
-3. **Eksekusi Hak Admin On-Chain**: Form pemberian (`grantRole`) dan pencabutan (`revokeRole`) peran langsung ke smart contract Sepolia bagi wallet dengan hak Admin.
+**Pengajuan penyaluran**:
+Usulan penyaluran dengan penerima, jumlah, tujuan, dan bukti kelayakan yang akan ditelaah.
 
-### F. UX Feedback & Syariah Error Decoding
-1. **Global Toast Notification (Sonner)**: Notifikasi siklus transaksi interaktif (Proses ➔ Sukses ➔ Tautan Sepolia Etherscan).
-2. **Human-Readable Revert Translation**: Menerjemahkan error contract Solidity (`DoubleClaimDetected`, `InsufficientVaultBalance`, `QuorumNotMet`, `Unauthorized`) ke dalam istilah syariah operasional yang ramah bagi pengguna awam.
-3. **Graceful Error Boundary**: Komponen penangkap crash UI di level halaman untuk menjaga kestabilan aplikasi.
+**Persetujuan DPS**:
+Persetujuan syariah atas pengajuan penyaluran oleh DPS yang berwenang.
+_Avoid_: Kuorum umum, persetujuan auditor.
 
-### G. Universal Gasless EIP-712 Governance for Amil, DPS, & Auditor (ADR-0009 & ADR-0015)
-**Manual-test override (ADR-0019, 2026-09-08):** Pengajuan, persetujuan DPS,
-pembatalan, dan eksekusi memakai transaksi wallet ke kontrak dan konfirmasi receipt
-terverifikasi. Endpoint gasless simulasi dinonaktifkan; wallet membutuhkan ETH
-testnet. Bagian universal gasless di bawah adalah keputusan historis, bukan
-jaminan perilaku implementasi saat ini. Deployment baru aktif sejak 2026-09-08;
-alamat, role, dan hasil verifikasi dicatat di
-`docs/deployments/2026-09-08-arbitrum-sepolia.md`.
+**Penyaluran**:
+Pemberian dana atau bantuan kepada penerima yang dituju.
 
-1. **EIP-712 Typed Structured Data**: Standar tanda tangan digital human-readable di pop-up dompet (MetaMask/Rabby/Coinbase) untuk seluruh aksi tata kelola:
-   - **Amil**: Pembuatan proposal (`AmilProposal`), eksekusi pencairan (`AmilExecution`), dan pembatalan (`ProposalCancellation`).
-   - **DPS**: Persetujuan kelayakan syariah (`DpsApproval`) dan pembatalan syariah (`ProposalCancellation`).
-   - **Auditor**: Atestasi ex-post opini WTP (`AuditorAttestation`).
-2. **Universal Gasless Experience**: Amil dan DPS tidak perlu memiliki atau mengelola saldo ETH gas fee. Relayer backend memvalidasi tanda tangan EIP-712, memeriksa kewenangan role secara on-chain/DB, dan menanggung biaya gas untuk transaksi on-chain.
-3. **Clean & Professional Typography**: Antarmuka tata kelola menggunakan tipografi natural tanpa label mencolok seperti "0 Gas / Gasless Sponsored".
+**Periode bantuan**:
+Rentang yang menjadi cakupan pemberian bantuan kepada penerima.
+_Avoid_: Periode pelaporan, jika yang dimaksud adalah cakupan bantuan atau klaim penerima.
 
-### H. Real Decentralized Storage & Dedicated IPFS Gateway (ADR-0010)
-1. **Real Multipart File Uploads**: Endpoint `POST /api/ipfs/upload-file` mengunggah berkas fisik asli (scan BAST PDF, foto serah terima bantuan, sertifikat audit KAP) ke Pinata IPFS via `pinFileToIPFS`.
-2. **Dedicated Fast Gateway**: Akses berkas instan berkecepatan tinggi melalui gateway privat `white-lazy-marten-351.mypinata.cloud/ipfs/` dengan multi-gateway fallback otomatis.
-3. **Strict Validation & Zero-Broken-Link Policy**: Validasi ketat pengunggahan IPFS; mencegah pencatatan CID rusak/palsu ke smart contract on-chain Sepolia.
+### Bukti dan pemeriksaan
 
-### I. Real-Time WebSocket Architecture & Event-Driven Invalidation (ADR-0011)
-1. **Native Bun + Hono WebSocket (`/ws`)**: Jalur komunikasi real-time dua arah ultra-cepat yang menggantikan polling interval pada frontend.
-2. **Event Broadcaster Engine**: Meneruskan event on-chain dari Indexer Viem dan mutasi transaksi API (proposal baru, persetujuan DPS, pencairan BAST, atestasi audit, pembayaran QRIS) ke seluruh client yang terhubung secara instan.
-3. **Thin Invalidation Strategy**: Mengirim sinyal event ringan (< 200 bytes) untuk memicu pembaruan state frontend & notifikasi Sonner Toast tanpa beban jaringan berlebih.
-### J. Frontend Feature-Driven Architecture & Human-Centric Syariah UX (ADR-0012)
-1. **Multi-Route Information Architecture (TanStack Router)**:
-   - `/` (Beranda): Nilai transparansi, kalkulator zakat kilat, ringkasan saldo & penyaluran real-time, pilar pengawasan 3 lapis, program bantuan unggulan.
-   - `/donasi`: Alur penyaluran zakat khusus (Zakat Maal, Zakat Penghasilan, Zakat Fitrah, Infaq) dengan metode QRIS / Virtual Account / USDC Web3 & lafal niat/akad zakat.
-   - `/transparansi`: Pusat transparansi & explorer publik (neraca kas real-time, grafik alokasi 8 Asnaf BAZNAS, riwayat penyaluran mustahik, berkas BAST IPFS, & tautan Sepolia Etherscan).
-   - `/verifikasi`: Cek bukti donasi digital (pencarian via ID Transaksi / Hash NIK, verifikasi Merkle inclusion proof instan, unduh sertifikat/kwitansi zakat).
-   - `/tata-kelola`: Portal operasional terpadu untuk Amil (pengajuan & BAST upload), Dewan Pengawas Syariah (DPS Safe Multisig approval), Auditor Independen (Gasless EIP-712 WTP Attestation).
-   - `/tata-kelola/roles`: Roster transparansi dan manajemen peran on-chain.
-   - `/rekonsiliasi`: Mesin rekonsiliasi (ADR-0017) — bandingkan rekap Laporan Zakat Wilayah dengan Laporan Kinerja kabupaten/kota, plus panel mode internal (basis data versus ledger on-chain) untuk Auditor Independen.
-   - `/laporan-periode`: Laporan periode terverifikasi (ADR-0018) — pilih periode, lihat angka yang dihitung dari ledger, durasi tiap tahap penyaluran beserta jejak waktunya, mintakan narasinya, lalu baca vonis validator. Draf yang ditolak tidak menyediakan jalan untuk tetap ditandatangani.
-2. **Feature-Driven / Vertical Slice Structure**:
-   - `src/components/ui/`: UI Primitives (Button, Dialog, Card, Badge, Input, Tabs, Table) berbasis Tailwind + Radix.
-   - `src/features/`: Modul domain mandiri (`landing/`, `donation/`, `transparency/`, `verification/`, `governance/`, `evidence/`, `reconciliation/`, `periodReport/`) berisi subkomponen terisolasi (< 150 baris), hooks, types, dan API helper.
-   - `src/lib/reporting.ts` dan `src/lib/download.ts`: penyajian angka (digit rupiah, USDC, basis poin, label periode) dan penyerahan berkas ke peramban, dipakai bersama irisan `reconciliation/` dan `periodReport/` agar tidak disalin dua kali. Seluruh nilai uang diformat langsung dari teks desimalnya dan tidak pernah melewati bilangan pecahan.
-3. **Indonesian Islamic Fiqh Copywriting**:
-   - Memprioritaskan bahasa fikih dan filantropi Islam Indonesia yang menenangkan bagi Muzakki awam.
-   - Menjadikan kapabilitas kriptografi/web3 sebagai bukti jaminan syariah otomatis, dengan opsi penelusuran data teknis on-chain di tab/accordion sekunder bagi auditor.
-4. **Interactive BAZNAS Zakat Calculator**:
-   - Menghitung Zakat Penghasilan & Zakat Maal berdasarkan nisab emas BAZNAS, dengan tombol integrasi langsung ke formulir donasi.
-5. **State & Render Optimization**:
-   - Isolasi form state pada leaf components, TanStack Query v5 granular caching, dan WebSocket thin invalidation tanpa trigger re-render masif.
+**Lapisan bukti**:
+Bagian layanan ZKT yang mengikat catatan lembaga dengan bukti pendukungnya agar dapat ditelusuri dan diperiksa.
 
-### K. Reconciliation Engine v0 (ADR-0017)
+**Paket bukti laporan**:
+Laporan periode beserta snapshot sumber dan hasil rekonsiliasi yang mendasarinya, sebagai satu cakupan pemeriksaan.
 
-Mesin murni yang menerima dua **sisi ledger** dan mengembalikan setiap titik perbedaan beserta entri penyebabnya. Satu inti, dua pemanggil: mode antar-lembaga (data diunggah pengguna) dan mode internal (server membangun sendiri kedua sisi dari PostgreSQL dan event on-chain terindeks).
+**Registry bukti**:
+Catatan identitas paket bukti, pengesahannya, dan hubungan dengan versi serta atestasi yang dapat ditelusuri pemeriksa.
 
-**Kosakata domain** (mengikuti PerBAZNAS 1/2023 dan LPZN):
+**Versi laporan**:
+Bentuk laporan pada satu penerbitan beserta paket bukti yang mendasarinya.
 
-| Istilah | Arti dalam sistem ini |
-| :--- | :--- |
-| **Pengelola Zakat (PZ)** | Lembaga zakat berizin: BAZNAS pusat/provinsi/kab-kota dan LAZ pada tiap tingkat. |
-| **Laporan Zakat Wilayah** | Rekapitulasi seluruh PZ di satu provinsi yang wajib disusun BAZNAS Provinsi (Pasal 6 ayat (7), tenggat 31 Januari). Menjadi **sisi klaim**. |
-| **Laporan Kinerja** | Laporan tiap PZ kabupaten/kota yang mendasari rekap tersebut. Menjadi **sisi sumber**. |
-| **Sisi klaim / sisi sumber** | Angka yang dilaporkan versus catatan yang mendasarinya. `delta` selalu bertanda: klaim dikurangi sumber. |
-| **Jenis dana** | Zakat, Fitrah, Infak/Sedekah, Kurban, DSKL. Dimensi bucket bawaan; dimensi lain (mis. jenis PZ) harus dinyatakan eksplisit. |
-| **Posisi neraca** | *On* atau *off balance sheet*. Direkonsiliasi terpisah agar selisih di satu sisi tidak menutupi selisih di sisi lain. |
-| **Periode pelaporan** | Semester (1 Jan–30 Jun) atau akhir tahun (1 Jan–31 Des). |
-| **LPZN** | Laporan Pengelola Zakat Nasional, publikasi resmi BAZNAS. Edisi Akhir Tahun 2024 dipakai sebagai fixture emas: Tabel 2.2 versus Tabel 2.3 berselisih **Rp668.020.210.274** *on balance sheet*. |
+**Koreksi laporan**:
+Versi baru yang memperbaiki laporan sebelumnya, dengan rujukan ke versi tersebut, alasan perubahan, dan pengesahnya.
+_Avoid_: Menimpa laporan, menghapus riwayat.
 
-**Kelas selisih**: `AMOUNT_MISMATCH`, `MISSING_IN_CLAIM`, `MISSING_IN_SOURCE` (tingkat entri, masuk `netDelta`); `BUCKET_TOTAL_MISMATCH`, `GRAND_TOTAL_MISMATCH`, `DUPLICATE_KEY` (tingkat total, dilaporkan terpisah agar tidak terhitung ganda).
+**Temuan pemeriksaan**:
+Selisih atau masalah yang ditemukan ketika memeriksa catatan dan tetap menjadi bagian dari bukti pemeriksaan tersebut.
+_Avoid_: Bukti lolos, untuk keberadaan catatan temuan.
 
-**Hak amil**: `amilAmount` opsional pada entri pengumpulan (kolom keenam teks bertabel) dijumlahkan per PZ dan posisi neraca. `amilAssessment` terpisah dari `balanced`: `WITHIN_CEILING`, `EXCEEDED`, atau `NOT_CHECKED`, dengan angka dan alasan pada tiap sisi. Toleransi dan filter selisih tidak menyembunyikan pelanggaran plafon. Mode internal memakai batch settled sekali sebagai basis IDR dan penyaluran AMIL tereksekusi dalam snapshot yang sama; aturan hitung 12,5% di `amil-policy.ts` juga dipakai laporan periode, tetapi populasi keduanya tetap berbeda.
+**Snapshot sumber**:
+Salinan tetap dari data dan bukti yang digunakan untuk menyusun atau memeriksa suatu laporan.
+_Avoid_: Data terbaru, untuk sumber yang sudah terikat pada laporan tertentu.
 
-**Batas yang diketahui**: deposit USDC belum bisa dicocokkan per transaksi (baris `donations` hanya menyimpan taksiran IDR tanpa txHash); rentang blok hanya membatasi sisi on-chain; hasil tidak disimpan (v0 stateless). Hak amil yang tidak tersedia tidak dianggap nol: unggahan lama, asnaf yang tidak dikenal, sisi event tanpa asnaf, dan basis USDC internal yang belum tersedia menghasilkan `NOT_CHECKED`. Kecocokan angka ledger bukan vonis kepatuhan plafon.
+**Pengesahan lembaga**:
+Pernyataan pihak berwenang di lembaga atas catatan yang menjadi tanggung jawabnya.
+_Avoid_: Atestasi auditor, vonis validator.
 
-### L. Laporan Periode Terverifikasi — Validator Deterministik (ADR-0018)
+**Ringkasan publik**:
+Bagian paket bukti yang dapat dilihat publik, berisi ringkasan laporan, status pemeriksaan, dan sidik digital dokumen.
 
-Laporan periode yang **angkanya diverifikasi sebelum ditandatangani**. Sistem menghitung angka periode dari ledger, sebuah draf disusun terhadap angka itu, lalu validator deterministik memutuskan: lolos atau ditolak. Keluaran AI tidak pernah menjadi langkah terakhir dan tidak pernah dipercaya tanpa diperiksa.
+**Dokumen terbatas**:
+Berkas pendukung yang hanya dapat diakses pihak berwenang, termasuk identitas penerima dan rincian bank.
 
-**Modul murni** (tanpa basis data, `store`, `viem`, atau jaringan):
+**Bukti pengajuan**:
+Dokumen atau keterangan yang mendasari pengajuan dan penilaian kelayakan penerima.
+_Avoid_: BAST, bukti penyaluran, untuk dokumen sebelum bantuan diserahkan.
 
-| Modul | Peran |
-| :--- | :--- |
-| `backend/src/period-report.ts` | Menerima baris (donasi, proposal) dan periode pelaporan, mengembalikan seluruh **angka periode** di bawah nama mesin yang stabil — satu-satunya angka yang boleh diklaim sebuah draf. |
-| `backend/src/report-validator.ts` | Menerima angka periode dan sebuah draf, mengembalikan **vonis**. Fungsi murni: tanpa model, jaringan, jam, maupun keacakan. |
-| `backend/src/wire.ts` | Kodek kawat bersama untuk uang dan periode pelaporan, dipakai route rekonsiliasi dan route laporan periode. Jumlah melintas sebagai teks desimal di kedua arah. |
-| `backend/src/ledger-rows.ts` | Pembacaan baris tersimpan yang dipakai bersama: jumlah tersimpan menjadi `bigint`, serta penempatan stempel waktu terhadap periode (`INSIDE` / `OUTSIDE` / `UNDATED`). |
-| `backend/src/disbursement-duration.ts` | **Durasi penyaluran**: mengubah stempel waktu dan nomor blok yang sudah tersimpan menjadi jejak tahap demi tahap per penyaluran, lalu meratakannya menjadi agregat periode. |
+**Berita Acara Serah Terima (BAST)**:
+Dokumen yang menyatakan penyerahan dan penerimaan bantuan.
+_Avoid_: Bukti pengajuan.
 
-**Penyusun draf** (`backend/src/report-drafter.ts`) — satu-satunya modul pada fitur ini yang menyentuh jaringan, sehingga sengaja diletakkan di luar tabel modul murni di atas. Ia memanggil DeepSeek langsung di sisi server, bawaan `deepseek-v4-flash` dengan mode non-thinking dan JSON output, tanpa abstraksi penyedia atau fallback ke penyedia lain. Zod memeriksa bentuk respons sebelum draf diteruskan ke validator angka. Satu permintaan dibatasi 30 detik dan 4.096 token keluaran, tanpa retry otomatis. Tes mengganti batas HTTP dengan respons simulasi, sementara perintah, pembacaan draf, dan validator tetap berjalan. `draftReport` tidak pernah melempar galat.
+**Atestasi auditor**:
+Pernyataan auditor mengenai hasil pemeriksaan catatan dan bukti pada cakupan tertentu.
+_Avoid_: Persetujuan DPS, untuk pemeriksaan auditor setelah kegiatan.
 
-**Kontrak draf**: dua bagian yang dipisahkan tegas — **daftar klaim** (nama angka → nilai) dan **narasi**. Pemisahan ini membuat pemeriksaan angka menjadi pencocokan tepat, bukan penafsiran teks.
+**Durasi penyaluran**:
+Lama tahapan pengajuan, persetujuan, penyaluran, dan atestasi yang dapat diukur dari jejak waktu kegiatan di dalam sistem.
+_Avoid_: Jam kerja penyusunan laporan, untuk durasi tahapan penyaluran.
 
-**Tiga pemeriksaan validator**: (1) **kecocokan klaim** — sama persis, tanpa toleransi pembulatan; (2) **kebocoran narasi** — setiap angka berbentuk rupiah di narasi harus ada di daftar klaim yang sudah lolos; (3) **invariant** — porsi hak amil tidak boleh melampaui plafon 12,5%, dibaca dari ledger, bukan dari draf.
+### Rekonsiliasi
 
-**Kelas temuan**: `KLAIM_TIDAK_COCOK`, `KLAIM_TIDAK_TERBACA`, `KLAIM_TIDAK_DIKENAL`, `KLAIM_GANDA`, `ANGKA_NARASI_TIDAK_DIKLAIM`, `PLAFON_HAK_AMIL_TERLAMPAUI`. Vonis bersifat **lolos atau ditolak** — tidak ada tingkat peringatan.
+**Rekonsiliasi**:
+Pemeriksaan kesesuaian dua sisi catatan beserta selisih dan entri penyebabnya.
+_Avoid_: Koreksi otomatis, vonis kepatuhan, untuk sekadar kecocokan angka.
 
-**Endpoint** (keduanya stateless, tanpa tabel baru dan tanpa migrasi):
+**Sisi klaim**:
+Angka yang dilaporkan dan diperiksa terhadap catatan pendukungnya.
 
-- `POST /api/period-report/verify` — memvonis draf yang ditulis pemanggil. Draf bersifat opsional; tanpa draf, angka periode tetap dikembalikan dan ketiadaan vonis dinyatakan terbuka.
-- `POST /api/period-report/draft` — angka periode dihitung lebih dulu, diserahkan ke DeepSeek sebagai satu-satunya sumber angka, lalu draf yang kembali dilewatkan validator. Kunci API tinggal di server. Kegagalan AI tidak pernah membuat permintaan gagal: angka tetap kembali dan ketiadaan narasi dinyatakan lewat `draftUnavailable`. Draf yang ditolak tetap dikembalikan beserta alasannya.
+**Sisi sumber**:
+Catatan yang menjadi pembanding bagi sisi klaim.
 
-**Antarmuka**: irisan fitur `frontend/src/features/periodReport/` pada route `/laporan-periode` (ADR-0012). Modul murninya — `verdictText.ts` (penyajian vonis, dan `canSign` yang menutup jalan tanda tangan bagi draf yang tidak lolos) dan `reportDocument.ts` (berkas unduhan, hanya terbentuk untuk laporan yang lolos) — diuji tanpa merender komponen.
+**Selisih**:
+Nilai sisi klaim dikurangi sisi sumber pada cakupan dan satuan yang sama.
 
-**Konfigurasi AI**: `DEEPSEEK_API_KEY` pada lingkungan server; `DEEPSEEK_BASE_URL` dan `DEEPSEEK_MODEL` opsional dengan bawaan pada `backend/.env.example`. Variabel `ANTHROPIC_*` tidak dipakai. Tanpa kunci, endpoint draf tetap menjawab 200 dengan angka periode dan menyatakan narasi tidak tersedia. Badan galat dari penyedia dan detail exception tidak diteruskan ke browser.
+**Posisi neraca**:
+Pengelompokan catatan sebagai on balance sheet atau off balance sheet.
 
-**Durasi penyaluran** (tiket #65) menjawab pertanyaan yang selama ini tidak bisa dijawab lembaga tentang dirinya sendiri: berapa lama, sebenarnya, dari pengajuan sampai atestasi, dan di tahap mana waktu paling banyak hilang. Tahapnya mengikuti pemisahan kewenangan ADR-0006 — **pengajuan → persetujuan DPS → eksekusi → atestasi** — dan rata-ratanya menjadi angka periode bersatuan `JAM`, sehingga klaim AI atasnya diperiksa validator yang sama dengan yang memeriksa angka rupiah.
+**Laporan Zakat Wilayah**:
+Rekap Pengelola Zakat di suatu provinsi yang disusun BAZNAS Provinsi; menjadi sisi klaim dalam rekonsiliasi antar-lembaga.
 
-Empat keadaan rentang, sengaja dibedakan: `SELESAI` (kedua ujungnya bertanggal), `BELUM_SELESAI` (tahapnya belum terlewati), `TIDAK_TERCATAT` (tahapnya terlewati tetapi tidak meninggalkan stempel waktu yang terbaca), dan `URUTAN_TERBALIK` (stempel waktu bertentangan dengan urutan tahap). **Rentang yang tidak terukur tidak pernah dilaporkan sebagai nol jam** — nol akan terbaca sebagai seketika, kebalikan dari yang benar. Setiap rata-rata disertai jumlah penyaluran yang mendasarinya dan jumlah yang dikeluarkan menurut alasannya. Tahap paling lambat hanya dibandingkan pada rentang yang tidak tumpang tindih dan diukur dari penyaluran yang sama; saat ini rentangnya sebelum dan sesudah dana keluar.
+**Laporan Kinerja**:
+Laporan Pengelola Zakat yang mendasari rekap wilayah; menjadi sisi sumber dalam rekonsiliasi antar-lembaga.
 
-**Nomor blok bukan jam.** Persetujuan DPS terjadi on-chain dan terindeks beserta nomor bloknya, tetapi tidak ada kolom stempel waktunya dan pekerjaan ini tidak menambah migrasi — sehingga kedua rentang di sekitarnya dilaporkan `TIDAK_TERCATAT`, bukan ditaksir dari nomor blok. Yang diukur adalah lamanya proses **di dalam sistem ini**, bukan jam kerja penyusunan laporan di lembaga. Jejak satu penyaluran dapat dibuka di layar dan di berkas unduhan, lengkap dengan nomor blok yang tertaut ke explorer.
+**LPZN**:
+Laporan Pengelola Zakat Nasional, publikasi BAZNAS yang menjadi salah satu sumber data pembanding dalam proyek ini.
 
-**Baris tanpa tanggal** dikeluarkan dari setiap periode — bukan dihitung di semuanya — dan jumlahnya dilaporkan sebagai angka `baris.tanpa_tanggal`, sehingga tidak ada yang hilang diam-diam. Rekonsiliasi tetap memakai aturan longgarnya sendiri, karena baris yang tersembunyi di sana berarti selisih yang tak terlaporkan.
+### Laporan periode
 
-**Batas yang diketahui**: validator memeriksa angka, bukan kata sifat; `donations` tidak menyimpan jenis dana sehingga seluruh donasi fiat dihitung sebagai Zakat; donasi USDC dilaporkan terpisah sebagai estimasi rupiah; label asnaf di luar tabel yang dikenal masuk ke `LAINNYA`; angka rupiah tanpa awalan `Rp`, tanpa titik ribuan, dan tanpa kata satuan tidak terdeteksi oleh pemindai narasi.
+**Periode pelaporan**:
+Cakupan waktu laporan: semester pertama (1 Januari–30 Juni) atau akhir tahun (1 Januari–31 Desember).
+_Avoid_: Periode bantuan.
 
----
+**Angka periode**:
+Angka yang dihitung dari catatan pada periode pelaporan dan menjadi acuan pemeriksaan draf.
 
-## 5. Completed Tasks & Current Project Status
+**Daftar klaim**:
+Pasangan nama angka dan nilai yang dinyatakan oleh sebuah draf laporan.
 
-- [x] **Smart Contract (L1)**: `ZakatProtocolL1.sol` deployed on Sepolia (`0x2d6fe1e81b633e8a310d1365524f4fb47024f7d7`) with SafeERC20, Invariant Split, Multi-Sig 2-of-3, and Emergency Cancel.
-- [x] **Backend & Database**: Bun + Hono API + Neon PostgreSQL via Drizzle ORM + Merkle Tree batch settlement engine + Embedded Viem Indexer Engine + Real-time WebSocket Server.
-- [x] **Frontend Web3**: TanStack Start + ConnectKit (Soft Syariah Theme) + Wagmi v3 + Viem + Public Role Governance Panel (`/admin/roles`) + Sonner Toasts + Error Boundary + WebSocket Live Invalidation Client.
-- [x] **Architecture Decisions**: ADR-0001 s/d ADR-0012 tercatat lengkap di `docs/adr/`.
+**Narasi laporan**:
+Uraian tertulis yang menjelaskan angka periode kepada pembaca laporan.
+
+**Vonis validator**:
+Hasil pemeriksaan deterministik terhadap klaim, angka dalam narasi, dan kebijakan angka yang diperiksa: lolos atau ditolak.
+_Avoid_: Opini auditor, sertifikasi syariah menyeluruh.
+
+**Pengesahan layanan validator**:
+Pernyataan layanan pemeriksaan bahwa paket laporan tertentu memperoleh vonis lolos berdasarkan aturan yang dinyatakan.
+_Avoid_: Pengesahan lembaga, atestasi auditor, bukti kebenaran seluruh sumber.
+
+**Penerbitan laporan**:
+Penetapan suatu versi laporan sebagai terbit setelah pengesahan lembaga dan pengesahan layanan validator diterima untuk paket yang sama.
+_Avoid_: Unduhan draf, pencatatan bukti pemeriksaan, untuk tindakan yang belum memenuhi pengesahan penerbitan.

@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+Pilot scope extension, 2026-09-08: [ADR-0021](0021-period-evidence-institutional-endorsement-and-private-sources.md) adds period evidence packages with retained source snapshots, institutional endorsement, and separate auditor examination. Decision 13 below describes v0; deterministic rejection remains binding. This records a design decision, not implemented signing or persistence.
+
 Updated 2026-09-07: at the user's request, the demo uses DeepSeek instead of
 Anthropic. This replaces the original provider choice in decision 9, not the
 deterministic validation policy.

@@ -6,6 +6,8 @@
 - **Primary Sources:** UU 23/2011 · PP 14/2014 · PerBAZNAS 1/2023 · KMA 606/2020 · PMA 19/2024 · PSAK 409 · Laporan Pengelolaan Zakat Nasional (LPZN) BAZNAS 2024 & 2025 · arXiv 2025–2026
 - **Metode:** Ekstraksi teks langsung dari PDF resmi (`pdftotext`), bukan ringkasan sekunder. Setiap angka disertai tanggal *cut-off* data karena angka BAZNAS berubah antar publikasi.
 
+> **Penyelarasan 2026-09-08:** seluruh dokumen dibaca kembali untuk desain pilot. Riset ini tetap menjadi dasar masalah produk; klaim kesiapan kontrak pada §6.4, §8.2, dan §10.7 dikoreksi terhadap kode `6a283c5`. Pilihan pilot berada di [ADR-0020](../adr/0020-institutional-pilot-evidence-and-reconciliation.md) dan paket bukti laporan di [ADR-0021](../adr/0021-period-evidence-institutional-endorsement-and-private-sources.md). Label keyakinan di bawah merujuk riset awal, bukan verifikasi ulang semua sumber pada tanggal ini. Pertanyaan lapangan §12 tetap terbuka.
+
 ---
 
 ## Penanda Tingkat Keyakinan
@@ -527,7 +529,7 @@ Ambang izin LAZ menurut PMA 19/2024 (pengumpulan tahunan minimum): `[INDIKATIF]`
 
 ### 6.4 Pemetaan ke arsitektur ZKT
 
-Struktur peran di `sc/src/ZakatProtocolL1.sol` ternyata memetakan cukup rapi ke pembagian kewenangan regulatif:
+Pemetaan berikut adalah **peran yang dimaksud desain**, yang harus dibedakan dari kewenangan aktual dalam `sc/src/ZakatProtocolL1.sol`:
 
 | Peran on-chain (`ZakatProtocolL1.sol`) | Padanan regulatif | Sifat |
 | :--- | :--- | :--- |
@@ -537,7 +539,7 @@ Struktur peran di `sc/src/ZakatProtocolL1.sol` ternyata memetakan cukup rapi ke 
 | `RELAYER_ROLE` (baris 35) | — (infrastruktur) | Menanggung gas, tidak punya wewenang dana |
 | `MAX_AMIL_BPS = 1250` (baris 39) | Plafon hak amil 12,5% (1/8 asnaf) | Invariant yang dipaksakan kode |
 
-Pemisahan *ex-ante* (DPS) dan *ex-post* (auditor) di ADR-0006 sejalan dengan pembagian di regulasi: pengawas syariat mengawasi berjalan, auditor memeriksa setelahnya. Ini bukan kebetulan desain yang perlu diubah — justru argumen kuat untuk dipertahankan.
+Pemisahan *ex-ante* (DPS) dan *ex-post* (auditor) merupakan keputusan ADR-0006. **Inspeksi 2026-09-08:** kontrak masih menerima auditor sebagai pemberi approval sebelum penyaluran; relayer dapat mengajukan proposal dan memperoleh approval awal otomatis; fungsi/event atestasi auditor belum tersedia di kontrak. Nama role saja belum menegakkan pembagian tanggung jawab tabel ini. Lihat [bukti kode pada riset 0004](0004-smart-contract-project-fit-grilling.md).
 
 ---
 
@@ -640,7 +642,7 @@ Dugaan awal "masalah komunikasi" lebih tepat dirumuskan ulang sebagai:
 Tiga pelajaran yang langsung memetakan ke desain protokol:
 
 1. **Plafon hak amil dilanggar dengan cara yang sepenuhnya terlihat di pembukuan.** Angka 20% vs 12,5% bukan hasil penyembunyian canggih — ia ada di laporan keuangan yang telah diaudit. Yang tidak ada adalah **mekanisme yang menolak transaksi tersebut sejak awal**.
-   → Di `ZakatProtocolL1.sol`, `MAX_AMIL_BPS = 1250` menghitung porsi amil pada saat penerimaan dana (baris 119 & 140), bukan memeriksanya belakangan. Pelanggaran seperti ini secara struktural **tidak bisa terjadi**.
+   → Di `ZakatProtocolL1.sol`, `MAX_AMIL_BPS = 1250` membagi pool pada penerimaan (baris 119 & 140). **Koreksi 2026-09-08:** ini belum membatasi seluruh pengeluaran untuk Amil; proposal berlabel Amil juga dapat mendebit pool mustahik, dan ledger IDR tidak mengendalikan rekening bank. Klaim bahwa pelanggaran tersebut mustahil tidak didukung implementasi sekarang. Lihat [riset 0004 §2B](0004-smart-contract-project-fit-grilling.md#b-pembagian-125-belum-membatasi-seluruh-pengeluaran-amil).
 
 2. **Deteksi bergantung sepenuhnya pada keberanian individu.** Audit internal menemukannya, lalu individu itu justru dikriminalisasi. Sistem yang menggantungkan integritas pada nyali seorang pegawai adalah sistem yang rapuh.
    → *Public transparency dashboard* + event log *immutable* memindahkan beban deteksi dari individu ke publik.
@@ -743,8 +745,8 @@ Setiap fitur diturunkan dari temuan spesifik di atas dan dipetakan ke kode/ADR y
 | Prioritas | Fitur | Alasan |
 | :--- | :--- | :--- |
 | **1** | §10.3 Reconciliation Engine | Bukti paling spektakuler (selisih Rp668 M di dokumen resmi BAZNAS), **dan tidak dikerjakan siapa pun** — baik SiMBA maupun vendor eksisting hanya mencatat, tidak merekonsiliasi |
-| **2** | §10.5 Pre-Audit Checklist DPS | Celah paling terukur: audit syariah cuma menjangkau 9,25% lembaga/tahun. Memanfaatkan `SHARIA_SUPERVISOR_ROLE` + Safe yang sudah jalan |
-| **3** | §10.6 Continuous Attestation | Menjawab jeda 7,5 bulan laporan teraudit; sudah sebagian ada (ADR-0009/0015) — yang kurang narasinya, bukan kodenya |
+| **2** | §10.5 Pre-Audit Checklist DPS | Kandidat untuk kebutuhan pengawasan pada §6.2; kewenangan DPS dan konfigurasi Safe aktif masih perlu dibuktikan. Angka cakupan tersebut tetap berstatus indikatif. |
+| **3** | §10.6 Continuous Attestation | Menjawab kebutuhan bukti di antara siklus audit. Pemeriksaan 2026-09-08 menemukan konfirmasi receipt, pengikatan BAST, dan otorisasi atestasi kontrak belum lengkap; pekerjaan implementasi masih diperlukan. |
 | 4 | §10.4 AI Draft + Validator | Pembedanya bukan "pakai AI" (SiMBA hasil modernisasi Nov 2025 juga punya AI), melainkan **validator deterministik** yang menolak draf pelanggar invariant |
 | 5 | §10.2 Deadline Tracker | Bernilai operasional tinggi, mudah dibangun, tapi paling mudah ditiru |
 | ~~6~~ | ~~§10.1 Compliance Report Generator~~ | **Diturunkan dari prioritas 1.** Terduplikasi penuh oleh 88 sub-laporan SiMBA yang sudah ber-PSAK 109 |
@@ -882,7 +884,8 @@ Pertanyaan **#1** memberi ROI naratif tertinggi per jam riset.
 
 ### 13.5 Dokumen internal terkait
 
-- `CONTEXT.md` — arsitektur protokol, invariant hak amil, alur DPS/auditor
+- [CONTEXT.md](../../CONTEXT.md) — glossary domain aktif; [arsip konteks](../../archive/CONTEXT-2026-09-08-before-pilot.md) menyimpan narasi implementasi lama
+- [ADR-0020](../adr/0020-institutional-pilot-evidence-and-reconciliation.md) dan [ADR-0021](../adr/0021-period-evidence-institutional-endorsement-and-private-sources.md) — pilihan pilot dan paket bukti laporan
 - `docs/adr/0006-separation-of-powers-dps-approval-and-ex-post-auditor-attestation.md`
 - `docs/adr/0009-gasless-eip712-auditor-attestation-and-relayer-sponsorship.md`
 - `docs/adr/0015-universal-gasless-eip712-for-amil-and-dps.md`

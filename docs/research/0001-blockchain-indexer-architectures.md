@@ -5,6 +5,8 @@
 - **Domain:** Web3 Data Ingestion, Ethereum EVM Indexing, System Architecture
 - **Primary Sources:** Envio, Ponder, Goldsky, The Graph, Paradigm/Reth, Coinbase Engineering
 
+> **Review 2026-09-08:** nama sumber pada header awal belum disertai URL pendukung klaim perusahaan tertentu. Dokumen ini adalah perbandingan opsi arsitektur, bukan bukti standar universal. Referensi primer terarah dan batas implementasi ZKT ditambahkan di bagian 4; diagram Sepolia L1 di bawah adalah konteks historis, sedangkan deployment terbaru tercatat pada manifest Arbitrum Sepolia 2026-09-08.
+
 ---
 
 ## 1. Executive Summary
@@ -15,7 +17,7 @@ In modern blockchain and Web3 software engineering, indexing on-chain state into
 | :--- | :--- | :--- | :--- |
 | **Process Model** | Shared process with HTTP API | Separate worker process | Decoupled pipeline + OLAP / GraphQL |
 | **Scaling Profile** | Tied to API instances | Independent (Singleton worker, Multi API) | Horizontal distributed workers |
-| **Failure Blast Radius** | High (crash affects API) | Low (isolated from API uptime) | Zero (Queue buffered & self-healing) |
+| **Failure Blast Radius** | Process failure can affect API | Worker failure isolated from API process | Queues can buffer failures; shared dependencies and recovery still matter |
 | **DevOps Overhead** | Zero (single `bun run dev`) | Minimal (`Procfile` / Docker) | Medium to High (K8s, Redis/Kafka) |
 | **Ideal Lifecycle** | Hackathon, POC, Testnet MVP | Seed / Staging / Production DApp | High-Frequency DeFi / L2 Rollups |
 
@@ -23,7 +25,7 @@ In modern blockchain and Web3 software engineering, indexing on-chain state into
 
 ## 2. Why Global Tech Companies Decouple Indexers from APIs
 
-In production environments of tier-1 crypto companies (e.g., Coinbase, Uniswap Labs, OpenSea, Aave), the indexer is **never** embedded inside the customer-facing API for four primary reasons:
+Separating an indexer from the customer-facing API can address the following operational concerns. Whether this separation is needed depends on the deployment and its recovery requirements; the original claim that named production companies never embed indexers was not supported by linked evidence.
 
 ### A. Preventing Race Conditions & Multi-Instance Duplication
 - **The Problem**: Customer-facing APIs scale horizontally (e.g., 5 or 10 pods behind an NGINX/Cloudflare load balancer). If the indexer is embedded in the API server, every new pod spawned by autoscaling will start its own polling loop, hammering the Ethereum RPC node and causing simultaneous database write conflicts.
@@ -44,7 +46,7 @@ In production environments of tier-1 crypto companies (e.g., Coinbase, Uniswap L
 
 ## 3. Recommended Architecture for Tawf Zakat Protocol
 
-Our codebase is engineered to support both modes seamlessly through **modular decoupling**:
+The code exposes an indexer engine that can be run with the API or separately. The diagram describes deployment options; singleton ownership, the pictured write mutex, and reorg recovery must be verified in the actual implementation:
 
 ```mermaid
 flowchart TD
@@ -80,3 +82,13 @@ flowchart TD
 2. **Decoupled Execution Support**:
    - Running `bun src/index.ts` automatically runs both for zero-config simplicity.
    - Adding a standalone runner `bun src/indexer.ts` allows deploying the indexer as an isolated background daemon on AWS ECS, Fly.io, or Railway anytime production scaling is required.
+
+## 4. Evidence Anchor Reliability Review — 2026-09-08
+
+For the report-evidence pilot, process separation is secondary to preserving correct event provenance and recoverable state:
+
+- **Receipt inclusion and finality differ.** Arbitrum distinguishes sequencer confirmation from parent-chain finality and assertion settlement. Label an anchor according to the confirmation level actually checked. [Arbitrum finality](https://docs.arbitrum.io/how-arbitrum-works/deep-dives/sequencer#finality).
+- **Reorgs need explicit recovery.** Geth documents removed logs and repeated notifications during chain reorganizations. Retain block provenance and reconcile projections when canonical history changes. Moving a worker into another process does not implement this. [Geth log subscriptions](https://geth.ethereum.org/docs/interacting-with-geth/rpc/pubsub#logs).
+- **Reprocessing needs an event identity and durable progress.** RPC logs expose block/transaction identity and log position. Scope processing to chain and contract, retain the block hash, and advance checkpoints only after the relevant writes succeed. This is a design inference from event semantics. [Ethereum JSON-RPC log fields](https://ethereum.org/developers/docs/apis/json-rpc/#eth_getfilterchanges).
+
+At code snapshot `6a283c5`, [indexer.ts](../../backend/src/indexer.ts):60–86 reads through the latest block and checkpoints a block number without reorg recovery. [governance-chain.ts](../../backend/src/governance-chain.ts):45–68 checks a successful receipt and canonical block at confirmation time, but not finality. [recordOnchainEvent](../../backend/src/db/index.ts):860 catches insert failures, which can allow progress to advance without durable event storage. These are source-inspection findings, not newly reproduced failures; no worker migration or framework replacement was performed.

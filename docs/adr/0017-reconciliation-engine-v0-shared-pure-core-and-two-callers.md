@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+Pilot scope extension, 2026-09-08: [ADR-0021](0021-period-evidence-institutional-endorsement-and-private-sources.md) adds retained source snapshots and reconciliation results as part of period evidence packages. Decision 9 below describes v0; the pure reconciliation core remains applicable. This records a design decision, not an implemented schema or migration.
+
 ## Context
 Two groups of users have no automated way of learning that their numbers disagree.
 
