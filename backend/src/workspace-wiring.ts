@@ -1,0 +1,62 @@
+/**
+ * Wiring the workspace to a real deployment (Spec #68, ticket #69).
+ *
+ * Kept apart from `./workspace-runtime`, which holds only the shape, so that
+ * importing the routes never drags a database driver or an RPC client into a
+ * test process. This module is imported once, by the server entry point.
+ *
+ * It configures nothing in three cases, and each is a deliberate silence rather
+ * than a degraded mode:
+ *
+ * - under test, where the test binds its own isolated database;
+ * - with no `DATABASE_URL`, where there is nowhere durable to keep a session;
+ * - while `DEPLOYMENT_PENDING`, where the deployment is mid-reset.
+ *
+ * In all three the routes answer 503. Nothing falls back to memory, because a
+ * workspace whose memberships evaporate on restart is worse than one that is
+ * plainly closed.
+ */
+
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import { createPublicClient, http, type Hex } from "viem";
+import { arbitrumSepolia } from "viem/chains";
+import { CONTRACT_CONFIG } from "./config";
+import { createWorkspaceStore } from "./tenancy-store";
+import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
+import type { EthCall } from "./account-signature";
+
+/** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
+const CHALLENGE_TTL_SECONDS = 300;
+const SESSION_TTL_SECONDS = 8 * 60 * 60;
+
+export function installWorkspaceRuntime(): void {
+  const databaseUrl = process.env.NODE_ENV === "test" ? undefined : process.env.DATABASE_URL;
+  if (!databaseUrl || process.env.DEPLOYMENT_PENDING === "true") return;
+
+  const db = drizzle(postgres(databaseUrl, { max: 5 }));
+  const store = createWorkspaceStore(db);
+
+  const rpc = createPublicClient({ chain: arbitrumSepolia, transport: http(CONTRACT_CONFIG.RPC_URL) });
+  // The whole ERC-1271 rule lives in `account-signature`; this only carries the
+  // call. A failure here is a refusal there, never an approval.
+  const ethCall: EthCall = async ({ to, data }) => {
+    const { data: returned } = await rpc.call({ to: to as Hex, data });
+    return returned ?? "0x";
+  };
+
+  configureWorkspace({
+    store,
+    ethCall,
+    now: nowInSeconds,
+    challengeTtlSeconds: CHALLENGE_TTL_SECONDS,
+    sessionTtlSeconds: SESSION_TTL_SECONDS,
+  });
+
+  // Additive and idempotent; it creates this ticket's tables and alters none
+  // that already exist. Failure is logged, not swallowed into a fake success.
+  store
+    .ensureSchema()
+    .then(() => console.log("Workspace tenancy schema ready"))
+    .catch((error) => console.error("Workspace tenancy schema failed:", error));
+}

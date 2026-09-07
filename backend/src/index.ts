@@ -31,6 +31,8 @@ import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
 import reconciliationRoutes from "./routes/reconciliation";
 import periodReportRoutes from "./routes/period-report";
+import workspaceRoutes from "./routes/workspace";
+import { installWorkspaceRuntime } from "./workspace-wiring";
 import { GOVERNANCE_ACTIONS } from "./governance-chain";
 import { GOVERNANCE_ROLE_HASHES } from "./governance-roles";
 
@@ -211,6 +213,12 @@ app.route("/api/reconciliation", reconciliationRoutes);
 
 // Laporan Periode Terverifikasi (Spec #61) - likewise its own route module
 app.route("/api/period-report", periodReportRoutes);
+
+// Ruang kerja lembaga (Spec #68) - tenancy and access, its own module again.
+// Tests bind their own runtime; here it is wired from the deployment's config,
+// and stays unconfigured (503) rather than pretending to work without one.
+installWorkspaceRuntime();
+app.route("/api/workspace", workspaceRoutes);
 
 // Real IPFS File Upload Endpoint (ADR-0010)
 app.post("/api/ipfs/upload-file", async (c) => {

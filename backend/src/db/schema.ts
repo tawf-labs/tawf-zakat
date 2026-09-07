@@ -138,3 +138,60 @@ export const auditorProfiles = pgTable("auditor_profiles", {
 
 export type AuditorProfile = typeof auditorProfiles.$inferSelect;
 export type NewAuditorProfile = typeof auditorProfiles.$inferInsert;
+
+// 8. Institutional Workspace Tenancy (Spec #68, ticket #69)
+// Declared here so `drizzle-kit` knows these tables are managed rather than
+// stray. The runtime creates them from `WORKSPACE_SCHEMA_STATEMENTS` in
+// `../tenancy-store.ts`, which is idempotent and additive; that file remains
+// the source of truth for the constraints Drizzle cannot express here — the
+// partial unique index on one active membership per account, and the composite
+// foreign key that stops a cross-institution session being stored at all.
+export const institutions = pgTable("institutions", {
+  id: text("id").primaryKey(),
+  legalName: text("legal_name").notNull(),
+  scopeUnit: text("scope_unit").notNull(),
+  scopeLevel: text("scope_level").notNull(),
+  mandateNote: text("mandate_note").notNull(),
+  // Fixture institutions carry the label in the row, not only in a comment.
+  isSynthetic: boolean("is_synthetic").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const institutionMemberships = pgTable("institution_memberships", {
+  id: serial("id").primaryKey(),
+  institutionId: text("institution_id").notNull(),
+  accountAddress: text("account_address").notNull(),
+  role: text("role").notNull(), // 'ADMIN' | 'OFFICER' | 'READER'
+  // Deactivated rows are kept: rotation preserves history, it does not delete it.
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const workspaceChallenges = pgTable("workspace_challenges", {
+  nonce: text("nonce").primaryKey(),
+  institutionId: text("institution_id").notNull(),
+  accountAddress: text("account_address").notNull(),
+  purpose: text("purpose").notNull(),
+  issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  consumedAt: bigint("consumed_at", { mode: "number" }),
+});
+
+export const workspaceSessions = pgTable("workspace_sessions", {
+  // The SHA-256 of the bearer token. The token itself is never stored.
+  tokenHash: text("token_hash").primaryKey(),
+  institutionId: text("institution_id").notNull(),
+  accountAddress: text("account_address").notNull(),
+  role: text("role").notNull(),
+  issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  revokedAt: bigint("revoked_at", { mode: "number" }),
+});
+
+export type Institution = typeof institutions.$inferSelect;
+export type NewInstitution = typeof institutions.$inferInsert;
+
+export type InstitutionMembership = typeof institutionMemberships.$inferSelect;
+export type NewInstitutionMembership = typeof institutionMemberships.$inferInsert;

@@ -46,6 +46,70 @@ env DATABASE_URL= DEEPSEEK_API_KEY= ENABLE_EMBEDDED_INDEXER=false NODE_ENV=test 
 The HTTP boundary is stubbed in tests; no paid model call is made. A live demo
 rehearsal is still needed to assess narrative quality and latency.
 
+## Ruang Kerja Lembaga (Spec #68, ticket #69)
+
+`/api/workspace` is the institutional workspace door. Access starts with a
+server-minted challenge — `POST /challenge` — that the account signs under this
+application's own EIP-712 domain (`Tawf Workspace Access`, no verifying
+contract, so a sign-in can never be replayed as a vault governance action).
+`POST /session` verifies the signature, spends the nonce and returns a bearer
+token **once**; only its SHA-256 hash is stored. `GET /` reads the workspace,
+`DELETE /session` revokes it, and `POST /members` is gated on the administrator
+capability.
+
+The institution a caller acts for comes from their membership. An
+`institutionId` in a payload or query string may only agree with it;
+disagreement is a 403, never a silent correction.
+
+Workspace membership governs the workspace only. Recording evidence and
+publishing a report are authorized by the registry onchain (ADR-0022), and no
+row here is consulted as a fallback for a role the chain refuses.
+
+### Local configuration and the dev migration
+
+The workspace needs `DATABASE_URL`. Without it — and under `NODE_ENV=test`, or
+while `DEPLOYMENT_PENDING=true` — the routes answer `503` and nothing falls back
+to memory: a workspace whose memberships evaporate on restart is worse than one
+that is plainly closed.
+
+On startup with a database configured, `installWorkspaceRuntime()` runs
+`WORKSPACE_SCHEMA_STATEMENTS` (see `src/tenancy-store.ts`). Every statement is
+`IF NOT EXISTS`, so it is idempotent and **additive**: it creates
+`institutions`, `institution_memberships`, `workspace_challenges` and
+`workspace_sessions`, and alters no table that already exists. Nothing is
+backfilled — rows recorded before institutions existed belong to no institution.
+
+Onboarding is a separate, deliberate step — installing institutions is exactly
+the thing that must not happen as a side effect of starting a server:
+
+```
+bun run seed:workspace
+```
+
+It records the two synthetic institutions in `src/fixtures/institutions.ts`
+together with their accounts (an initial administrator, an Amil operasional, and
+for one of them an authorised reader), and is idempotent. Until it is run the
+`institutions` table is empty and `POST /api/workspace/challenge` correctly
+answers 404 for every id.
+
+The script refuses a non-local `DATABASE_URL` unless `--force` is passed. The
+fixture accounts come from published Ethereum test keys and are worthless as
+credentials, which is what a fixture account should be — and precisely why they
+must never be given authority on a deployment holding real data.
+
+`GET /api/workspace/institutions` lists what onboarding actually installed,
+read from the database rather than from the fixture list, so the interface is
+never offered a sign-in that can only 404. Both fixtures are labelled synthetic
+in the stored row itself. Real institution identities, mandates, signatory
+accounts and readers are onboarding data a pilot supplies; none of it is guessed
+from an earlier deployment.
+
+The four tables are also declared in `src/db/schema.ts` so `drizzle-kit` treats
+them as managed rather than stray. `WORKSPACE_SCHEMA_STATEMENTS` stays the
+source of truth for the two constraints Drizzle cannot express: the partial
+unique index giving an account one active membership, and the composite foreign
+key that makes a cross-institution session unstorable.
+
 ## Automated Tests vs Manual Demo
 
 Run `bun test` from `backend/`. `bunfig.toml` preloads `test/setup.ts` before test
@@ -53,6 +117,13 @@ imports: the suite uses the in-memory store, clears external-service credentials
 disables the embedded indexer and signing, and points RPC reads to loopback. The
 database module also refuses to create a persistent client under `NODE_ENV=test`.
 The normal `bun run dev` command still uses the configured demo database.
+
+Workspace tenancy is the exception to the in-memory rule, on purpose: its suites
+run against an isolated PGlite PostgreSQL (`test/helpers/workspace-database.ts`),
+one data directory per test file, truncated between tests. Foreign keys, the
+partial unique index and `UPDATE ... RETURNING` behave as they do in the deployed
+database, and `reopen()` genuinely closes and reopens the directory — which is
+the only honest way to test that a session survives a restart.
 
 Do not use the legacy `clean-database.ts`, `clean_test_data.ts`, or
 `reset-database-empty.ts` as a chain resync: they contain hard-coded seeds or
