@@ -43,6 +43,19 @@ Memasangkannya dengan cara menebak akan menghasilkan persis rekonsiliasi palsu y
 
 Backfill tetap sah bila kelak ada sumber on-chain yang dapat membuktikan pasangan **dan** jumlahnya. Itu pekerjaan tersendiri dengan buktinya sendiri, bukan perluasan diam-diam skrip migrasi ini.
 
+## Sisi penyaluran, ditutup terpisah
+
+Ketika ADR ini ditulis, jumlah **penyaluran** USDC masih dibaca dengan heuristik besar angka (`toUsdcMinorUnits` menskalakan ulang nilai di bawah 1.000.000), sehingga proposal 0,5 USDC dilaporkan sebagai 500.000 USDC dan basis hak amil dalam USDC dinyatakan belum dapat diperiksa.
+
+Tiket #80 menutupnya dengan keputusan yang sama bentuknya, di tabel sebelahnya:
+
+- Heuristiknya dihapus. Satuan diambil dari `currency_type` — sebuah fakta tersimpan — dan tidak pernah dari besar angka. Ini tidak memerlukan migrasi sama sekali.
+- Kolom `disbursement_proposals.amount_exact` (TEXT) menyimpan jumlah persis seperti yang dinyatakan chain, dengan migrasi aditif yang dijalankan operator lewat `bun run proposal:migrate`. Kolom itu mengangkat penolakan pembaca chain atas jumlah di atas 2^53 satuan minor.
+- Baris tanpa kolom eksak tetap terbaca lewat kolom angka. Itu bukan tebakan: satuannya tetap dari `currency_type`, hanya presisinya yang dibatasi.
+- Basis hak amil USDC karena itu menjadi dapat diperiksa: pengumpulan dari deposit terverifikasi, penyaluran dari proposal tereksekusi. Bila salah satu belum lengkap, keduanya dilaporkan `null` beserta alasannya, bukan nol.
+
+Backfill jumlah eksak untuk baris lama **sah** di sini, tidak seperti deposit warisan pada #67: proposal membawa `proposalIdOnChain`, dan chain memancarkan `DisbursementProposed`/`DisbursementExecuted` beserta jumlahnya, sehingga pasangannya dapat dibuktikan. Itu tetap pekerjaan tersendiri dengan pengujiannya sendiri terhadap chain, bukan sesuatu yang dijalankan skrip migrasi tanpa pengawasan.
+
 ## Yang tetap terbuka
 
-Jumlah **penyaluran** USDC masih dibaca dengan heuristik besar angka (`toUsdcMinorUnits` menskalakan ulang nilai di bawah 1.000.000), karena kolom jumlah proposal belum berubah. Proposal 0,5 USDC akan dilaporkan sebagai 500.000 USDC pada jalur itu. Basis hak amil dalam USDC karena itu dinyatakan **belum dapat diperiksa**, bukan dihitung dari angka yang tidak dapat dipertanggungjawabkan. Memperbaikinya menyentuh governance dan merupakan keputusan tersendiri.
+Kolom `disbursement_proposals.amount` tetap `bigint({ mode: "number" })` dan tetap menjadi sumber bagi baris yang belum menyimpan jumlah eksak. Menghapusnya berarti menulis ulang setiap penulis proposal dan menyentuh governance; itu keputusan tersendiri lagi.

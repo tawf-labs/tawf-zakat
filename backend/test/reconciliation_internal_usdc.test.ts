@@ -290,3 +290,63 @@ describe("POST /api/reconciliation/internal", () => {
     expect(typeof body.indexerStatus).toBe("string");
   });
 });
+
+describe("basis hak amil USDC (#80)", () => {
+  const amilBasis = (snapshot: InternalSnapshot) =>
+    buildInternalLedgerSides(snapshot, "USDC_6DP").claim.amilBasis![0]!;
+
+  const executedUsdc = (id: number, amount: number, asnaf: string, amountExact?: string) => ({
+    proposalIdOnChain: id,
+    currencyType: 1,
+    amount,
+    status: "Executed",
+    asnafCategory: asnaf,
+    ...(amountExact ? { amountExact } : {}),
+  });
+
+  it("menghitung pengumpulan dan hak amil dari jumlah yang tersimpan eksak", () => {
+    const basis = amilBasis(
+      snapshotOf({
+        events: [depositEvent(TX_MATCH, 0, "10000000")],
+        donations: [depositRow("USDC-1", "10000000", TX_MATCH, 0)],
+        proposals: [executedUsdc(1, 0, "Amil", "500000"), executedUsdc(2, 0, "Fakir", "1000000")],
+      })
+    );
+
+    expect(basis.collected).toEqual({ amount: 10_000_000n, unit: "USDC_6DP" });
+    // 0,5 USDC hak amil - bukan 500.000 USDC seperti heuristik lama.
+    expect(basis.actual).toEqual({ amount: 500_000n, unit: "USDC_6DP" });
+    expect(basis.reason).toBeUndefined();
+  });
+
+  it("tidak lagi menyebut heuristik besar angka sebagai alasan", () => {
+    const basis = amilBasis(snapshotOf());
+    expect(basis.reason ?? "").not.toMatch(/heuristik/i);
+  });
+
+  it("menahan kedua angka ketika ada deposit yang belum terverifikasi", () => {
+    const basis = amilBasis(
+      snapshotOf({
+        donations: [depositRow("USDC-LAMA", null, null, null, 16_200_000)],
+        proposals: [executedUsdc(1, 500_000, "Amil")],
+      })
+    );
+
+    expect(basis.collected).toBeNull();
+    expect(basis.actual).toBeNull();
+    expect(basis.reason).toMatch(/belum terverifikasi/i);
+  });
+
+  it("tidak menganggap hak amil nol ketika asnaf penyaluran tidak dikenal", () => {
+    const basis = amilBasis(
+      snapshotOf({
+        events: [depositEvent(TX_MATCH, 0, "10000000")],
+        donations: [depositRow("USDC-1", "10000000", TX_MATCH, 0)],
+        proposals: [executedUsdc(1, 0, "Entah", "500000")],
+      })
+    );
+
+    expect(basis.actual).toBeNull();
+    expect(basis.reason).toMatch(/asnaf/i);
+  });
+});

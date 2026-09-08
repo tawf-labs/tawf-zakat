@@ -12,8 +12,6 @@
 
 import { money, type Money, type ReportingPeriod } from "./reconciliation";
 
-const USDC_MINOR_UNIT_SCALE = 1_000_000n;
-
 /**
  * Amount columns are declared `bigint({ mode: "number" })`, so the driver hands
  * back a JavaScript number and the boundary is already crossed by the time a row
@@ -33,29 +31,59 @@ export function toWholeAmount(value: number | string, what: string): bigint {
   return BigInt(value);
 }
 
-/**
- * Proposal amounts are stored either as whole USDC or as 6-decimal minor units,
- * depending on which writer produced the row. This mirrors the heuristic the
- * proposal read path already uses, so every surface reads a row the same way.
- */
-export function toUsdcMinorUnits(amount: number | string): bigint {
-  const value = toWholeAmount(amount, "Jumlah USDC");
-  return value < USDC_MINOR_UNIT_SCALE ? value * USDC_MINOR_UNIT_SCALE : value;
-}
-
 export type AmountRow = {
   proposalIdOnChain: number;
   currencyType: number; // 0: IDR, 1: USDC
   amount: number | string;
+  /**
+   * The amount as stored exactly, in decimal text (ticket #80). Preferred over
+   * `amount` where present: the `amount` column is declared `bigint({ mode:
+   * "number" })`, so the driver hands it back as a JavaScript number and stops
+   * being exact past 2^53 minor units.
+   */
+  amountExact?: string | number | null;
 };
 
 export const unitOfCurrencyType = (currencyType: number) =>
   currencyType === 1 ? ("USDC_6DP" as const) : ("IDR" as const);
 
+/**
+ * A proposal's amount and its unit, or the reason it cannot be read.
+ *
+ * The unit comes from `currencyType` and from nowhere else. It used to be
+ * guessed from magnitude for USDC - anything under 1.000.000 was assumed to mean
+ * whole USDC and multiplied - which reported a 0,5 USDC disbursement as 500.000
+ * USDC. A stored `currencyType` is a fact; the size of a number is not evidence
+ * of what it means.
+ */
+export function readProposalAmount(row: AmountRow): { value: Money } | { error: string } {
+  const unit = unitOfCurrencyType(row.currencyType);
+  const where = `Jumlah proposal #${row.proposalIdOnChain}`;
+
+  if (row.amountExact !== undefined && row.amountExact !== null) {
+    const exact = typeof row.amountExact === "number" ? String(row.amountExact) : row.amountExact.trim();
+    if (!/^\d+$/.test(exact)) {
+      return {
+        error:
+          `${where}: kolom jumlah eksak bukan bilangan bulat desimal tidak negatif ` +
+          `(${JSON.stringify(row.amountExact)}).`,
+      };
+    }
+    return { value: money(BigInt(exact), unit) };
+  }
+
+  try {
+    return { value: money(toWholeAmount(row.amount, where), unit) };
+  } catch (error: any) {
+    return { error: String(error?.message ?? error) };
+  }
+}
+
+/** The same read, for callers that treat an unreadable amount as a failure. */
 export function proposalAmount(row: AmountRow): Money {
-  return row.currencyType === 1
-    ? money(toUsdcMinorUnits(row.amount), "USDC_6DP")
-    : money(toWholeAmount(row.amount, `Jumlah proposal #${row.proposalIdOnChain}`), "IDR");
+  const read = readProposalAmount(row);
+  if ("error" in read) throw new Error(read.error);
+  return read.value;
 }
 
 /** Half-open bounds of a reporting period: [from, to). */

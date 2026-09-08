@@ -87,6 +87,8 @@ export type ProposalRow = {
   proposalIdOnChain: number;
   currencyType: number; // 0: IDR, 1: USDC
   amount: number | string;
+  /** The amount as stored exactly (ticket #80). Absent before that migration. */
+  amountExact?: string | number | null;
   asnafCategory?: string | number | null;
   status: string; // 'Pending' | 'Approved' | 'Executed' | 'Cancelled'
   createdAt?: Date | string | null;

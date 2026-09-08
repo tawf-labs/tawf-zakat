@@ -46,6 +46,10 @@ export const disbursementProposals = pgTable("disbursement_proposals", {
   proposalIdOnChain: integer("proposal_id_on_chain").notNull().unique(),
   currencyType: integer("currency_type").notNull().default(0), // 0: IDR, 1: USDC
   amount: bigint("amount", { mode: "number" }).notNull(),
+  // The same amount, exactly, in the unit `currencyType` names (ticket #80).
+  // Text rather than bigint: the driver returns a bigint column as a JavaScript
+  // number, which is why the chain reader has to refuse anything past 2^53.
+  amountExact: text("amount_exact"),
   asnafCategory: text("asnaf_category").notNull(),
   beneficiaryName: text("beneficiary_name").notNull(),
   beneficiaryNIKMasked: text("beneficiary_nik_masked").notNull(),

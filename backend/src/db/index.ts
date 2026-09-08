@@ -16,6 +16,7 @@ import {
   type DepositIntakeRecord,
 } from "../usdc-deposit-intake";
 import { donationSelection, hasNativeDepositColumns, saveUsdcDeposit } from "../usdc-deposit-store";
+import { hasExactAmountColumn, proposalSelection } from "../proposal-amount-store";
 
 /**
  * Whether this deployment's `donations` table can hold a deposit identity
@@ -47,6 +48,25 @@ type DepositColumn =
   | "depositContract"
   | "depositTxHash"
   | "depositLogIndex";
+
+/**
+ * A proposal row as this deployment can answer for it. `amountExact` is optional
+ * rather than nullable: before the migration it is not there at all.
+ */
+export type ProposalLedgerRow = Omit<schema.DisbursementProposal, "amountExact"> &
+  Partial<Pick<schema.DisbursementProposal, "amountExact">>;
+
+/** Whether `disbursement_proposals` can hold an exact amount (#80). */
+let proposalExactColumnPresent: boolean | null = null;
+
+async function proposalAmountColumn(): Promise<boolean> {
+  if (db) proposalExactColumnPresent ??= await hasExactAmountColumn(db);
+  return proposalExactColumnPresent ?? false;
+}
+
+async function proposalColumns() {
+  return proposalSelection(await proposalAmountColumn());
+}
 
 async function donationColumns() {
   if (db) depositColumnsPresent ??= await hasNativeDepositColumns(db);
@@ -150,6 +170,9 @@ export const dbService = {
     const p = confirmed.proposal;
     const canonical = {
       currencyType: p.currencyType, amount: p.amount, asnafCategory: p.asnafLabel,
+      // Only where the column exists: running the migration is a separate act
+      // from deploying this code (ADR-0025), so both states have to work.
+      ...((await proposalAmountColumn()) ? { amountExact: p.amountExact } : {}),
       beneficiaryHash: p.beneficiaryHash, ipfsProofCID: p.ipfsProofCID,
       periodId: p.periodId, approvalCount: p.approvalCount, status: p.status,
       txHash, ...(action === "execute" ? { executedAt: new Date(confirmed.timestamp) } : {}),
@@ -160,7 +183,7 @@ export const dbService = {
     if (db) {
       // The chain ID is the only proposal key; a database serial ID is not interchangeable.
       await db.transaction(async tx => {
-        const existing = await tx.select().from(schema.disbursementProposals)
+        const existing = await tx.select(await proposalColumns()).from(schema.disbursementProposals)
           .where(eq(schema.disbursementProposals.proposalIdOnChain, p.proposalId));
         if (existing.length) {
           if (existing.some(row => row.beneficiaryHash.toLowerCase() !== p.beneficiaryHash.toLowerCase())) {
@@ -440,7 +463,7 @@ export const dbService = {
   async getProposals() {
     if (db) {
       try {
-        const rows = await db.select().from(schema.disbursementProposals).orderBy(desc(schema.disbursementProposals.proposalIdOnChain));
+        const rows = await db.select(await proposalColumns()).from(schema.disbursementProposals).orderBy(desc(schema.disbursementProposals.proposalIdOnChain));
         const verified = new Map<number, Awaited<ReturnType<typeof governanceChain.readProposal>>>();
         // Reconcile every status, including a previously incorrect Executed row.
         for (const r of rows) {
@@ -971,7 +994,7 @@ export const dbService = {
     if (db) {
       try {
         return await db
-          .select()
+          .select(await proposalColumns())
           .from(schema.disbursementProposals)
           .orderBy(asc(schema.disbursementProposals.proposalIdOnChain));
       } catch (err) {
@@ -1028,11 +1051,11 @@ export const dbService = {
     );
   },
 
-  async readProposalRows(): Promise<SourceRead<schema.DisbursementProposal>> {
+  async readProposalRows(): Promise<SourceRead<ProposalLedgerRow>> {
     if (!db) return sourceMissing(NO_DATABASE);
-    return attemptRead(() =>
+    return attemptRead(async () =>
       db!
-        .select()
+        .select(await proposalColumns())
         .from(schema.disbursementProposals)
         .orderBy(asc(schema.disbursementProposals.proposalIdOnChain))
     );

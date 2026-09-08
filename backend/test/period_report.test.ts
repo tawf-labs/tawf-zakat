@@ -136,7 +136,8 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
         [
           proposal({ proposalIdOnChain: 1, amount: 3_000_000, asnafCategory: "Fakir" }),
           proposal({ proposalIdOnChain: 2, amount: 1_000_000, asnafCategory: "Ibnu Sabil" }),
-          proposal({ proposalIdOnChain: 3, amount: 250, currencyType: 1, asnafCategory: "Miskin" }),
+          // Stored as the chain stores it: 250 USDC in 6-decimal minor units.
+          proposal({ proposalIdOnChain: 3, amount: 250_000_000, currencyType: 1, asnafCategory: "Miskin" }),
         ]
       ),
       AKHIR_TAHUN_2026
@@ -146,10 +147,22 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
     expect(amountOf(figures, "penyaluran.ibnu_sabil.idr")).toBe(1_000_000n);
     expect(amountOf(figures, "penyaluran.total.idr")).toBe(4_000_000n);
 
-    // 250 whole USDC, carried in 6-decimal minor units - never added to rupiah.
+    // Minor units are carried through as they are, and never added to rupiah.
     expect(amountOf(figures, "penyaluran.miskin.usdc")).toBe(250_000_000n);
     expect(amountOf(figures, "penyaluran.total.usdc")).toBe(250_000_000n);
     expect(figureByName(figures, "penyaluran.total.usdc")!.value.unit).toBe("USDC_6DP");
+  });
+
+  it("tidak lagi menskalakan penyaluran USDC di bawah satu USDC (#80)", () => {
+    const figures = computePeriodFigures(
+      rows([], [
+        proposal({ proposalIdOnChain: 1, amount: 500_000, currencyType: 1, asnafCategory: "Miskin" }),
+      ]),
+      AKHIR_TAHUN_2026
+    );
+
+    // 0,5 USDC. Heuristik lama melaporkannya sebagai 500.000 USDC.
+    expect(amountOf(figures, "penyaluran.miskin.usdc")).toBe(500_000n);
   });
 
   it("hanya menghitung penyaluran yang sudah tereksekusi", () => {

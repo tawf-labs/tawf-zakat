@@ -11,7 +11,9 @@
     "demo:usdc-source": "NODE_ENV=test bun src/scripts/demo-internal-usdc-source.ts",
     "seed:workspace": "bun src/scripts/seed-workspace.ts",
     "usdc:verify": "bun src/scripts/usdc-deposit-identity.ts verify",
-    "usdc:migrate": "bun src/scripts/usdc-deposit-identity.ts apply"
+    "usdc:migrate": "bun src/scripts/usdc-deposit-identity.ts apply",
+    "proposal:verify": "bun src/scripts/proposal-amount-precision.ts verify",
+    "proposal:migrate": "bun src/scripts/proposal-amount-precision.ts apply"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

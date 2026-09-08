@@ -29,7 +29,13 @@ import {
   type Money,
   type ReportingPeriod,
 } from "./reconciliation";
-import { proposalAmount, toWholeAmount, unitOfCurrencyType, withinPeriod } from "./ledger-rows";
+import {
+  proposalAmount,
+  readProposalAmount,
+  toWholeAmount,
+  unitOfCurrencyType,
+  withinPeriod,
+} from "./ledger-rows";
 import { asnafOf } from "./period-report";
 import type { AmilBasis } from "./reconciliation-amil";
 import {
@@ -73,6 +79,8 @@ export type InternalProposalRow = {
   proposalIdOnChain: number;
   currencyType: number; // 0: IDR, 1: USDC
   amount: number | string;
+  /** The amount as stored exactly (ticket #80). Absent before that migration. */
+  amountExact?: string | number | null;
   status: string; // 'Pending' | 'Approved' | 'Executed' | 'Cancelled'
   asnafCategory?: string | number | null;
   txHash?: string | null;
@@ -149,19 +157,11 @@ function internalAmilBasis(snapshot: InternalSnapshot, unit: CurrencyUnit): Amil
     key: "PROTOKOL", label: "Snapshot batch settled dan penyaluran tereksekusi",
     balanceSheet: "ON", collected: null, actual: null,
   };
-  // Deposits now carry their native amount (#67), so collection in USDC is
-  // knowable. The amil share is not: an executed USDC proposal's amount still
-  // passes through a magnitude heuristic on the way out of storage, so a ceiling
-  // computed from it would be a number nobody can stand behind.
-  if (unit !== "IDR") {
-    return {
-      ...base,
-      reason:
-        "Hak amil dalam USDC belum dapat diperiksa: jumlah penyaluran USDC masih dibaca dengan " +
-        "heuristik besar angka, sehingga plafonnya tidak dapat dihitung. Estimasi rupiah tidak " +
-        "dipakai sebagai basis.",
-    };
-  }
+  // Both halves are knowable now: deposits carry their native amount (#67) and a
+  // disbursement's amount is read from its stored `currencyType` rather than
+  // guessed from its size (#80).
+  if (unit !== "IDR") return usdcAmilBasis(snapshot, base);
+
   const batches = snapshot.batches.filter(isSettled);
   const executed = snapshot.proposals.filter((p) => p.status === "Executed" && p.currencyType === 0);
   if (batches.length === 0 && executed.length === 0) return { ...base, reason: "Tidak ada data batch settled atau penyaluran IDR dalam snapshot ini." };
@@ -176,6 +176,69 @@ function internalAmilBasis(snapshot: InternalSnapshot, unit: CurrencyUnit): Amil
     .reduce((sum, p) => sum + proposalAmount(p).amount, 0n), unit);
   return base;
 }
+
+/**
+ * The USDC ceiling basis: deposits collected, against the amil share disbursed.
+ *
+ * Every refusal below leaves both figures `null` with its reason. A basis that
+ * is partly unknown is not a smaller basis - it is a ceiling nobody can check,
+ * and reporting zero for the unknown half would quietly pass every proposal.
+ */
+function usdcAmilBasis(snapshot: InternalSnapshot, base: AmilBasis): AmilBasis {
+  if (!snapshot.chain) {
+    return { ...base, reason: "Deployment tidak menyebut chain dan kontrak deposit, sehingga pengumpulan USDC belum dapat dipastikan." };
+  }
+
+  const deposits = mapLedgerDeposits(ledgerDepositRows(snapshot), snapshot.chain);
+  if (deposits.unverified.length > 0) {
+    return {
+      ...base,
+      reason:
+        `${deposits.unverified.length} baris deposit USDC belum terverifikasi, sehingga dasar ` +
+        `pengumpulan belum lengkap dan plafon hak amil tidak dapat dihitung.`,
+    };
+  }
+
+  const executed = snapshot.proposals.filter((p) => p.status === "Executed" && p.currencyType === 1);
+  if (deposits.rows.length === 0 && executed.length === 0) {
+    return { ...base, reason: "Tidak ada deposit atau penyaluran USDC dalam snapshot ini." };
+  }
+  if (new Set(executed.map((p) => p.proposalIdOnChain)).size !== executed.length) {
+    return { ...base, reason: "Baris penyaluran USDC ganda membuat basis hak amil tidak dapat dipastikan." };
+  }
+  if (executed.some((p) => asnafOf(p.asnafCategory) === "LAINNYA")) {
+    return { ...base, reason: "Asnaf penyaluran USDC tidak lengkap atau tidak dikenal; hak amil tidak dianggap nol." };
+  }
+
+  let actual = 0n;
+  for (const proposal of executed.filter((p) => asnafOf(p.asnafCategory) === "AMIL")) {
+    const read = readProposalAmount(proposal);
+    if ("error" in read) return { ...base, reason: `${read.error} Plafon hak amil USDC tidak dapat dihitung.` };
+    actual += read.value.amount;
+  }
+
+  return {
+    ...base,
+    label: "Deposit USDC terverifikasi dan penyaluran USDC tereksekusi",
+    collected: money(deposits.rows.reduce((sum, row) => sum + BigInt(row.amount), 0n), "USDC_6DP"),
+    actual: money(actual, "USDC_6DP"),
+  };
+}
+
+/** The USDC donation rows of a snapshot, in the shape the deposit mapper reads. */
+const ledgerDepositRows = (snapshot: InternalSnapshot): LedgerDepositRow[] =>
+  snapshot.donations
+    .filter((row) => String(row.paymentMethod ?? "").toUpperCase() === "USDC")
+    .map((row) => ({
+      trxId: row.trxId,
+      amountUsdc: row.amountUsdc ?? null,
+      depositChainId: row.depositChainId ?? null,
+      depositContract: row.depositContract ?? null,
+      depositTxHash: row.depositTxHash ?? null,
+      depositLogIndex: row.depositLogIndex ?? null,
+      amountIDR: row.amountIDR,
+      createdAt: row.createdAt ?? null,
+    }));
 
 /** A mapped deposit row, as the engine wants it. The key already carries identity. */
 const depositEntry = (row: NormalizedRow): LedgerEntry => ({
@@ -229,20 +292,7 @@ function depositSides(snapshot: InternalSnapshot): {
   }
 
   const scope = { chainId: chain.chainId, contract: chain.contract };
-  const ledgerRows: LedgerDepositRow[] = snapshot.donations
-    .filter((row) => String(row.paymentMethod ?? "").toUpperCase() === "USDC")
-    .map((row) => ({
-      trxId: row.trxId,
-      amountUsdc: row.amountUsdc ?? null,
-      depositChainId: row.depositChainId ?? null,
-      depositContract: row.depositContract ?? null,
-      depositTxHash: row.depositTxHash ?? null,
-      depositLogIndex: row.depositLogIndex ?? null,
-      amountIDR: row.amountIDR,
-      createdAt: row.createdAt ?? null,
-    }));
-
-  const claimSide = mapLedgerDeposits(ledgerRows, scope);
+  const claimSide = mapLedgerDeposits(ledgerDepositRows(snapshot), scope);
   const sourceSide = mapDepositEvents(
     snapshot.events.map((event) => ({
       eventName: event.eventName,
@@ -451,6 +501,7 @@ export function snapshotFromRows(
         proposalIdOnChain: Number(row.proposalIdOnChain),
         currencyType: Number(row.currencyType),
         amount: row.amount,
+        amountExact: row.amountExact ?? null,
         status: row.status,
         txHash: row.txHash ?? null,
         asnafCategory: row.asnafCategory ?? null,
