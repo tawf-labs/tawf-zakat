@@ -1,3 +1,4 @@
+import { authorityScope, type AuthorityChange } from "../../shared/report-authority";
 import { createPublicClient, createWalletClient, defineChain, http, encodeFunctionData, decodeEventLog, keccak256, toHex, TransactionReceiptNotFoundError, BlockNotFoundError, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { reportRegistryAbi as abi } from "../../shared/report-registry-abi";
@@ -42,7 +43,7 @@ export function createRegistryChain(config: RegistryConfig) {
         signatory: role(signatory), validator: role(validator), auditor: { ...role(auditor), mandate } };
     },
     /** The caller's wallet executes; the technical relayer never impersonates a role manager. */
-    async prepareAuthorityChange(institution: string, actor: Hex, change: import("./report-authority-input").AuthorityChange) {
+    async prepareAuthorityChange(institution: string, actor: Hex, change: AuthorityChange) {
       await assertDeployment();
       let functionName: string, args: unknown[];
       switch (change.action) {
@@ -56,7 +57,7 @@ export function createRegistryChain(config: RegistryConfig) {
       }
       const data = encodeFunctionData({ abi, functionName, args } as never);
       await rpc.call({ account: actor, to: config.address, data });
-      return { actor, scope: change.action.includes("VALIDATOR") ? "GLOBAL_VALIDATOR_SERVICE" : institution,
+      return { actor, scope: authorityScope(change, institution),
         change, chainId: config.chainId, to: config.address, data, value: "0" };
     },
     async authorityHistory(institution: string, fromBlock: bigint) {
@@ -64,12 +65,19 @@ export function createRegistryChain(config: RegistryConfig) {
       const head = await rpc.getBlockNumber({ cacheTime: 0 });
       const toBlock = fromBlock + 1999n < head ? fromBlock + 1999n : head;
       if (fromBlock > head) return { events: [], nextBlock: fromBlock.toString() };
-      const events = await rpc.getContractEvents({ address: config.address, abi, eventName: "AuthorityChanged", fromBlock, toBlock });
+      const events = await rpc.getContractEvents({ address: config.address, abi, fromBlock, toBlock });
       const scope = keccak256(toHex(institution));
-      return { events: events.filter(event => event.args.scope === scope || event.args.scope === `0x${"0".repeat(64)}`).map(event => ({
-        ...event.args, epoch: event.args.epoch?.toString(), actorEpoch: event.args.actorEpoch?.toString(),
-        blockNumber: event.blockNumber.toString(), blockHash: event.blockHash, transactionHash: event.transactionHash, logIndex: event.logIndex,
-      })), nextBlock: (toBlock + 1n).toString() };
+      const historyEvents = ["AuthorityChanged", "AdministratorProposed", "AdministratorAccepted", "ValidatorOperatorProposed", "ValidatorOperatorAccepted"];
+      return { events: events.filter(event => {
+        if (!historyEvents.includes(event.eventName)) return false;
+        const args = event.args as { scope?: Hex; institutionKey?: Hex };
+        const eventScope = args.scope ?? args.institutionKey;
+        return !eventScope || eventScope === scope || eventScope === `0x${"0".repeat(64)}`;
+      }).map(event => JSON.parse(JSON.stringify({
+        event: event.eventName, ...event.args, blockNumber: event.blockNumber, blockHash: event.blockHash,
+        transactionHash: event.transactionHash, logIndex: event.logIndex,
+      }, (_, value) => typeof value === "bigint" ? value.toString() : value))), nextBlock: (toBlock + 1n).toString() };
+
     },
     async authorityReceipt(hash: Hex) {
       await assertDeployment();
@@ -79,7 +87,7 @@ export function createRegistryChain(config: RegistryConfig) {
       const events = receipt.logs.filter(log => log.address.toLowerCase() === config.address.toLowerCase()).flatMap(log => {
         try {
           const decoded = decodeEventLog({ abi, topics: log.topics, data: log.data });
-          if (!["AuthorityChanged", "AdministratorProposed", "ValidatorOperatorProposed", "AdministratorAccepted"].includes(decoded.eventName)) return [];
+          if (!["AuthorityChanged", "AdministratorProposed", "ValidatorOperatorProposed", "ValidatorOperatorAccepted", "AdministratorAccepted"].includes(decoded.eventName)) return [];
           return [{ event: decoded.eventName, args: decoded.args, logIndex: log.logIndex }];
         } catch { return []; }
       });

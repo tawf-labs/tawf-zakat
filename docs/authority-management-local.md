@@ -7,8 +7,8 @@ RPC produksi, atau data lembaga sungguhan.
 ```bash
 forge build --root sc
 python3 scripts/export-registry-abi.py
-bun test backend/test/workspace_api.test.ts
-bun test backend/test/registry_api.test.ts
+(cd backend && bun test test/workspace_api.test.ts)
+(cd backend && bun test test/registry_api.test.ts)
 forge test --root sc --match-contract 'ReportAuthorityTest|ReportAttestationTest'
 ```
 
@@ -40,7 +40,9 @@ terjadi reorg. Riwayat registry dibaca per halaman maksimum 2.000 blok; mulai pa
 blok deployment untuk registry berumur panjang. Event AuthorityChanged merekam
 scope, role, akun, pelaku, epoch akun, epoch pengelola dan mandat. Interval historis
 bermula pada posisi blok/log event dan berakhir pada perubahan berikutnya untuk
-role/akun yang sama. Validator dan operatornya memiliki scope global layanan;
+role/akun yang sama. Usulan, pembatalan (alamat nol), dan penerimaan juga
+disertakan; event penerimaan menyebut pengusul sebelumnya beserta epochnya dan
+penerus beserta epoch barunya. Pelaku penerimaan bertindak dengan epoch baru. Validator dan operatornya memiliki scope global layanan;
 pengesah dan auditor memiliki scope lembaga. Administrator lembaga mengelola
 mandat auditor, bukan operator teknis. Pengelola tidak otomatis menjadi pengesah.
 
@@ -84,3 +86,20 @@ pengesahan penerbitan. Registry lama tetap menjadi arsip yang dapat diperiksa.
 Perubahan kontrak ini belum dideploy. Registry immutable yang sudah terpasang tidak
 memperoleh ABI baru secara otomatis; demo memakai deployment lokal baru. Jangan
 mengganti alamat deployment aktif tanpa rencana migrasi terpisah.
+
+## Hasil verifikasi
+
+- HTTP registry/ruang kerja beserta lima smoke Chromium: **76 lulus, 0 gagal**.
+- Tes frontend: **133 lulus, 0 gagal**; build frontend lulus.
+- Tes ABI registry setelah perbaikan review: **80 lulus, 0 gagal**.
+- Seluruh suite Foundry: **150 lulus, 0 gagal** dengan
+  `FOUNDRY_INVARIANT_RUNS=64 FOUNDRY_INVARIANT_DEPTH=128 forge test --root sc`.
+  Run default dihentikan setelah lebih dari sembilan menit; dua invariant
+  pemeriksaan seluruh riwayat belum selesai. Konfigurasi repo tidak diubah.
+- Typecheck dibandingkan commit awal `0f07d83`: tidak ada error baru; baseline
+  masih mempunyai 136 diagnosis frontend dan 13 backend (pesan unik).
+- Seluruh suite backend dijalankan. Dua puluh kegagalan legacy direproduksi pada
+  commit awal; satu assertion demo tentang jumlah konfirmasi kemudian diperbaiki
+  agar membandingkan isi dan blok penerimaan yang tetap, dan tes terkait lulus.
+- Review Standards dan Spec selesai; temuan tipe aksi dan atribusi epoch
+  penerimaan telah diperbaiki dan direview ulang tanpa temuan tersisa.

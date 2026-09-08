@@ -1834,10 +1834,22 @@ export const reportRegistryAbi = [
         "internalType": "address"
       },
       {
+        "name": "previousEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
         "name": "administrator",
         "type": "address",
         "indexed": false,
         "internalType": "address"
+      },
+      {
+        "name": "administratorEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -1863,6 +1875,12 @@ export const reportRegistryAbi = [
         "type": "address",
         "indexed": false,
         "internalType": "address"
+      },
+      {
+        "name": "administratorEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -2201,6 +2219,37 @@ export const reportRegistryAbi = [
   },
   {
     "type": "event",
+    "name": "ValidatorOperatorAccepted",
+    "inputs": [
+      {
+        "name": "previous",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "previousEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "operator",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "operatorEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ValidatorOperatorProposed",
     "inputs": [
       {
@@ -2214,6 +2263,12 @@ export const reportRegistryAbi = [
         "type": "address",
         "indexed": false,
         "internalType": "address"
+      },
+      {
+        "name": "operatorEpoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false

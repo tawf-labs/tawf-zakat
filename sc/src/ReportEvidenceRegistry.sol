@@ -16,7 +16,8 @@ contract ReportEvidenceRegistry is EIP712 {
     // Epoch identifies a mandate; block/log position defines its historical interval.
     event AuthorityChanged(bytes32 indexed scope, bytes32 indexed role, address indexed account,
         address actor, bool active, uint256 epoch, uint256 actorEpoch, string mandate);
-    event ValidatorOperatorProposed(address operator, address successor);
+    event ValidatorOperatorProposed(address operator, address successor, uint256 operatorEpoch);
+    event ValidatorOperatorAccepted(address previous, uint256 previousEpoch, address operator, uint256 operatorEpoch);
     mapping(bytes32 => address) public administrators;
     mapping(bytes32 => address) public pendingAdministrators;
     struct Authority { bool active; uint256 epoch; }
@@ -45,8 +46,8 @@ contract ReportEvidenceRegistry is EIP712 {
     error Replayed();
     error AlreadyRecorded();
     event InstitutionEnrolled(bytes32 indexed institutionKey, string institutionId, address administrator);
-    event AdministratorProposed(bytes32 indexed institutionKey, address administrator, address successor);
-    event AdministratorAccepted(bytes32 indexed institutionKey, address previous, address administrator);
+    event AdministratorProposed(bytes32 indexed institutionKey, address administrator, address successor, uint256 administratorEpoch);
+    event AdministratorAccepted(bytes32 indexed institutionKey, address previous, uint256 previousEpoch, address administrator, uint256 administratorEpoch);
     event SignatoryChanged(bytes32 indexed institutionKey, address indexed signer, bool active, uint256 epoch);
     event EvidenceRecorded(bytes32 indexed institutionKey, bytes32 indexed packageKey, bytes32 indexed authorization, bytes32 action, bytes32 digest, address signer);
 
@@ -69,7 +70,7 @@ contract ReportEvidenceRegistry is EIP712 {
         if (msg.sender != administrators[key]) revert Unauthorized();
         // Zero cancels an outstanding proposal; admission has no recovery override.
         pendingAdministrators[key] = successor;
-        emit AdministratorProposed(key, msg.sender, successor);
+        emit AdministratorProposed(key, msg.sender, successor, administratorEpochs[key]);
     }
     function acceptAdministrator(string calldata institutionId) external {
         bytes32 key = keccak256(bytes(institutionId));
@@ -78,10 +79,10 @@ contract ReportEvidenceRegistry is EIP712 {
         uint256 previousEpoch = administratorEpochs[key];
         administratorEpochs[key]++;
         administrators[key] = msg.sender;
-        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), previous, msg.sender, false, previousEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
-        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), msg.sender, msg.sender, true, administratorEpochs[key], previousEpoch, "SUCCESSOR_ACCEPTANCE");
+        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), previous, msg.sender, false, previousEpoch, administratorEpochs[key], "SUCCESSOR_ACCEPTANCE");
+        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), msg.sender, msg.sender, true, administratorEpochs[key], administratorEpochs[key], "SUCCESSOR_ACCEPTANCE");
         delete pendingAdministrators[key];
-        emit AdministratorAccepted(key, previous, msg.sender);
+        emit AdministratorAccepted(key, previous, previousEpoch, msg.sender, administratorEpochs[key]);
     }
     function setSignatory(string calldata institutionId, address signer, bool active) external {
         bytes32 key = keccak256(bytes(institutionId));
@@ -140,15 +141,17 @@ contract ReportEvidenceRegistry is EIP712 {
     function proposeValidatorOperator(address successor) external {
         if (msg.sender != validatorOperator) revert Unauthorized();
         pendingValidatorOperator = successor;
-        emit ValidatorOperatorProposed(msg.sender, successor);
+        emit ValidatorOperatorProposed(msg.sender, successor, validatorOperatorEpoch);
     }
     function acceptValidatorOperator() external {
         if (msg.sender != pendingValidatorOperator) revert Unauthorized();
+        address previous = validatorOperator;
         uint256 previousEpoch = validatorOperatorEpoch++;
-        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), validatorOperator, msg.sender, false, previousEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
+        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), validatorOperator, msg.sender, false, previousEpoch, validatorOperatorEpoch, "SUCCESSOR_ACCEPTANCE");
         validatorOperator = msg.sender;
         delete pendingValidatorOperator;
-        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), msg.sender, msg.sender, true, validatorOperatorEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
+        emit ValidatorOperatorAccepted(previous, previousEpoch, msg.sender, validatorOperatorEpoch);
+        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), msg.sender, msg.sender, true, validatorOperatorEpoch, validatorOperatorEpoch, "SUCCESSOR_ACCEPTANCE");
     }
     function setValidator(address validator, bool active) external {
         if (msg.sender != validatorOperator) revert Unauthorized();

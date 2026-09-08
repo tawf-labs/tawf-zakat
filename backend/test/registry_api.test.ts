@@ -1301,6 +1301,28 @@ it("keeps a published version readable after rotation and marks pending signing 
   expect((await json(`${path}/${prepared.id}`)).intent.signingAuthority).toBe("STALE");
   expect((await request(`${path}/${prepared.id}/submit`, { signature: signed })).status).toBe(409);
   const after = await (await request(`public/reports/${publicPackage.id}`, undefined, "")).json();
-  expect(after.summary).toEqual(before.summary);
+  expect(after.summary.content.packageId).toBe(publicPackage.id);
+  expect(after.summary.content).toEqual(before.summary.content);
+  expect(after.summary.summaryDigest).toBe(before.summary.summaryDigest);
+  expect(after.summary.publication.state).toBe("PUBLISHED");
+  expect(after.summary.publication.observation.blockHash).toBe(before.summary.publication.observation.blockHash);
   expect((await request(`public/reports/${publicPackage.id}`, undefined, "")).status).toBe(200);
+});
+
+it("returns proposals, cancellation and A-to-B-to-A acceptance authority epochs through the API", async () => {
+  const successorWallet = createWalletClient({ account: validator, chain: foundry, transport: http(rpcUrl) });
+  const send = async (who: typeof wallet | typeof successorWallet, functionName: string, args: unknown[]) => {
+    await rpc.waitForTransactionReceipt({ hash: await who.writeContract({ address: registry, abi: reportRegistryAbi, functionName, args } as any) });
+  };
+  const fromBlock = await rpc.getBlockNumber({ cacheTime: 0 });
+  await rpc.request({ method: "anvil_setBalance" as any, params: [validator.address, "0x56bc75e2d63100000"] as any });
+  await send(wallet, "proposeAdministrator", [institution, "0x0000000000000000000000000000000000000000"]);
+  await send(wallet, "proposeAdministrator", [institution, validator.address]);
+  await send(successorWallet, "acceptAdministrator", [institution]);
+  await send(successorWallet, "proposeAdministrator", [institution, account.address]);
+  await send(wallet, "acceptAdministrator", [institution]);
+  const history = (await json(`workspace/authority/history?fromBlock=${fromBlock}`)).events;
+  expect(history).toContainEqual(expect.objectContaining({ event: "AdministratorProposed", administrator: account.address, successor: "0x0000000000000000000000000000000000000000", administratorEpoch: "1" }));
+  expect(history).toContainEqual(expect.objectContaining({ event: "AdministratorAccepted", previous: validator.address, previousEpoch: "2", administrator: account.address, administratorEpoch: "3" }));
+  expect(history).toContainEqual(expect.objectContaining({ event: "AuthorityChanged", account: account.address, actor: account.address, active: true, epoch: "3", actorEpoch: "3" }));
 });

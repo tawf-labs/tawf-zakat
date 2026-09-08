@@ -9,4 +9,3 @@ export const authorityChangeInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("PROPOSE_VALIDATOR_OPERATOR"), account: address }).strict(),
   z.object({ action: z.literal("ACCEPT_VALIDATOR_OPERATOR") }).strict(),
 ]);
-export type AuthorityChange = z.infer<typeof authorityChangeInput>;

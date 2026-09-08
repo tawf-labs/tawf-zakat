@@ -1,3 +1,4 @@
+import type { AuthorityChange } from "../../../../shared/report-authority";
 import { useState } from "react";
 import { useAccount, useSendTransaction, useSwitchChain } from "wagmi";
 import type { Hex } from "viem";
@@ -19,7 +20,7 @@ const actions = {
   PROPOSE_ADMINISTRATOR: "Usulkan administrator registry", ACCEPT_ADMINISTRATOR: "Terima administrator registry",
   PROPOSE_VALIDATOR_OPERATOR: "Usulkan operator validator", ACCEPT_VALIDATOR_OPERATOR: "Terima operator validator",
 };
-type Transaction = { actor: Hex; scope: string; chainId: number; to: Hex; data: Hex; value: string; change: unknown };
+type Transaction = { actor: Hex; scope: string; chainId: number; to: Hex; data: Hex; value: string; change: AuthorityChange };
 export function AuthorityPanel({ token, workspace }: { token: string; workspace: Workspace }) {
   const { address, chainId } = useAccount();
   const { sendTransactionAsync } = useSendTransaction();
@@ -66,7 +67,13 @@ export function AuthorityPanel({ token, workspace }: { token: string; workspace:
       {action === "AUDITOR" && <label className="block">Mandat auditor<textarea className="block w-full border p-2" value={mandate} onChange={e => { setMandate(e.target.value); invalidate(); }} /></label>}
       <Button disabled={!!busy} onClick={() => run("prepare", async () => {
         invalidate(); setReceipt(null);
-        const change = action.startsWith("ACCEPT") ? { action } : action.startsWith("PROPOSE") ? { action, account } : { action, account, active, ...(action === "AUDITOR" ? { mandate } : {}) };
+        let change: AuthorityChange;
+        switch (action) {
+          case "ACCEPT_ADMINISTRATOR": case "ACCEPT_VALIDATOR_OPERATOR": change = { action }; break;
+          case "PROPOSE_ADMINISTRATOR": case "PROPOSE_VALIDATOR_OPERATOR": change = { action, account }; break;
+          case "SIGNATORY": case "VALIDATOR": change = { action, account, active }; break;
+          case "AUDITOR": change = { action, account, active, mandate }; break;
+        }
         setTransaction((await authorityRequest("/authority/prepare", token, change)).transaction);
       })}>{busy === "prepare" ? "Memeriksa…" : "Siapkan perubahan"}</Button>
       {transaction && <>
