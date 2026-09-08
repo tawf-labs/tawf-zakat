@@ -80,10 +80,10 @@ export async function authenticateWorkspace(
   requestedInstitutionId: string | undefined
 ): Promise<{ ok: true; session: WorkspaceSession } | { ok: false; response: Response }> {
   const token = bearerToken(c);
-  if (token === "") return { ok: false, response: refuse(c, 401, "unauthenticated") };
-
-  const stored = await runtime.store.sessionFor(hashToken(token), runtime.now());
-  if (!stored) return { ok: false, response: refuse(c, 401, "unauthenticated") };
+  const state = token ? await runtime.store.sessionStateFor(hashToken(token), runtime.now()) : { state: "UNKNOWN" as const };
+  if (state.state !== "ACTIVE") return { ok: false, response: c.json({ success: false,
+    reason: "unauthenticated", error: REFUSAL_MESSAGES.unauthenticated, sessionEnd: state.state }, 401) };
+  const stored = state.session;
 
   // The session is only a claim about the account; the membership is re-read on
   // every request, so revoking one takes effect without waiting for expiry.

@@ -37,7 +37,7 @@ export type AccessPorts = {
 
 export type AccessResult =
   | { ok: true; session: StoredSession }
-  | { ok: false; error: string };
+  | { ok: false; error: string; cause: unknown };
 
 export async function openWorkspaceSession(
   ports: AccessPorts,
@@ -72,6 +72,6 @@ export async function openWorkspaceSession(
       },
     };
   } catch (caught: unknown) {
-    return { ok: false, error: caught instanceof Error ? caught.message : "Gagal masuk ke ruang kerja." };
+    return { ok: false, error: caught instanceof Error ? caught.message : "Gagal masuk ke ruang kerja.", cause: caught };
   }
 }

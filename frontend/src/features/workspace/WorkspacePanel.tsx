@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Building2, DoorOpen, KeyRound, LogOut, ShieldAlert, Users } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
-import { useWorkspace } from "./useWorkspace";
+import { useWorkspaceAccess, useWalletWorkspaceAccess, WorkspaceAccessProvider } from "./useWorkspaceAccess";
 import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
@@ -20,7 +20,14 @@ import { EvidencePackagePanel } from "./EvidencePackagePanel";
  * tests that prove it call the API directly rather than through this page.
  */
 export function WorkspacePanel() {
-  const { address, isConnected, isSignedIn, token, workspace, error, busy, signIn, signOut } = useWorkspace();
+  const access = useWalletWorkspaceAccess();
+  return <WorkspaceAccessProvider access={access}><WorkspaceContents /></WorkspaceAccessProvider>;
+}
+
+function WorkspaceContents() {
+  const access = useWorkspaceAccess();
+  const { account: address, error, enter: signIn, leave: signOut } = access;
+  const busy = access.state === "OPENING";
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
 
@@ -33,7 +40,7 @@ export function WorkspacePanel() {
       .catch(() => setInstitutions([]));
   }, []);
 
-  if (!isConnected) {
+  if (!address) {
     return (
       <section className="rounded-2xl border border-stone-200 bg-white p-8 text-center">
         <KeyRound className="mx-auto h-10 w-10 text-stone-400" />
@@ -46,7 +53,7 @@ export function WorkspacePanel() {
     );
   }
 
-  if (!isSignedIn || !workspace) {
+  if (access.state !== "READY") {
     return (
       <section className="rounded-2xl border border-stone-200 bg-white p-8">
         <h2 className="text-xl font-semibold text-stone-900">Masuk ruang kerja</h2>
@@ -86,6 +93,7 @@ export function WorkspacePanel() {
     );
   }
 
+  const { workspace, requests } = access;
   const { institution, role, capabilities, members } = workspace;
 
   return (
@@ -151,9 +159,9 @@ export function WorkspacePanel() {
         </div>
       )}
 
-      {token && <AuthorityPanel key={`authority:${token}:${workspace.account}`} token={token} workspace={workspace} />}
+      <AuthorityPanel key={`authority:${requests.contextId}`} requests={requests} workspace={workspace} />
 
-      {token && <EvidencePackagePanel key={token} token={token} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />}
+      <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
 
       {error && (
         <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">

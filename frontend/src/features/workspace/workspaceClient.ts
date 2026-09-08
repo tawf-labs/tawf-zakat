@@ -14,16 +14,8 @@ import { getApiBaseUrl } from "../../lib/contracts";
 import { describeRefusal, type WorkspaceRole } from "./workspaceSession";
 import type { EvidenceSummary } from "./evidenceClient";
 
-export class WorkspaceRequestError extends Error {
-  constructor(
-    message: string,
-    readonly reason: string | null,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "WorkspaceRequestError";
-  }
-}
+import { WorkspaceRequestError } from "./privateRequests";
+export { WorkspaceRequestError } from "./privateRequests";
 
 export type Institution = {
   id: string;
@@ -88,23 +80,6 @@ async function call(path: string, init: RequestInit = {}): Promise<any> {
 
   return payload;
 }
-
-const authorized = (token: string) => ({ Authorization: `Bearer ${token}` });
-
-export const requestAccessChallenge = (institutionId: string, account: string): Promise<AccessChallengeResponse> =>
-  call("/challenge", { method: "POST", body: JSON.stringify({ institutionId, account }) });
-
-export const exchangeSignedChallenge = (
-  nonce: string,
-  signature: string
-): Promise<{ token: string; expiresAt: number; institutionId: string; role: WorkspaceRole }> =>
-  call("/session", { method: "POST", body: JSON.stringify({ nonce, signature }) });
-
-export const fetchWorkspace = (token: string): Promise<Workspace> =>
-  call("", { headers: authorized(token) });
-
-export const endSession = (token: string): Promise<null> =>
-  call("/session", { method: "DELETE", headers: authorized(token) });
 
 export const fetchOnboardingFixtures = (): Promise<{ institutions: Institution[] }> =>
   call("/institutions");

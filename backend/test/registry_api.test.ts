@@ -1578,3 +1578,61 @@ it("refuses substituted auditor papers against the original evidence commitment"
       WHERE institution_id = ${institution} AND id = ${intent.id}`);
   }
 });
+
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: real workspace owner restores only expired drafts and clears revoked drafts", async () => {
+  const built = await Bun.build({ entrypoints: [new URL("../../frontend/test/workspace-access-smoke.tsx", import.meta.url).pathname], target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) } });
+  if (!built.success) throw new Error(built.logs.join("\n"));
+  const bundle = await built.outputs[0]!.text();
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 18578, async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+    if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+    if (path === "/wallet-rpc") {
+      const { method, params } = await req.json();
+      if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([account.address]);
+      if (method === "eth_chainId") return Response.json("0x7a69");
+      if (method === "eth_signTypedData_v4") return Response.json(await account.signTypedData(JSON.parse(params[1])));
+      return Response.json(null);
+    }
+    return app.fetch(req);
+  } });
+  const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+  const browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (error: Error) => console.error("Browser:", error.message));
+    await page.goto("http://127.0.0.1:18578");
+    const enter = async () => {
+      await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(institution);
+      await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+      await page.getByRole("button", { name: /Local gap/ }).click();
+      await page.getByRole("textbox", { name: /^Narasi draf/ }).waitFor({ timeout: 5000 }).catch(async (error: Error) => { console.error(await page.locator("body").innerText()); throw error; });
+    };
+    await enter();
+    await page.getByRole("textbox", { name: /^Narasi draf/ }).fill("Draf hanya pada tab ini");
+    await page.getByLabel("Identitas laporan", { exact: true }).fill("retained-report");
+    await configure(3601);
+    await page.getByLabel("Paket tersimpan").selectOption(frozen.id);
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).waitFor();
+    expect(await page.getByRole("textbox", { name: /^Narasi draf/ }).count()).toBe(0);
+    await enter();
+    expect(await page.getByRole("textbox", { name: /^Narasi draf/ }).inputValue()).toBe("Draf hanya pada tab ini");
+    expect(await page.getByLabel("Identitas laporan", { exact: true }).inputValue()).toBe("retained-report");
+    expect(await page.getByLabel(/Saya menyertakan seluruh sumber/).isChecked()).toBe(false);
+    const store = createWorkspaceStore(database.handle());
+    await store.deactivateMembership({ institutionId: institution, account: account.address });
+    await store.upsertMembership({ institutionId: institution, account: account.address, role: "OFFICER" });
+    await page.getByLabel("Paket tersimpan").selectOption(frozen.id);
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).waitFor();
+    await enter();
+    expect(await page.getByRole("textbox", { name: /^Narasi draf/ }).inputValue()).toBe("");
+    await page.getByRole("textbox", { name: /^Narasi draf/ }).fill("Lost on reload");
+    await page.reload();
+    await page.getByRole("button", { name: /Local gap/ }).click();
+    expect(await page.getByRole("textbox", { name: /^Narasi draf/ }).inputValue()).toBe("");
+  } finally {
+    await browser.close(); server.stop(true); await configure();
+    const challenge = await json("workspace/challenge", { institutionId: institution, account: account.address });
+    token = (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await account.signTypedData(challenge.typedData) })).token;
+  }
+}, 60000);

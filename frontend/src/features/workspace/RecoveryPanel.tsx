@@ -1,6 +1,6 @@
+import type { PrivateRequests } from "./privateRequests";
 import { useState } from "react";
 import { Button } from "../../components/ui/Button";
-import { getApiBaseUrl } from "../../lib/contracts";
 
 import type { FileAvailability, RecoveryFileStatus, RecoveryStatus } from "../../../../shared/registry-recovery";
 import type { RecordingObservation } from "../../../../shared/report-registry";
@@ -8,20 +8,17 @@ const fileLabels: Record<FileAvailability, string> = { AVAILABLE: "Tersedia dan 
 const transactionLabels: Record<RecordingObservation["state"], string> = { PREPARED: "Belum dikirim", SUBMITTED: "Diajukan; belum terbukti masuk blok", INCLUDED: "Masuk blok; menunggu konfirmasi", CONFIRMED: "Tingkat konfirmasi tercapai", NONCANONICAL: "Blok berubah; perlu pemeriksaan ulang", REVERTED: "Transaksi gagal", INVALID_EVENT: "Event tidak cocok" };
 
 /** Backup bytes must match the committed source; the server decides, never this form. */
-export function RecoveryPanel({ token, preparationId, canRecover }: { token: string; preparationId: string; canRecover: boolean }) {
+export function RecoveryPanel({ requests, preparationId, canRecover }: { requests: PrivateRequests; preparationId: string; canRecover: boolean }) {
   const [recovery, setRecovery] = useState<RecoveryStatus | null>(null);
   const [files, setFiles] = useState<RecoveryFileStatus[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [chainError, setChainError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   async function request(path: string, body?: unknown) {
-    const response = await fetch(`${getApiBaseUrl()}/api/workspace/recovery${path}`, {
-      method: body === undefined ? "GET" : "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    return requests.json(`/api/workspace/recovery${path}`, {
+      method: body === undefined ? "GET" : "POST",
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? "Pemeriksaan belum selesai.");
-    return result;
   }
   async function inspect() {
     setBusy(true); setError(null); setChainError(null); setRecovery(null); setFiles(null);

@@ -487,6 +487,29 @@ describe("what a reader may not do", () => {
 });
 
 describe("what the workspace never says out loud", () => {
+  it("classifies an expired supplied token without exposing its account or institution", async () => {
+    const token = await tokenFrom(await signIn(officer, SINAR));
+    clock += 3601;
+    const response = await get("", token);
+    const body = await response.json();
+    expect(response.status).toBe(401);
+    expect(body).toMatchObject({ success: false, reason: "unauthenticated", sessionEnd: "EXPIRED" });
+    expect(Object.keys(body).sort()).toEqual(["error", "reason", "sessionEnd", "success"]);
+    expect(JSON.stringify(body)).not.toContain(SINAR);
+    expect(JSON.stringify(body)).not.toContain(officer.address.toLowerCase());
+    expect((await (await get("", "unknown-token")).json()).sessionEnd).toBe("UNKNOWN");
+  });
+
+  it("keeps revocation ahead of expiry after membership is granted again", async () => {
+    const token = await tokenFrom(await signIn(reader, SINAR));
+    clock += 3601;
+    await store.deactivateMembership({ institutionId: SINAR, account: reader.address });
+    expect((await (await get("", token)).json()).sessionEnd).toBe("REVOKED");
+    await store.upsertMembership({ institutionId: SINAR, account: reader.address, role: "READER" });
+    expect((await (await get("", token)).json()).sessionEnd).toBe("REVOKED");
+    const fresh = await tokenFrom(await signIn(reader, SINAR));
+    expect((await get("", fresh)).status).toBe(200);
+  });
   it("returns the bearer token once, at sign-in, and never again", async () => {
     const token = await tokenFrom(await signIn(officer, SINAR));
 

@@ -1,3 +1,4 @@
+import type { PrivateRequests } from "./privateRequests";
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "../../components/ui/Button";
 import {
@@ -106,8 +107,8 @@ function InternalSourcePanel({ stream }: { stream: InternalSourceStream }) {
   );
 }
 
-export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved }: {
-  token: string;
+export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSaved }: {
+  requests: PrivateRequests;
   scopeUnit: string;
   scopeLevel: string;
   onSaved: (id: string) => void;
@@ -135,7 +136,7 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
     const parsedYear = Number(year);
     if (!Number.isInteger(parsedYear)) return;
     setStreamError(null);
-    fetchInternalSources(token, { kind: periodKind, year: parsedYear })
+    fetchInternalSources(requests, { kind: periodKind, year: parsedYear })
       .then((payload) => {
         if (current) setStream(payload.streams[0] ?? null);
       })
@@ -151,7 +152,7 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
     return () => {
       current = false;
     };
-  }, [token, periodKind, year]);
+  }, [requests, periodKind, year]);
 
   const upload = async (side: Side, file?: File) => {
     if (!file) return;
@@ -186,7 +187,7 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
         catch { throw new Error(`${sideName(side)}: JSON belum sah. Periksa tanda kutip, koma, dan kurung sesuai contoh.`); }
       }
       const attachments = await Promise.all(SIDES.flatMap((side) => files[side] ? [attachment(files[side], side)] : []));
-      const { preparation } = await prepareEvidence(token, {
+      const { preparation } = await prepareEvidence(requests, {
         label, period: { kind: periodKind, year: Number(year) },
         currencyUnit: unit, balanceSheetScope: position,
         claim: parsed.CLAIM, source: parsed.SOURCE, files: attachments,

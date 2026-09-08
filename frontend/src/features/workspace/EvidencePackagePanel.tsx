@@ -1,3 +1,4 @@
+import type { PrivateRequests } from "./privateRequests";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { ReportPackageForm } from "./ReportPackageForm";
 import { useEffect, useState } from "react";
@@ -166,11 +167,11 @@ function SourceCard({ source }: { source: EvidencePreparation["sources"][number]
 function FileRow({
   preparationId,
   file,
-  token,
+  requests,
 }: {
   preparationId: string;
   file: EvidenceFile;
-  token: string;
+  requests: PrivateRequests;
 }) {
   const [unavailable, setUnavailable] = useState(false);
   const status: Described = unavailable ? {
@@ -185,7 +186,7 @@ function FileRow({
     setBusy(true);
     setError(null);
     try {
-      const blob = await downloadEvidenceFile(preparationId, file, token);
+      const blob = await downloadEvidenceFile(preparationId, file, requests);
       setUnavailable(false);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -240,11 +241,11 @@ function FileRow({
 function PreparationDetail({
   preparation,
   commitmentVerified,
-  token,
+  requests,
 }: {
   preparation: EvidencePreparation;
   commitmentVerified: boolean;
-  token: string;
+  requests: PrivateRequests;
 }) {
   const outcome = describeOutcome(preparation.outcome, preparation.findings.length);
   const commitment = describeCommitment(commitmentVerified);
@@ -338,7 +339,7 @@ function PreparationDetail({
           </h4>
           <ul className="mt-2 space-y-2">
             {preparation.files.map((file) => (
-              <FileRow key={file.id} preparationId={preparation.id} file={file} token={token} />
+              <FileRow key={file.id} preparationId={preparation.id} file={file} requests={requests} />
             ))}
           </ul>
         </section>
@@ -352,8 +353,8 @@ function PreparationDetail({
   );
 }
 
-export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel }: {
-  token: string; canPrepare: boolean; scopeUnit: string; scopeLevel: string;
+export function EvidencePackagePanel({ requests, canPrepare, scopeUnit, scopeLevel }: {
+  requests: PrivateRequests; canPrepare: boolean; scopeUnit: string; scopeLevel: string;
 }) {
   const [summaries, setSummaries] = useState<EvidenceSummary[] | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -368,13 +369,13 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
 
   useEffect(() => {
     let cancelled = false;
-    listEvidencePreparations(token).then(({ preparations }) => {
+    listEvidencePreparations(requests).then(({ preparations }) => {
       if (!cancelled) { setSummaries(preparations); setError(null); }
     }).catch((caught) => {
       if (!cancelled) { setSummaries([]); setError(caught instanceof Error ? caught.message : "Daftar snapshot tidak dapat dibaca."); }
     });
     return () => { cancelled = true; };
-  }, [token, refresh]);
+  }, [requests, refresh]);
 
   useEffect(() => {
     if (!openId) {
@@ -384,7 +385,7 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
     let cancelled = false;
     setDetail(null);
     setDetailError(null);
-    fetchEvidencePreparation(openId, token)
+    fetchEvidencePreparation(openId, requests)
       .then((next) => {
         if (!cancelled) setDetail(next);
       })
@@ -396,7 +397,7 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
     return () => {
       cancelled = true;
     };
-  }, [openId, token, refresh]);
+  }, [openId, requests, refresh]);
 
   if (summaries === null) {
     return (
@@ -417,7 +418,7 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
         </Button>
       </header>
 
-      {canPrepare && <EvidencePreparationForm token={token} scopeUnit={scopeUnit} scopeLevel={scopeLevel}
+      {canPrepare && <EvidencePreparationForm requests={requests} scopeUnit={scopeUnit} scopeLevel={scopeLevel}
         onSaved={(id) => { setSavedId(id); setOpenId(id); setRefresh((value) => value + 1); }} />}
       {savedId && <p role="status" className="mt-3 text-sm text-emerald-800">Snapshot tersimpan: {savedId}. Hasil pemeriksaan dapat dibuka di bawah.</p>}
 
@@ -464,10 +465,10 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
                       <PreparationDetail
                         preparation={detail.preparation}
                         commitmentVerified={detail.commitmentVerified}
-                        token={token}
+                        requests={requests}
                       />
-                      <RecoveryPanel key={`recovery:${summary.id}:${token}`} token={token} preparationId={summary.id} canRecover={canPrepare} />
-                      <ReportPackageForm key={`${summary.id}:${token}`} preparationId={summary.id} token={token} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
+                      <RecoveryPanel key={`recovery:${summary.id}:${requests.contextId}`} requests={requests} preparationId={summary.id} canRecover={canPrepare} />
+                      <ReportPackageForm key={`${summary.id}:${requests.contextId}`} preparationId={summary.id} requests={requests} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
                       </>
                     ) : detailError ? (
                       <p role="alert" className="text-sm text-red-700">{detailError} Gunakan Muat ulang untuk mencoba lagi.</p>

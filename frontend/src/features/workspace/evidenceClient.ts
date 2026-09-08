@@ -1,7 +1,8 @@
+import type { PrivateRequests } from "./privateRequests";
 /**
  * Talking to the evidence package API (Spec #68, ticket #70).
  *
- * Every call carries the workspace bearer token. There is no unauthenticated
+ * Every call carries the workspace bearer requests. There is no unauthenticated
  * path here on purpose: the public summary is a different surface with a
  * different audience, and mixing them in one client is how a restricted row
  * ends up on a page that was meant to be public.
@@ -11,8 +12,7 @@
  * refused, and offering it would suggest the locator alone is enough. It is not.
  */
 
-import { getApiBaseUrl } from "../../lib/contracts";
-import { WorkspaceRequestError } from "./workspaceClient";
+import { WorkspaceRequestError, type SessionEnd } from "./privateRequests";
 import type {
   ChainScopeView,
   ExaminationOutcome,
@@ -150,37 +150,22 @@ export type EvidenceIssue = {
 };
 
 export class EvidenceRequestError extends WorkspaceRequestError {
-  constructor(message: string, status: number, readonly issues: EvidenceIssue[]) {
-    super(message, null, status);
+  constructor(message: string, status: number, readonly issues: EvidenceIssue[], reason: string | null, sessionEnd: SessionEnd | null) {
+    super(message, reason, status, sessionEnd, issues);
   }
 }
 
-async function call(path: string, token: string, body?: unknown): Promise<any> {
-  const response = await fetch(`${getApiBaseUrl()}/api/evidence${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-
-  let payload: any = null;
+async function call(path: string, requests: PrivateRequests, body?: unknown): Promise<any> {
   try {
-    payload = await response.json();
-  } catch {
-    throw new WorkspaceRequestError(
-      `Server membalas ${response.status} tanpa isi yang bisa dibaca.`,
-      null,
-      response.status
-    );
+    return await requests.json(`/api/evidence${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceRequestError) throw new EvidenceRequestError(error.message, error.status,
+      error.issues as EvidenceIssue[], error.reason, error.sessionEnd);
+    throw error;
   }
-
-  if (!response.ok || payload?.success === false) {
-    throw new EvidenceRequestError(
-      (typeof payload?.error === "string" && payload.error) || `Permintaan gagal (HTTP ${response.status}).`,
-      response.status,
-      Array.isArray(payload?.issues) ? payload.issues : []
-    );
-  }
-  return payload;
 }
 
 /** One internal source this deployment can offer, and how far it reaches. */
@@ -215,21 +200,21 @@ export type InternalSourceStream = {
  * unexaminable records already visible.
  */
 export const fetchInternalSources = (
-  token: string,
+  requests: PrivateRequests,
   period: { kind: string; year: number }
 ): Promise<{ streams: InternalSourceStream[] }> =>
-  call(`/internal-sources?periodKind=${encodeURIComponent(period.kind)}&year=${period.year}`, token);
+  call(`/internal-sources?periodKind=${encodeURIComponent(period.kind)}&year=${period.year}`, requests);
 
-export const listEvidencePreparations = (token: string): Promise<{ preparations: EvidenceSummary[] }> =>
-  call("", token);
+export const listEvidencePreparations = (requests: PrivateRequests): Promise<{ preparations: EvidenceSummary[] }> =>
+  call("", requests);
 
-export const prepareEvidence = (token: string, body: unknown): Promise<{ preparation: EvidencePreparation }> =>
-  call("", token, body);
+export const prepareEvidence = (requests: PrivateRequests, body: unknown): Promise<{ preparation: EvidencePreparation }> =>
+  call("", requests, body);
 
 export const fetchEvidencePreparation = (
   id: string,
-  token: string
-): Promise<{ preparation: EvidencePreparation; commitmentVerified: boolean }> => call(`/${id}`, token);
+  requests: PrivateRequests
+): Promise<{ preparation: EvidencePreparation; commitmentVerified: boolean }> => call(`/${id}`, requests);
 
 /**
  * Downloads a restricted document through the authorized request, then hands
@@ -239,25 +224,9 @@ export const fetchEvidencePreparation = (
 export async function downloadEvidenceFile(
   preparationId: string,
   file: EvidenceFile,
-  token: string
+  requests: PrivateRequests
 ): Promise<Blob> {
-  const response = await fetch(
-    `${getApiBaseUrl()}/api/evidence/${preparationId}/files/${file.id}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  if (!response.ok) {
-    let message = `Berkas tidak dapat diunduh (HTTP ${response.status}).`;
-    try {
-      const payload = await response.json();
-      if (typeof payload?.error === "string") message = payload.error;
-    } catch {
-      // Keep the status-based message; an unreadable body is not a new fact.
-    }
-    throw new WorkspaceRequestError(message, null, response.status);
-  }
-
-  return response.blob();
+  return requests.blob(`/api/evidence/${preparationId}/files/${file.id}`);
 }
 
 export type ReportFigure = { name: string; label: string; value: WireQuantity };
@@ -290,10 +259,10 @@ export type CorrectionReview = {
   netDelta: { before: WireQuantity | null; after: WireQuantity | null };
   reasonRequired: true; blockers: string[]; limitations: string[];
 };
-export const reviewCorrection = (id: string, predecessor: string, token: string): Promise<{ correction: CorrectionReview }> =>
-  call(`/${id}/reports/correction?predecessor=${encodeURIComponent(predecessor)}`, token);
-export const reviewReport = (id: string, token: string): Promise<ReportReview> => call(`/${id}/reports/review`, token);
-export const listReports = (id: string, token: string): Promise<{ packages: { id: string; digest: string }[] }> => call(`/${id}/reports`, token);
-export const readReport = (id: string, packageId: string, token: string): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}`, token);
-export const saveReport = (id: string, token: string, input: unknown): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports`, token, input);
-export const freezeReport = (id: string, packageId: string, token: string): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}/freeze`, token, {});
+export const reviewCorrection = (id: string, predecessor: string, requests: PrivateRequests): Promise<{ correction: CorrectionReview }> =>
+  call(`/${id}/reports/correction?predecessor=${encodeURIComponent(predecessor)}`, requests);
+export const reviewReport = (id: string, requests: PrivateRequests): Promise<ReportReview> => call(`/${id}/reports/review`, requests);
+export const listReports = (id: string, requests: PrivateRequests): Promise<{ packages: { id: string; digest: string }[] }> => call(`/${id}/reports`, requests);
+export const readReport = (id: string, packageId: string, requests: PrivateRequests): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}`, requests);
+export const saveReport = (id: string, requests: PrivateRequests, input: unknown): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports`, requests, input);
+export const freezeReport = (id: string, packageId: string, requests: PrivateRequests): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}/freeze`, requests, {});

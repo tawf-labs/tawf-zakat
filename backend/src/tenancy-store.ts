@@ -202,9 +202,13 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async deactivateMembership(input: { institutionId: string; account: string }): Promise<void> {
       await db.execute(sql`
-        UPDATE institution_memberships SET is_active = FALSE, updated_at = NOW()
-        WHERE institution_id = ${input.institutionId}
-          AND account_address = ${normalizeAccount(input.account)}
+        WITH deactivated AS (
+          UPDATE institution_memberships SET is_active = FALSE, updated_at = NOW()
+          WHERE institution_id = ${input.institutionId} AND account_address = ${normalizeAccount(input.account)}
+          RETURNING institution_id, account_address
+        )
+        UPDATE workspace_sessions s SET revoked_at = COALESCE(s.revoked_at, EXTRACT(EPOCH FROM NOW())::bigint)
+        FROM deactivated m WHERE s.institution_id = m.institution_id AND s.account_address = m.account_address
       `);
     },
 
@@ -401,6 +405,23 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         role: asRole(row.role),
         expiresAt: asSeconds(row.expires_at),
       };
+    },
+
+    /** Only the supplied token is classified; membership/revocation outranks expiry. */
+    async sessionStateFor(tokenHash: string, now: number): Promise<
+      { state: "ACTIVE"; session: SessionRecord } | { state: "EXPIRED" | "REVOKED" | "UNKNOWN" }
+    > {
+      const row = await one(sql`
+        SELECT s.institution_id, s.account_address, s.role, s.expires_at, s.revoked_at, m.is_active
+        FROM workspace_sessions s LEFT JOIN institution_memberships m
+          ON m.institution_id = s.institution_id AND m.account_address = s.account_address
+        WHERE s.token_hash = ${tokenHash}
+      `);
+      if (!row) return { state: "UNKNOWN" };
+      if (row.revoked_at !== null || !row.is_active) return { state: "REVOKED" };
+      if (asSeconds(row.expires_at) < now) return { state: "EXPIRED" };
+      return { state: "ACTIVE", session: { institutionId: row.institution_id, account: row.account_address,
+        role: asRole(row.role), expiresAt: asSeconds(row.expires_at) } };
     },
 
     async revokeSession(tokenHash: string, now: number): Promise<void> {

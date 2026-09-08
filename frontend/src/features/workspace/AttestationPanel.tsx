@@ -1,7 +1,7 @@
+import type { PrivateRequests } from "./privateRequests";
 import { useEffect, useRef, useState } from "react";
 import { hashTypedData, keccak256, toHex } from "viem";
 import { useAccount, useSignTypedData, useSwitchChain } from "wagmi";
-import { getApiBaseUrl } from "../../lib/contracts";
 import { Button } from "../../components/ui/Button";
 import { attestationTypedData, type AttestationIntent } from "../../../../shared/report-registry";
 import type { SavedReportPackage } from "./evidenceClient";
@@ -40,8 +40,8 @@ const states: Record<string, string> = {
 export type VersionAttestation = { id: string; auditor: string; scope: string; conclusion: string;
   evidenceCommitment: string; predecessor: string | null; mandate: string };
 
-export function AttestationPanel({ saved, preparationId, token, recorded, basis, onRecorded }: {
-  saved: SavedReportPackage; preparationId: string; token: string;
+export function AttestationPanel({ saved, preparationId, requests, recorded, basis, onRecorded }: {
+  saved: SavedReportPackage; preparationId: string; requests: PrivateRequests;
   recorded: VersionAttestation[] | null; basis: string | null; onRecorded?: () => void;
 }) {
   const { address, chainId } = useAccount();
@@ -63,14 +63,14 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
   const path = `${preparationId}/reports/${saved.id}/attestation`;
   const cacheKey = `tawf-attestation:${path}:${address?.toLowerCase()}`;
   const contextRef = useRef("");
-  contextRef.current = `${path}:${token}:${address}:${chainId}:${intent?.id}`;
+  contextRef.current = `${path}:${requests.contextId}:${address}:${chainId}:${intent?.id}`;
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setIntent(null); setHistory([]); setReviewed(false); setContractSignature("");
-    recordingRequest<{ intents: AttestationIntent[] }>(path, token).then(({ intents }) => {
+    recordingRequest<{ intents: AttestationIntent[] }>(path, requests).then(({ intents }) => {
       if (cancelled) return;
       setHistory(intents);
       const cached = sessionStorage.getItem(cacheKey);
@@ -80,13 +80,13 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
     }).catch(() => { if (!cancelled) { setStatusUnavailable(true); setError("Riwayat atestasi belum dapat diperiksa."); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [path, token, cacheKey]);
+  }, [path, requests, cacheKey]);
 
   useEffect(() => {
     if (!intent) return;
     const timer = setInterval(() => { void check(); }, 4000);
     return () => clearInterval(timer);
-  }, [intent, path, token]);
+  }, [intent, path, requests]);
   // A confirmed note changes what the version says it was examined against, so the list is re-read once.
   const announced = useRef<string | null>(null);
   useEffect(() => {
@@ -107,7 +107,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
     if (!intent) return;
     const checkingContext = contextRef.current;
     try {
-      const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, token);
+      const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, requests);
       if (alive.current && contextRef.current === checkingContext) { setIntent(next.intent); setStatusUnavailable(next.intent.signingAuthority === "UNAVAILABLE");
         if (next.intent.signingAuthority === "STALE" || next.intent.signingAuthority === "UNAVAILABLE") { setContractSignature(""); setReviewed(false); }
       }
@@ -125,7 +125,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
   }
   const prepare = () => act("Menyimpan bukti dan memeriksa kewenangan…", async () => {
     sessionStorage.setItem(cacheKey, retryId.current);
-    const next = await recordingRequest<{ intent: AttestationIntent }>(path, token, {
+    const next = await recordingRequest<{ intent: AttestationIntent }>(path, requests, {
       retryId: retryId.current, packageDigest: saved.digest, scope, conclusion,
       predecessor: predecessor || null, evidence,
     });
@@ -143,7 +143,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
       throw new Error("Atestasi berbeda dari versi atau akun yang ditinjau.");
     }
     if (BigInt(statement.deadline) < BigInt(Math.floor(Date.now() / 1000))) throw new Error("Atestasi kedaluwarsa. Mulai tinjauan baru.");
-    const fresh = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, token);
+    const fresh = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, requests);
     if (fresh.intent.signingAuthority !== "CURRENT") {
       setIntent(fresh.intent); setContractSignature("");
       throw new Error("Otoritas auditor berubah atau tidak dapat dibaca. Mulai tinjauan atestasi baru.");
@@ -151,7 +151,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
     const signature = contractSignature || await signTypedDataAsync(attestationTypedData(intent.domain, statement));
     if (!alive.current || contextRef.current !== signingContext) return;
     setContractSignature(signature);
-    const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/submit`, token, { signature });
+    const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/submit`, requests, { signature });
     if (alive.current) setIntent(next.intent);
   });
 
@@ -212,9 +212,9 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
       <p className="text-sm">Masa kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat live diperiksa ulang sebelum signing."}</p>
       <p className="break-all text-xs">Commitment bukti pemeriksaan {intent.statement.evidenceCommitment}<br />Berkas: {intent.evidence.files.map(file => file.fileName).join(", ")}</p>
       {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async () => {
-        const response = await fetch(`${getApiBaseUrl()}/api/evidence/${path}/${intent.id}/files/${file.id}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!response.ok) throw new Error("Bukti pemeriksaan tidak dapat diunduh. Periksa akses dan ketersediaan berkas.");
-        const url = URL.createObjectURL(await response.blob());
+        const blob = await requests.blob(`/api/evidence/${path}/${intent.id}/files/${file.id}`);
+        requests.assertCurrent();
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a"); link.href = url; link.download = file.fileName; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       })}>Unduh {file.fileName}</Button>)}
@@ -235,7 +235,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
       }}>Mulai tinjauan atestasi baru</Button>}
       {intent.transactionHash && ["SUBMITTED", "NONCANONICAL"].includes(intent.observation.state) &&
         <Button disabled={!!busy} onClick={() => act("Mengirim ulang transaksi tersimpan…", async () => {
-          const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/retry`, token, {});
+          const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/retry`, requests, {});
           if (alive.current) setIntent(next.intent);
         })}>Kirim ulang transaksi tersimpan</Button>}
     </div>}

@@ -1,3 +1,4 @@
+import type { PrivateRequests } from "./privateRequests";
 import { useEffect, useRef, useState } from "react";
 import { useAccount, useSignTypedData, useSwitchChain } from "wagmi";
 import { hashTypedData, keccak256, toHex } from "viem";
@@ -28,7 +29,7 @@ type VersionHistoryEntry = { packageId: string; version: string; official: boole
   attestations: VersionAttestations;
   anchor: { transactionHash?: string; state: string; blockNumber?: string; blockTimestamp?: string; confirmations: number; requiredConfirmations: number } | null };
 
-export function RecordingPanel({ saved, preparationId, token, publication = false, onCorrect }: { saved: SavedReportPackage; preparationId: string; token: string; publication?: boolean; onCorrect?: (packageId: string) => void }) {
+export function RecordingPanel({ saved, preparationId, requests, publication = false, onCorrect }: { saved: SavedReportPackage; preparationId: string; requests: PrivateRequests; publication?: boolean; onCorrect?: (packageId: string) => void }) {
   const { address, chainId } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
@@ -51,11 +52,11 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
   const cacheKey = `tawf-recording:${path}:${address?.toLowerCase()}`;
   const alive = useRef(true);
   const contextRef = useRef("");
-  contextRef.current = `${address}:${chainId}:${token}:${saved.id}`;
+  contextRef.current = `${address}:${chainId}:${requests.contextId}:${saved.id}`;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let cancelled = false;
-    recordingRequest<{ intents: RecordingIntent[] }>(path, token).then(({ intents }) => {
+    recordingRequest<{ intents: RecordingIntent[] }>(path, requests).then(({ intents }) => {
       if (cancelled) return;
       setHistory(intents);
       const id = sessionStorage.getItem(cacheKey);
@@ -66,13 +67,13 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
       setStatusUnavailable(false);
     }).catch(() => { if (!cancelled) { setStatusUnavailable(true); setError("Riwayat pencatatan belum dapat diperiksa."); } });
     return () => { cancelled = true; };
-  }, [cacheKey, path, token]);
+  }, [cacheKey, path, requests]);
   async function check() {
     if (!intent || checkingRef.current) return;
     checkingRef.current = true;
     setChecking(true);
     try {
-      const next = (await recordingRequest(`${path}/${intent.id}`, token)).intent;
+      const next = (await recordingRequest(`${path}/${intent.id}`, requests)).intent;
       if (alive.current) {
         setIntent(next); setStatusUnavailable(next.signingAuthority === "UNAVAILABLE"); setError(null);
         if (next.signingAuthority === "STALE" || next.signingAuthority === "UNAVAILABLE") { setSignature(""); setReviewed(false); }
@@ -84,24 +85,24 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     if (!intent) return;
     const timer = setInterval(() => { void check(); }, 4000);
     return () => clearInterval(timer);
-  }, [intent, path, token]);
+  }, [intent, path, requests]);
   // Version identity and the official line are read from the registry, never from the numbering on screen.
   async function readLine() {
     if (!publication) return;
     try {
       const [current, line] = await Promise.all([
-        recordingRequest<{ version: PublishedVersion }>(`${path}/version`, token),
-        recordingRequest<{ history: VersionHistoryEntry[] }>(`${path}/history`, token),
+        recordingRequest<{ version: PublishedVersion }>(`${path}/version`, requests),
+        recordingRequest<{ history: VersionHistoryEntry[] }>(`${path}/history`, requests),
       ]);
       if (alive.current) { setVersion(current.version); setVersionLine(line.history); setLineUnavailable(false); }
     } catch { if (alive.current) { setLineUnavailable(true); setVersion(null); setVersionLine(null); } }
   }
-  useEffect(() => { void readLine(); }, [path, token, intent?.observation.state]);
+  useEffect(() => { void readLine(); }, [path, requests, intent?.observation.state]);
   async function prepare() {
     setPreparing(true); setError(null);
     try {
       sessionStorage.setItem(cacheKey, retryId.current);
-      const next = (await recordingRequest(path, token, { retryId: retryId.current, digest: saved.digest })).intent;
+      const next = (await recordingRequest(path, requests, { retryId: retryId.current, digest: saved.digest })).intent;
       if (alive.current) { setIntent(next); setHistory(previous => [...previous.filter(item => item.id !== next.id), next]); setStatusUnavailable(false); setReviewed(false); }
     } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "Persiapan ditolak."); }
     finally { if (alive.current) setPreparing(false); }
@@ -111,7 +112,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     const signingContext = contextRef.current;
     setSubmitting(true); setError(null);
     try {
-      const fresh = await recordingRequest(`${path}/${intent.id}`, token);
+      const fresh = await recordingRequest(`${path}/${intent.id}`, requests);
       if (fresh.intent.signingAuthority !== "CURRENT") {
         setIntent(fresh.intent); setSignature(""); setReviewed(false);
         throw new Error("Otoritas berubah atau tidak dapat dibaca. Mulai tinjauan baru sebelum menandatangani.");
@@ -133,7 +134,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
       const signed = signature || await signTypedDataAsync(evidenceTypedData(intent.domain, a));
       if (!alive.current || contextRef.current !== signingContext) return;
       setSignature(signed);
-      const next = await recordingRequest(`${path}/${intent.id}/submit`, token, { signature: signed });
+      const next = await recordingRequest(`${path}/${intent.id}/submit`, requests, { signature: signed });
       if (alive.current) { setIntent(next.intent); setStatusUnavailable(false); }
     } catch (caught) {
       // The server's own reason matters here: a losing correction must be told to reprepare, not just to retry.
@@ -146,7 +147,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     if (!intent) return;
     setRetrying(true); setError(null);
     try {
-      const result = await recordingRequest(`${path}/${intent.id}/retry`, token, {});
+      const result = await recordingRequest(`${path}/${intent.id}/retry`, requests, {});
       if (alive.current) { setIntent(result.intent); setStatusUnavailable(false); }
     } catch { if (alive.current) { setStatusUnavailable(true); setError("Pengiriman ulang belum dapat dipastikan. Periksa status; byte transaksi tetap tersimpan."); } }
     finally { if (alive.current) setRetrying(false); }
@@ -203,7 +204,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
         </li>)}</ol>}
       </>}
     </section>}
-    {publication && version?.publication === "PUBLISHED" && <AttestationPanel key={`${saved.id}:${token}:${address}`} saved={saved} preparationId={preparationId} token={token}
+    {publication && version?.publication === "PUBLISHED" && <AttestationPanel key={`${saved.id}:${requests.contextId}:${address}`} saved={saved} preparationId={preparationId} requests={requests}
       recorded={version.attestations?.entries ?? null} basis={version.attestations?.basis ?? null} onRecorded={() => void readLine()} />}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
   </section>;
