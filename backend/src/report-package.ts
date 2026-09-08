@@ -41,14 +41,14 @@ const Input = z.object({
   draft: DraftInput.optional(), disclosure: z.unknown().optional(),
 }).strict();
 
-function snapshotOf(record: PreparationRecord): EvidenceSnapshot {
+function snapshotOf(record: Pick<PreparationRecord, "canonicalSnapshot" | "commitmentSalt" | "commitment">): EvidenceSnapshot {
   if (!verifyCommitment(new TextEncoder().encode(record.canonicalSnapshot), record.commitmentSalt, record.commitment)) {
     throw new PackageError("Commitment snapshot tidak cocok; sumber harus diperiksa kembali.", 409);
   }
   return parseSnapshot(record.canonicalSnapshot);
 }
 
-export function reviewSnapshot(record: PreparationRecord, configuredRules: AmilRule[] = []) {
+export function reviewSnapshot(record: Pick<PreparationRecord, "canonicalSnapshot" | "commitmentSalt" | "commitment">, configuredRules: AmilRule[] = []) {
   const snapshot = snapshotOf(record);
   const blockers: string[] = [];
   const sides = snapshot.sides;

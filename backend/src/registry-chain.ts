@@ -35,6 +35,10 @@ export function createRegistryChain(config: RegistryConfig) {
       const [active, epoch] = await rpc.readContract({ address: config.address, abi, functionName: "validators", args: [signer] });
       return { active, epoch: epoch.toString() };
     },
+    async receipt(hash: Hex) {
+      await assertDeployment();
+      return rpc.getTransactionReceipt({ hash });
+    },
     async publishedVersion(institution: string, report: string, version: string) {
       await assertDeployment();
       return rpc.readContract({ address: config.address, abi, functionName: "publishedVersion", args: [institution, report, version] });

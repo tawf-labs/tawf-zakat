@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from "../../lib/contracts";
 import { RecordingPanel } from "./RecordingPanel";
 import { verifyReportCommitment } from "./reportCommitment";
 import { useEffect, useState } from "react";
@@ -50,11 +51,22 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
     await acceptSaved(result.package);
     setHistory((await listReports(preparationId, token)).packages);
   }
-  function download() {
+  async function download() {
     if (!saved) return;
+    // Every download rechecks the reader's current authorization.
+    const current = (await readReport(preparationId, saved.id, token)).package;
+    await acceptSaved(current);
     const blob = new Blob([`DRAF — BELUM DITERBITKAN\nLaporan ${saved.reportId}, versi ${saved.version}\nPaket ${saved.id}\nDigest ${saved.digest}\nVonis ${saved.verdict.outcome}\n\n${saved.draft?.narrative ?? "Draf tidak tersedia"}\n\n${JSON.stringify(saved, null, 2)}`], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `draf-${saved.id}.txt`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function downloadExamination() {
+    if (!saved) return;
+    const response = await fetch(`${getApiBaseUrl()}/api/evidence/${preparationId}/reports/${saved.id}/examination`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+    if (!response.ok) throw new Error("Paket pemeriksaan tidak tersedia atau akses sudah berakhir.");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a"); link.href = url; link.download = `examination-${saved.id}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <section className="mt-5 space-y-3 rounded-xl border border-stone-200 p-4">
@@ -105,7 +117,9 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
       {saved.status === "FROZEN" && <RecordingPanel key={`${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
       <div className="flex flex-wrap gap-2">
         {canPrepare && saved.status !== "FROZEN" && <Button disabled={!!pending} onClick={() => act("Membekukan paket…", async () => { await acceptSaved((await freezeReport(preparationId, saved.id, token)).package); setHistory((await listReports(preparationId, token)).packages); })}>Bekukan paket untuk review pengesahan</Button>}
-        <Button variant="outline" onClick={download}>Unduh draf terbatas</Button>
+        <Button variant="outline" disabled={!!pending} onClick={() => act("Memeriksa akses unduhan…", download)}>Unduh draf terbatas</Button>
+        <Button variant="outline" disabled={!!pending} onClick={() => act("Menyiapkan paket pemeriksaan…", downloadExamination)}>Unduh paket pemeriksaan terbatas</Button>
+        {saved.status === "FROZEN" && <a className="text-sm underline" href={`/transparansi/laporan?packageId=${encodeURIComponent(saved.id)}`} target="_blank" rel="noreferrer">Buka ringkasan publik versi terbit</a>}
       </div>
     </div>}
   </section>;

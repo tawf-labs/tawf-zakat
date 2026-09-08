@@ -1,3 +1,4 @@
+import reportExaminationRoutes from "./routes/report-examination";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { dataStore } from "./store";
@@ -222,6 +223,12 @@ app.route("/api/period-report", periodReportRoutes);
 // and stays unconfigured (503) rather than pretending to work without one.
 installWorkspaceRuntime();
 app.route("/api/workspace", workspaceRoutes);
+app.use("/api/evidence/*", async (c, next) => {
+  c.header("Cache-Control", "private, no-store");
+  c.header("Vary", "Authorization");
+  await next();
+});
+app.route("/", reportExaminationRoutes);
 app.route("/api/evidence", registryRecordingRoutes);
 app.route("/api/evidence", reportPackageRoutes);
 app.route("/api/evidence", evidenceRoutes);

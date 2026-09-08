@@ -20,6 +20,7 @@ import { Route as TransparansiRouteImport } from './routes/transparansi'
 import { Route as VerifikasiRouteImport } from './routes/verifikasi'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 import { Route as TransparansiBuktiRouteImport } from './routes/transparansi/bukti'
+import { Route as TransparansiLaporanRouteImport } from './routes/transparansi/laporan'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -76,6 +77,11 @@ const TransparansiBuktiRoute = TransparansiBuktiRouteImport.update({
   path: '/bukti',
   getParentRoute: () => TransparansiRoute,
 } as any)
+const TransparansiLaporanRoute = TransparansiLaporanRouteImport.update({
+  id: '/laporan',
+  path: '/laporan',
+  getParentRoute: () => TransparansiRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -89,6 +95,7 @@ export interface FileRoutesByFullPath {
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/transparansi/bukti': typeof TransparansiBuktiRoute
+  '/transparansi/laporan': typeof TransparansiLaporanRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/transparansi/bukti': typeof TransparansiBuktiRoute
+  '/transparansi/laporan': typeof TransparansiLaporanRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -116,6 +124,7 @@ export interface FileRoutesById {
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/transparansi/bukti': typeof TransparansiBuktiRoute
+  '/transparansi/laporan': typeof TransparansiLaporanRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -131,6 +140,7 @@ export interface FileRouteTypes {
     | '/verifikasi'
     | '/admin/roles'
     | '/transparansi/bukti'
+    | '/transparansi/laporan'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -144,6 +154,7 @@ export interface FileRouteTypes {
     | '/verifikasi'
     | '/admin/roles'
     | '/transparansi/bukti'
+    | '/transparansi/laporan'
   id:
     | '__root__'
     | '/'
@@ -157,6 +168,7 @@ export interface FileRouteTypes {
     | '/verifikasi'
     | '/admin/roles'
     | '/transparansi/bukti'
+    | '/transparansi/laporan'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -251,15 +263,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TransparansiBuktiRouteImport
       parentRoute: typeof TransparansiRoute
     }
+    '/transparansi/laporan': {
+      id: '/transparansi/laporan'
+      path: '/laporan'
+      fullPath: '/transparansi/laporan'
+      preLoaderRoute: typeof TransparansiLaporanRouteImport
+      parentRoute: typeof TransparansiRoute
+    }
   }
 }
 
 interface TransparansiRouteChildren {
   TransparansiBuktiRoute: typeof TransparansiBuktiRoute
+  TransparansiLaporanRoute: typeof TransparansiLaporanRoute
 }
 
 const TransparansiRouteChildren: TransparansiRouteChildren = {
   TransparansiBuktiRoute: TransparansiBuktiRoute,
+  TransparansiLaporanRoute: TransparansiLaporanRoute,
 }
 
 const TransparansiRouteWithChildren = TransparansiRoute._addFileChildren(

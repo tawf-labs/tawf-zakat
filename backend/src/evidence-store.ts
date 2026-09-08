@@ -235,6 +235,17 @@ const fileFrom = (row: any): StoredFile => ({
 
 export function createEvidenceStore(db: EvidenceDatabase) {
   return {
+    async locateReportPackage(id: string): Promise<{ institutionId: string; preparationId: string } | null> {
+      const row = rowsOf(await db.execute(sql`SELECT institution_id, preparation_id FROM report_packages WHERE id=${id}`))[0];
+      return row ? { institutionId: row.institution_id, preparationId: row.preparation_id } : null;
+    },
+    async getPublicReport(id: string): Promise<any | null> {
+      const row = rowsOf(await db.execute(sql`SELECT summary FROM public_report_summaries WHERE package_id=${id}`))[0];
+      return row ? JSON.parse(row.summary) : null;
+    },
+    async savePublicReport(id: string, summary: unknown) {
+      await db.execute(sql`INSERT INTO public_report_summaries(package_id,summary) VALUES (${id},${JSON.stringify(summary)}) ON CONFLICT DO NOTHING`);
+    },
     async saveReportPackage(institutionId: string, preparationId: string, id: string, canonical: string, digest: string) {
       await db.execute(sql`INSERT INTO report_packages (id, institution_id, preparation_id, canonical, digest)
         VALUES (${id}, ${institutionId}, ${preparationId}, ${canonical}, ${digest}) ON CONFLICT (id) DO NOTHING`);
@@ -251,7 +262,8 @@ export function createEvidenceStore(db: EvidenceDatabase) {
         WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} ORDER BY id`));
     },
     async ensureSchema(): Promise<void> {
-      for (const statement of EVIDENCE_SCHEMA_STATEMENTS) {
+      for (const statement of [...EVIDENCE_SCHEMA_STATEMENTS,
+        `CREATE TABLE IF NOT EXISTS public_report_summaries (package_id TEXT PRIMARY KEY REFERENCES report_packages(id), summary TEXT NOT NULL)`]) {
         await db.execute(sql.raw(statement));
       }
     },
