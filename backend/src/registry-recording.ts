@@ -66,7 +66,11 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
         if (intent.authorization.packageId !== packageId || intent.authorization.digest !== input.digest || intent.authorization.signer.toLowerCase() !== account.toLowerCase()) throw new RecordingError("Identitas retry telah terikat pada pengesahan berbeda.", 409);
         return intent;
       };
-      if (existing) return sameReview(await readIntent(input.retryId));
+      if (existing) {
+        const reviewed = sameReview(await status(input.retryId));
+        if (reviewed.signingAuthority === "STALE" || reviewed.signingAuthority === "UNAVAILABLE") throw new RecordingError("Kewenangan berubah atau tidak dapat diperiksa. Mulai tinjauan baru dengan identitas retry baru.", 409);
+        return reviewed;
+      }
       if (publication) {
         await assertSuccession(saved);
         if (await chain.publishedPackageVersion(institution, packageId)) throw new RecordingError("Paket ini sudah menjadi versi resmi. Koreksi memerlukan paket dan pengesahan baru.", 409);

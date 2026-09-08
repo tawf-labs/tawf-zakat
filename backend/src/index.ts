@@ -32,6 +32,7 @@ import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
 import reconciliationRoutes from "./routes/reconciliation";
 import periodReportRoutes from "./routes/period-report";
+import reportAuthorityRoutes from "./routes/report-authority";
 import workspaceRoutes from "./routes/workspace";
 import evidenceRoutes from "./routes/evidence";
 import reportPackageRoutes from "./routes/report-package";
@@ -222,6 +223,7 @@ app.route("/api/period-report", periodReportRoutes);
 // Tests bind their own runtime; here it is wired from the deployment's config,
 // and stays unconfigured (503) rather than pretending to work without one.
 installWorkspaceRuntime();
+app.route("/api/workspace/authority", reportAuthorityRoutes);
 app.route("/api/workspace", workspaceRoutes);
 app.use("/api/evidence/*", async (c, next) => {
   c.header("Cache-Control", "private, no-store");

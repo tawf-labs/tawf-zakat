@@ -274,19 +274,17 @@ workspaceRoutes.post("/members", async (c) => {
         success: false,
         error:
           "Administrator lembaga hanya ditetapkan lewat onboarding. Rotasi administrator memerlukan " +
-          "penerimaan oleh penerusnya dan belum tersedia pada rilis ini.",
+          "penerimaan oleh penerusnya melalui alur serah-terima administrator.",
       },
       403
     );
   }
 
+  const target = await runtime.store.activeMembershipFor(account);
+  if (target?.institutionId === auth.session.institutionId && target.role === "ADMIN") return refuse(c, 403, "forbidden");
   try {
     // The institution written is the session's own, never the payload's.
-    await runtime.store.upsertMembership({
-      institutionId: auth.session.institutionId,
-      account,
-      role: body.role,
-    });
+    if (!await runtime.store.manageMember(auth.session.institutionId, auth.session.account, account, body.role, runtime.now())) return refuse(c, 403, "forbidden");
   } catch {
     return c.json(
       { success: false, error: "Akun tersebut sudah aktif pada lembaga lain. Nonaktifkan keanggotaan lamanya lebih dahulu." },
@@ -299,6 +297,29 @@ workspaceRoutes.post("/members", async (c) => {
     201
   );
 });
+
+workspaceRoutes.get("/authority-history", async c => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+  return c.json({ history: await runtime.store.authorityHistory(auth.session.institutionId),
+    proposal: await runtime.store.administratorProposal(auth.session.institutionId) });
+});
+for (const [path, action] of [["/members/revoke", "REVOKE"], ["/administrator/propose", "PROPOSE"], ["/administrator/accept", "ACCEPT"]] as const) {
+  workspaceRoutes.post(path, async c => {
+    const runtime = runtimeOf();
+    const body = await readJson(c);
+    if (!body) return badRequest(c, "JSON tidak sah.");
+    const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+    if (!auth.ok) return auth.response;
+    if (action !== "ACCEPT" && !authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+    const account = action === "ACCEPT" ? auth.session.account : body.account;
+    if (typeof account !== "string" || !ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
+    const changed = await runtime.store.changeMembership(auth.session.institutionId, auth.session.account, account, action, runtime.now());
+    if (!changed) return c.json({ error: "Perubahan ditolak. Periksa kewenangan, keanggotaan penerus dan usulan yang masih berlaku." }, 409);
+    return c.json({ success: true, account, action });
+  });
+}
 
 /**
  * The institutions actually onboarded on this deployment - read from the

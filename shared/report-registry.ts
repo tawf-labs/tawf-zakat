@@ -33,6 +33,7 @@ export type RecordingObservation = {
 export type RecordingIntent = {
   validator?: { authorization: EvidenceAuthorization; authorizationDigest: Hex; signature: Hex };
   id: string; domain: RegistryDomain; authorization: EvidenceAuthorization; authorizationDigest: Hex;
+  signingAuthority?: "CURRENT" | "STALE" | "UNAVAILABLE" | "HISTORICAL";
   accountKind: "EOA" | "ERC1271"; observation: RecordingObservation; transactionHash?: Hex;
 };
 
@@ -74,6 +75,7 @@ export const attestationTypedData = (domain: RegistryDomain, a: AttestationState
 export type AttestationEvidenceFile = { id: string; fileName: string; mimeType: string; sizeBytes: number; contentSha256: string };
 export type AttestationIntent = {
   id: string; domain: RegistryDomain; statement: AttestationStatement; statementDigest: Hex;
+  signingAuthority?: "CURRENT" | "STALE" | "UNAVAILABLE" | "HISTORICAL";
   accountKind: "EOA" | "ERC1271"; observation: RecordingObservation; transactionHash?: Hex;
   evidence: { commitmentScheme: "HMAC-SHA256"; salt: Hex; files: AttestationEvidenceFile[];
     /** Deployment-private locators; excluded from commitments and HTTP responses. */

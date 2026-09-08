@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { useWorkspace } from "./useWorkspace";
 import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
+import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
 
 /**
@@ -149,6 +150,8 @@ export function WorkspacePanel() {
           </ul>
         </div>
       )}
+
+      {token && <AuthorityPanel key={`authority:${token}:${workspace.account}`} token={token} workspace={workspace} />}
 
       {token && <EvidencePackagePanel key={token} token={token} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />}
 

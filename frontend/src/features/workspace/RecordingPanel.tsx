@@ -73,12 +73,15 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     setChecking(true);
     try {
       const next = (await recordingRequest(`${path}/${intent.id}`, token)).intent;
-      if (alive.current) { setIntent(next); setStatusUnavailable(false); setError(null); }
+      if (alive.current) {
+        setIntent(next); setStatusUnavailable(next.signingAuthority === "UNAVAILABLE"); setError(null);
+        if (next.signingAuthority === "STALE" || next.signingAuthority === "UNAVAILABLE") { setSignature(""); setReviewed(false); }
+      }
     } catch { if (alive.current) { setStatusUnavailable(true); setError("Status chain tidak tersedia; keberhasilan belum dapat dipastikan."); } }
     finally { checkingRef.current = false; if (alive.current) setChecking(false); }
   }
   useEffect(() => {
-    if (!intent || !["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state)) return;
+    if (!intent) return;
     const timer = setInterval(() => { void check(); }, 4000);
     return () => clearInterval(timer);
   }, [intent, path, token]);
@@ -108,6 +111,11 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     const signingContext = contextRef.current;
     setSubmitting(true); setError(null);
     try {
+      const fresh = await recordingRequest(`${path}/${intent.id}`, token);
+      if (fresh.intent.signingAuthority !== "CURRENT") {
+        setIntent(fresh.intent); setSignature(""); setReviewed(false);
+        throw new Error("Otoritas berubah atau tidak dapat dibaca. Mulai tinjauan baru sebelum menandatangani.");
+      }
       const a = intent.authorization;
       if (a.action !== keccak256(toHex(publication ? "PUBLISH_REPORT" : "RECORD_EVIDENCE")) || a.packageId !== saved.id || a.digest !== saved.digest
         || a.institutionId !== saved.institutionId || a.reportId !== saved.reportId || a.version !== saved.version
@@ -155,6 +163,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     }}><option value="">Pilih percobaan</option>{history.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>}
     {!intent && <Button disabled={locked || !address} onClick={prepare}>{preparing ? "Memeriksa kewenangan…" : publication ? "Minta pengesahan validator" : "Siapkan pengesahan pencatatan"}</Button>}
     {intent && <>
+      <p className="text-sm">Masa kewenangan {intent.authorization.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin tindakan baru." : intent.signingAuthority === "STALE" ? "Otoritas berubah. Mulai tinjauan baru." : "Otoritas live diperiksa ulang sebelum signing."}</p>
       <p role="status">{statusUnavailable ? "Status chain belum dapat dipastikan" : (publication ? publicationLabels : labels)[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {statusUnavailable ? "belum diketahui" : intent.observation.confirmations} / {intent.observation.requiredConfirmations}. {publication ? `Laporan ${saved.reportId} · versi ${saved.version}` : "Pengesahan ini hanya untuk pencatatan bukti."}</p>
       <p className="text-xs">Kebijakan {intent.observation.confirmationPolicy}. Kedalaman blok ini bukan finalitas settlement L1. {intent.domain.chainId === 31337 ? "EVM lokal, data uji." : intent.domain.chainId === 421614 ? "Arbitrum Sepolia, testnet." : "Periksa jaringan deployment sebelum menandatangani."}</p>
@@ -171,13 +180,14 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
         {intent.accountKind === "ERC1271" && <label className="block text-sm">Tanda tangan akun kontrak atas parameter ini (dari alur persetujuan lembaga)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={signature} disabled={locked} onChange={e => setSignature(e.target.value.trim())} /><span className="text-xs">Registry memeriksa ERC-1271 saat pengiriman. Salin parameter di atas ke alur penandatanganan akun kontrak jika wallet tidak dapat menandatangani langsung.</span></label>}
         {chainId !== intent.domain.chainId ? <Button disabled={locked} onClick={() => switchChainAsync({ chainId: intent.domain.chainId }).catch(() => setError("Ganti jaringan di wallet ke chain registry."))}>{switching ? "Mengganti jaringan…" : "Ganti ke jaringan registry"}</Button>
           : <Button disabled={locked || !reviewed || !address || statusUnavailable} onClick={submit}>{submitting ? "Memproses pengesahan…" : signature ? "Kirim ulang pengesahan yang sama" : publication ? "Tandatangani penerbitan laporan" : "Tandatangani pencatatan bukti"}</Button>}
-        <Button variant="outline" disabled={locked || checking || statusUnavailable} onClick={() => { retryId.current = crypto.randomUUID(); sessionStorage.removeItem(cacheKey); setIntent(null); setSignature(""); setReviewed(false); }}>Mulai tinjauan pengesahan baru</Button>
+        <Button variant="outline" disabled={locked || checking} onClick={() => { setStatusUnavailable(false); retryId.current = crypto.randomUUID(); sessionStorage.removeItem(cacheKey); setIntent(null); setSignature(""); setReviewed(false); }}>Mulai tinjauan pengesahan baru</Button>
       </>}
     </>}
     {publication && <section className="space-y-2 border-t pt-3 text-sm">
       <h6 className="font-semibold">Versi resmi dan riwayat koreksi</h6>
       {lineUnavailable ? <p role="alert">Riwayat versi belum dapat dibaca dari registry. Status resmi belum dapat dipastikan.</p> : <>
-        <p role="status">Paket ini: {version ? VERSION_STATE_LABELS[version.versionState] ?? "perlu diperiksa" : "belum diperiksa"}.
+
+      <p role="status">Paket ini: {version ? VERSION_STATE_LABELS[version.versionState] ?? "perlu diperiksa" : "belum diperiksa"}.
           {version?.correctionReason && ` Alasan koreksi: ${version.correctionReason}`}</p>
         {version?.officialPackageId && version.officialPackageId !== saved.id && <p>Versi resmi terkini kini paket {version.officialPackageId}. Penomoran pada layar bukan sumber kewenangan.</p>}
         {onCorrect && version?.versionState === "VERSI_RESMI_TERKINI" && <Button variant="outline" onClick={() => onCorrect(saved.id)}>Mulai koreksi dari versi ini</Button>}

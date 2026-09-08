@@ -373,6 +373,8 @@ it("publication rechecks validator at execution, verifies events and recovers af
   expect((await request(`${path}/${old.id}/submit`, { signature })).status).toBe(409);
   await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setValidator", args: [validator.address, true] }) });
   expect((await request(`${path}/${old.id}/submit`, { signature })).status).toBe(409);
+  expect((await json(`${path}/${old.id}`)).intent.signingAuthority).toBe("STALE");
+  expect((await request(path, { retryId: old.id, digest: saved.digest })).status).toBe(409);
   const intent = (await json(path, { retryId: "renewed-publication", digest: saved.digest })).intent;
   const signed = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
   const snapshot = await rpc.request({ method: "evm_snapshot" as any });
@@ -521,8 +523,11 @@ it("checks reader membership, institution and expiry on each export and source r
   await configure(4000);
   try { expect((await request(examinationPath, undefined, readerToken)).status).toBe(401); }
   finally { await configure(); }
-  await store.deactivateMembership({ institutionId: institution, account: reader.address });
-  expect((await request(examinationPath, undefined, readerToken)).status).toBe(403);
+  await store.upsertMembership({ institutionId: institution, account: account.address, role: "ADMIN" });
+  expect((await request("workspace/members/revoke", { account: reader.address })).status).toBe(200);
+  await store.upsertMembership({ institutionId: institution, account: account.address, role: "OFFICER" });
+  expect((await request(examinationPath, undefined, readerToken)).status).toBe(401);
+  expect((await request(filePath, undefined, readerToken)).status).toBe(401);
   await store.upsertMembership({ institutionId: institution, account: reader.address, role: "READER" });
   const { hashToken } = await import("../src/workspace-session");
   await store.revokeSession(hashToken(readerToken), Math.floor(Date.now() / 1000));
@@ -1263,3 +1268,39 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: an auditor signs a con
     await page.screenshot({ path: "/tmp/ticket76-public-attestation.png", fullPage: true });
   } finally { await browser.close(); server.stop(true); }
 }, 90000);
+
+it("prepares scoped authority transactions, checks live roles and exposes canonical receipts", async () => {
+  const path = "workspace/authority";
+  const snapshot = (await json(path)).authority;
+  expect(snapshot.administrator.toLowerCase()).toBe(account.address.toLowerCase());
+  const change = { action: "SIGNATORY", account: validator.address, active: false };
+  const prepared = (await json(`${path}/prepare`, change)).transaction;
+  expect(prepared.actor.toLowerCase()).toBe(account.address.toLowerCase());
+  expect(prepared.scope).toBe(institution);
+  const hash = await wallet.sendTransaction({ to: prepared.to, data: prepared.data });
+  await rpc.waitForTransactionReceipt({ hash });
+  const receipt = (await json(`${path}/receipt/${hash}`)).receipt;
+  expect(receipt.events).toContainEqual(expect.objectContaining({ event: "AuthorityChanged", args: expect.objectContaining({ actor: account.address, active: false }) }));
+  const history = await json(`${path}/history`);
+  expect(history.events.some((event: any) => event.transactionHash === hash)).toBe(true);
+  const accepted = await json(`${path}/prepare`, { action: "PROPOSE_ADMINISTRATOR", account: validator.address });
+  await rpc.waitForTransactionReceipt({ hash: await wallet.sendTransaction({ to: accepted.transaction.to, data: accepted.transaction.data }) });
+  expect((await request(`${path}/prepare`, { action: "ACCEPT_ADMINISTRATOR" })).status).toBe(503);
+  mutateRpc = (method, response) => method === "eth_call" ? { jsonrpc: "2.0", id: response.id, error: { code: -32000, message: "unavailable" } } : response;
+  expect((await request(`${path}/prepare`, change)).status).toBe(503);
+  mutateRpc = null;
+});
+
+it("keeps a published version readable after rotation and marks pending signing material stale", async () => {
+  const { saved, path } = await freshPackage(true);
+  const prepared = (await json(path, { retryId: "rotation-demo", digest: saved.digest })).intent;
+  const signed = await account.signTypedData(evidenceTypedData(prepared.domain, prepared.authorization));
+  const before = await (await request(`public/reports/${publicPackage.id}`, undefined, "")).json();
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setSignatory", args: [institution, account.address, false] }) });
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setSignatory", args: [institution, account.address, true] }) });
+  expect((await json(`${path}/${prepared.id}`)).intent.signingAuthority).toBe("STALE");
+  expect((await request(`${path}/${prepared.id}/submit`, { signature: signed })).status).toBe(409);
+  const after = await (await request(`public/reports/${publicPackage.id}`, undefined, "")).json();
+  expect(after.summary).toEqual(before.summary);
+  expect((await request(`public/reports/${publicPackage.id}`, undefined, "")).status).toBe(200);
+});

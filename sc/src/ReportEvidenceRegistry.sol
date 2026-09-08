@@ -9,6 +9,14 @@ contract ReportEvidenceRegistry is EIP712 {
     bytes32 public constant RECORD_EVIDENCE = keccak256("RECORD_EVIDENCE");
     bytes32 public constant AUTHORIZATION_TYPEHASH = keccak256("Authorization(bytes32 action,string institutionId,string reportId,string version,string packageId,string predecessor,bytes32 digest,string policy,string outcome,address signer,uint256 authorityEpoch,bytes32 nonce,uint256 deadline)");
     address public immutable admissionAuthority;
+    address public validatorOperator;
+    address public pendingValidatorOperator;
+    mapping(bytes32 => uint256) public administratorEpochs;
+    uint256 public validatorOperatorEpoch = 1;
+    // Epoch identifies a mandate; block/log position defines its historical interval.
+    event AuthorityChanged(bytes32 indexed scope, bytes32 indexed role, address indexed account,
+        address actor, bool active, uint256 epoch, uint256 actorEpoch, string mandate);
+    event ValidatorOperatorProposed(address operator, address successor);
     mapping(bytes32 => address) public administrators;
     mapping(bytes32 => address) public pendingAdministrators;
     struct Authority { bool active; uint256 epoch; }
@@ -45,12 +53,15 @@ contract ReportEvidenceRegistry is EIP712 {
     constructor(address admission) EIP712("Tawf Report Evidence", "1") {
         if (admission == address(0)) revert Unauthorized();
         admissionAuthority = admission;
+        validatorOperator = admission;
     }
     function enrollInstitution(string calldata institutionId, address administrator) external {
         bytes32 key = keccak256(bytes(institutionId));
         if (msg.sender != admissionAuthority) revert Unauthorized();
         if (bytes(institutionId).length == 0 || administrator == address(0) || administrators[key] != address(0)) revert InvalidAuthorization();
         administrators[key] = administrator;
+        administratorEpochs[key] = 1;
+        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), administrator, msg.sender, true, 1, 0, "ONBOARDING");
         emit InstitutionEnrolled(key, institutionId, administrator);
     }
     function proposeAdministrator(string calldata institutionId, address successor) external {
@@ -64,7 +75,11 @@ contract ReportEvidenceRegistry is EIP712 {
         bytes32 key = keccak256(bytes(institutionId));
         if (msg.sender != pendingAdministrators[key]) revert Unauthorized();
         address previous = administrators[key];
+        uint256 previousEpoch = administratorEpochs[key];
+        administratorEpochs[key]++;
         administrators[key] = msg.sender;
+        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), previous, msg.sender, false, previousEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
+        emit AuthorityChanged(key, keccak256("ADMINISTRATOR"), msg.sender, msg.sender, true, administratorEpochs[key], previousEpoch, "SUCCESSOR_ACCEPTANCE");
         delete pendingAdministrators[key];
         emit AdministratorAccepted(key, previous, msg.sender);
     }
@@ -77,6 +92,7 @@ contract ReportEvidenceRegistry is EIP712 {
         // Every mandate change invalidates outstanding material, including reactivation.
         authority.epoch++;
         emit SignatoryChanged(key, signer, active, authority.epoch);
+        emit AuthorityChanged(key, keccak256("SIGNATORY"), signer, msg.sender, active, authority.epoch, administratorEpochs[key], "");
     }
     function authorizationDigest(Authorization calldata a) public view returns (bytes32) {
         return _hashTypedDataV4(keccak256(abi.encode(AUTHORIZATION_TYPEHASH, a.action,
@@ -121,13 +137,27 @@ contract ReportEvidenceRegistry is EIP712 {
     event ReportPublished(bytes32 indexed institutionKey, bytes32 indexed packageKey, bytes32 indexed authorization,
         bytes32 action, bytes32 digest, address signer, bytes32 validatorAuthorization, address validator);
 
+    function proposeValidatorOperator(address successor) external {
+        if (msg.sender != validatorOperator) revert Unauthorized();
+        pendingValidatorOperator = successor;
+        emit ValidatorOperatorProposed(msg.sender, successor);
+    }
+    function acceptValidatorOperator() external {
+        if (msg.sender != pendingValidatorOperator) revert Unauthorized();
+        uint256 previousEpoch = validatorOperatorEpoch++;
+        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), validatorOperator, msg.sender, false, previousEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
+        validatorOperator = msg.sender;
+        delete pendingValidatorOperator;
+        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR_OPERATOR"), msg.sender, msg.sender, true, validatorOperatorEpoch, previousEpoch, "SUCCESSOR_ACCEPTANCE");
+    }
     function setValidator(address validator, bool active) external {
-        if (msg.sender != admissionAuthority) revert Unauthorized();
+        if (msg.sender != validatorOperator) revert Unauthorized();
         if (validator == address(0)) revert InvalidAuthorization();
         Authority storage authority = validators[validator];
         authority.active = active;
         authority.epoch++;
         emit ValidatorChanged(validator, active, authority.epoch);
+        emit AuthorityChanged(bytes32(0), keccak256("VALIDATOR"), validator, msg.sender, active, authority.epoch, validatorOperatorEpoch, "");
     }
     function publicationPayload(Authorization calldata a) private pure returns (bytes32) {
         return keccak256(abi.encode(a.institutionId, a.reportId, a.version, a.packageId, a.predecessor,
@@ -231,6 +261,7 @@ contract ReportEvidenceRegistry is EIP712 {
         authority.epoch++;
         auditorMandates[key][auditor] = mandate;
         emit AuditorChanged(key, auditor, active, authority.epoch, mandate);
+        emit AuthorityChanged(key, keccak256("AUDITOR"), auditor, msg.sender, active, authority.epoch, administratorEpochs[key], mandate);
     }
     function auditorMandate(string calldata institutionId, address auditor) external view returns (string memory) {
         return auditorMandates[keccak256(bytes(institutionId))][auditor];

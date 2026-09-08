@@ -26,6 +26,69 @@ export function createRegistryChain(config: RegistryConfig) {
     requiredConfirmations: config.requiredConfirmations,
     confirmationPolicy,
     deployment: `${config.chainId}:${config.address.toLowerCase()}:${account.address.toLowerCase()}`,
+    async authoritySnapshot(institution: string, subject: Hex) {
+      await assertDeployment();
+      const blockNumber = await rpc.getBlockNumber({ cacheTime: 0 });
+      const read = (functionName: string, args: unknown[] = []) => rpc.readContract({ address: config.address, abi, functionName, args, blockNumber } as never) as Promise<any>;
+      const key = keccak256(toHex(institution));
+      const [administrator, pendingAdministrator, administratorEpoch, operator, pendingOperator, operatorEpoch, signatory, validator, auditor, mandate] = await Promise.all([
+        read("administrators", [key]), read("pendingAdministrators", [key]), read("administratorEpochs", [key]),
+        read("validatorOperator"), read("pendingValidatorOperator"), read("validatorOperatorEpoch"),
+        read("signatories", [key, subject]), read("validators", [subject]), read("auditors", [key, subject]), read("auditorMandate", [institution, subject]),
+      ]);
+      const role = ([active, epoch]: [boolean, bigint]) => ({ active, epoch: epoch.toString() });
+      return { institution, subject, blockNumber: blockNumber.toString(), domain, administrator, pendingAdministrator,
+        administratorEpoch: administratorEpoch.toString(), operator, pendingOperator, operatorEpoch: operatorEpoch.toString(),
+        signatory: role(signatory), validator: role(validator), auditor: { ...role(auditor), mandate } };
+    },
+    /** The caller's wallet executes; the technical relayer never impersonates a role manager. */
+    async prepareAuthorityChange(institution: string, actor: Hex, change: import("./report-authority-input").AuthorityChange) {
+      await assertDeployment();
+      let functionName: string, args: unknown[];
+      switch (change.action) {
+        case "SIGNATORY": functionName = "setSignatory"; args = [institution, change.account, change.active]; break;
+        case "AUDITOR": functionName = "setAuditor"; args = [institution, change.account, change.active, change.mandate]; break;
+        case "VALIDATOR": functionName = "setValidator"; args = [change.account, change.active]; break;
+        case "PROPOSE_ADMINISTRATOR": functionName = "proposeAdministrator"; args = [institution, change.account]; break;
+        case "ACCEPT_ADMINISTRATOR": functionName = "acceptAdministrator"; args = [institution]; break;
+        case "PROPOSE_VALIDATOR_OPERATOR": functionName = "proposeValidatorOperator"; args = [change.account]; break;
+        case "ACCEPT_VALIDATOR_OPERATOR": functionName = "acceptValidatorOperator"; args = []; break;
+      }
+      const data = encodeFunctionData({ abi, functionName, args } as never);
+      await rpc.call({ account: actor, to: config.address, data });
+      return { actor, scope: change.action.includes("VALIDATOR") ? "GLOBAL_VALIDATOR_SERVICE" : institution,
+        change, chainId: config.chainId, to: config.address, data, value: "0" };
+    },
+    async authorityHistory(institution: string, fromBlock: bigint) {
+      await assertDeployment();
+      const head = await rpc.getBlockNumber({ cacheTime: 0 });
+      const toBlock = fromBlock + 1999n < head ? fromBlock + 1999n : head;
+      if (fromBlock > head) return { events: [], nextBlock: fromBlock.toString() };
+      const events = await rpc.getContractEvents({ address: config.address, abi, eventName: "AuthorityChanged", fromBlock, toBlock });
+      const scope = keccak256(toHex(institution));
+      return { events: events.filter(event => event.args.scope === scope || event.args.scope === `0x${"0".repeat(64)}`).map(event => ({
+        ...event.args, epoch: event.args.epoch?.toString(), actorEpoch: event.args.actorEpoch?.toString(),
+        blockNumber: event.blockNumber.toString(), blockHash: event.blockHash, transactionHash: event.transactionHash, logIndex: event.logIndex,
+      })), nextBlock: (toBlock + 1n).toString() };
+    },
+    async authorityReceipt(hash: Hex) {
+      await assertDeployment();
+      const receipt = await rpc.getTransactionReceipt({ hash });
+      const block = await rpc.getBlock({ blockNumber: receipt.blockNumber });
+      if (receipt.blockHash !== block.hash) throw new Error("Receipt tidak kanonik.");
+      const events = receipt.logs.filter(log => log.address.toLowerCase() === config.address.toLowerCase()).flatMap(log => {
+        try {
+          const decoded = decodeEventLog({ abi, topics: log.topics, data: log.data });
+          if (!["AuthorityChanged", "AdministratorProposed", "ValidatorOperatorProposed", "AdministratorAccepted"].includes(decoded.eventName)) return [];
+          return [{ event: decoded.eventName, args: decoded.args, logIndex: log.logIndex }];
+        } catch { return []; }
+      });
+      if (!events.length || receipt.status !== "success") throw new Error("Transaksi tidak menerima perubahan otoritas registry.");
+      const confirmations = Number(await rpc.getBlockNumber({ cacheTime: 0 }) - receipt.blockNumber + 1n);
+      return JSON.parse(JSON.stringify({ hash, blockHash: block.hash, blockNumber: block.number, timestamp: block.timestamp,
+        state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED", confirmations, requiredConfirmations: config.requiredConfirmations, events },
+        (_, value) => typeof value === "bigint" ? value.toString() : value));
+    },
     async authority(institutionId: string, signer: Hex) {
       await assertDeployment();
       const [active, epoch] = await rpc.readContract({ address: config.address, abi, functionName: "signatories", args: [keccak256(toHex(institutionId)), signer] });

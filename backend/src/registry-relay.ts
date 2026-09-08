@@ -8,7 +8,7 @@
  */
 import type { Hex, RecordingObservation } from "../../shared/report-registry";
 import type { RegistryChain } from "./registry-chain";
-import type { RegistryStore, StoredIntent } from "./registry-store";
+import { isAttestation, type RegistryStore, type StoredIntent } from "./registry-store";
 
 export type RelayError = (message: string, status: 409) => Error;
 
@@ -19,8 +19,20 @@ export function createRelay(store: RegistryStore, chain: RegistryChain, institut
   /** Re-reads the chain rather than trusting the last stored observation, then persists what it saw. */
   async function status<T extends StoredIntent>(intent: T): Promise<T> {
     const attempt = await store.attempt(institution, intent.id);
-    if (!attempt) return intent;
-    return store.observe(intent, await chain.observe(intent, attempt.hash), attempt.hash);
+    const current = attempt ? await store.observe(intent, await chain.observe(intent, attempt.hash), attempt.hash) : intent;
+    if (["CONFIRMED", "INCLUDED"].includes(current.observation.state)) return { ...current, signingAuthority: "HISTORICAL" };
+    try {
+      const statement = isAttestation(current) ? current.statement : current.authorization;
+      const role = isAttestation(current)
+        ? await chain.auditorAuthority(institution, current.statement.auditor)
+        : await chain.authority(institution, current.authorization.signer);
+      let valid = role.active && role.epoch === statement.authorityEpoch;
+      if (!isAttestation(current) && current.validator) {
+        const validator = await chain.validatorAuthority(current.validator.authorization.signer);
+        valid = valid && validator.active && validator.epoch === current.validator.authorization.authorityEpoch;
+      }
+      return { ...current, signingAuthority: valid ? "CURRENT" : "STALE" };
+    } catch { return { ...current, signingAuthority: "UNAVAILABLE" }; }
   }
 
   /**

@@ -104,7 +104,11 @@ export function createAttestation(runtime: WorkspaceRuntime, registry: RegistryR
       if (!parsed.success) throw new AttestationError("Lingkup, kesimpulan, bukti pemeriksaan atau identitas retry tidak sah.", 400);
       const input = parsed.data;
       const existing = await store.get(institution, input.retryId, "ATTESTATION");
-      if (existing) return sameReview(await readIntent(account, input.retryId));
+      if (existing) {
+        const reviewed = sameReview(await status(account, input.retryId));
+        if (reviewed.signingAuthority === "STALE" || reviewed.signingAuthority === "UNAVAILABLE") throw new AttestationError("Kewenangan berubah atau tidak dapat diperiksa. Mulai tinjauan atestasi baru.", 409);
+        return reviewed;
+      }
       if (await store.takenByOtherKind(institution, input.retryId, "ATTESTATION")) throw new AttestationError("Identitas retry ini sudah dipakai tindakan registry lain.", 409);
 
       const { saved, version } = await publishedVersion();

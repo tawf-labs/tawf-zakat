@@ -506,3 +506,28 @@ describe("what the workspace never says out loud", () => {
     expect(outsiderReason).toBe("no-membership");
   });
 });
+
+it("revokes a reader through the API, kills existing sessions even after regrant, and preserves the actor history", async () => {
+  const admin = await tokenFrom(await signIn({ address: CONTRACT_ACCOUNT, signTypedData: contractSigner.signTypedData }, SINAR));
+  const old = await tokenFrom(await signIn(reader, SINAR));
+  expect((await post("/members/revoke", { account: reader.address }, old)).status).toBe(403);
+  expect((await post("/members/revoke", { account: reader.address }, admin)).status).toBe(200);
+  expect((await get("", old)).status).toBe(401);
+  expect((await post("/members", { account: reader.address, role: "READER" }, admin)).status).toBe(201);
+  expect((await get("", old)).status).toBe(401);
+  const history = await (await get("/authority-history", admin)).json();
+  expect(history.history).toContainEqual(expect.objectContaining({ actor: CONTRACT_ACCOUNT, account: reader.address.toLowerCase(), action: "REVOKE", role: "READER" }));
+});
+
+it("requires administrator proposal and successor acceptance without allowing direct demotion", async () => {
+  const admin = await tokenFrom(await signIn({ address: CONTRACT_ACCOUNT, signTypedData: contractSigner.signTypedData }, SINAR));
+  const successor = await tokenFrom(await signIn(reader, SINAR));
+  expect((await post("/administrator/accept", {}, successor)).status).toBe(409);
+  expect((await post("/members", { account: CONTRACT_ACCOUNT, role: "READER" }, admin)).status).toBe(403);
+  expect((await post("/administrator/propose", { account: reader.address }, admin)).status).toBe(200);
+  expect((await post("/members/revoke", { account: officer.address }, successor)).status).toBe(403);
+  expect((await post("/administrator/accept", {}, successor)).status).toBe(200);
+  const fresh = await tokenFrom(await signIn(reader, SINAR));
+  expect((await (await get("", fresh)).json()).role).toBe("ADMIN");
+  expect((await post("/members/revoke", { account: officer.address }, admin)).status).toBe(401);
+});

@@ -115,6 +115,15 @@ export const WORKSPACE_SCHEMA_STATEMENTS = [
        FOREIGN KEY (institution_id, account_address)
        REFERENCES institution_memberships (institution_id, account_address)
    );`,
+  `CREATE TABLE IF NOT EXISTS workspace_authority_history (
+     id SERIAL PRIMARY KEY, institution_id TEXT NOT NULL REFERENCES institutions(id),
+     actor TEXT NOT NULL, account TEXT NOT NULL, role TEXT NOT NULL, action TEXT NOT NULL,
+     occurred_at BIGINT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS workspace_admin_proposals (
+     institution_id TEXT PRIMARY KEY REFERENCES institutions(id),
+     administrator TEXT NOT NULL, successor TEXT NOT NULL
+   );`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
@@ -151,7 +160,7 @@ const asRole = (value: unknown): WorkspaceRole => {
   return value;
 };
 
-export function createWorkspaceStore(db: WorkspaceDatabase) {
+export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(work: (tx: WorkspaceDatabase) => Promise<T>) => Promise<T> }) {
   const one = async (query: any) => rowsOf(await db.execute(query))[0] ?? null;
 
   return {
@@ -227,6 +236,84 @@ export function createWorkspaceStore(db: WorkspaceDatabase) {
         role: asRole(row.role),
         isActive: Boolean(row.is_active),
       }));
+    },
+
+    async manageMember(institutionId: string, actorInput: string, accountInput: string, role: "OFFICER" | "READER", now: number) {
+      const actor = normalizeAccount(actorInput), account = normalizeAccount(accountInput);
+      return db.transaction(async tx => {
+        await tx.execute(sql`SELECT id FROM institutions WHERE id = ${institutionId} FOR UPDATE`);
+        const rows = rowsOf(await tx.execute(sql`
+          SELECT account_address, role FROM institution_memberships
+          WHERE institution_id = ${institutionId} AND is_active AND account_address IN (${actor}, ${account})
+        `));
+        if (!rows.some(row => row.account_address === actor && row.role === "ADMIN")
+          || rows.some(row => row.account_address === account && row.role === "ADMIN")) return false;
+        await tx.execute(sql`INSERT INTO institution_memberships (institution_id, account_address, role)
+          VALUES (${institutionId}, ${account}, ${role}) ON CONFLICT (institution_id, account_address)
+          DO UPDATE SET role = EXCLUDED.role, is_active = TRUE, updated_at = NOW()`);
+        await tx.execute(sql`INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          VALUES (${institutionId}, ${actor}, ${account}, ${role}, 'GRANT', ${now})`);
+        return true;
+      });
+    },
+    async authorityHistory(institutionId: string) {
+      return rowsOf(await db.execute(sql`SELECT id, actor, account, role, action, occurred_at AS "occurredAt"
+        FROM workspace_authority_history WHERE institution_id = ${institutionId} ORDER BY id`));
+    },
+    async administratorProposal(institutionId: string) {
+      return await one(sql`SELECT administrator, successor FROM workspace_admin_proposals WHERE institution_id = ${institutionId}`);
+    },
+    /** One SQL statement locks the institution, changes membership and appends its receipt atomically. */
+    async changeMembership(institutionId: string, actorInput: string, accountInput: string, action: "REVOKE" | "PROPOSE" | "ACCEPT", now: number) {
+      const actor = normalizeAccount(actorInput), account = normalizeAccount(accountInput);
+      return db.transaction(async tx => {
+      await tx.execute(sql`SELECT id FROM institutions WHERE id = ${institutionId} FOR UPDATE`);
+      const result = rowsOf(await tx.execute(sql`
+        WITH locked AS MATERIALIZED (SELECT id FROM institutions WHERE id = ${institutionId} FOR UPDATE),
+        eligible AS MATERIALIZED (
+          SELECT m.* FROM institution_memberships m, locked
+          WHERE m.institution_id = locked.id AND m.account_address = ${actor} AND m.is_active
+            AND (${action} = 'ACCEPT' OR m.role = 'ADMIN')
+        ), target AS MATERIALIZED (
+          SELECT m.* FROM institution_memberships m, eligible e
+          WHERE m.institution_id = e.institution_id AND m.account_address = ${account} AND m.is_active
+            AND m.role <> 'ADMIN'
+        ), proposal AS (
+          INSERT INTO workspace_admin_proposals (institution_id, administrator, successor)
+          SELECT institution_id, ${actor}, account_address FROM target WHERE ${action} = 'PROPOSE'
+          ON CONFLICT (institution_id) DO UPDATE SET administrator = EXCLUDED.administrator, successor = EXCLUDED.successor
+          RETURNING institution_id
+        ), accepted AS (
+          DELETE FROM workspace_admin_proposals p USING eligible e
+          WHERE ${action} = 'ACCEPT' AND p.institution_id = e.institution_id AND p.successor = ${actor}
+            AND EXISTS (SELECT 1 FROM institution_memberships a WHERE a.institution_id = p.institution_id
+              AND a.account_address = p.administrator AND a.role = 'ADMIN' AND a.is_active)
+          RETURNING p.*
+        ), changed AS (
+          UPDATE institution_memberships m SET
+            is_active = CASE WHEN ${action} = 'REVOKE' THEN FALSE ELSE TRUE END,
+            role = CASE WHEN ${action} = 'ACCEPT' THEN CASE WHEN m.account_address = ${actor} THEN 'ADMIN' ELSE 'READER' END ELSE m.role END,
+            updated_at = NOW()
+          WHERE (${action} = 'REVOKE' AND m.id IN (SELECT id FROM target))
+             OR (${action} = 'ACCEPT' AND EXISTS (SELECT 1 FROM accepted a WHERE a.institution_id = m.institution_id
+               AND m.account_address IN (a.administrator, a.successor)))
+          RETURNING m.account_address, m.role
+        ), cancelled AS (
+          DELETE FROM workspace_admin_proposals WHERE ${action} = 'REVOKE' AND institution_id = ${institutionId}
+            AND successor IN (SELECT account_address FROM changed) RETURNING institution_id
+        ), sessions AS (
+          UPDATE workspace_sessions SET revoked_at = ${now}
+          WHERE institution_id = ${institutionId} AND account_address IN (SELECT account_address FROM changed)
+          RETURNING token_hash
+        ), history AS (
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          SELECT ${institutionId}, ${actor}, account_address, role, ${action}, ${now}::bigint FROM changed
+          UNION ALL SELECT ${institutionId}, ${actor}, ${account}, 'ADMIN', 'PROPOSE', ${now}::bigint FROM proposal
+          RETURNING id
+        ) SELECT COUNT(*)::int AS count FROM history
+      `))[0];
+      return result.count > 0;
+      });
     },
 
     async listInstitutions(): Promise<InstitutionRecord[]> {

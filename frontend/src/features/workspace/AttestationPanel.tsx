@@ -83,7 +83,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
   }, [path, token, cacheKey]);
 
   useEffect(() => {
-    if (!intent || !["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state)) return;
+    if (!intent) return;
     const timer = setInterval(() => { void check(); }, 4000);
     return () => clearInterval(timer);
   }, [intent, path, token]);
@@ -108,7 +108,9 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
     const checkingContext = contextRef.current;
     try {
       const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, token);
-      if (alive.current && contextRef.current === checkingContext) { setIntent(next.intent); setStatusUnavailable(false); }
+      if (alive.current && contextRef.current === checkingContext) { setIntent(next.intent); setStatusUnavailable(next.intent.signingAuthority === "UNAVAILABLE");
+        if (next.intent.signingAuthority === "STALE" || next.intent.signingAuthority === "UNAVAILABLE") { setContractSignature(""); setReviewed(false); }
+      }
     } catch { if (alive.current) setStatusUnavailable(true); }
   }
   async function attach(list: FileList | null) {
@@ -141,6 +143,11 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
       throw new Error("Atestasi berbeda dari versi atau akun yang ditinjau.");
     }
     if (BigInt(statement.deadline) < BigInt(Math.floor(Date.now() / 1000))) throw new Error("Atestasi kedaluwarsa. Mulai tinjauan baru.");
+    const fresh = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, token);
+    if (fresh.intent.signingAuthority !== "CURRENT") {
+      setIntent(fresh.intent); setContractSignature("");
+      throw new Error("Otoritas auditor berubah atau tidak dapat dibaca. Mulai tinjauan atestasi baru.");
+    }
     const signature = contractSignature || await signTypedDataAsync(attestationTypedData(intent.domain, statement));
     if (!alive.current || contextRef.current !== signingContext) return;
     setContractSignature(signature);
@@ -202,6 +209,7 @@ export function AttestationPanel({ saved, preparationId, token, recorded, basis,
       <p role="status">{statusUnavailable ? "Status chain belum dapat dipastikan" : states[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {intent.observation.confirmations} / {intent.observation.requiredConfirmations}. Kebijakan {intent.observation.confirmationPolicy}.</p>
       <p className="text-xs">Kesimpulan yang akan ditandatangani: {conclusionLabel(intent.statement.conclusion)} · lingkup {scopeLabel(intent.statement.scope)}.</p>
+      <p className="text-sm">Masa kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat live diperiksa ulang sebelum signing."}</p>
       <p className="break-all text-xs">Commitment bukti pemeriksaan {intent.statement.evidenceCommitment}<br />Berkas: {intent.evidence.files.map(file => file.fileName).join(", ")}</p>
       {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async () => {
         const response = await fetch(`${getApiBaseUrl()}/api/evidence/${path}/${intent.id}/files/${file.id}`, { headers: { Authorization: `Bearer ${token}` } });
