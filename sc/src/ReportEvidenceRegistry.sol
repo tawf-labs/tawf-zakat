@@ -108,4 +108,65 @@ contract ReportEvidenceRegistry is EIP712 {
     function evidenceDigest(string calldata institutionId, string calldata packageId) external view returns (bytes32) {
         return evidence[keccak256(bytes(institutionId))][keccak256(bytes(packageId))];
     }
+
+    bytes32 public constant PUBLISH_REPORT = keccak256("PUBLISH_REPORT");
+    bytes32 public constant VALIDATE_REPORT = keccak256("VALIDATE_REPORT");
+    mapping(address => Authority) public validators;
+    struct Publication { Authorization institution; Authorization validator; bytes institutionSignature; bytes validatorSignature; }
+    mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => Publication))) private publications;
+    mapping(bytes32 => mapping(bytes32 => string)) private latestPackages;
+    event ValidatorChanged(address indexed validator, bool active, uint256 epoch);
+    event ReportPublished(bytes32 indexed institutionKey, bytes32 indexed packageKey, bytes32 indexed authorization,
+        bytes32 action, bytes32 digest, address signer, bytes32 validatorAuthorization, address validator);
+
+    function setValidator(address validator, bool active) external {
+        if (msg.sender != admissionAuthority) revert Unauthorized();
+        if (validator == address(0)) revert InvalidAuthorization();
+        Authority storage authority = validators[validator];
+        authority.active = active;
+        authority.epoch++;
+        emit ValidatorChanged(validator, active, authority.epoch);
+    }
+    function publicationPayload(Authorization calldata a) private pure returns (bytes32) {
+        return keccak256(abi.encode(a.institutionId, a.reportId, a.version, a.packageId, a.predecessor,
+            a.digest, a.policy, a.outcome, a.deadline));
+    }
+    function checkPublicationSignature(Authorization calldata a, bytes calldata signature, Authority memory role) private view {
+        if (!role.active || role.epoch != a.authorityEpoch) revert Unauthorized();
+        if (block.timestamp > a.deadline) revert Expired();
+        if (a.nonce == bytes32(0)) revert InvalidAuthorization();
+        if (usedNonces[keccak256(bytes(a.institutionId))][a.signer][a.nonce]) revert Replayed();
+        if (!SignatureChecker.isValidSignatureNow(a.signer, authorizationDigest(a), signature)) revert InvalidAuthorization();
+    }
+    function validatePublication(Authorization calldata a, bytes calldata signature, Authorization calldata v, bytes calldata validatorSignature) public view {
+        if (a.action != PUBLISH_REPORT || v.action != VALIDATE_REPORT || a.signer == v.signer
+            || a.digest == bytes32(0) || bytes(a.reportId).length == 0 || bytes(a.version).length == 0
+            || bytes(a.packageId).length == 0 || bytes(a.policy).length == 0
+            || keccak256(bytes(a.outcome)) != keccak256("LOLOS") || publicationPayload(a) != publicationPayload(v)) revert InvalidAuthorization();
+        bytes32 institutionKey = keccak256(bytes(a.institutionId));
+        bytes32 reportKey = keccak256(bytes(a.reportId));
+        // First publication only. A future correction must explicitly check the predecessor and append.
+        if (bytes(a.predecessor).length != 0 || bytes(latestPackages[institutionKey][reportKey]).length != 0) revert AlreadyRecorded();
+        bytes32 recorded = evidence[institutionKey][keccak256(bytes(a.packageId))];
+        if (recorded != bytes32(0) && recorded != a.digest) revert InvalidAuthorization();
+        checkPublicationSignature(a, signature, signatories[institutionKey][a.signer]);
+        checkPublicationSignature(v, validatorSignature, validators[v.signer]);
+    }
+    function publishReport(Authorization calldata a, bytes calldata signature, Authorization calldata v, bytes calldata validatorSignature) external {
+        validatePublication(a, signature, v, validatorSignature);
+        bytes32 institutionKey = keccak256(bytes(a.institutionId));
+        usedNonces[institutionKey][a.signer][a.nonce] = true;
+        usedNonces[institutionKey][v.signer][v.nonce] = true;
+        publications[institutionKey][keccak256(bytes(a.reportId))][keccak256(bytes(a.version))] = Publication(a, v, signature, validatorSignature);
+        latestPackages[institutionKey][keccak256(bytes(a.reportId))] = a.packageId;
+        evidence[institutionKey][keccak256(bytes(a.packageId))] = a.digest;
+        emit ReportPublished(institutionKey, keccak256(bytes(a.packageId)), authorizationDigest(a), a.action,
+            a.digest, a.signer, authorizationDigest(v), v.signer);
+    }
+    function publishedVersion(string calldata institutionId, string calldata reportId, string calldata version) external view returns (Publication memory) {
+        return publications[keccak256(bytes(institutionId))][keccak256(bytes(reportId))][keccak256(bytes(version))];
+    }
+    function latestPublishedPackage(string calldata institutionId, string calldata reportId) external view returns (string memory) {
+        return latestPackages[keccak256(bytes(institutionId))][keccak256(bytes(reportId))];
+    }
 }

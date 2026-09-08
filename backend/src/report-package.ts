@@ -8,7 +8,7 @@ import { entriesFrom } from "./evidence-source";
 import { reconcile } from "./reconciliation";
 import { computeSnapshotFigures, FIGURE_UNITS } from "./period-report";
 import { draftReport, toReportDraft } from "./report-drafter";
-import { validateDraft } from "./report-validator";
+import { validateDraft, type ReportDraft } from "./report-validator";
 import type { PrivateFileStore } from "./evidence-files";
 import { sha256Hex } from "./evidence-snapshot";
 
@@ -113,6 +113,17 @@ export function reviewSnapshot(record: PreparationRecord, configuredRules: AmilR
   return { snapshot, figures, reconciliation, blockers, limitations, disclosure, policy: { ...REPORT_POLICY, amilChecks } };
 }
 
+/** Shared deterministic publication policy, always supplied with recomputed snapshot figures. */
+export function assessReportDraft(review: ReturnType<typeof reviewSnapshot>, draft: ReportDraft | null, disclosure: unknown) {
+  const checked = draft ? validateDraft({ figures: review.figures, amilShare: null }, draft) : null;
+  const prerequisites = [...review.blockers];
+  if (!draft) prerequisites.push("Draf belum tersedia.");
+  for (const figure of review.figures) if (!draft?.claims.some(c => c.name === figure.name)) prerequisites.push(`Klaim wajib ${figure.name} belum diisi.`);
+  if (review.figures.length === 0) prerequisites.push("Angka bersumber belum tersedia.");
+  if (canonicalJson(disclosure ?? null) !== canonicalJson(review.disclosure)) prerequisites.push("Pernyataan cakupan, keterbatasan, dan temuan harus sesuai manifest.");
+  return { outcome: prerequisites.length || checked?.outcome !== "LOLOS" ? "DITOLAK" : "LOLOS", findings: checked?.findings ?? [], prerequisites };
+}
+
 export function createReportPackages(store: EvidenceStore, files?: PrivateFileStore, rules: AmilRule[] = []) {
   async function preparation(institutionId: string, id: string) {
     const record = await store.getPreparation(institutionId, id);
@@ -159,13 +170,7 @@ export function createReportPackages(store: EvidenceStore, files?: PrivateFileSt
         aiUnavailable = attempt.unavailable ? "Layanan AI tidak tersedia. Angka dan temuan tetap tersimpan; masukkan draf manusia." : null;
       }
       if (input.mode === "HUMAN" && !draft) throw new PackageError("Draf manusia wajib diisi.");
-      const checked = draft ? validateDraft({ figures: review.figures, amilShare: null }, draft) : null;
-      const prerequisites = [...review.blockers];
-      if (!draft) prerequisites.push("Draf belum tersedia.");
-      for (const figure of review.figures) if (!draft?.claims.some(c => c.name === figure.name)) prerequisites.push(`Klaim wajib ${figure.name} belum diisi.`);
-      if (review.figures.length === 0) prerequisites.push("Angka bersumber belum tersedia.");
-      if (canonicalJson(input.disclosure ?? null) !== canonicalJson(review.disclosure)) prerequisites.push("Pernyataan cakupan, keterbatasan, dan temuan harus sesuai manifest.");
-      const verdict = { outcome: prerequisites.length || checked?.outcome !== "LOLOS" ? "DITOLAK" : "LOLOS", findings: checked?.findings ?? [], prerequisites };
+      const verdict = assessReportDraft(review, draft, input.disclosure);
       return persist(record, {
         format: "tawf.report.package", serializationVersion: 1, id: randomUUID(), status: "DRAFT",
         institutionId, preparationId: id, reportId: input.reportId, version: input.version,

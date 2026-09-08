@@ -101,6 +101,7 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
       <ul className="list-disc pl-5 text-xs">{saved.limitations.map((note, i) => <li key={i}>{note}</li>)}</ul>
       {saved.verdict.prerequisites.map((note, i) => <p key={i} className="text-sm text-red-700">{note}</p>)}
       {saved.verdict.findings.map((f, i) => <p key={i} className="text-sm text-red-700">{f.message}{f.expected && ` Diharapkan: ${formatQuantity(f.expected)}.`}{f.claimed && ` Diklaim: ${formatQuantity(f.claimed)}.`}</p>)}
+      {saved.status === "FROZEN" && <RecordingPanel publication key={`publication:${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
       {saved.status === "FROZEN" && <RecordingPanel key={`${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
       <div className="flex flex-wrap gap-2">
         {canPrepare && saved.status !== "FROZEN" && <Button disabled={!!pending} onClick={() => act("Membekukan paket…", async () => { await acceptSaved((await freezeReport(preparationId, saved.id, token)).package); setHistory((await listReports(preparationId, token)).packages); })}>Bekukan paket untuk review pengesahan</Button>}

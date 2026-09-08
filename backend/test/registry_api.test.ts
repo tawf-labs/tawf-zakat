@@ -1,3 +1,8 @@
+import { mkdtemp, rm, rename } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createEncryptedFileStore, type PrivateFileStore } from "../src/evidence-files";
+import { createReportEndorsement } from "../src/report-endorsement";
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { createPublicClient, createWalletClient, http, keccak256, toHex, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -15,11 +20,16 @@ import { evidenceTypedData } from "../../shared/report-registry";
 
 // Published local Anvil key. This suite never accepts a network URL from the environment.
 const account = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
+const validatorKey = `0x${"0".repeat(60)}5678` as Hex;
+const validator = privateKeyToAccount(validatorKey);
 const institution = "lpz-sinar-amanah";
 const rpcUrl = "http://127.0.0.1:18572";
 const rpc = createPublicClient({ chain: foundry, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
 const wallet = createWalletClient({ account, chain: foundry, transport: http(rpcUrl) });
 let node: ReturnType<typeof Bun.spawn>;
+let fileDirectory: string;
+let files: PrivateFileStore;
+let validatorAvailable = true;
 let database: TestWorkspaceDatabase;
 let registry: Hex;
 let token: string;
@@ -47,7 +57,7 @@ async function configure() {
   const registryStore = createRegistryStore(database.handle());
   await store.ensureSchema(); await evidence.ensureSchema(); await registryStore.ensureSchema();
   const chain = createRegistryChain({ rpcUrl: String(proxy.url), chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" });
-  configureWorkspace({ store, evidence, registry: { store: registryStore, chain }, now: () => Math.floor(Date.now() / 1000), challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
+  configureWorkspace({ store, evidence, files, registry: { store: registryStore, chain, endorsement: validatorAvailable ? createReportEndorsement(validatorKey) : undefined }, now: () => Math.floor(Date.now() / 1000), challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
     ethCall: chain.accountSignatureCall });
   return store;
 }
@@ -62,6 +72,7 @@ beforeAll(async () => {
   const deployment = await wallet.deployContract({ abi: reportRegistryAbi, bytecode: artifact.bytecode.object, args: [account.address] });
   registry = (await rpc.waitForTransactionReceipt({ hash: deployment })).contractAddress!;
   for (const args of [
+    { functionName: "setValidator", args: [validator.address, true] },
     { functionName: "enrollInstitution", args: [institution, account.address] },
     { functionName: "setSignatory", args: [institution, account.address, true] },
   ] as const) await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, ...args } as any) });
@@ -71,6 +82,8 @@ beforeAll(async () => {
     const result = await (await fetch(rpcUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
     return Response.json(mutateRpc ? mutateRpc(body.method, result) : result);
   } });
+  fileDirectory = await mkdtemp(join(tmpdir(), "publication-files-"));
+  files = createEncryptedFileStore({ directory: fileDirectory, key: Buffer.alloc(32, 73) });
   database = await createTestWorkspaceDatabase();
   const store = await configure();
   for (const inst of SYNTHETIC_INSTITUTIONS) await store.upsertInstitution(institutionRecordOf(inst));
@@ -78,13 +91,13 @@ beforeAll(async () => {
   const challenge = await json("workspace/challenge", { institutionId: institution, account: account.address });
   token = (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await account.signTypedData(challenge.typedData) })).token;
   const manifest = { label: "Local source", origin: "PASTE", scopeUnit: "Riau", scopeLevel: "PROVINSI", fundTypes: ["ZAKAT"], balanceSheet: "ON", currencyUnit: "IDR", period: { kind: "AKHIR_TAHUN", year: 2024 }, cutOff: "2025-02-11T00:00:00.000Z", format: "baris-ledger", mappingVersion: "1", transactionDetail: "PRESENT" };
-  const preparation = (await json("evidence", { label: "Local gap", period: manifest.period, currencyUnit: "IDR", balanceSheetScope: "ON", claim: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "200", unit: "IDR" } }] }, source: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "100", unit: "IDR" } }] } })).preparation;
+  const preparation = (await json("evidence", { files: [{ role: "SOURCE", fileName: "synthetic.txt", mimeType: "text/plain", contentBase64: Buffer.from("synthetic private source").toString("base64") }], label: "Local gap", period: manifest.period, currencyUnit: "IDR", balanceSheetScope: "ON", claim: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "200", unit: "IDR" } }] }, source: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "100", unit: "IDR" } }] } })).preparation;
   const base = `evidence/${preparation.id}/reports`;
   const draft = (await json(base, { reportId: "local-2024", version: "1", mode: "HUMAN", draft: { narrative: "Temuan belum diperbaiki.", claims: [] } })).package;
   frozen = (await json(`${base}/${draft.id}/freeze`, {})).package;
   packagePath = `${base}/${frozen.id}/recording`;
 }, 30000);
-afterAll(async () => { resetWorkspace(); if (database) await database.close(); proxy?.stop(true); node?.kill(); });
+afterAll(async () => { resetWorkspace(); if (database) await database.close(); proxy?.stop(true); node?.kill(); if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true }); });
 it("records rejected evidence through API, signature, local EVM and durable receipt history", async () => {
   expect(frozen.verdict.outcome).toBe("DITOLAK");
   const intent = (await json(packagePath, { retryId: "first-review", digest: frozen.digest })).intent;
@@ -134,11 +147,11 @@ it("refuses mismatched receipts, events and known noncanonical blocks through th
   expect((await json(path)).intent.observation.state).toBe("CONFIRMED");
 });
 
-async function freshPackage(passing = false) {
+async function freshPackage(passing = false, reportId = "local-2024", wrong = false) {
   const base = packagePath.split(`/${frozen.id}/recording`)[0]!;
   const review = await json(`${base}/review`);
-  const draft = (await json(base, { reportId: "local-2024", version: "1", mode: "HUMAN",
-    draft: { narrative: "Selisih dilaporkan sesuai sumber.", claims: passing ? review.figures.map((f: any) => ({ name: f.name, amount: f.value.amount, unit: f.value.unit })) : [] },
+  const draft = (await json(base, { reportId, version: "1", mode: "HUMAN",
+    draft: { narrative: "Selisih dilaporkan sesuai sumber.", claims: passing ? review.figures.map((f: any) => ({ name: f.name, amount: wrong ? "999999999" : f.value.amount, unit: f.value.unit })) : [] },
     disclosure: review.disclosure })).package;
   const saved = (await json(`${base}/${draft.id}/freeze`, {})).package;
   return { saved, path: `${base}/${saved.id}/recording` };
@@ -249,8 +262,8 @@ it("recovers an unbroadcast durable transaction in a new session without another
   expect((await json(`${path}/${intent.id}`)).intent.observation.state).toBe("INCLUDED");
 });
 
-it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: reviews rejected package, signs, recovers history and notices a later reorg", async () => {
-  const { saved, path } = await freshPackage();
+for (const publication of [false, true]) it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(publication ? "browser smoke: publishes with two endorsements and detects a later reorg" : "browser smoke: reviews rejected package, signs, recovers history and notices a later reorg", async () => {
+  const { saved, path } = await freshPackage(publication, `browser-${crypto.randomUUID()}`);
   const preparationId = path.split('/')[1]!;
   const preparation = await json(`evidence/${preparationId}`);
   const result = await Bun.build({ entrypoints: [new URL('../../frontend/test/registry-smoke.tsx', import.meta.url).pathname], target: 'browser', define: { 'import.meta.env': JSON.stringify({ VITE_API_BASE_URL: 'http://127.0.0.1:18573' }) } });
@@ -278,26 +291,148 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: reviews rejected
     page.on('pageerror', (error: Error) => console.error('Browser:', error.message));
     await page.goto('http://127.0.0.1:18573');
     await page.getByLabel('Paket tersimpan').selectOption(saved.id);
-    await page.getByRole('button', { name: 'Siapkan pengesahan pencatatan' }).click();
-    const sign = page.getByRole('button', { name: 'Tandatangani pencatatan bukti' });
+    const panel = page.getByRole('heading', { name: publication ? 'Penerbitan laporan' : 'Pengesahan pencatatan bukti', exact: true }).locator('..');
+    await panel.getByRole('button', { name: publication ? 'Minta pengesahan validator' : 'Siapkan pengesahan pencatatan' }).click();
+    const sign = panel.getByRole('button', { name: publication ? 'Tandatangani penerbitan laporan' : 'Tandatangani pencatatan bukti' });
     await sign.waitFor();
     expect(await sign.isDisabled()).toBe(true);
-    await page.getByText('Cakupan sumber dan temuan paket beku', { exact: true }).click();
-    expect(await page.locator('body').innerText()).toContain('DITOLAK');
-    await page.getByLabel('Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.').check();
+    await panel.getByText('Cakupan sumber dan temuan paket beku', { exact: true }).click();
+    expect(await page.locator('body').innerText()).toContain(publication ? 'LOLOS' : 'DITOLAK');
+    await panel.getByLabel('Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.').check();
     const snapshot = await rpc.request({ method: 'evm_snapshot' as any });
     await sign.click();
-    await page.getByText('Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Penerbitan masuk blok; menunggu konfirmasi' : 'Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
     await rpc.request({ method: 'evm_mine' as any });
-    await page.getByText('Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Laporan terbit; tingkat konfirmasi tercapai' : 'Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
     await page.evaluate(() => sessionStorage.clear());
     await page.reload();
     await page.getByLabel('Paket tersimpan').selectOption(saved.id);
-    await page.getByText('Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Laporan terbit; tingkat konfirmasi tercapai' : 'Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
     await rpc.request({ method: 'evm_revert' as any, params: [snapshot] as any });
-    await page.getByText('Blok berubah; pencatatan perlu diperiksa ulang', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Kirim ulang transaksi tersimpan' }).click();
-    await page.getByText('Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
-    await page.screenshot({ path: '/tmp/ticket72-browser-smoke.png', fullPage: true });
+    await panel.getByText(publication ? 'Blok berubah; penerbitan perlu diperiksa ulang' : 'Blok berubah; pencatatan perlu diperiksa ulang', { exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Kirim ulang transaksi tersimpan' }).click();
+    await panel.getByText(publication ? 'Penerbitan masuk blok; menunggu konfirmasi' : 'Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
+    await page.screenshot({ path: `/tmp/ticket73-browser-${publication ? 'publication' : 'recording'}.png`, fullPage: true });
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
+
+
+it("publishes one official version using recomputed validator endorsement and both real signatures", async () => {
+  const { saved, path: recording } = await freshPackage(true);
+  const path = recording.replace(/recording$/, "publication");
+  const intent = (await json(path, { retryId: "publication-first", digest: saved.digest })).intent;
+  expect(intent.validator.authorization.outcome).toBe("LOLOS");
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  await json(`${path}/${intent.id}/submit`, { signature }, 200);
+  expect((await json(`${path}/${intent.id}`)).intent.observation.state).toBe("INCLUDED");
+  await rpc.request({ method: "evm_mine" as any });
+  await database.reopen(); await configure();
+  const confirmed = (await json(`${path}/${intent.id}`)).intent;
+  expect(confirmed.observation.state).toBe("CONFIRMED");
+  expect((await json(path, { retryId: intent.id, digest: saved.digest })).intent.authorization).toEqual(intent.authorization);
+  const version = (await json(`${path}/version`)).version;
+  expect(version.publication).toBe("PUBLISHED");
+  expect(version.auditor).toBe("NOT_EXAMINED");
+  expect(version.packageId).toBe(saved.id);
+  expect(version.reportId).toBe(saved.reportId);
+  expect((await json(`${path}/${intent.id}/retry`, {}, 200)).intent.transactionHash).toBe(confirmed.transactionHash);
+}, 15000);
+
+
+it("validator refuses wrong drafts, missing claims, unavailable files and outage without losing evidence", async () => {
+  for (const [passing, wrong] of [[false, false], [true, true]]) {
+    const { saved, path } = await freshPackage(passing, crypto.randomUUID(), wrong);
+    const publication = path.replace(/recording$/, "publication");
+    const response = await request(publication, { retryId: crypto.randomUUID(), digest: saved.digest });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("Validator menolak");
+    expect((await json(publication)).intents).toEqual([]);
+    expect((await json(path.replace(/\/recording$/, ""))).package.verdict.outcome).toBe("DITOLAK");
+  }
+  const { saved, path } = await freshPackage(true, "outage-report");
+  const publication = path.replace(/recording$/, "publication");
+  validatorAvailable = false; await configure();
+  expect((await request(publication, { retryId: "outage", digest: saved.digest })).status).toBe(503);
+  validatorAvailable = true; await configure();
+  await rename(fileDirectory, `${fileDirectory}-unavailable`);
+  try { expect((await request(publication, { retryId: "missing-file", digest: saved.digest })).status).toBe(409); }
+  finally { await rename(`${fileDirectory}-unavailable`, fileDirectory); }
+  expect((await json(publication, { retryId: "outage", digest: saved.digest })).intent.validator.authorization.outcome).toBe("LOLOS");
+});
+
+it("publication rechecks validator at execution, verifies events and recovers after a real reorg", async () => {
+  const { saved, path: recording } = await freshPackage(true, "reorg-publication");
+  const path = recording.replace(/recording$/, "publication");
+  const old = (await json(path, { retryId: "revoked-publication", digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(old.domain, old.authorization));
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setValidator", args: [validator.address, false] }) });
+  expect((await request(`${path}/${old.id}/submit`, { signature })).status).toBe(409);
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setValidator", args: [validator.address, true] }) });
+  expect((await request(`${path}/${old.id}/submit`, { signature })).status).toBe(409);
+  const intent = (await json(path, { retryId: "renewed-publication", digest: saved.digest })).intent;
+  const signed = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  const snapshot = await rpc.request({ method: "evm_snapshot" as any });
+  await json(`${path}/${intent.id}/submit`, { signature: signed }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  expect((await json(`${path}/version`)).version.publication).toBe("PUBLISHED");
+  try {
+    for (const mutate of [
+      (m: string, b: any) => { if (m === "eth_getTransactionReceipt") b.result.status = "0x0"; return b; },
+      (m: string, b: any) => { if (m === "eth_getTransactionReceipt") b.result.logs[0].topics[3] = keccak256(toHex("wrong")); return b; },
+      (m: string, b: any) => { if (m === "eth_getTransactionReceipt") b.result.logs = []; return b; },
+    ]) { mutateRpc = mutate; expect((await json(`${path}/version`)).version.publication).toBe("NOT_PUBLISHED"); }
+  } finally { mutateRpc = null; }
+  expect((await json(`${path}/version`)).version.publication).toBe("PUBLISHED");
+  await rpc.request({ method: "evm_revert" as any, params: [snapshot] as any });
+  expect((await json(`${path}/version`)).version.publication).toBe("NOT_PUBLISHED");
+  await database.reopen(); await configure();
+  await json(`${path}/${intent.id}/retry`, {}, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  expect((await json(`${path}/version`)).version.publication).toBe("PUBLISHED");
+}, 15000);
+
+
+it("does not endorse a package whose mandatory source was never supplied", async () => {
+  const manifest = frozen.snapshot.sides[0].manifest;
+  const preparation = (await json("evidence", { label: "Missing mandatory source", period: manifest.period, currencyUnit: "IDR", balanceSheetScope: "ON",
+    claim: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "100", unit: "IDR" } }] },
+    source: { manifest, status: "MISSING", detail: "Belum dikirim" } })).preparation;
+  const base = `evidence/${preparation.id}/reports`;
+  const review = await json(`${base}/review`);
+  const draft = (await json(base, { reportId: "missing-source", version: "1", mode: "HUMAN", draft: { narrative: "Sumber belum tersedia.", claims: [] }, disclosure: review.disclosure })).package;
+  const saved = (await json(`${base}/${draft.id}/freeze`, {})).package;
+  const response = await request(`${base}/${saved.id}/publication`, { retryId: "missing-source", digest: saved.digest });
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toContain("Sumber wajib SOURCE tidak tersedia");
+});
+
+it("rechecks mandatory files before first relay even after validator endorsement", async () => {
+  const { saved, path: recording } = await freshPackage(true, "files-after-endorsement");
+  const path = recording.replace(/recording$/, "publication");
+  expect((await request(path, { retryId: "forged", digest: saved.digest, outcome: "LOLOS", withinCeiling: true })).status).toBe(400);
+  const intent = (await json(path, { retryId: "files-later", digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  await rename(fileDirectory, `${fileDirectory}-unavailable`);
+  try { expect((await request(`${path}/${intent.id}/submit`, { signature })).status).toBe(409); }
+  finally { await rename(`${fileDirectory}-unavailable`, fileDirectory); }
+  expect((await json(`${path}/${intent.id}`)).intent.observation.state).toBe("PREPARED");
+  await json(`${path}/${intent.id}/submit`, { signature }, 200);
+});
+
+
+it("requires available files for pending rebroadcast but preserves included receipt recovery", async () => {
+  const { saved, path: recording } = await freshPackage(true, "pending-files");
+  const path = recording.replace(/recording$/, "publication");
+  const intent = (await json(path, { retryId: "pending-files", digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  rejectBroadcast = true;
+  try { expect((await request(`${path}/${intent.id}/submit`, { signature })).status).toBe(503); }
+  finally { rejectBroadcast = false; }
+  await rename(fileDirectory, `${fileDirectory}-unavailable`);
+  try { expect((await request(`${path}/${intent.id}/retry`, {})).status).toBe(409); }
+  finally { await rename(`${fileDirectory}-unavailable`, fileDirectory); }
+  await json(`${path}/${intent.id}/retry`, {}, 200);
+  await rename(fileDirectory, `${fileDirectory}-unavailable`);
+  try { expect((await json(`${path}/${intent.id}/retry`, {}, 200)).intent.observation.state).toBe("INCLUDED"); }
+  finally { await rename(`${fileDirectory}-unavailable`, fileDirectory); }
+});

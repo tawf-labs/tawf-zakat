@@ -26,7 +26,33 @@ export const reportRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "PUBLISH_REPORT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "RECORD_EVIDENCE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "VALIDATE_REPORT",
     "inputs": [],
     "outputs": [
       {
@@ -255,6 +281,30 @@ export const reportRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "latestPublishedPackage",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "reportId",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "pendingAdministrators",
     "inputs": [
       {
@@ -289,6 +339,353 @@ export const reportRegistryAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "publishReport",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Authorization",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "predecessor",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "digest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "policy",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "signer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "signature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "v",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Authorization",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "predecessor",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "digest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "policy",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "signer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "validatorSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "publishedVersion",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "reportId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Publication",
+        "components": [
+          {
+            "name": "institution",
+            "type": "tuple",
+            "internalType": "struct ReportEvidenceRegistry.Authorization",
+            "components": [
+              {
+                "name": "action",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "institutionId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "reportId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "version",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "packageId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "predecessor",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "digest",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "policy",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "outcome",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "signer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "authorityEpoch",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "validator",
+            "type": "tuple",
+            "internalType": "struct ReportEvidenceRegistry.Authorization",
+            "components": [
+              {
+                "name": "action",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "institutionId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "reportId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "version",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "packageId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "predecessor",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "digest",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "policy",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "outcome",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "signer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "authorityEpoch",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "institutionSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "validatorSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -386,6 +783,24 @@ export const reportRegistryAbi = [
       },
       {
         "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setValidator",
+    "inputs": [
+      {
+        "name": "validator",
         "type": "address",
         "internalType": "address"
       },
@@ -542,6 +957,192 @@ export const reportRegistryAbi = [
     "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "validatePublication",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Authorization",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "predecessor",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "digest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "policy",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "signer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "signature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "v",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Authorization",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "predecessor",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "digest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "policy",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "signer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "validatorSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "validators",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
     "type": "event",
     "name": "AdministratorAccepted",
     "inputs": [
@@ -667,6 +1268,61 @@ export const reportRegistryAbi = [
   },
   {
     "type": "event",
+    "name": "ReportPublished",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "packageKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "authorization",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "action",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "digest",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "validatorAuthorization",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "validator",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SignatoryChanged",
     "inputs": [
       {
@@ -677,6 +1333,31 @@ export const reportRegistryAbi = [
       },
       {
         "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ValidatorChanged",
+    "inputs": [
+      {
+        "name": "validator",
         "type": "address",
         "indexed": true,
         "internalType": "address"

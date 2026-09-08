@@ -31,6 +31,7 @@ export type RecordingObservation = {
   blockNumber?: string; blockHash?: Hex; logIndex?: number;
 };
 export type RecordingIntent = {
+  validator?: { authorization: EvidenceAuthorization; authorizationDigest: Hex; signature: Hex };
   id: string; domain: RegistryDomain; authorization: EvidenceAuthorization; authorizationDigest: Hex;
   accountKind: "EOA" | "ERC1271"; observation: RecordingObservation; transactionHash?: Hex;
 };

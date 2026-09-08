@@ -30,9 +30,19 @@ export function createRegistryChain(config: RegistryConfig) {
       const code = await rpc.getCode({ address: signer });
       return { active, epoch: epoch.toString(), accountKind: code && code !== "0x" ? "ERC1271" as const : "EOA" as const };
     },
+    async validatorAuthority(signer: Hex) {
+      await assertDeployment();
+      const [active, epoch] = await rpc.readContract({ address: config.address, abi, functionName: "validators", args: [signer] });
+      return { active, epoch: epoch.toString() };
+    },
+    async publishedVersion(institution: string, report: string, version: string) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "publishedVersion", args: [institution, report, version] });
+    },
     async validate(intent: RecordingIntent, signature: Hex) {
       await assertDeployment();
-      await rpc.readContract({ address: config.address, abi, functionName: "validateAuthorization", args: [contractAuthorization(intent.authorization), signature] });
+      if (intent.validator) await rpc.readContract({ address: config.address, abi, functionName: "validatePublication", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] });
+      else await rpc.readContract({ address: config.address, abi, functionName: "validateAuthorization", args: [contractAuthorization(intent.authorization), signature] });
     },
     async accountSignatureCall({ to, data }: { to: string; data: Hex }): Promise<string> {
       await assertDeployment();
@@ -40,7 +50,9 @@ export function createRegistryChain(config: RegistryConfig) {
     },
     pendingNonce: () => rpc.getTransactionCount({ address: account.address, blockTag: "pending" }),
     async build(intent: RecordingIntent, signature: Hex, nonce: number): Promise<RegistryAttempt> {
-      const data = encodeFunctionData({ abi, functionName: "recordEvidence", args: [contractAuthorization(intent.authorization), signature] });
+      const data = intent.validator
+        ? encodeFunctionData({ abi, functionName: "publishReport", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] })
+        : encodeFunctionData({ abi, functionName: "recordEvidence", args: [contractAuthorization(intent.authorization), signature] });
       const tx = await wallet.prepareTransactionRequest({ to: config.address, data, nonce });
       const raw = await wallet.signTransaction(tx);
       return { raw, hash: keccak256(raw), nonce, signature };
@@ -75,6 +87,14 @@ export function createRegistryChain(config: RegistryConfig) {
       const matches = receipt.logs.filter(log => {
         if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
         try {
+          if (intent.validator) {
+            const event = decodeEventLog({ abi, eventName: "ReportPublished", topics: log.topics, data: log.data, strict: true });
+            const a = intent.authorization, v = intent.validator;
+            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
+              && event.args.authorization === intent.authorizationDigest && event.args.digest === a.digest && event.args.action === a.action
+              && event.args.signer.toLowerCase() === a.signer.toLowerCase() && event.args.validatorAuthorization === v.authorizationDigest
+              && event.args.validator.toLowerCase() === v.authorization.signer.toLowerCase();
+          }
           const event = decodeEventLog({ abi, eventName: "EvidenceRecorded", topics: log.topics, data: log.data, strict: true });
           const a = intent.authorization;
           return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))

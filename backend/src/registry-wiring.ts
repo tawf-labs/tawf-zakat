@@ -1,3 +1,4 @@
+import { createReportEndorsement } from "./report-endorsement";
 import { z } from "zod";
 import { createRegistryChain } from "./registry-chain";
 import { createRegistryStore } from "./registry-store";
@@ -15,5 +16,7 @@ export function registryFromEnvironment(db: EvidenceDatabase) {
     address: process.env.REPORT_REGISTRY_ADDRESS, privateKey: process.env.REPORT_REGISTRY_RELAYER_KEY,
     requiredConfirmations: process.env.REPORT_REGISTRY_CONFIRMATIONS });
   if (!config.success) throw new Error("Konfigurasi REPORT_REGISTRY_* harus lengkap dan sah.");
-  return { store: createRegistryStore(db), chain: createRegistryChain({ ...config.data, address: config.data.address as `0x${string}`, privateKey: config.data.privateKey as `0x${string}` }) };
+  const validatorKey = process.env.REPORT_REGISTRY_VALIDATOR_KEY;
+  if (validatorKey && !/^0x[0-9a-fA-F]{64}$/.test(validatorKey)) throw new Error("REPORT_REGISTRY_VALIDATOR_KEY tidak sah.");
+  return { endorsement: validatorKey ? createReportEndorsement(validatorKey as `0x${string}`) : undefined, store: createRegistryStore(db), chain: createRegistryChain({ ...config.data, address: config.data.address as `0x${string}`, privateKey: config.data.privateKey as `0x${string}` }) };
 }
