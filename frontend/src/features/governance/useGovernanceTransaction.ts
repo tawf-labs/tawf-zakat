@@ -1,3 +1,4 @@
+import { submitGovernanceTransaction } from "./submitGovernanceTransaction";
 import { useAccount, usePublicClient, useSignMessage, useSwitchChain, useWriteContract } from "wagmi";
 import { parseAbi, type Hex } from "viem";
 import { getApiBaseUrl, ZAKAT_PROTOCOL_L1_ADDRESS, ARBITRUM_SEPOLIA_CHAIN_ID } from "../../lib/contracts";
@@ -42,7 +43,13 @@ export function useGovernanceTransaction() {
       const { request } = await client.simulateContract({
         address: ZAKAT_PROTOCOL_L1_ADDRESS as Hex, abi, functionName: functions[action], args: args as any, account: address,
       });
-      const txHash = await writeContractAsync({ ...request, chainId: ARBITRUM_SEPOLIA_CHAIN_ID } as any);
+      const txHash = await submitGovernanceTransaction(
+        { ...request, chainId: ARBITRUM_SEPOLIA_CHAIN_ID },
+        {
+          estimateFees: () => client.estimateFeesPerGas({ type: "eip1559" }),
+          write: transaction => writeContractAsync(transaction as any),
+        },
+      );
       pending = { action, txHash, proposalId, metadata };
       sessionStorage.setItem(key, JSON.stringify(pending));
     }

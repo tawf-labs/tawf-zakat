@@ -463,3 +463,6 @@ frontend/.output/
 
 # Backup dumps and their checksums stay local (ticket #67 runbook)
 *.dump.bak.sha256
+
+# Restart journal for explicit testnet demo seeding (signed transactions, no keys).
+.seed-demo/

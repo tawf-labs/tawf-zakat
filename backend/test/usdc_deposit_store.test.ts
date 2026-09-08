@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { sql } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -344,4 +345,19 @@ describe("reading donations across the migration boundary", () => {
       await legacy.close();
     }
   });
+});
+
+
+it("serializes deposit timestamps before postgres-js binds raw SQL parameters", async () => {
+  const record = recordOf({ occurredAt: "2026-09-09T07:30:00+07:00" });
+  await saveUsdcDeposit({ execute: async query => {
+    // Raw SQL has no column encoder. postgres-js rejects a Date here while
+    // PGlite accepts one; check the actual compiled boundary before execution.
+    const { params } = new PgDialect().sqlToQuery(query);
+    expect(params.filter(value => value instanceof Date)).toEqual([]);
+    expect(params.filter(value => value === "2026-09-09T00:30:00.000Z")).toHaveLength(2);
+    return db.execute(query);
+  } }, record, { salt: "test-only", migrated: false });
+  const [saved] = await donationRows();
+  expect(new Date(saved.created_at).toISOString()).toBe("2026-09-09T00:30:00.000Z");
 });

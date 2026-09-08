@@ -148,7 +148,8 @@ export async function saveUsdcDeposit(
   options: { salt: string; migrated?: boolean }
 ): Promise<DepositSaveOutcome> {
   const migrated = options.migrated ?? (await hasNativeDepositColumns(db));
-  const occurredAt = new Date(record.occurredAt);
+  // Raw SQL bypasses the timestamp column encoder used by typed inserts.
+  const occurredAt = new Date(record.occurredAt).toISOString();
 
   const columns = migrated
     ? sql`, amount_usdc_6dp, deposit_chain_id, deposit_contract, deposit_tx_hash, deposit_log_index`
