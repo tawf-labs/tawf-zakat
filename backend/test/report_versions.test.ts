@@ -1,9 +1,9 @@
 import { expect, it } from "bun:test";
-import { createReportVersions } from "../src/report-versions.ts";
-import { canonicalJson, commitmentFor } from "../src/evidence-snapshot.ts";
-import { evidenceTypedData } from "../../shared/report-registry.ts";
+import { createReportVersions } from "../src/report-versions";
+import { canonicalJson, commitmentFor } from "../src/evidence-snapshot";
+import { evidenceTypedData } from "../../shared/report-registry";
 import { hashTypedData, keccak256, toHex } from "viem";
-import type { WorkspaceRuntime } from "../src/workspace-runtime.ts";
+import type { WorkspaceRuntime } from "../src/workspace-runtime";
 
 function fixture(options: { recoveryMidRead?: boolean } = {}) {
   const salt = `0x${"11".repeat(32)}`;

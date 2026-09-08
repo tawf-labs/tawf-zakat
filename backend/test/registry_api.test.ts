@@ -72,6 +72,9 @@ async function configure(clockOffset = 0) {
   return store;
 }
 beforeAll(async () => {
+  let occupied = false;
+  try { await rpc.getChainId(); occupied = true; } catch { /* The isolated fixture must own this port. */ }
+  if (occupied) throw new Error("Port 18572 sudah digunakan; hentikan fixture Anvil lama sebelum menjalankan suite.");
   node = Bun.spawn(["anvil", "--host", "127.0.0.1", "--port", "18572", "--silent"], { stdout: "ignore", stderr: "pipe" });
   let ready = false;
   for (let i = 0; i < 50; i++) {
@@ -107,7 +110,7 @@ beforeAll(async () => {
   frozen = (await json(`${base}/${draft.id}/freeze`, {})).package;
   packagePath = `${base}/${frozen.id}/recording`;
 }, 30000);
-afterAll(async () => { resetWorkspace(); if (database) await database.close(); proxy?.stop(true); node?.kill(); if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true }); });
+afterAll(async () => { resetWorkspace(); if (database) await database.close(); await proxy?.stop(true); if (node && node.exitCode === null) { node.kill(); await node.exited; } if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true }); });
 it("records rejected evidence through API, signature, local EVM and durable receipt history", async () => {
   expect(frozen.verdict.outcome).toBe("DITOLAK");
   const intent = (await json(packagePath, { retryId: "first-review", digest: frozen.digest })).intent;
@@ -327,7 +330,7 @@ for (const publication of [false, true]) it.skipIf(!process.env.REGISTRY_BROWSER
     await panel.getByRole('button', { name: 'Kirim ulang transaksi tersimpan' }).click();
     await panel.getByText(publication ? 'Penerbitan masuk blok; menunggu konfirmasi' : 'Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
     await page.screenshot({ path: `/tmp/ticket73-browser-${publication ? 'publication' : 'recording'}.png`, fullPage: true });
-  } finally { await browser.close(); server.stop(true); }
+  } finally { await browser.close(); await server.stop(true); }
 }, 60000);
 
 
@@ -655,7 +658,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: anonymous public summa
     await page.getByRole("button", { name: "Unduh paket pemeriksaan terbatas" }).click();
     await page.getByRole("alert").filter({ hasText: "Sesi ruang kerja tidak ditemukan atau sudah berakhir." }).waitFor();
     expect(await page.getByRole("button", { name: "Unduh paket pemeriksaan terbatas" }).count()).toBe(0);
-  } finally { await browser.close(); server.stop(true); }
+  } finally { await browser.close(); await server.stop(true); }
 }, 60000);
 
 
@@ -992,7 +995,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: publishes a first vers
     await page.getByText("Versi yang digantikan · halaman ini", { exact: true }).waitFor();
     expect(await page.locator("body").innerText()).not.toContain("Narasi versi pertama keliru");
     await page.screenshot({ path: "/tmp/ticket75-public-superseded.png", fullPage: true });
-  } finally { await browser.close(); server.stop(true); }
+  } finally { await browser.close(); await server.stop(true); }
 }, 90000);
 
 
@@ -1277,7 +1280,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: an auditor signs a con
     await page.getByText("Tidak wajar (TIDAK_WAJAR) · Rekonsiliasi periode (REKONSILIASI_PERIODE)", { exact: true }).waitFor();
     expect(await page.locator("body").innerText()).toContain("bukan bukti independensi");
     await page.screenshot({ path: "/tmp/ticket76-public-attestation.png", fullPage: true });
-  } finally { await browser.close(); server.stop(true); }
+  } finally { await browser.close(); await server.stop(true); }
 }, 90000);
 
 it("prepares scoped authority transactions, checks live roles and exposes canonical receipts", async () => {
@@ -1492,7 +1495,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: recovery reports a mis
     await page.getByText(`Tersedia dan hash cocok · ${file.id}`, { exact: true }).waitFor();
     expect(await page.locator("body").innerText()).toContain("bukan finalitas settlement L1");
     await page.screenshot({ path: "/tmp/ticket78-browser-recovery.png", fullPage: true });
-  } finally { await browser.close(); server.stop(true); }
+  } finally { await browser.close(); await server.stop(true); }
 }, 60000);
 
 it("recovery never presents an included auditor opinion as confirmed and protects unsigned examination files", async () => {
@@ -1632,7 +1635,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: real workspace owner r
     await page.getByRole("button", { name: /Local gap/ }).click();
     expect(await page.getByRole("textbox", { name: /^Narasi draf/ }).inputValue()).toBe("");
   } finally {
-    await browser.close(); server.stop(true); await configure();
+    await browser.close(); await server.stop(true); await configure();
     const challenge = await json("workspace/challenge", { institutionId: institution, account: account.address });
     token = (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await account.signTypedData(challenge.typedData) })).token;
   }

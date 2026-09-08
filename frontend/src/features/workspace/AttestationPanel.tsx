@@ -1,11 +1,10 @@
-import type { PrivateRequests } from "./privateRequests";
-import { useEffect, useRef, useState } from "react";
-import { hashTypedData, keccak256, toHex } from "viem";
-import { useAccount, useSignTypedData, useSwitchChain } from "wagmi";
+import { AccessContextChanged, type PrivateRequests } from "./privateRequests";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useAttestation } from "./useRegistryInteraction";
+import { useAccount, useSwitchChain } from "wagmi";
 import { Button } from "../../components/ui/Button";
-import { attestationTypedData, type AttestationIntent } from "../../../../shared/report-registry";
+import { attestationTypedData } from "../../../../shared/report-registry";
 import type { SavedReportPackage } from "./evidenceClient";
-import { recordingRequest } from "./recordingClient";
 import { ATTESTATION_CONCLUSIONS as CONCLUSIONS, ATTESTATION_SCOPES as SCOPES, conclusionLabel, scopeLabel } from "./evidenceText";
 
 /**
@@ -45,115 +44,44 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
   recorded: VersionAttestation[] | null; basis: string | null; onRecorded?: () => void;
 }) {
   const { address, chainId } = useAccount();
-  const { signTypedDataAsync } = useSignTypedData();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
-  const [history, setHistory] = useState<AttestationIntent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [intent, setIntent] = useState<AttestationIntent | null>(null);
+  const interaction = useAttestation({ saved, preparationId, requests });
+  const { history, loading, intent, reviewed, statusUnavailable, task } = interaction;
+  const contractSignature = interaction.signature;
   const [scope, setScope] = useState<string>(SCOPES[0]!.value);
   const [conclusion, setConclusion] = useState<string>("");
   const [predecessor, setPredecessor] = useState("");
   const [evidence, setEvidence] = useState<{ fileName: string; mimeType: string; contentBase64: string }[]>([]);
-  const [reviewed, setReviewed] = useState(false);
-  const [contractSignature, setContractSignature] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [statusUnavailable, setStatusUnavailable] = useState(false);
-  const retryId = useRef<string>(crypto.randomUUID());
+  const [localBusy, setBusy] = useState<string | null>(null);
+  const [localError, setError] = useState<string | null>(null);
+  const busy = localBusy ?? interaction.busy;
+  const error = localError ?? interaction.error;
+  const setReviewed = task.review, setContractSignature = task.signature, check = task.refresh;
   const path = `${preparationId}/reports/${saved.id}/attestation`;
-  const cacheKey = `tawf-attestation:${path}:${address?.toLowerCase()}`;
-  const contextRef = useRef("");
-  contextRef.current = `${path}:${requests.contextId}:${address}:${chainId}:${intent?.id}`;
-  const alive = useRef(true);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true); setIntent(null); setHistory([]); setReviewed(false); setContractSignature("");
-    recordingRequest<{ intents: AttestationIntent[] }>(path, requests).then(({ intents }) => {
-      if (cancelled) return;
-      setHistory(intents);
-      const cached = sessionStorage.getItem(cacheKey);
-      const selected = cached ? intents.find(item => item.id === cached) : intents.at(-1);
-      retryId.current = selected?.id ?? cached ?? crypto.randomUUID();
-      setIntent(selected ?? null); setStatusUnavailable(false);
-    }).catch(() => { if (!cancelled) { setStatusUnavailable(true); setError("Riwayat atestasi belum dapat diperiksa."); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [path, requests, cacheKey]);
-
-  useEffect(() => {
-    if (!intent) return;
-    const timer = setInterval(() => { void check(); }, 4000);
-    return () => clearInterval(timer);
-  }, [intent, path, requests]);
-  // A confirmed note changes what the version says it was examined against, so the list is re-read once.
-  const announced = useRef<string | null>(null);
-  useEffect(() => {
-    if (!intent) return;
-    const observed = `${intent.id}:${intent.observation.state}`;
-    if (announced.current === observed) return;
-    announced.current = observed;
-    onRecorded?.();
-  }, [intent?.id, intent?.observation.state]);
-
-  async function act(label: string, task: () => Promise<void>) {
+  useEffect(() => { onRecorded?.(); }, [intent?.id, intent?.observation.state]);
+  const localGeneration = useRef(0);
+  useLayoutEffect(() => { localGeneration.current++; setBusy(null); setError(null); setEvidence([]); return () => { localGeneration.current++; }; }, [task]);
+  async function act(label: string, operation: (assertCurrent: () => void) => Promise<void>) {
+    const started = ++localGeneration.current;
+    const assertCurrent = () => { requests.assertCurrent(); if (started !== localGeneration.current) throw new AccessContextChanged(); };
     setBusy(label); setError(null);
-    try { await task(); setStatusUnavailable(false); }
-    catch (caught) { if (alive.current) { setError(caught instanceof Error ? caught.message : "Permintaan atestasi ditolak."); } }
-    finally { if (alive.current) setBusy(null); }
-  }
-  async function check() {
-    if (!intent) return;
-    const checkingContext = contextRef.current;
-    try {
-      const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, requests);
-      if (alive.current && contextRef.current === checkingContext) { setIntent(next.intent); setStatusUnavailable(next.intent.signingAuthority === "UNAVAILABLE");
-        if (next.intent.signingAuthority === "STALE" || next.intent.signingAuthority === "UNAVAILABLE") { setContractSignature(""); setReviewed(false); }
-      }
-    } catch { if (alive.current) setStatusUnavailable(true); }
+    try { await operation(assertCurrent); assertCurrent(); }
+    catch (error) { if (started === localGeneration.current) setError(error instanceof Error ? error.message : "Permintaan ditolak."); }
+    finally { if (started === localGeneration.current) setBusy(null); }
   }
   async function attach(list: FileList | null) {
     const files = Array.from(list ?? []);
     setEvidence([]);
-    await act("Membaca bukti pemeriksaan…", async () => {
-    setEvidence(await Promise.all(files.map(async file => ({
+    await act("Membaca bukti pemeriksaan…", async assertCurrent => {
+    const attachments = await Promise.all(files.map(async file => ({
       fileName: file.name, mimeType: file.type || "application/octet-stream",
       contentBase64: base64(new Uint8Array(await file.arrayBuffer())),
-    }))));
+    })));
+    assertCurrent(); setEvidence(attachments);
     });
   }
-  const prepare = () => act("Menyimpan bukti dan memeriksa kewenangan…", async () => {
-    sessionStorage.setItem(cacheKey, retryId.current);
-    const next = await recordingRequest<{ intent: AttestationIntent }>(path, requests, {
-      retryId: retryId.current, packageDigest: saved.digest, scope, conclusion,
-      predecessor: predecessor || null, evidence,
-    });
-    if (alive.current) { setIntent(next.intent); setHistory(items => [...items.filter(item => item.id !== next.intent.id), next.intent]); setReviewed(false); }
-  });
-  const sign = () => act("Memproses atestasi…", async () => {
-    if (!intent || !address || !reviewed) return;
-    const signingContext = contextRef.current;
-    const statement = intent.statement;
-    if (statement.auditor.toLowerCase() !== address.toLowerCase() || statement.packageId !== saved.id
-      || statement.packageDigest !== saved.digest || intent.domain.chainId !== chainId
-      || statement.institutionId !== saved.institutionId || statement.reportId !== saved.reportId || statement.version !== saved.version
-      || statement.action !== keccak256(toHex("ATTEST_REPORT"))
-      || hashTypedData(attestationTypedData(intent.domain, statement)) !== intent.statementDigest) {
-      throw new Error("Atestasi berbeda dari versi atau akun yang ditinjau.");
-    }
-    if (BigInt(statement.deadline) < BigInt(Math.floor(Date.now() / 1000))) throw new Error("Atestasi kedaluwarsa. Mulai tinjauan baru.");
-    const fresh = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}`, requests);
-    if (fresh.intent.signingAuthority !== "CURRENT") {
-      setIntent(fresh.intent); setContractSignature("");
-      throw new Error("Otoritas auditor berubah atau tidak dapat dibaca. Mulai tinjauan atestasi baru.");
-    }
-    const signature = contractSignature || await signTypedDataAsync(attestationTypedData(intent.domain, statement));
-    if (!alive.current || contextRef.current !== signingContext) return;
-    setContractSignature(signature);
-    const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/submit`, requests, { signature });
-    if (alive.current) setIntent(next.intent);
-  });
+  const prepare = () => task.prepare({ scope, conclusion, predecessor: predecessor || null, evidence });
+  const sign = task.submit;
 
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
   const mine = (recorded ?? []).filter(note => note.auditor.toLowerCase() === address?.toLowerCase());
@@ -180,8 +108,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
     {loading && <p role="status">Memuat riwayat atestasi…</p>}
     {history.length > 0 && <label className="block text-sm">Riwayat percobaan atestasi saya
       <select className="block w-full rounded border p-2" value={intent?.id ?? ""} disabled={!!busy || loading} onChange={e => {
-        const selected = history.find(item => item.id === e.target.value);
-        if (selected) { setIntent(selected); retryId.current = selected.id; sessionStorage.setItem(cacheKey, selected.id); setReviewed(false); setContractSignature(""); }
+        task.select(e.target.value);
       }}><option value="">Pilih percobaan</option>{history.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select>
     </label>}
     {!intent && <fieldset disabled={!!busy || loading || statusUnavailable} className="space-y-2 text-sm">
@@ -211,9 +138,9 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
       <p className="text-xs">Kesimpulan yang akan ditandatangani: {conclusionLabel(intent.statement.conclusion)} · lingkup {scopeLabel(intent.statement.scope)}.</p>
       <p className="text-sm">Masa kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat live diperiksa ulang sebelum signing."}</p>
       <p className="break-all text-xs">Commitment bukti pemeriksaan {intent.statement.evidenceCommitment}<br />Berkas: {intent.evidence.files.map(file => file.fileName).join(", ")}</p>
-      {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async () => {
+      {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async assertCurrent => {
         const blob = await requests.blob(`/api/evidence/${path}/${intent.id}/files/${file.id}`);
-        requests.assertCurrent();
+        assertCurrent();
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a"); link.href = url; link.download = file.fileName; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -231,13 +158,10 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
           : <Button disabled={!!busy || switching || loading || !reviewed || !address || statusUnavailable} onClick={sign}>Tandatangani atestasi versi ini</Button>}
       </>}
       {!["SUBMITTED", "INCLUDED"].includes(intent.observation.state) && <Button variant="outline" disabled={!!busy || statusUnavailable} onClick={() => {
-        retryId.current = crypto.randomUUID(); sessionStorage.setItem(cacheKey, retryId.current); setIntent(null); setReviewed(false); setContractSignature(""); setEvidence([]);
+        task.newReview(); setEvidence([]);
       }}>Mulai tinjauan atestasi baru</Button>}
       {intent.transactionHash && ["SUBMITTED", "NONCANONICAL"].includes(intent.observation.state) &&
-        <Button disabled={!!busy} onClick={() => act("Mengirim ulang transaksi tersimpan…", async () => {
-          const next = await recordingRequest<{ intent: AttestationIntent }>(`${path}/${intent.id}/retry`, requests, {});
-          if (alive.current) setIntent(next.intent);
-        })}>Kirim ulang transaksi tersimpan</Button>}
+        <Button disabled={!!busy} onClick={task.retry}>Kirim ulang transaksi tersimpan</Button>}
     </div>}
     {busy && <p role="status">{busy}</p>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
