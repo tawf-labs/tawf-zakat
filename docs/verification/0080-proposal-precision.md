@@ -54,3 +54,24 @@ Pengujian sandbox awal tidak dapat membuka layanan lokal. Suite akhir dijalankan
 ulang di luar sandbox, memakai `NODE_ENV=test` dan data sintetis terisolasi.
 Log sesi tersedia di `/tmp/zkt-backend-final.log`, `/tmp/zkt-backend-baseline.log`,
 `/tmp/zkt-frontend-final.log`, dan `/tmp/zkt-typecheck-final.log`.
+
+## Pelaksanaan migrasi setelah persetujuan pengguna — 2026-09-09 WIB
+
+Pengguna menyetujui backup, migrasi #80, dan verifikasi setelah commit `fdadffd`.
+
+- Backup custom PostgreSQL: `backend/pre-proposal80-migration-20260908T183316Z.dump.bak`
+  (74.264 byte, izin 0600), disimpan lokal dan diabaikan Git. Timestamp nama
+  berkas menggunakan UTC. Checksum ada pada berkas `.sha256` di sebelahnya.
+- `pg_restore --list` dan pembacaan seluruh arsip ke `/dev/null` berhasil;
+  `sha256sum --check` cocok. Ini verifikasi keterbacaan arsip, bukan uji restore
+  ke database terpisah.
+- Verifikasi sebelum migrasi: kolom belum ada, proposal 0.
+- `bun run proposal:migrate` berhasil menjalankan
+  `ALTER TABLE disbursement_proposals ADD COLUMN IF NOT EXISTS amount_exact TEXT`.
+- Verifikasi ulang dari proses terpisah: kolom sudah ada, proposal tetap 0,
+  jumlah eksak 0, USDC tanpa jumlah eksak 0. Tidak ada backfill yang diperlukan.
+- Tidak ada API lokal yang mendengarkan port 3001 saat pemeriksaan, sehingga
+  tidak ada proses API lokal untuk direstart. Proses yang kemudian dijalankan
+  akan membaca katalog baru. Proses deployment lain tidak diverifikasi di sini.
+- Tidak ada transaksi publik atau deployment aplikasi dilakukan. Status issue
+  GitHub tidak diubah oleh pelaksanaan migrasi ini.
