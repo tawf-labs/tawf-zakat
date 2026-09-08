@@ -90,11 +90,8 @@ export function RecordingPanel({ saved, preparationId, requests, publication = f
   async function readLine() {
     if (!publication) return;
     try {
-      const [current, line] = await Promise.all([
-        recordingRequest<{ version: PublishedVersion }>(`${path}/version`, requests),
-        recordingRequest<{ history: VersionHistoryEntry[] }>(`${path}/history`, requests),
-      ]);
-      if (alive.current) { setVersion(current.version); setVersionLine(line.history); setLineUnavailable(false); }
+      const current = await recordingRequest<{ version: PublishedVersion; history: VersionHistoryEntry[] }>(`${path}?view=versions`, requests);
+      if (alive.current) { setVersion(current.version); setVersionLine(current.history); setLineUnavailable(false); }
     } catch { if (alive.current) { setLineUnavailable(true); setVersion(null); setVersionLine(null); } }
   }
   useEffect(() => { void readLine(); }, [path, requests, intent?.observation.state]);

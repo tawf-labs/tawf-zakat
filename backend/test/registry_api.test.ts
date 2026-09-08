@@ -653,7 +653,8 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: anonymous public summa
     expect(JSON.parse(await new Response(runner.stdout).text()).recomputed.reconciliation.netDelta.amount).toBe("100");
     await store.deactivateMembership({ institutionId: institution, account: reader.address });
     await page.getByRole("button", { name: "Unduh paket pemeriksaan terbatas" }).click();
-    await page.getByText("Paket pemeriksaan tidak tersedia atau akses sudah berakhir.", { exact: true }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "Sesi ruang kerja tidak ditemukan atau sudah berakhir." }).waitFor();
+    expect(await page.getByRole("button", { name: "Unduh paket pemeriksaan terbatas" }).count()).toBe(0);
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
 
@@ -1636,3 +1637,72 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: real workspace owner r
     token = (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await account.signTypedData(challenge.typedData) })).token;
   }
 }, 60000);
+
+it("pins receipt confirmations to one reference and observes advancing heads on the next read", async () => {
+  const { withRegistryRead } = await import("../src/registry-read");
+  const { workspaceRuntime } = await import("../src/workspace-runtime");
+  const { saved, path } = await freshPackage(false, `read-${crypto.randomUUID()}`);
+  const intent = (await json(path, { retryId: `read-${crypto.randomUUID()}`, digest: saved.digest })).intent;
+  const submitted = (await json(`${path}/${intent.id}/submit`, { signature: await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization)) }, 200)).intent;
+  await rpc.waitForTransactionReceipt({ hash: submitted.transactionHash });
+  const chain = workspaceRuntime()!.registry!.chain;
+  const pair = await withRegistryRead(chain, async scoped => {
+    const first = await scoped.observe(intent, submitted.transactionHash);
+    await rpc.request({ method: "evm_mine" as any });
+    const second = await scoped.observe(intent, submitted.transactionHash);
+    return [first, second];
+  });
+  expect(pair[0]!.state).toBe("INCLUDED");
+  expect(pair[1]).toEqual(pair[0]);
+  expect((await withRegistryRead(chain, scoped => scoped.observe(intent, submitted.transactionHash))).state).toBe("CONFIRMED");
+});
+
+it("discards a real EVM read when the captured reference is replaced", async () => {
+  const { withRegistryRead } = await import("../src/registry-read");
+  const { workspaceRuntime } = await import("../src/workspace-runtime");
+  const snapshot = await rpc.request({ method: "evm_snapshot" as any });
+  await rpc.request({ method: "evm_mine" as any });
+  const chain = workspaceRuntime()!.registry!.chain;
+  await expect(withRegistryRead(chain, async scoped => {
+    await scoped.officialLine(institution, "local-2024");
+    await rpc.request({ method: "evm_revert" as any, params: [snapshot] as any });
+    return "must not escape";
+  })).rejects.toThrow("Acuan pembacaan");
+});
+
+it("keeps directly published versions in the coherent history without borrowing a local anchor", async () => {
+  const { contractAuthorization } = await import("../../shared/report-registry");
+  const { path: recordingPath, saved } = await freshPackage(true, `direct-${crypto.randomUUID()}`);
+  const path = recordingPath.replace(/recording$/, "publication");
+  const intent = (await json(path, { retryId: `direct-${crypto.randomUUID()}`, digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  const hash = await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "publishReport", args: [
+    contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature,
+  ] });
+  await rpc.waitForTransactionReceipt({ hash });
+  const view = await json(`${path}?view=versions`);
+  expect(view.history[0]).toMatchObject({ packageId: saved.id, version: saved.version, official: true, anchor: null });
+  expect(view.version.officialPackageId).toBe(saved.id);
+  expect(view.version.publication).toBe("NOT_PUBLISHED");
+  expect(view.history[0].attestations.subject.packageId).toBe(saved.id);
+});
+
+it("does not persist a first public summary from a rejected canonical read", async () => {
+  const { saved, path: recordingPath } = await freshPackage(true, `discard-${crypto.randomUUID()}`);
+  const path = recordingPath.replace(/recording$/, "publication");
+  const intent = (await json(path, { retryId: `discard-${crypto.randomUUID()}`, digest: saved.digest })).intent;
+  await json(`${path}/${intent.id}/submit`, { signature: await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization)) }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  let reference: string | null = null;
+  mutateRpc = (method, response) => {
+    if (method !== "eth_getBlockByNumber" || !response.result) return response;
+    if (!reference) { reference = response.result.number; return response; }
+    if (response.result.number === reference) return { ...response, result: { ...response.result, hash: `0x${"99".repeat(32)}` } };
+    return response;
+  };
+  try {
+    expect((await request(`public/reports/${saved.id}`, undefined, "")).status).toBe(503);
+    expect(await createEvidenceStore(database.handle()).getPublicReport(saved.id)).toBeNull();
+  } finally { mutateRpc = null; }
+  expect((await request(`public/reports/${saved.id}`, undefined, "")).status).toBe(200);
+});

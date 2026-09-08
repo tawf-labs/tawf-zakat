@@ -1,3 +1,4 @@
+import type { RegistryReference } from "./registry-read";
 import { authorityScope, type AuthorityChange } from "../../shared/report-authority";
 import { createPublicClient, createWalletClient, defineChain, http, encodeFunctionData, decodeEventLog, keccak256, toHex, TransactionReceiptNotFoundError, BlockNotFoundError, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -8,11 +9,19 @@ import { isAttestation, type RegistryAttempt } from "./registry-store";
 export type RegistryConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number };
 /** Everything the relayer can carry: recording, publication and attestation share one durable path. */
 export type RegistryIntent = RecordingIntent | AttestationIntent;
-export function createRegistryChain(config: RegistryConfig) {
+function registryAdapter(config: RegistryConfig, reference?: RegistryReference) {
   if (!Number.isSafeInteger(config.chainId) || config.chainId < 1 || !Number.isSafeInteger(config.requiredConfirmations) || config.requiredConfirmations < 1) throw new Error("Konfigurasi registry tidak sah.");
   const chain = defineChain({ id: config.chainId, name: "Report evidence registry", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
   const account = privateKeyToAccount(config.privateKey);
-  const rpc = createPublicClient({ chain, transport: http(config.rpcUrl) });
+  const client = createPublicClient({ chain, transport: http(config.rpcUrl, { retryCount: 0 }) });
+  const blockNumber = reference ? BigInt(reference.blockNumber) : undefined;
+  const rpc = {
+    ...client,
+    readContract: ((args: any) => client.readContract({ ...args, ...(reference ? { blockNumber } : {}) })) as typeof client.readContract,
+    getCode: ((args: any) => client.getCode({ ...args, ...(reference ? { blockNumber } : {}) })) as typeof client.getCode,
+    getBlockNumber: ((args: any) => reference ? Promise.resolve(blockNumber!) : client.getBlockNumber(args)) as typeof client.getBlockNumber,
+    getContractEvents: ((args: any) => client.getContractEvents({ ...args, ...(reference ? { toBlock: blockNumber } : {}) })) as typeof client.getContractEvents,
+  };
   const wallet = createWalletClient({ account, chain, transport: http(config.rpcUrl) });
   const domain: RegistryDomain = { name: "Tawf Report Evidence", version: "1", chainId: config.chainId, verifyingContract: config.address };
   const confirmationPolicy = `block-depth-v1:${config.chainId}:${config.requiredConfirmations}`;
@@ -22,7 +31,7 @@ export function createRegistryChain(config: RegistryConfig) {
     const [, name, version, chainId, address] = await rpc.readContract({ address: config.address, abi, functionName: "eip712Domain" });
     if (name !== domain.name || version !== domain.version || chainId !== BigInt(domain.chainId) || address.toLowerCase() !== domain.verifyingContract.toLowerCase()) throw new Error("Domain registry tidak cocok.");
   }
-  async function observe(intent: RegistryIntent, hash: Hex, atBlock?: bigint): Promise<RecordingObservation> {
+  async function observe(intent: RegistryIntent, hash: Hex, atBlock: bigint | undefined = blockNumber): Promise<RecordingObservation> {
       await assertDeployment();
       let receipt;
       try { receipt = await rpc.getTransactionReceipt({ hash }); }
@@ -82,7 +91,12 @@ export function createRegistryChain(config: RegistryConfig) {
       return { ...base, ...timed, confirmations, logIndex: matches[0]!.logIndex!, state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED" };
     }
   const adapter = {
+    readOnly: !!reference,
     domain,
+    async readHead() {
+      const block = await client.getBlock({ blockTag: "latest" });
+      return { blockNumber: block.number.toString(), blockHash: block.hash };
+    },
     recoveryDeployment: `${config.chainId}:${config.address.toLowerCase()}`,
     async recoveryHead() {
       await assertDeployment();
@@ -246,7 +260,7 @@ export function createRegistryChain(config: RegistryConfig) {
         const log = logs.find(log => !log.removed && log.transactionHash);
         if (!log?.transactionHash) throw new Error("Event atestasi belum dapat diperiksa.");
         const intent = { statement, statementDigest: id, observation: { ...base, state: "PREPARED" } } as AttestationIntent;
-        const observation = await observe(intent, log.transactionHash);
+        const observation = await observe(intent, log.transactionHash, blockNumber);
         if (observation.state === "CONFIRMED") records.push({ id, statement: record.statement, signature: record.signature, mandate: record.mandate, observation });
       }
       return records;
@@ -284,4 +298,24 @@ export function createRegistryChain(config: RegistryConfig) {
   };
   return adapter;
 }
-export type RegistryChain = ReturnType<typeof createRegistryChain>;
+export type RegistryChain = ReturnType<typeof registryAdapter> & { readAt(reference: RegistryReference): RegistryChain };
+export function createRegistryChain(config: RegistryConfig): RegistryChain {
+  const at = (reference?: RegistryReference): RegistryChain => ({
+    ...registryAdapter(config, reference),
+    readAt: next => memoizedRead(at(next)),
+  });
+  return at();
+}
+
+/** Request-local cache: never shared with action validation or recovery checkpoints. */
+function memoizedRead(chain: RegistryChain): RegistryChain {
+  const cache = new Map<string, Promise<any>>();
+  const memo = <K extends keyof RegistryChain>(key: K): RegistryChain[K] => ((...args: any[]) => {
+    const identity = key + ":" + JSON.stringify(args, (_key, value) => typeof value === "bigint" ? value.toString() : value);
+    if (!cache.has(identity)) cache.set(identity, (chain[key] as (...args: any[]) => Promise<any>)(...args));
+    return cache.get(identity)!;
+  }) as RegistryChain[K];
+  return { ...chain, observe: memo("observe"), receipt: memo("receipt"), officialLine: memo("officialLine"),
+    publishedVersion: memo("publishedVersion"), publishedPackageVersion: memo("publishedPackageVersion"),
+    versionAttestations: memo("versionAttestations") };
+}

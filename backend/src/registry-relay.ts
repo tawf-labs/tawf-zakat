@@ -32,7 +32,7 @@ export function createRelay(store: RegistryStore, chain: RegistryChain, institut
         valid = valid && validator.active && validator.epoch === current.validator.authorization.authorityEpoch;
       }
       return { ...current, signingAuthority: valid ? "CURRENT" : "STALE" };
-    } catch { return { ...current, signingAuthority: "UNAVAILABLE" }; }
+    } catch (error) { if (chain.readOnly) throw error; return { ...current, signingAuthority: "UNAVAILABLE" }; }
   }
 
   /**

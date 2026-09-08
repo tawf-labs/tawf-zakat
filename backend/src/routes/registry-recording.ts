@@ -1,3 +1,4 @@
+import { createReportVersions } from "../report-versions";
 import { Hono } from "hono";
 import { workspaceRuntime } from "../workspace-runtime";
 import { authenticateWorkspace } from "../workspace-session";
@@ -25,9 +26,14 @@ async function handle(c: import("hono").Context) {
     const recording = createRecording(runtime, runtime.registry, auth.session.institutionId, preparation, packageId, publication);
     const marker = publication ? "/publication" : "/recording";
     const tail = c.req.path.slice(c.req.path.indexOf(marker) + marker.length).split("/").filter(Boolean);
+    if (publication && c.req.method === "GET" && tail.length === 0 && c.req.query("view") === "versions") {
+      return c.json(await createReportVersions(runtime, auth.session.institutionId, preparation, packageId).publicationView());
+    }
     if (c.req.method === "GET" && tail.length === 0) return c.json({ intents: await recording.list() });
-    if (publication && c.req.method === "GET" && tail[0] === "version" && tail.length === 1) return c.json({ version: await recording.version() });
-    if (publication && c.req.method === "GET" && tail[0] === "history" && tail.length === 1) return c.json({ history: await recording.history() });
+    if (publication && c.req.method === "GET" && tail.length === 1 && ["version", "history"].includes(tail[0]!)) {
+      const view = await createReportVersions(runtime, auth.session.institutionId, preparation, packageId).publicationView();
+      return c.json(tail[0] === "version" ? { version: view.version } : tail[0] === "history" ? { history: view.history } : view);
+    }
     if (c.req.method === "GET" && tail.length === 1) return c.json({ intent: await recording.status(tail[0]!) });
     if (c.req.method === "POST" && tail.length === 0) return c.json({ intent: await recording.prepare(auth.session.account as Hex, await c.req.json()) }, 201);
     if (c.req.method === "POST" && tail.length === 2 && tail[1] === "submit") return c.json({ intent: await recording.submit(auth.session.account as Hex, tail[0]!, await c.req.json()) });

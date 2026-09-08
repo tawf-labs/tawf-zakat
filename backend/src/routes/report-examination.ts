@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { workspaceRuntime } from "../workspace-runtime";
 import { authenticateWorkspace } from "../workspace-session";
-import { createExamination } from "../report-examination";
+import { createReportVersions } from "../report-versions";
 import { PackageError } from "../report-package";
 const routes = new Hono();
 routes.get("/api/public/reports/:packageId", async c => {
@@ -12,7 +12,7 @@ routes.get("/api/public/reports/:packageId", async c => {
     const id = c.req.param("packageId");
     const location = await runtime.evidence.locateReportPackage(id);
     if (!location) return c.json({ error: "Ringkasan versi terbit tidak ditemukan." }, 404);
-    return c.json({ summary: await createExamination(runtime, location.institutionId, location.preparationId, id).publicSummary() });
+    return c.json({ summary: await createReportVersions(runtime, location.institutionId, location.preparationId, id).publicSummary() });
   } catch (error) {
     if (error instanceof PackageError && error.status === 404) return c.json({ error: "Ringkasan versi terbit tidak ditemukan." }, 404);
     return c.json({ error: "Ringkasan atau status terkini tidak dapat diperiksa." }, 503);
@@ -26,7 +26,7 @@ routes.get("/api/evidence/:preparationId/reports/:packageId/examination", async 
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId"));
   if (!auth.ok) return auth.response;
   try {
-    const bundle = await createExamination(runtime, auth.session.institutionId, c.req.param("preparationId"), c.req.param("packageId")).export();
+    const bundle = await createReportVersions(runtime, auth.session.institutionId, c.req.param("preparationId"), c.req.param("packageId")).examination();
     c.header("Content-Disposition", `attachment; filename="examination-${c.req.param("packageId").replace(/[^a-zA-Z0-9-]/g, "")}.json"`);
     return c.json(bundle);
   } catch (error) {
