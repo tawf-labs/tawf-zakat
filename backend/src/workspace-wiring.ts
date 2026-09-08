@@ -27,6 +27,7 @@ import { createEvidenceStore } from "./evidence-store";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
+import { startRegistryRecovery } from "./registry-recovery";
 import { registryFromEnvironment } from "./registry-wiring";
 import type { EthCall } from "./account-signature";
 
@@ -87,6 +88,9 @@ export function installWorkspaceRuntime(): void {
     .ensureSchema()
     .then(() => evidence.ensureSchema())
     .then(() => registry?.store.ensureSchema())
-    .then(() => console.log("Workspace tenancy and evidence schema ready"))
+    .then(() => {
+      if (registry) startRegistryRecovery(registry);
+      console.log("Workspace tenancy and evidence schema ready");
+    })
     .catch((error) => console.error("Workspace schema failed:", error));
 }

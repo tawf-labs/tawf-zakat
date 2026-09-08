@@ -22,8 +22,98 @@ export function createRegistryChain(config: RegistryConfig) {
     const [, name, version, chainId, address] = await rpc.readContract({ address: config.address, abi, functionName: "eip712Domain" });
     if (name !== domain.name || version !== domain.version || chainId !== BigInt(domain.chainId) || address.toLowerCase() !== domain.verifyingContract.toLowerCase()) throw new Error("Domain registry tidak cocok.");
   }
-  return {
+  async function observe(intent: RegistryIntent, hash: Hex, atBlock?: bigint): Promise<RecordingObservation> {
+      await assertDeployment();
+      let receipt;
+      try { receipt = await rpc.getTransactionReceipt({ hash }); }
+      catch (error) {
+        if (!(error instanceof TransactionReceiptNotFoundError)) throw error;
+        // A previously observed block may have disappeared. Never retain stale success.
+        if (intent.observation.blockNumber) {
+          try {
+            const block = await rpc.getBlock({ blockNumber: BigInt(intent.observation.blockNumber) });
+            if (block.hash !== intent.observation.blockHash) return { ...base, state: "NONCANONICAL", blockNumber: intent.observation.blockNumber, blockHash: intent.observation.blockHash };
+          } catch (error) {
+            if (!(error instanceof BlockNotFoundError)) throw error;
+            return { ...base, state: "NONCANONICAL", blockNumber: intent.observation.blockNumber, blockHash: intent.observation.blockHash };
+          }
+        }
+        return { ...base, state: "SUBMITTED" };
+      }
+      if (atBlock !== undefined && receipt.blockNumber > atBlock) return { ...base, state: "SUBMITTED" };
+      const evidence = { blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash };
+      const block = await rpc.getBlock({ blockNumber: receipt.blockNumber });
+      if (block.hash !== receipt.blockHash) return { ...base, ...evidence, state: "NONCANONICAL" };
+      const timed = { ...evidence, blockTimestamp: block.timestamp.toString() };
+      if (receipt.status !== "success") return { ...base, ...timed, state: "REVERTED" };
+      if (receipt.transactionHash !== hash || receipt.to?.toLowerCase() !== config.address.toLowerCase()) return { ...base, ...timed, state: "INVALID_EVENT" };
+      const uniqueLogs = [...new Map(receipt.logs.map(log => [JSON.stringify(log, (_, value) => typeof value === "bigint" ? value.toString() : value), log])).values()];
+      const matches = uniqueLogs.filter(log => {
+        if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
+        try {
+          if (isAttestation(intent)) {
+            const event = decodeEventLog({ abi, eventName: "ReportAttested", topics: log.topics, data: log.data, strict: true });
+            const a = intent.statement;
+            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
+              && event.args.attestation === intent.statementDigest && event.args.action === a.action
+              && event.args.packageDigest === a.packageDigest && event.args.evidenceCommitment === a.evidenceCommitment
+              && event.args.predecessor === a.predecessor && event.args.auditor.toLowerCase() === a.auditor.toLowerCase();
+          }
+          if (intent.validator) {
+            const event = decodeEventLog({ abi, eventName: "ReportPublished", topics: log.topics, data: log.data, strict: true });
+            const a = intent.authorization, v = intent.validator;
+            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
+              && event.args.authorization === intent.authorizationDigest && event.args.digest === a.digest && event.args.action === a.action
+              && event.args.signer.toLowerCase() === a.signer.toLowerCase() && event.args.validatorAuthorization === v.authorizationDigest
+              && event.args.validator.toLowerCase() === v.authorization.signer.toLowerCase();
+          }
+          const event = decodeEventLog({ abi, eventName: "EvidenceRecorded", topics: log.topics, data: log.data, strict: true });
+          const a = intent.authorization;
+          return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
+            && event.args.authorization === intent.authorizationDigest && event.args.digest === a.digest && event.args.action === a.action
+            && event.args.signer.toLowerCase() === a.signer.toLowerCase();
+        } catch { return false; }
+      });
+      if (matches.length !== 1 || matches[0]!.logIndex === null) return { ...base, ...timed, state: "INVALID_EVENT" };
+      const head = atBlock ?? await rpc.getBlockNumber({ cacheTime: 0 });
+      if (head < receipt.blockNumber) return { ...base, ...timed, state: "NONCANONICAL" };
+      if ((await rpc.getBlock({ blockNumber: receipt.blockNumber })).hash !== receipt.blockHash) return { ...base, ...timed, state: "NONCANONICAL" };
+      const confirmations = Number(head - receipt.blockNumber + 1n);
+      return { ...base, ...timed, confirmations, logIndex: matches[0]!.logIndex!, state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED" };
+    }
+  const adapter = {
     domain,
+    recoveryDeployment: `${config.chainId}:${config.address.toLowerCase()}`,
+    async recoveryHead() {
+      await assertDeployment();
+      const block = await rpc.getBlock({ blockTag: "latest" });
+      return { blockNumber: block.number.toString(), blockHash: block.hash };
+    },
+    async canonicalBlock(number: string) {
+      try { return (await rpc.getBlock({ blockNumber: BigInt(number) })).hash; }
+      catch (error) { if (error instanceof BlockNotFoundError) return null; throw error; }
+    },
+    async recoveryEvents(institution: string, from: bigint, to: bigint) {
+      const events: import("./registry-recovery-store").RegistryEvent[] = [];
+      const scope = keccak256(toHex(institution));
+      const blocks = new Map<string, Hex | null>();
+      for (let start = from; start <= to; start += 2000n) {
+        const end = start + 1999n < to ? start + 1999n : to;
+        const logs = await rpc.getContractEvents({ address: config.address, abi, fromBlock: start, toBlock: end, strict: true });
+        for (const log of logs) {
+          if (!["EvidenceRecorded", "ReportPublished", "ReportAttested"].includes(log.eventName)) continue;
+          if ((log.args as { institutionKey?: Hex }).institutionKey !== scope) continue;
+          if (log.removed || log.logIndex === null || !log.transactionHash || !log.blockHash || log.blockNumber === null
+            || log.address.toLowerCase() !== config.address.toLowerCase() || log.blockNumber < start || log.blockNumber > end) throw new Error("Event registry tidak sah.");
+          const number = log.blockNumber.toString();
+          if (!blocks.has(number)) blocks.set(number, (await rpc.getBlock({ blockNumber: log.blockNumber })).hash);
+          if (blocks.get(number) !== log.blockHash) throw new Error("Event bukan bagian chain canonical.");
+          events.push({ chainId: config.chainId, registry: config.address.toLowerCase(), transactionHash: log.transactionHash,
+            logIndex: log.logIndex, blockNumber: number, blockHash: log.blockHash, event: log.eventName });
+        }
+      }
+      return events;
+    },
     requiredConfirmations: config.requiredConfirmations,
     confirmationPolicy,
     deployment: `${config.chainId}:${config.address.toLowerCase()}:${account.address.toLowerCase()}`,
@@ -151,7 +241,13 @@ export function createRegistryChain(config: RegistryConfig) {
       for (let index = 0n; index < count; index++) {
         const id = await rpc.readContract({ address: config.address, abi, functionName: "attestationIdAt", args: [institution, report, version, index] });
         const record = await rpc.readContract({ address: config.address, abi, functionName: "attestationById", args: [id] });
-        records.push({ id, statement: record.statement, signature: record.signature, mandate: record.mandate });
+        const statement = { ...record.statement, authorityEpoch: record.statement.authorityEpoch.toString(), deadline: record.statement.deadline.toString() } as AttestationStatement;
+        const logs = await rpc.getContractEvents({ address: config.address, abi, eventName: "ReportAttested", fromBlock: 0n, toBlock: "latest", args: { attestation: id } });
+        const log = logs.find(log => !log.removed && log.transactionHash);
+        if (!log?.transactionHash) throw new Error("Event atestasi belum dapat diperiksa.");
+        const intent = { statement, statementDigest: id, observation: { ...base, state: "PREPARED" } } as AttestationIntent;
+        const observation = await observe(intent, log.transactionHash);
+        if (observation.state === "CONFIRMED") records.push({ id, statement: record.statement, signature: record.signature, mandate: record.mandate, observation });
       }
       return records;
     },
@@ -184,62 +280,8 @@ export function createRegistryChain(config: RegistryConfig) {
       const hash = await rpc.sendRawTransaction({ serializedTransaction: attempt.raw });
       if (hash !== attempt.hash) throw new Error("Identitas transaksi berubah.");
     },
-    async observe(intent: RegistryIntent, hash: Hex): Promise<RecordingObservation> {
-      await assertDeployment();
-      let receipt;
-      try { receipt = await rpc.getTransactionReceipt({ hash }); }
-      catch (error) {
-        if (!(error instanceof TransactionReceiptNotFoundError)) throw error;
-        // A previously observed block may have disappeared. Never retain stale success.
-        if (intent.observation.blockNumber) {
-          try {
-            const block = await rpc.getBlock({ blockNumber: BigInt(intent.observation.blockNumber) });
-            if (block.hash !== intent.observation.blockHash) return { ...base, state: "NONCANONICAL", blockNumber: intent.observation.blockNumber, blockHash: intent.observation.blockHash };
-          } catch (error) {
-            if (!(error instanceof BlockNotFoundError)) throw error;
-            return { ...base, state: "NONCANONICAL", blockNumber: intent.observation.blockNumber, blockHash: intent.observation.blockHash };
-          }
-        }
-        return { ...base, state: "SUBMITTED" };
-      }
-      const evidence = { blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash };
-      const block = await rpc.getBlock({ blockNumber: receipt.blockNumber });
-      if (block.hash !== receipt.blockHash) return { ...base, ...evidence, state: "NONCANONICAL" };
-      const timed = { ...evidence, blockTimestamp: block.timestamp.toString() };
-      if (receipt.status !== "success") return { ...base, ...timed, state: "REVERTED" };
-      if (receipt.transactionHash !== hash || receipt.to?.toLowerCase() !== config.address.toLowerCase()) return { ...base, ...timed, state: "INVALID_EVENT" };
-      const matches = receipt.logs.filter(log => {
-        if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
-        try {
-          if (isAttestation(intent)) {
-            const event = decodeEventLog({ abi, eventName: "ReportAttested", topics: log.topics, data: log.data, strict: true });
-            const a = intent.statement;
-            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
-              && event.args.attestation === intent.statementDigest && event.args.action === a.action
-              && event.args.packageDigest === a.packageDigest && event.args.evidenceCommitment === a.evidenceCommitment
-              && event.args.predecessor === a.predecessor && event.args.auditor.toLowerCase() === a.auditor.toLowerCase();
-          }
-          if (intent.validator) {
-            const event = decodeEventLog({ abi, eventName: "ReportPublished", topics: log.topics, data: log.data, strict: true });
-            const a = intent.authorization, v = intent.validator;
-            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
-              && event.args.authorization === intent.authorizationDigest && event.args.digest === a.digest && event.args.action === a.action
-              && event.args.signer.toLowerCase() === a.signer.toLowerCase() && event.args.validatorAuthorization === v.authorizationDigest
-              && event.args.validator.toLowerCase() === v.authorization.signer.toLowerCase();
-          }
-          const event = decodeEventLog({ abi, eventName: "EvidenceRecorded", topics: log.topics, data: log.data, strict: true });
-          const a = intent.authorization;
-          return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
-            && event.args.authorization === intent.authorizationDigest && event.args.digest === a.digest && event.args.action === a.action
-            && event.args.signer.toLowerCase() === a.signer.toLowerCase();
-        } catch { return false; }
-      });
-      if (matches.length !== 1 || matches[0]!.logIndex === null) return { ...base, ...timed, state: "INVALID_EVENT" };
-      const head = await rpc.getBlockNumber({ cacheTime: 0 });
-      if (head < receipt.blockNumber) return { ...base, ...timed, state: "NONCANONICAL" };
-      const confirmations = Number(head - receipt.blockNumber + 1n);
-      return { ...base, ...timed, confirmations, logIndex: matches[0]!.logIndex!, state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED" };
-    },
+    observe,
   };
+  return adapter;
 }
 export type RegistryChain = ReturnType<typeof createRegistryChain>;

@@ -44,14 +44,15 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
       const accepted = await chain.publishedVersion(institution, saved.reportId, saved.version);
       const published = !!confirmed && accepted.institution.digest === saved.digest && accepted.institution.packageId === packageId;
       const official = await chain.officialLine(institution, saved.reportId);
+      const attestations = await attestationsForVersion(chain, { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest });
       return { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest,
         predecessor: saved.predecessor ?? null, correctionReason: saved.correctionReason ?? null,
         publication: published ? "PUBLISHED" : "NOT_PUBLISHED",
         // A superseded version stays readable through its own identity; a losing package is never an official version.
         versionState: !published ? "BUKAN_VERSI_RESMI" : official.packageId === packageId ? "VERSI_RESMI_TERKINI" : "DIGANTIKAN_KOREKSI",
         officialVersion: official.version || null, officialPackageId: official.packageId || null,
-        auditor: "NOT_EXAMINED",
-        attestations: await attestationsForVersion(chain, { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest }),
+        auditor: attestations.state,
+        attestations,
         anchor: confirmed ?? null, trust: "Kontrak memverifikasi pernyataan layanan validator. Perhitungan bergantung pada layanan dan sumber bank; bukan komputasi trustless." };
     },
     async prepare(account: Hex, raw: unknown) {

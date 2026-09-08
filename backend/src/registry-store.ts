@@ -1,3 +1,4 @@
+import { createRecoveryStore, persistObservation } from "./registry-recovery-store";
 import { sql } from "drizzle-orm";
 import type { EvidenceDatabase } from "./evidence-store";
 import type { AttestationIntent, RecordingIntent, Hex, RecordingObservation } from "../../shared/report-registry";
@@ -31,7 +32,9 @@ export function createRegistryStore(db: EvidenceDatabase) {
     const row = rows(await db.execute(sql`SELECT kind FROM registry_intents WHERE institution_id=${institution} AND id=${id}`))[0];
     return !!row && (row.kind ?? "RECORDING") !== kind;
   };
+  const recovery = createRecoveryStore(db);
   return {
+    recovery,
     async ensureSchema() {
       for (const statement of [
         `CREATE UNIQUE INDEX IF NOT EXISTS report_packages_owner_id ON report_packages(institution_id, id)`,
@@ -43,6 +46,7 @@ export function createRegistryStore(db: EvidenceDatabase) {
         // Added for attestations; existing rows are recording or publication intents.
         `ALTER TABLE registry_intents ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'RECORDING'`,
       ]) await db.execute(sql.raw(statement));
+      await recovery.ensureSchema();
     },
     get,
     takenByOtherKind,
@@ -78,7 +82,8 @@ export function createRegistryStore(db: EvidenceDatabase) {
     async observe<T extends StoredIntent>(intent: T, observation: RecordingObservation, hash?: Hex): Promise<T> {
       const next = { ...intent, observation, ...(hash ? { transactionHash: hash } : {}) };
       const institution = subjectOf(intent).institutionId;
-      await db.execute(sql`UPDATE registry_intents SET intent=${JSON.stringify(next)} WHERE institution_id=${institution} AND id=${intent.id}`);
+      if (hash ?? intent.transactionHash) await db.transaction(tx => persistObservation(tx, { intent, observation, hash: (hash ?? intent.transactionHash)! }));
+      else await db.execute(sql`UPDATE registry_intents SET intent=${JSON.stringify(next)} WHERE institution_id=${institution} AND id=${intent.id}`);
       return next;
     },
   };

@@ -22,7 +22,7 @@
  */
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, open, rename, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 /** 10 MB, matching the audit-document ceiling this project already applies. */
@@ -41,6 +41,7 @@ export type StoredFile = {
 };
 
 export type PrivateFileStore = {
+  restore?(storageRef: string, bytes: Uint8Array, expected: { contentSha256: string; sizeBytes: number }): Promise<void>;
   put(input: {
     institutionId: string;
     preparationId: string;
@@ -57,6 +58,10 @@ export class EvidenceFileError extends Error {
     super(message);
     this.name = "EvidenceFileError";
   }
+}
+
+export class EvidenceReadError extends Error {
+  constructor(readonly availability: "CORRUPT" | "UNAVAILABLE") { super("Berkas tidak dapat dibaca atau diverifikasi."); }
 }
 
 const SEGMENT = /^[A-Za-z0-9_.-]+$/;
@@ -115,7 +120,29 @@ export function createEncryptedFileStore(options: {
       `${safeSegment(fileId, "Identitas berkas")}.bin`
     );
 
+  async function writeEncrypted(target: string, bytes: Uint8Array) {
+    const nonce = randomBytes(NONCE_BYTES);
+    const cipher = createCipheriv(ALGORITHM, options.key, nonce);
+    const ciphertext = Buffer.concat([cipher.update(Buffer.from(bytes)), cipher.final()]);
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${randomBytes(12).toString("hex")}.tmp`;
+    try {
+      const file = await open(temporary, "wx", 0o600);
+      try { await file.writeFile(Buffer.concat([nonce, cipher.getAuthTag(), ciphertext])); await file.sync(); }
+      finally { await file.close(); }
+      await rename(temporary, target);
+      const directory = await open(dirname(target), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await unlink(temporary).catch(() => {}); }
+  }
   return {
+    async restore(storageRef, bytes, expected) {
+      if (!resolve(storageRef).startsWith(`${root}/`) || bytes.byteLength !== expected.sizeBytes
+        || bytes.byteLength > MAX_EVIDENCE_FILE_BYTES || sha256Of(bytes) !== expected.contentSha256) {
+        throw new EvidenceFileError("Backup tidak cocok dengan berkas yang dikomitmenkan.");
+      }
+      await writeEncrypted(storageRef, bytes);
+    },
     async put({ institutionId, preparationId, fileId, bytes }) {
       if (bytes.byteLength === 0) {
         throw new EvidenceFileError("Berkas kosong tidak disimpan sebagai bukti.");
@@ -127,14 +154,7 @@ export function createEncryptedFileStore(options: {
       }
 
       const target = pathFor(institutionId, preparationId, fileId);
-      const nonce = randomBytes(NONCE_BYTES);
-      const cipher = createCipheriv(ALGORITHM, options.key, nonce);
-      const ciphertext = Buffer.concat([cipher.update(Buffer.from(bytes)), cipher.final()]);
-
-      await mkdir(dirname(target), { recursive: true });
-      // Nonce, tag, then ciphertext. Written in one call so a reader never sees
-      // a half-file that would decrypt to nothing and look like corruption.
-      await writeFile(target, Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]));
+      await writeEncrypted(target, bytes);
 
       return {
         storageRef: target,
@@ -149,10 +169,11 @@ export function createEncryptedFileStore(options: {
       let stored: Buffer;
       try {
         stored = await readFile(storageRef);
-      } catch {
-        return null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw new EvidenceReadError("UNAVAILABLE");
       }
-      if (stored.length < NONCE_BYTES + TAG_BYTES) return null;
+      if (stored.length < NONCE_BYTES + TAG_BYTES) throw new EvidenceReadError("CORRUPT");
 
       const nonce = stored.subarray(0, NONCE_BYTES);
       const tag = stored.subarray(NONCE_BYTES, NONCE_BYTES + TAG_BYTES);
@@ -162,8 +183,10 @@ export function createEncryptedFileStore(options: {
       decipher.setAuthTag(tag);
       // A tag that does not verify throws here, and a file that cannot be
       // authenticated is reported as unavailable rather than returned.
-      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-      return new Uint8Array(plaintext);
+      try {
+        const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+        return new Uint8Array(plaintext);
+      } catch { throw new EvidenceReadError("CORRUPT"); }
     },
   };
 }

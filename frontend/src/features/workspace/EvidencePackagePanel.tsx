@@ -1,3 +1,4 @@
+import { RecoveryPanel } from "./RecoveryPanel";
 import { ReportPackageForm } from "./ReportPackageForm";
 import { useEffect, useState } from "react";
 import { AlertTriangle, FileWarning, FileText, Lock, RefreshCw, ScrollText } from "lucide-react";
@@ -442,6 +443,7 @@ export function EvidencePackagePanel({ token, canPrepare, scopeUnit, scopeLevel 
                         commitmentVerified={detail.commitmentVerified}
                         token={token}
                       />
+                      <RecoveryPanel key={`recovery:${summary.id}:${token}`} token={token} preparationId={summary.id} canRecover={canPrepare} />
                       <ReportPackageForm key={`${summary.id}:${token}`} preparationId={summary.id} token={token} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
                       </>
                     ) : detailError ? (

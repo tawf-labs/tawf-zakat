@@ -1,6 +1,7 @@
-import { mkdtemp, rm, rename } from "node:fs/promises";
+import { mkdtemp, rm, rename, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { createEncryptedFileStore, type PrivateFileStore } from "../src/evidence-files";
 import { createReportEndorsement } from "../src/report-endorsement";
 import { afterAll, beforeAll, expect, it } from "bun:test";
@@ -40,6 +41,7 @@ let mutateRpc: ((method: string, response: any) => any) | null = null;
 let proxy: ReturnType<typeof Bun.serve>;
 let receiptIntent: any;
 let receiptSignature: Hex;
+let crashBeforeSql: string | null = null;
 
 const request = (path: string, body?: unknown, auth = token) => app.fetch(new Request(`http://localhost/api/${path}`, {
   method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json", ...(auth ? { Authorization: `Bearer ${auth}` } : {}) },
@@ -54,7 +56,14 @@ async function json(path: string, body?: unknown, status = body === undefined ? 
 async function configure(clockOffset = 0) {
   const store = createWorkspaceStore(database.handle());
   const evidence = createEvidenceStore(database.handle());
-  const registryStore = createRegistryStore(database.handle());
+  const handle = database.handle();
+  const registryStore = createRegistryStore({
+    execute: query => handle.execute(query),
+    transaction: run => handle.transaction(tx => run({ execute: query => {
+      if (crashBeforeSql && new PgDialect().sqlToQuery(query).sql.includes(crashBeforeSql)) throw new Error("Injected storage crash");
+      return tx.execute(query);
+    } })),
+  });
   await store.ensureSchema(); await evidence.ensureSchema(); await registryStore.ensureSchema();
   const chain = createRegistryChain({ rpcUrl: String(proxy.url), chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" });
   configureWorkspace({ store, evidence, files, registry: { store: registryStore, chain, endorsement: validatorAvailable ? createReportEndorsement(validatorKey) : undefined }, now: () => Math.floor(Date.now() / 1000) + clockOffset, challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
@@ -80,7 +89,7 @@ beforeAll(async () => {
     const body = await req.json();
     if (rejectBroadcast && body.method === "eth_sendRawTransaction") return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "transport refused before broadcast" } });
     const result = await (await fetch(rpcUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-    return Response.json(mutateRpc ? mutateRpc(body.method, result) : result);
+    return Response.json(mutateRpc ? await mutateRpc(body.method, result) : result);
   } });
   fileDirectory = await mkdtemp(join(tmpdir(), "publication-files-"));
   files = createEncryptedFileStore({ directory: fileDirectory, key: Buffer.alloc(32, 73) });
@@ -1326,3 +1335,215 @@ it("returns proposals, cancellation and A-to-B-to-A acceptance authority epochs 
   expect(history).toContainEqual(expect.objectContaining({ event: "AdministratorAccepted", previous: validator.address, previousEpoch: "2", administrator: account.address, administratorEpoch: "3" }));
   expect(history).toContainEqual(expect.objectContaining({ event: "AuthorityChanged", account: account.address, actor: account.address, active: true, epoch: "3", actorEpoch: "3" }));
 });
+
+it("recovery checkpoints durable events and observations across restart and duplicate delivery", async () => {
+  const { saved, path } = await freshPackage();
+  const intent = (await json(path, { retryId: "recovery-record", digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  await json(`${path}/${intent.id}/submit`, { signature }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  const recovered = await json("workspace/recovery", {}, 200);
+  expect(recovered.recovery.state).toBe("CURRENT");
+  expect(recovered.recovery.checkpoint.blockHash).toMatch(/^0x/);
+  expect(recovered.recovery.events).toContainEqual(expect.objectContaining({ event: "EvidenceRecorded", canonical: true, chainId: 31337, registry: registry.toLowerCase() }));
+  const observation = recovered.recovery.observations.find((item: any) => item.intentId === intent.id && item.observation.state === "CONFIRMED");
+  expect(observation.observation.state).toBe("CONFIRMED");
+  await database.reopen(); await configure();
+  const restarted = await json("workspace/recovery", {}, 200);
+  expect(restarted.recovery.events).toEqual(recovered.recovery.events);
+  expect(restarted.recovery.observations).toEqual(recovered.recovery.observations);
+  expect((await request("workspace/recovery", undefined, "")).status).toBe(401);
+}, 30000);
+
+it("recovery restores only the committed source backup and keeps frozen evidence unchanged", async () => {
+  const preparation = await correctionPreparation("20", "10", "backup recovery");
+  const file = preparation.files[0];
+  const sourcePath = `evidence/${preparation.id}/files/${file.id}`;
+  const backup = Buffer.from(await (await request(sourcePath)).arrayBuffer()).toString("base64");
+  const storedPath = join(fileDirectory, institution, preparation.id, `${file.id}.bin`);
+  await rename(storedPath, `${storedPath}.backup`);
+  const inspectPath = `workspace/recovery/files?preparationId=${preparation.id}`;
+  expect((await json(inspectPath)).files[0].availability).toBe("MISSING");
+  const restore = { preparationId: preparation.id, fileId: file.id, contentBase64: backup };
+  expect((await request("workspace/recovery/files", { ...restore, contentBase64: Buffer.from("latest source is not the backup").toString("base64") })).status).toBe(409);
+  await json("workspace/recovery/files", restore, 200);
+  expect((await json(inspectPath)).files[0].availability).toBe("AVAILABLE");
+  expect(Buffer.from(await (await request(sourcePath)).arrayBuffer()).toString("base64")).toBe(backup);
+  const reopened = (await json(`evidence/${preparation.id}`)).preparation;
+  expect(reopened.commitment).toBe(preparation.commitment);
+  expect(reopened.createdAt).toBe(preparation.createdAt);
+}, 30000);
+
+
+it("recovery rolls back event persistence and checkpoint on injected crashes, then catches late and duplicate logs", async () => {
+  const baseline = (await json("workspace/recovery", {}, 200)).recovery;
+  const { saved, path } = await freshPackage();
+  const intent = (await json(path, { retryId: "recovery-crash", digest: saved.digest })).intent;
+  await json(`${path}/${intent.id}/submit`, { signature: await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization)) }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  const before = (await json("workspace/recovery")).recovery;
+  for (const point of ["INSERT INTO registry_events", "INSERT INTO registry_observations", "UPDATE registry_checkpoints SET checkpoint"]) {
+    crashBeforeSql = point;
+    try { expect((await request("workspace/recovery", {})).status).toBe(503); }
+    finally { crashBeforeSql = null; }
+    await database.reopen(); await configure();
+    const recovered = (await json("workspace/recovery")).recovery;
+    expect(recovered.checkpoint).toEqual(baseline.checkpoint);
+    expect(recovered.events).toEqual(before.events);
+    expect(recovered.observations).toEqual(before.observations);
+    expect(recovered.state).toBe("CATCHING_UP");
+  }
+  mutateRpc = (method, response) => method === "eth_getLogs" ? { ...response, result: [] } : response;
+  try { expect((await request("workspace/recovery", {})).status).toBe(503); } finally { mutateRpc = null; }
+  // A later provider response repeats each log; delayed events must still be discovered.
+  mutateRpc = (method, response) => method === "eth_getLogs" ? { ...response, result: [...response.result, ...response.result] } : response;
+  let final;
+  try { final = (await json("workspace/recovery", {}, 200)).recovery; } finally { mutateRpc = null; }
+  const hash = (await json(`${path}/${intent.id}`)).intent.transactionHash;
+  expect(final.events.filter((event: any) => event.transactionHash === hash)).toHaveLength(1);
+  expect((await json("workspace/recovery", {}, 200)).recovery.events).toEqual(final.events);
+}, 30000);
+
+it("recovery completes recording publication correction and attestation after a real reorg and lost transaction", async () => {
+  const preparation = await correctionPreparation("100", "90", "recovery journey");
+  const first = await frozenVersion(preparation.id, { reportId: `recovery-${crypto.randomUUID()}`, version: "1" });
+  const recordPath = publicationPath(first).replace(/publication$/, "recording");
+  const recording = (await json(recordPath, { retryId: "journey-record", digest: first.digest })).intent;
+  rejectBroadcast = true;
+  try { expect((await request(`${recordPath}/${recording.id}/submit`, { signature: await account.signTypedData(evidenceTypedData(recording.domain, recording.authorization)) })).status).toBe(503); }
+  finally { rejectBroadcast = false; }
+  await database.reopen(); await configure();
+  await json("workspace/recovery", {}, 200);
+  expect((await json(`${recordPath}/${recording.id}`)).intent.observation.state).toBe("SUBMITTED");
+  await json(`${recordPath}/${recording.id}/retry`, {}, 200);
+  await publishVersion(first, "journey-publish");
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, true, "Mandat uji recovery"] }) });
+  const auditorAccess = await auditorSession();
+  const snapshot = await rpc.request({ method: "evm_snapshot" as any });
+  const correctionSource = await correctionPreparation("100", "100", "recovery corrected");
+  const correction = await frozenVersion(correctionSource.id, { reportId: first.reportId, version: "2", predecessor: first.id, correctionReason: "Koreksi sumber uji." });
+  const publication = await publishVersion(correction, "journey-correction");
+  const attestation = await attestVersion(correction, auditorAccess, { retryId: "journey-attestation", conclusion: "TIDAK_WAJAR" });
+  const attestationHash = (await (await request(`${attestation.path}/${attestation.intent.id}`, undefined, auditorAccess)).json()).intent.transactionHash;
+  const before = (await json("workspace/recovery", {}, 200)).recovery;
+  expect((await json(`${publication.path}/version`)).version.attestations.state).toBe("ATTESTED");
+  await rpc.request({ method: "evm_revert" as any, params: [snapshot] as any });
+  await database.reopen(); await configure();
+  const rolledBack = (await json("workspace/recovery", {}, 200)).recovery;
+  expect(rolledBack.events).toContainEqual(expect.objectContaining({ transactionHash: attestationHash, canonical: false }));
+  expect(rolledBack.observations).toEqual(expect.arrayContaining(before.observations));
+  const oldVersion = (await json(`${publicationPath(first)}/version`)).version;
+  expect(oldVersion.versionState).toBe("VERSI_RESMI_TERKINI");
+  expect((await json(`${publication.path}/version`)).version.attestations.state).toBe("NOT_EXAMINED");
+  const orphan = (await request(`${attestation.path}/${attestation.intent.id}`, undefined, auditorAccess));
+  expect((await orphan.json()).intent.observation.state).toBe("NONCANONICAL");
+  await json(`${publication.path}/${publication.intent.id}/retry`, {}, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  expect((await request(`${attestation.path}/${attestation.intent.id}/retry`, {}, auditorAccess)).status).toBe(200);
+  await rpc.request({ method: "evm_mine" as any });
+  const final = (await json("workspace/recovery", {}, 200)).recovery;
+  const recoveredVersion = (await json(`${publication.path}/version`)).version;
+  expect(recoveredVersion.versionState).toBe("VERSI_RESMI_TERKINI");
+  expect(recoveredVersion.attestations.entries).toHaveLength(1);
+  expect(recoveredVersion.attestations.entries[0].conclusion).toBe("TIDAK_WAJAR");
+  expect(final.events.filter((event: any) => event.transactionHash === attestationHash && event.canonical)).toHaveLength(1);
+  expect(final.events.filter((event: any) => event.transactionHash === attestationHash && !event.canonical)).toHaveLength(1);
+  const history = (await json(`${publication.path}/history`)).history;
+  expect(history.map((entry: any) => entry.packageId)).toEqual([correction.id, first.id]);
+  expect((await json(`workspace/recovery/files?preparationId=${correctionSource.id}`)).files.every((file: any) => file.availability === "AVAILABLE")).toBe(true);
+  const evidenceFile = attestation.intent.evidence.files[0];
+  const evidencePath = `${attestation.path}/${attestation.intent.id}/files/${evidenceFile.id}`;
+  const backup = Buffer.from(await (await request(evidencePath, undefined, auditorAccess)).arrayBuffer()).toString("base64");
+  const location = join(fileDirectory, institution, correctionSource.id, `${evidenceFile.id}.bin`);
+  await rename(location, `${location}.backup`);
+  await json("workspace/recovery/files", { preparationId: correctionSource.id, intentId: attestation.intent.id, fileId: evidenceFile.id, contentBase64: backup }, 200);
+  expect(Buffer.from(await (await request(evidencePath, undefined, auditorAccess)).arrayBuffer()).toString("base64")).toBe(backup);
+}, 60000);
+
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: recovery reports a missing file, rejects a substitute and restores the exact backup", async () => {
+  const preparation = await correctionPreparation("30", "20", "browser recovery");
+  const file = preparation.files[0];
+  const content = Buffer.from(await (await request(`evidence/${preparation.id}/files/${file.id}`)).arrayBuffer());
+  const location = join(fileDirectory, institution, preparation.id, `${file.id}.bin`);
+  await rename(location, `${location}.backup`);
+  const built = await Bun.build({ entrypoints: [new URL("../../frontend/test/recovery-smoke.tsx", import.meta.url).pathname], target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "http://127.0.0.1:18577" }) } });
+  if (!built.success) throw new Error(built.logs.join("\n"));
+  const script = await built.outputs[0]!.text();
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 18577, fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/") return new Response('<div id="root"></div><script type="module" src="/recovery.js"></script>', { headers: { "Content-Type": "text/html" } });
+    if (path === "/recovery.js") return new Response(script, { headers: { "Content-Type": "text/javascript" } });
+    if (path === "/smoke-config") return Response.json({ preparationId: preparation.id, token, canRecover: true });
+    return app.fetch(req);
+  } });
+  const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+  const browser = await chromium.launch({ ...(process.env.REGISTRY_BROWSER_EXECUTABLE ? { executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE } : {}), headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    await page.goto("http://127.0.0.1:18577");
+    await page.getByRole("button", { name: "Periksa pemulihan dan berkas" }).click();
+    await page.getByText(`Berkas hilang · ${file.id}`, { exact: true }).waitFor();
+    const upload = page.getByLabel(`Pulihkan backup berkas ${file.id}`);
+    await upload.setInputFiles({ name: "wrong.txt", mimeType: "text/plain", buffer: Buffer.from("wrong") });
+    await page.getByRole("alert").filter({ hasText: "Backup tidak cocok" }).waitFor();
+    await upload.setInputFiles({ name: "backup.txt", mimeType: "text/plain", buffer: content });
+    await page.getByText(`Tersedia dan hash cocok · ${file.id}`, { exact: true }).waitFor();
+    expect(await page.locator("body").innerText()).toContain("bukan finalitas settlement L1");
+    await page.screenshot({ path: "/tmp/ticket78-browser-recovery.png", fullPage: true });
+  } finally { await browser.close(); server.stop(true); }
+}, 60000);
+
+it("recovery never presents an included auditor opinion as confirmed and protects unsigned examination files", async () => {
+  const prep = await correctionPreparation("10", "10", "confirmation recovery");
+  const saved = await frozenVersion(prep.id, { reportId: `depth-${crypto.randomUUID()}`, version: "1" });
+  await publishVersion(saved, "depth-publication");
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, true, "Confirmation test"] }) });
+  const access = await auditorSession();
+  const path = attestationPath(saved);
+  const intent = (await (await request(path, { retryId: "depth-attestation", packageDigest: saved.digest, scope: "REKONSILIASI_PERIODE", conclusion: "TIDAK_WAJAR", evidence: workingPaper("restricted draft") }, access)).json()).intent;
+  const filesPath = `workspace/recovery/files?preparationId=${prep.id}&intentId=${intent.id}`;
+  expect((await request(filesPath)).status).toBe(404);
+  expect((await request(filesPath, undefined, access)).status).toBe(200);
+  expect((await request("workspace/recovery", {}, access)).status).toBe(403);
+  const signature = await auditor.signTypedData(attestationTypedData(intent.domain, intent.statement));
+  expect((await request(`${path}/${intent.id}/submit`, { signature }, access)).status).toBe(200);
+  const included = (await json(`${publicationPath(saved)}/version`)).version;
+  expect(included.attestations.state).toBe("NOT_EXAMINED");
+  expect(included.auditor).toBe("NOT_EXAMINED");
+  await rpc.request({ method: "evm_mine" as any });
+  const confirmed = (await json(`${publicationPath(saved)}/version`)).version;
+  expect(confirmed.attestations.state).toBe("ATTESTED");
+  expect(confirmed.auditor).toBe("ATTESTED");
+  expect((await request(filesPath)).status).toBe(200);
+  mutateRpc = (method, response) => method === "eth_getTransactionReceipt" ? { ...response, result: { ...response.result, logs: [...response.result.logs, ...response.result.logs] } } : response;
+  try { expect((await json(`${publicationPath(saved)}/depth-publication`)).intent.observation.state).toBe("CONFIRMED"); }
+  finally { mutateRpc = null; }
+}, 30000);
+
+
+it("recovery advances its checkpoint while normal descendant blocks are produced", async () => {
+  await json("workspace/recovery", {}, 200);
+  const captured = await rpc.getBlockNumber({ cacheTime: 0 });
+  mutateRpc = async (method, response) => {
+    if (method === "eth_getLogs") await rpc.request({ method: "evm_mine" as any });
+    return response;
+  };
+  try {
+    const recovered = (await json("workspace/recovery", {}, 200)).recovery;
+    expect(recovered.checkpoint.blockNumber).toBe(captured.toString());
+    expect(recovered.state).toBe("CATCHING_UP");
+    expect(await rpc.getBlockNumber({ cacheTime: 0 })).toBeGreaterThan(captured);
+  } finally { mutateRpc = null; }
+}, 30000);
+
+it("recovery distinguishes truncated ciphertext from a missing source", async () => {
+  const preparation = await correctionPreparation("30", "10", "truncated recovery");
+  const file = preparation.files[0];
+  const location = join(fileDirectory, institution, preparation.id, `${file.id}.bin`);
+  await writeFile(location, new Uint8Array([1, 2, 3]));
+  const result = await json(`workspace/recovery/files?preparationId=${preparation.id}`);
+  expect(result.files[0].availability).toBe("CORRUPT");
+  await rename(location, `${location}.corrupt`);
+  await mkdir(location);
+  expect((await json(`workspace/recovery/files?preparationId=${preparation.id}`)).files[0].availability).toBe("UNAVAILABLE");
+}, 30000);

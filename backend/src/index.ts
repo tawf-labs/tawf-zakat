@@ -36,6 +36,7 @@ import reportAuthorityRoutes from "./routes/report-authority";
 import workspaceRoutes from "./routes/workspace";
 import evidenceRoutes from "./routes/evidence";
 import reportPackageRoutes from "./routes/report-package";
+import registryRecoveryRoutes from "./routes/registry-recovery";
 import registryRecordingRoutes from "./routes/registry-recording";
 import { installWorkspaceRuntime } from "./workspace-wiring";
 import { GOVERNANCE_ACTIONS } from "./governance-chain";
@@ -232,6 +233,7 @@ app.use("/api/evidence/*", async (c, next) => {
 });
 app.route("/", reportExaminationRoutes);
 app.route("/api/evidence", registryRecordingRoutes);
+app.route("/api/workspace", registryRecoveryRoutes);
 app.route("/api/evidence", reportPackageRoutes);
 app.route("/api/evidence", evidenceRoutes);
 
