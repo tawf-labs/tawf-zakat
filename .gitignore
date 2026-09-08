@@ -460,3 +460,6 @@ frontend/.output/
 
 # Encrypted restricted source documents; deployment storage, never source code.
 .evidence-files/
+
+# Backup dumps and their checksums stay local (ticket #67 runbook)
+*.dump.bak.sha256
