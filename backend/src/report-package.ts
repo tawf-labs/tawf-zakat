@@ -1,3 +1,4 @@
+import { createRestrictedDocuments } from "./restricted-documents";
 /** Application boundary for report packages. Only committed snapshot bytes supply facts. */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -266,11 +267,9 @@ export function createReportPackages(store: EvidenceStore, files?: PrivateFileSt
       if (await store.getReportPackage(institutionId, preparationId, frozenId)) return read(institutionId, preparationId, frozenId);
       const record = await preparation(institutionId, preparationId);
       snapshotOf(record);
-      for (const file of record.files) {
-        if (!files || !file.storageRef || file.storageStatus !== "STORED") throw new PackageError("Berkas wajib tidak tersedia.", 409);
-        let bytes: Uint8Array | null;
-        try { bytes = await files.get(file.storageRef); } catch { throw new PackageError("Berkas wajib tidak dapat dibaca.", 409); }
-        if (!bytes || sha256Hex(bytes) !== file.contentSha256) throw new PackageError("Berkas sumber tidak cocok dengan commitment.", 409);
+      const inspected = await createRestrictedDocuments(store, files).inspect({ institutionId, preparationId });
+      if (inspected.some(file => file.availability !== "AVAILABLE")) {
+        throw new PackageError("Berkas wajib hilang, berubah, atau belum dapat diperiksa.", 409);
       }
       const { digest, ...body } = saved;
       // A distinct content identity: previously inspected drafts remain readable.

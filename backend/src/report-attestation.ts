@@ -1,3 +1,4 @@
+import { createRestrictedDocuments, DocumentError } from "./restricted-documents";
 /**
  * Auditor examination notes over one published version (Spec #68, ticket #76).
  *
@@ -77,18 +78,16 @@ export function createAttestation(runtime: WorkspaceRuntime, registry: RegistryR
     status,
     async download(account: Hex, id: string, fileId: string) {
       const intent = await readIntent(account, id);
-      const file = intent.evidence.files.find(file => file.id === fileId);
-      const storageRef = intent.evidence.storageRefs?.[fileId];
-      if (!file || !storageRef) throw new AttestationError("Berkas pemeriksaan tidak ditemukan.", 404);
-      if (!runtime.files) throw new AttestationError("Penyimpanan bukti pemeriksaan belum tersedia.", 503);
-      let bytes: Uint8Array | null;
-      try { bytes = await runtime.files.get(storageRef); }
-      catch { throw new AttestationError("Berkas pemeriksaan tidak dapat dibaca.", 503); }
-      if (!bytes) throw new AttestationError("Berkas pemeriksaan tidak ditemukan.", 404);
-      if (bytes.byteLength !== file.sizeBytes || sha256Hex(bytes) !== file.contentSha256) {
-        throw new AttestationError("Isi berkas tidak cocok dengan commitment bukti pemeriksaan.", 409);
+      try {
+        const { file, bytes } = await createRestrictedDocuments(runtime.evidence!, runtime.files, store).read({
+          institutionId: institution, preparationId: preparation, intentId: intent.id,
+        }, fileId);
+        return { bytes, fileName: file.fileName };
+      } catch (error) {
+        if (error instanceof DocumentError) throw new AttestationError(error.message,
+          error.reason === "NOT_FOUND" || error.reason === "MISSING" ? 404 : error.reason === "UNAVAILABLE" ? 503 : 409);
+        throw error;
       }
-      return { bytes, fileName: file.fileName };
     },
     list: async (account: Hex) => Promise.all((await store.list(institution, packageId, "ATTESTATION"))
       .filter(intent => intent.statement.auditor.toLowerCase() === account.toLowerCase())

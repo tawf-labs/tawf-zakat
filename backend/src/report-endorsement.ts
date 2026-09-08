@@ -1,9 +1,10 @@
+import { createRestrictedDocuments } from "./restricted-documents";
 /** Recompute from committed sources before signing; caller-supplied verdicts never enter here. */
 import { privateKeyToAccount } from "viem/accounts";
 import { randomBytes } from "node:crypto";
 import { hashTypedData, keccak256, toHex, type Hex } from "viem";
 import { evidenceTypedData, type EvidenceAuthorization, type RecordingIntent } from "../../shared/report-registry";
-import { canonicalJson, sha256Hex } from "./evidence-snapshot";
+import { canonicalJson } from "./evidence-snapshot";
 import { createReportPackages, reviewSnapshot, assessReportDraft, wire, PackageError } from "./report-package";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 import type { RegistryChain } from "./registry-chain";
@@ -33,10 +34,9 @@ export async function verifyPublishablePackage(runtime: WorkspaceRuntime, instit
   const record = await runtime.evidence!.getPreparation(institution, preparation);
   if (!record || saved.status !== "FROZEN") throw new PackageError("Paket beku dan snapshot wajib tersedia.", 409);
   const review = reviewSnapshot(record, runtime.reportAmilRules);
-  for (const file of record.files) {
-    if (!runtime.files || !file.storageRef || file.storageStatus !== "STORED") throw new PackageError("Berkas wajib tidak tersedia; pulihkan sumber sebelum meminta pengesahan.", 409);
-    const bytes = await runtime.files.get(file.storageRef);
-    if (!bytes || sha256Hex(bytes) !== file.contentSha256) throw new PackageError("Berkas wajib hilang atau berubah; pulihkan sumber.", 409);
+  const inspected = await createRestrictedDocuments(runtime.evidence!, runtime.files).inspect({ institutionId: institution, preparationId: preparation });
+  if (inspected.some(file => file.availability !== "AVAILABLE")) {
+    throw new PackageError("Berkas wajib hilang, berubah, atau belum dapat diperiksa; pulihkan sumber sebelum meminta pengesahan.", 409);
   }
   const equal = (left: unknown, right: unknown) => canonicalJson(wire(left)) === canonicalJson(wire(right));
   if (saved.snapshotCommitment !== record.commitment || !equal(saved.snapshot, review.snapshot)

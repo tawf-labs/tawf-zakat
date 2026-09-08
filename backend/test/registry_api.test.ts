@@ -2,6 +2,7 @@ import { mkdtemp, rm, rename, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createEncryptedFileStore, type PrivateFileStore } from "../src/evidence-files";
 import { createReportEndorsement } from "../src/report-endorsement";
 import { afterAll, beforeAll, expect, it } from "bun:test";
@@ -1547,3 +1548,33 @@ it("recovery distinguishes truncated ciphertext from a missing source", async ()
   await mkdir(location);
   expect((await json(`workspace/recovery/files?preparationId=${preparation.id}`)).files[0].availability).toBe("UNAVAILABLE");
 }, 30000);
+
+it("refuses substituted auditor papers against the original evidence commitment", async () => {
+  const source = await correctionPreparation("100", "100", "document commitment");
+  const saved = await frozenVersion(source.id, { reportId: "document-commitment", version: "1" });
+  await publishVersion(saved, "document-publication");
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi,
+    functionName: "setAuditor", args: [institution, auditor.address, true, "Mandat pemeriksaan dokumen"] }) });
+  const access = await auditorSession();
+  const { path, intent } = await attestVersion(saved, access, { retryId: "document-attestation", conclusion: "TIDAK_WAJAR" });
+  const registryStore = createRegistryStore(database.handle());
+  const original = (await registryStore.get(institution, intent.id, "ATTESTATION"))!;
+  const file = original.evidence.files[0]!;
+  const paperPath = `${path}/${intent.id}/files/${file.id}`;
+  const backup = await files.get(original.evidence.storageRefs![file.id]!);
+  const replacement = await files.put({ institutionId: institution, preparationId: source.id, fileId: file.id,
+    bytes: new TextEncoder().encode("substituted working paper") });
+  const changed = structuredClone(original);
+  changed.evidence.files[0]!.contentSha256 = replacement.contentSha256 as Hex;
+  changed.evidence.files[0]!.sizeBytes = replacement.sizeBytes;
+  try {
+    await database.handle().execute(sql`UPDATE registry_intents SET intent = ${JSON.stringify(changed)}
+      WHERE institution_id = ${institution} AND id = ${intent.id}`);
+    expect((await request(paperPath, undefined, access)).status).toBe(409);
+    expect((await request(paperPath)).status).toBe(404);
+  } finally {
+    await files.put({ institutionId: institution, preparationId: source.id, fileId: file.id, bytes: backup! });
+    await database.handle().execute(sql`UPDATE registry_intents SET intent = ${JSON.stringify(original)}
+      WHERE institution_id = ${institution} AND id = ${intent.id}`);
+  }
+});

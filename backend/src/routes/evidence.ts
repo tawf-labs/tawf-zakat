@@ -1,3 +1,4 @@
+import { createRestrictedDocuments, DocumentError } from "../restricted-documents";
 /**
  * Preparing, keeping and reopening a source snapshot (Spec #68, ticket #70).
  *
@@ -61,7 +62,6 @@ import {
   parseSnapshot,
   publicSummaryOf,
   verifyCommitment,
-  sha256Hex,
   type FileReference,
   type Quantity,
 } from "../evidence-snapshot";
@@ -349,13 +349,13 @@ const restrictedView = (preparation: StoredPreparation) => {
       rows: side.rows,
       unverified: unverifiedOf(side.role),
     })),
-    files: preparation.files.map((file) => publicFileView(file)),
+    files: frozen.files.map((file) => publicFileView(file)),
     publicSummary: preparation.publicSummary,
   };
 };
 
 /** What a reader is told about a file. Never where it is kept. */
-const publicFileView = (file: StoredFile) => ({
+const publicFileView = (file: FileReference) => ({
   id: file.id,
   role: file.role,
   fileName: file.fileName,
@@ -877,56 +877,19 @@ evidenceRoutes.get("/:id/files/:fileId", async (c) => {
   const auth = await authenticateWorkspace(c, runtime, undefined);
   if (!auth.ok) return auth.response;
 
-  // The institution is part of the query, so substituting an id in the URL
-  // finds no row rather than finding one this handler then has to hide.
-  const file = await runtime.evidence.getFile(
-    auth.session.institutionId,
-    c.req.param("id"),
-    c.req.param("fileId")
-  );
-  if (!file) return refuse(c, 404, "not-found");
-
-  if (file.storageStatus !== "STORED" || !file.storageRef || !runtime.files) {
-    return c.json(
-      {
-        success: false,
-        status: file.storageStatus,
-        error:
-          file.failureReason ??
-          "Berkas ini tidak tersedia pada penyimpanan terbatas deployment ini.",
-      },
-      409
-    );
-  }
-
-  let bytes: Uint8Array | null;
+  let document;
   try {
-    bytes = await runtime.files.get(file.storageRef);
-  } catch (error: any) {
-    // A file whose authentication tag does not verify is unavailable, not
-    // returned. The commitment recorded earlier is left exactly as it was.
-    return c.json(
-      {
-        success: false,
-        status: "UNAVAILABLE",
-        error: "Berkas tersimpan tidak dapat dibuka atau diverifikasi. Hubungi operator penyimpanan.",
-      },
-      409
-    );
+    document = await createRestrictedDocuments(runtime.evidence, runtime.files).read({
+      institutionId: auth.session.institutionId, preparationId: c.req.param("id"),
+    }, c.req.param("fileId"));
+  } catch (error) {
+    if (error instanceof DocumentError) {
+      if (error.reason === "NOT_FOUND" || error.missingLocatorRow) return refuse(c, 404, "not-found");
+      return c.json({ success: false, status: error.storageStatus === "FAILED" ? "FAILED" : "UNAVAILABLE", error: error.message }, 409);
+    }
+    return c.json({ success: false, status: "UNAVAILABLE", error: "Berkas belum dapat diperiksa." }, 503);
   }
-
-  if (!bytes || bytes.byteLength !== file.sizeBytes || sha256Hex(bytes) !== file.contentSha256) {
-    return c.json(
-      {
-        success: false,
-        status: "UNAVAILABLE",
-        error:
-          "Berkas tidak ditemukan atau isinya tidak cocok dengan dokumen yang dibekukan. Commitment dan waktu pencatatannya " +
-          "tidak diubah untuk menyamarkan ketidaktersediaan ini.",
-      },
-      409
-    );
-  }
+  const { bytes, file } = document;
 
   return c.body(bytes as unknown as ArrayBuffer, 200, {
     "Content-Type": /^[\w.+-]+\/[\w.+-]+$/.test(file.mimeType) ? file.mimeType : "application/octet-stream",

@@ -1,3 +1,4 @@
+import { createRestrictedDocuments, DocumentError, type DocumentSubject } from "./restricted-documents";
 /** Separate public projection and authenticated examination material for a fixed report package. */
 import { keccak256, toHex } from "viem";
 import { canonicalJson, sha256Hex } from "./evidence-snapshot";
@@ -13,14 +14,18 @@ const publicAttestations = (attestations: { state: string; basis: string; entrie
 });
 import type { WorkspaceRuntime } from "./workspace-runtime";
 
-export async function examinationFiles(runtime: WorkspaceRuntime, record: { files: { id: string; storageRef: string | null; contentSha256: string | null }[] }) {
-  return Promise.all(record.files.map(async file => {
-    if (!runtime.files || !file.storageRef) return { id: file.id, state: "UNAVAILABLE" as const };
-    let bytes: Uint8Array | null;
-    try { bytes = await runtime.files.get(file.storageRef); } catch { return { id: file.id, state: "UNAVAILABLE" as const }; }
-    if (!bytes) return { id: file.id, state: "MISSING" as const };
-    if (sha256Hex(bytes) !== file.contentSha256) return { id: file.id, state: "INTEGRITY_FAILED" as const };
-    return { id: file.id, state: "AVAILABLE" as const, contentBase64: Buffer.from(bytes).toString("base64") };
+async function examinationFiles(runtime: WorkspaceRuntime, subject: DocumentSubject, includeContent: boolean) {
+  const documents = createRestrictedDocuments(runtime.evidence!, runtime.files);
+  const stateOf = (state: string) => state === "CORRUPT" ? "INTEGRITY_FAILED" : state;
+  return Promise.all((await documents.inspect(subject)).map(async file => {
+    if (!includeContent || file.availability !== "AVAILABLE") return { id: file.id, state: stateOf(file.availability) };
+    try {
+      const { bytes } = await documents.read(subject, file.id);
+      return { id: file.id, state: "AVAILABLE", contentBase64: Buffer.from(bytes).toString("base64") };
+    } catch (error) {
+      if (!(error instanceof DocumentError) || error.reason === "BINDING" || error.reason === "NOT_FOUND") throw error;
+      return { id: file.id, state: stateOf(error.reason) };
+    }
   }));
 }
 export function createExamination(runtime: WorkspaceRuntime, institution: string, preparation: string, packageId: string) {
@@ -93,7 +98,7 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         await store.savePublicReport(packageId, content);
         content = await store.getPublicReport(packageId);
       }
-      const files = await examinationFiles(runtime, record);
+      const files = await examinationFiles(runtime, { institutionId: institution, preparationId: preparation }, false);
       const own = await attestationsForVersion(runtime.registry.chain, { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest });
       const history = await publicHistory(saved.reportId);
       const intent = observed.publicationIntents.find(i => i.authorizationDigest === content.publicationAuthorizationDigest);
@@ -140,7 +145,7 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
       return {
         format: "tawf.report.examination", version: 1, packageCanonical: stored!.canonical, packageDigest: saved.digest,
         snapshotCanonical: record.canonicalSnapshot, snapshotCommitment: record.commitment, commitmentSalt: record.commitmentSalt,
-        files: await examinationFiles(runtime, record), proofs,
+        files: await examinationFiles(runtime, { institutionId: institution, preparationId: preparation }, true), proofs,
         publication: observed.publication?.publication ?? "NOT_PUBLISHED",
         versionState: observed.publication?.versionState ?? "BUKAN_VERSI_RESMI",
         officialLine: runtime.registry ? await readOfficialLine(runtime, runtime.registry, institution, saved.reportId) : [],

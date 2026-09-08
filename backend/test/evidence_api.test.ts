@@ -31,6 +31,7 @@ import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import type { EthCall } from "../src/account-signature";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
 import { canonicalJson, verifyCommitment } from "../src/evidence-snapshot";
+import { createRestrictedDocuments } from "../src/restricted-documents";
 
 const WORKSPACE = "http://localhost:3001/api/workspace";
 const EVIDENCE = "http://localhost:3001/api/evidence";
@@ -597,6 +598,20 @@ describe("restricted documents", () => {
 
   const SENSITIVE = "nik,nama,rekening\n3201010101010001,Sartika,1234567890\n";
 
+  it("rejects replacement bytes even when relational metadata matches the replacement", async () => {
+    const token = await signIn(officer, SINAR);
+    const preparation = await prepared(token, withFile(SENSITIVE));
+    const fileId = preparation.files[0].id;
+    const replacement = await fileStore.put({ institutionId: SINAR, preparationId: preparation.id,
+      fileId, bytes: new TextEncoder().encode("rekening pengganti") });
+    await database.handle().execute(sql`UPDATE evidence_files SET content_sha256 = ${replacement.contentSha256},
+      size_bytes = ${replacement.sizeBytes} WHERE id = ${fileId}`);
+
+    const download = await get(`${EVIDENCE}/${preparation.id}/files/${fileId}`, token);
+    expect(download.status).toBe(409);
+    expect((await download.json()).success).toBe(false);
+  });
+
   it("downloads an original document with an Arabic and emoji filename", async () => {
     const token = await signIn(officer, SINAR);
     const body = withFile(SENSITIVE);
@@ -606,6 +621,44 @@ describe("restricted documents", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Disposition")).toContain("filename*=UTF-8''");
     expect(await response.text()).toBe(SENSITIVE);
+  });
+
+  it("keeps a committed document visible as missing when its locator row disappears", async () => {
+    const token = await signIn(officer, SINAR);
+    const preparation = await prepared(token, withFile(SENSITIVE));
+    const fileId = preparation.files[0].id;
+    await database.handle().execute(sql`DELETE FROM evidence_files WHERE id = ${fileId}`);
+    const response = await get(`${WORKSPACE}/recovery/files?preparationId=${preparation.id}`, token);
+    expect(response.status).toBe(200);
+    expect((await response.json()).files).toEqual([{
+      id: fileId, sizeBytes: Buffer.byteLength(SENSITIVE),
+      contentSha256: preparation.files[0].contentSha256, availability: "MISSING",
+    }]);
+    expect((await get(`${EVIDENCE}/${preparation.id}/files/${fileId}`, token)).status).toBe(404);
+    expect((await (await get(`${EVIDENCE}/${preparation.id}`, token)).json()).preparation.files).toEqual(preparation.files);
+  });
+
+  it("restores only the committed backup and verifies it without changing the preparation", async () => {
+    const token = await signIn(officer, SINAR);
+    const preparation = await prepared(token, withFile(SENSITIVE));
+    const fileId = preparation.files[0].id;
+    const subject = { institutionId: SINAR, preparationId: preparation.id };
+    const documents = createRestrictedDocuments(evidence, fileStore);
+    await writeFile(join(fileDirectory, SINAR, preparation.id, `${fileId}.bin`), Buffer.from("damaged"));
+    await expect(documents.restore(subject, fileId, new TextEncoder().encode("replacement"))).rejects.toThrow("Backup tidak cocok");
+    expect((await documents.inspect(subject))[0]!.availability).toBe("CORRUPT");
+    expect((await documents.restore(subject, fileId, new TextEncoder().encode(SENSITIVE))).availability).toBe("AVAILABLE");
+    expect(new TextDecoder().decode((await documents.read(subject, fileId)).bytes)).toBe(SENSITIVE);
+    expect((await (await get(`${EVIDENCE}/${preparation.id}`, token)).json()).preparation).toEqual(preparation);
+  });
+
+  it("keeps a download unavailable when its locator row exists without a usable reference", async () => {
+    const token = await signIn(officer, SINAR);
+    const preparation = await prepared(token, withFile(SENSITIVE));
+    const fileId = preparation.files[0].id;
+    await database.handle().execute(sql`UPDATE evidence_files SET storage_status = 'FAILED', storage_ref = NULL,
+      failure_reason = 'Locator unavailable' WHERE id = ${fileId}`);
+    expect((await get(`${EVIDENCE}/${preparation.id}/files/${fileId}`, token)).status).toBe(409);
   });
 
   it("reports storage failures without exposing private adapter paths", async () => {
@@ -1068,6 +1121,33 @@ it("refuses freezing when a committed source file becomes unavailable", async ()
   const result = await post(`${url}/${saved.id}/freeze`, {}, token);
   expect(result.status).toBe(409);
   expect((await (await get(`${url}/${saved.id}`, token)).json()).package.status).toBe("DRAFT");
+});
+
+it("reports damaged encrypted evidence as an integrity failure in examination v1", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token, { ...KNOWN_GAP, files: [{ role: "SOURCE", fileName: "source.txt",
+    mimeType: "text/plain", contentBase64: Buffer.from("original evidence").toString("base64") }] });
+  const draft = (await (await post(url, input, token)).json()).package;
+  const frozen = (await (await post(`${url}/${draft.id}/freeze`, {}, token)).json()).package;
+  const fileId = frozen.snapshot.files[0].id;
+  await writeFile(join(fileDirectory, SINAR, frozen.preparationId, `${fileId}.bin`), Buffer.from("truncated ciphertext"));
+  const recovery = await (await get(`${WORKSPACE}/recovery/files?preparationId=${frozen.preparationId}`, token)).json();
+  expect(recovery.files[0].availability).toBe("CORRUPT");
+  const examination = await get(`${url}/${frozen.id}/examination`, token);
+  expect(examination.status).toBe(200);
+  expect((await examination.json()).files).toEqual([{ id: fileId, state: "INTEGRITY_FAILED" }]);
+});
+
+it("blocks a new freeze after a locator disappears while preserving an idempotent frozen package", async () => {
+  const token = await signIn(officer, SINAR);
+  const { url, input } = await reportFixture(token, { ...KNOWN_GAP, files: [{ role: "SOURCE", fileName: "source.txt",
+    mimeType: "text/plain", contentBase64: Buffer.from("original evidence").toString("base64") }] });
+  const draft = (await (await post(url, input, token)).json()).package;
+  const frozen = (await (await post(`${url}/${draft.id}/freeze`, {}, token)).json()).package;
+  await database.handle().execute(sql`DELETE FROM evidence_files WHERE id = ${frozen.snapshot.files[0].id}`);
+  expect((await (await post(`${url}/${draft.id}/freeze`, {}, token)).json()).package).toEqual(frozen);
+  const next = (await (await post(url, { ...input, version: "2" }, token)).json()).package;
+  expect((await post(`${url}/${next.id}/freeze`, {}, token)).status).toBe(409);
 });
 
 it("allows a truthful negative discrepancy in the narrative", async () => {
