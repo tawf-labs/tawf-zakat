@@ -217,6 +217,22 @@ export type SavedReportPackage = Pick<ReportReview, "figures" | "limitations" | 
   verdict: { outcome: "LOLOS" | "DITOLAK"; prerequisites: string[]; findings: { kind: string; message: string; expected?: WireQuantity; claimed?: WireQuantity }[] };
   aiUnavailable: string | null;
 };
+export type ChangeState = "TETAP" | "BERUBAH" | "DITAMBAHKAN" | "TIDAK_LAGI_TERSEDIA";
+/** What a correction would change against the version it succeeds, before any package is saved. */
+export type CorrectionReview = {
+  predecessor: { id: string; reportId: string; version: string; status: string; digest: string; preparationId: string;
+    snapshotCommitment: string; period: { kind: string; year: number }; predecessor: string | null;
+    correctionReason: string | null; outcome: string; netDelta: WireQuantity | null; findingCount: number | null };
+  samePreparation: boolean;
+  sources: { role: string; state: ChangeState;
+    before: Record<string, string> | null; after: Record<string, string> | null }[];
+  changes: { name: string; label: string; before: WireQuantity | null; after: WireQuantity | null; state: ChangeState }[];
+  findingCount: { before: number | null; after: number | null };
+  netDelta: { before: WireQuantity | null; after: WireQuantity | null };
+  reasonRequired: true; blockers: string[]; limitations: string[];
+};
+export const reviewCorrection = (id: string, predecessor: string, token: string): Promise<{ correction: CorrectionReview }> =>
+  call(`/${id}/reports/correction?predecessor=${encodeURIComponent(predecessor)}`, token);
 export const reviewReport = (id: string, token: string): Promise<ReportReview> => call(`/${id}/reports/review`, token);
 export const listReports = (id: string, token: string): Promise<{ packages: { id: string; digest: string }[] }> => call(`/${id}/reports`, token);
 export const readReport = (id: string, packageId: string, token: string): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}`, token);

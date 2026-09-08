@@ -113,6 +113,47 @@ export function reviewSnapshot(record: Pick<PreparationRecord, "canonicalSnapsho
   return { snapshot, figures, reconciliation, blockers, limitations, disclosure, policy: { ...REPORT_POLICY, amilChecks } };
 }
 
+/**
+ * What a correction would change, figure by figure, against the version it succeeds.
+ *
+ * Both sides are recomputed sums over committed snapshot bytes, so a figure the
+ * new snapshot no longer supports is reported as removed rather than silently
+ * carried over from the version being corrected.
+ */
+export function figureChanges(before: { name: string; label: string; value: unknown }[], after: { name: string; label: string; value: unknown }[]) {
+  const names = [...new Set([...before, ...after].map(figure => figure.name))].sort();
+  return names.map(name => {
+    const previous = before.find(figure => figure.name === name) ?? null;
+    const next = after.find(figure => figure.name === name) ?? null;
+    return {
+      name, label: (next ?? previous)!.label, before: previous?.value ?? null, after: next?.value ?? null,
+      state: !previous ? "DITAMBAHKAN" : !next ? "TIDAK_LAGI_TERSEDIA"
+        : canonicalJson(wire(previous.value)) === canonicalJson(wire(next.value)) ? "TETAP" : "BERUBAH",
+    };
+  });
+}
+
+const SOURCE_FACETS = ["origin", "label", "scopeUnit", "scopeLevel", "cutOff", "transactionDetail", "mappingVersion", "format"] as const;
+/**
+ * Which sources a correction rests on, against the sources the version it succeeds rested on.
+ *
+ * A correction usually exists because a source was re-read or replaced, so the
+ * side that changed matters as much as the figure that changed. A role that is
+ * simply absent on one side is reported as such rather than compared away.
+ */
+export function sourceChanges(before: { manifest: any; status: string }[], after: { manifest: any; status: string }[]) {
+  const facets = (side: { manifest: any; status: string } | undefined) =>
+    side ? { status: side.status, ...Object.fromEntries(SOURCE_FACETS.map(facet => [facet, side.manifest[facet]])) } : null;
+  const roles = [...new Set([...before, ...after].map(side => side.manifest.role))].sort();
+  return roles.map(role => {
+    const previous = facets(before.find(side => side.manifest.role === role));
+    const next = facets(after.find(side => side.manifest.role === role));
+    return { role, before: previous, after: next,
+      state: !previous ? "DITAMBAHKAN" : !next ? "TIDAK_LAGI_TERSEDIA"
+        : canonicalJson(previous) === canonicalJson(next) ? "TETAP" : "BERUBAH" };
+  });
+}
+
 /** Shared deterministic publication policy, always supplied with recomputed snapshot figures. */
 export function assessReportDraft(review: ReturnType<typeof reviewSnapshot>, draft: ReportDraft | null, disclosure: unknown) {
   const checked = draft ? validateDraft({ figures: review.figures, amilShare: null }, draft) : null;
@@ -147,6 +188,38 @@ export function createReportPackages(store: EvidenceStore, files?: PrivateFileSt
     read,
     list: (institutionId: string, preparationId: string) => store.listReportPackages(institutionId, preparationId),
     async review(institutionId: string, id: string) { return wire(reviewSnapshot(await preparation(institutionId, id), rules)); },
+    /**
+     * Review material for a correction, before any new package exists.
+     *
+     * The predecessor is read from its own stored bytes and never recomputed
+     * against today's ledger, so the comparison shows what actually changed
+     * between two frozen snapshots rather than what the working data says now.
+     */
+    async correction(institutionId: string, preparationId: string, predecessorId: string) {
+      const record = await preparation(institutionId, preparationId);
+      const stored = await store.findReportPackage(institutionId, predecessorId);
+      if (!stored) throw new PackageError("Pendahulu tidak ditemukan dalam lembaga ini.", 404);
+      const body = JSON.parse(stored.canonical);
+      const review = reviewSnapshot(record, rules);
+      const blockers = [...review.blockers];
+      if (body.status !== "FROZEN") blockers.push("Pendahulu belum dibekukan; koreksi hanya dapat menyusul versi beku.");
+      return wire({
+        predecessor: {
+          id: body.id, reportId: body.reportId, version: body.version, status: body.status, digest: stored.digest,
+          preparationId: body.preparationId, snapshotCommitment: body.snapshotCommitment, period: body.snapshot.period,
+          predecessor: body.predecessor ?? null, correctionReason: body.correctionReason ?? null,
+          outcome: body.verdict.outcome, netDelta: body.reconciliation?.netDelta ?? null,
+          findingCount: body.reconciliation?.discrepancies.length ?? null,
+        },
+        // Correcting from the same snapshot repeats the same numbers; a new reading needs a new preparation.
+        samePreparation: body.preparationId === preparationId,
+        sources: sourceChanges(body.snapshot.sides, review.snapshot.sides),
+        changes: figureChanges(body.figures, review.figures),
+        findingCount: { before: body.reconciliation?.discrepancies.length ?? null, after: review.reconciliation?.discrepancies.length ?? null },
+        netDelta: { before: body.reconciliation?.netDelta ?? null, after: review.reconciliation?.netDelta ?? null },
+        reasonRequired: true, blockers, limitations: review.limitations,
+      });
+    },
     async prepare(institutionId: string, id: string, raw: unknown) {
       const parsed = Input.safeParse(raw);
       if (!parsed.success) throw new PackageError("Identitas laporan, draf, atau bentuk permintaan tidak sah.");

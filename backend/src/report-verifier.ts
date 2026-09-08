@@ -4,6 +4,7 @@ import { evidenceTypedData } from "../../shared/report-registry";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
 import { canonicalJson, sha256Hex, verifyCommitment } from "./evidence-snapshot";
 import { reviewSnapshot, assessReportDraft, wire, AmilRulesSchema } from "./report-package";
+import { OFFICIAL_LINE_LIMIT } from "./report-history";
 
 export type ExaminationConnection = { rpcUrl: string; chainId: number; registry: Hex };
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
@@ -106,7 +107,27 @@ export async function verifyExamination(bundle: any, connection?: ExaminationCon
     }
   }
   if (bundle.publication === "PUBLISHED") assert(acceptedPublications > 0, "Klaim terbit tanpa bukti penerimaan.");
+  const line: any[] = bundle.officialLine ?? [];
+  assert(Array.isArray(line), "Riwayat versi resmi harus berupa daftar.");
+  // History must read back as one line, newest first, and must agree with the package it was exported with.
+  for (let index = 1; index < line.length; index++) assert(line[index - 1].predecessor === line[index].packageId, "Riwayat versi tidak membentuk satu garis resmi.");
+  // A line shorter than the reading limit must reach the first version, so a dropped ancestor is visible.
+  assert(line.length === 0 || line.length >= OFFICIAL_LINE_LIMIT || line[line.length - 1].predecessor === null, "Riwayat versi tidak membentuk satu garis resmi.");
+  const entry = line.find(item => item.packageId === saved.id) ?? null;
+  if (entry) assert(entry.version === saved.version && (entry.predecessor ?? "") === (saved.predecessor ?? "") && entry.digest === bundle.packageDigest,
+    "Riwayat versi tidak cocok dengan paket yang dihitung ulang.");
+  assert(bundle.versionState === undefined || bundle.versionState !== "VERSI_RESMI_TERKINI" || line[0]?.packageId === saved.id, "Klaim versi resmi terkini tidak didukung riwayat.");
+  if (rpc) {
+    const registryReads = { address: connection!.registry, abi: reportRegistryAbi } as const;
+    assert(await rpc.readContract({ ...registryReads, functionName: "latestPublishedPackage", args: [saved.institutionId, saved.reportId] }) === (line[0]?.packageId ?? ""),
+      "Versi resmi terkini berbeda dari riwayat yang diekspor.");
+    for (const item of line) assert(await rpc.readContract({ ...registryReads, functionName: "publishedPackageVersion", args: [saved.institutionId, item.packageId] }) === item.version,
+      "Identitas versi dalam riwayat tidak diakui registry.");
+  }
   return { ok: missing.length === 0 && unresolvedContractSignatures === 0, commitments: "MATCH", files: { missing }, signatures,
+    version: { version: saved.version, predecessor: saved.predecessor ?? null, correction: !!saved.predecessor,
+      official: line[0]?.packageId === saved.id, superseded: !!entry && line[0]?.packageId !== saved.id,
+      line: line.map(item => ({ packageId: item.packageId, version: item.version, predecessor: item.predecessor ?? null })) },
     chain: connection ? (chainVerified ? "CANONICAL_RECEIPTS_CHECKED" : "NO_ACCEPTED_RECEIPT") : "NOT_CHECKED_OFFLINE",
     contractSignatures: unresolvedContractSignatures > 0 ? "REQUIRES_RPC" : "CHECKED_OR_NOT_PRESENT",
     publicationClaim: bundle.publication, recomputed: wire({ figures: review.figures, reconciliation: review.reconciliation, verdict }),

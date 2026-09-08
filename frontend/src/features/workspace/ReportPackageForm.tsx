@@ -3,9 +3,14 @@ import { RecordingPanel } from "./RecordingPanel";
 import { verifyReportCommitment } from "./reportCommitment";
 import { useEffect, useState } from "react";
 import { Button } from "../../components/ui/Button";
-import { freezeReport, listReports, readReport, reviewReport, saveReport } from "./evidenceClient";
-import type { ReportReview, SavedReportPackage } from "./evidenceClient";
+import { freezeReport, listReports, readReport, reviewCorrection, reviewReport, saveReport } from "./evidenceClient";
+import type { ChangeState, CorrectionReview, ReportReview, SavedReportPackage } from "./evidenceClient";
 import { formatQuantity } from "../../lib/reporting";
+
+const CHANGE_LABELS: Record<ChangeState, string> = {
+  TETAP: "Tidak berubah", BERUBAH: "Berubah",
+  DITAMBAHKAN: "Baru pada koreksi", TIDAK_LAGI_TERSEDIA: "Tidak lagi didukung snapshot",
+};
 
 export function ReportPackageForm({ preparationId, token, canPrepare, commitmentSalt }: { preparationId: string; token: string; canPrepare: boolean; commitmentSalt: string }) {
   const [review, setReview] = useState<ReportReview | null>(null);
@@ -15,6 +20,7 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
   const [version, setVersion] = useState("1");
   const [predecessor, setPredecessor] = useState("");
   const [reason, setReason] = useState("");
+  const [correction, setCorrection] = useState<CorrectionReview | null>(null);
   const [narrative, setNarrative] = useState("");
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [disclosed, setDisclosed] = useState(false);
@@ -40,6 +46,15 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
     const { digest, ...body } = next;
     if (!await verifyReportCommitment(body, commitmentSalt, digest)) throw new Error("Digest paket tidak cocok; review dihentikan.");
     setSaved(next);
+  }
+  /** A correction is reviewed against the version it succeeds before anything new is saved. */
+  async function loadCorrection(id: string) {
+    setCorrection(null);
+    const { correction: next } = await reviewCorrection(preparationId, id, token);
+    setPredecessor(id);
+    setReportId(next.predecessor.reportId);
+    setVersion("");
+    setCorrection(next);
   }
   async function save(mode: "HUMAN" | "AI") {
     if (!review) return;
@@ -80,17 +95,40 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
       <fieldset disabled={!!pending || !canPrepare} className="space-y-3 disabled:opacity-70">
         <label className="block text-sm">Identitas laporan<input className="block w-full rounded border p-2" value={reportId} onChange={e => setReportId(e.target.value)} /></label>
         <label className="block text-sm">Versi<input className="block w-full rounded border p-2" value={version} onChange={e => setVersion(e.target.value)} /></label>
-        <label className="block text-sm">ID paket pendahulu (khusus koreksi)<input className="block w-full rounded border p-2" value={predecessor} onChange={e => setPredecessor(e.target.value)} /></label>
-        <label className="block text-sm">Alasan koreksi<input className="block w-full rounded border p-2" value={reason} onChange={e => setReason(e.target.value)} /></label>
+        <label className="block text-sm">ID paket pendahulu (khusus koreksi)<input className="block w-full rounded border p-2" value={predecessor} onChange={e => { setPredecessor(e.target.value); setCorrection(null); }} /></label>
+        {predecessor && <Button variant="outline" disabled={!!pending} onClick={() => act("Membuka versi pendahulu…", () => loadCorrection(predecessor.trim()))}>Tinjau sumber dan perubahan koreksi</Button>}
+        <label className="block text-sm">Alasan koreksi{predecessor ? " (wajib)" : ""}<input className="block w-full rounded border p-2" value={reason} onChange={e => setReason(e.target.value)} /></label>
+        {predecessor && !reason.trim() && <p role="alert" className="text-sm text-red-700">Koreksi memerlukan alasan sebelum dapat disimpan.</p>}
         <div className="space-y-2">{review.figures.map(f => <label key={f.name} className="block text-xs">
           {f.label}: {formatQuantity(f.value)}. Klaim ({f.value.unit === "USDC_6DP" ? "satuan minor USDC, 6 desimal" : "rupiah penuh"})
           <input className="mt-1 block w-full rounded border p-2 font-mono" value={amounts[f.name] ?? ""} onChange={e => setAmounts({ ...amounts, [f.name]: e.target.value })} />
         </label>)}</div>
         <label className="block text-sm">Narasi draf<textarea rows={5} className="block w-full rounded border p-2" value={narrative} onChange={e => setNarrative(e.target.value)} /></label>
         <label className="flex gap-2 text-sm"><input type="checkbox" checked={disclosed} onChange={e => setDisclosed(e.target.checked)} />Saya menyertakan seluruh sumber, temuan, dan batas pemeriksaan di atas sebagai bagian laporan.</label>
+        {correction && <section className="space-y-2 rounded border p-3 text-xs">
+          <h5 className="text-sm font-semibold">Perubahan terhadap versi {correction.predecessor.version}</h5>
+          <p>Pendahulu {correction.predecessor.id} · vonis {correction.predecessor.outcome} · commitment snapshot {correction.predecessor.snapshotCommitment.slice(0, 18)}…</p>
+          <p>{correction.samePreparation
+            ? "Koreksi ini memakai snapshot yang sama; angka tidak akan berubah kecuali draf diubah."
+            : "Koreksi ini memakai snapshot baru. Snapshot dan berkas versi pendahulu tetap tersimpan apa adanya."}</p>
+          <ul className="space-y-1">{correction.sources.map(source => <li key={source.role}>
+            Sisi {source.role === "CLAIM" ? "klaim" : "sumber"}: {CHANGE_LABELS[source.state]}.
+            {source.before && source.after && source.state === "BERUBAH" && ` Cut-off ${source.before.cutOff} → ${source.after.cutOff}; status ${source.before.status} → ${source.after.status}; asal ${source.before.origin} → ${source.after.origin}.`}
+          </li>)}</ul>
+          <table className="w-full text-left"><thead><tr>{["Angka", "Versi pendahulu", "Koreksi", "Status"].map(h => <th key={h} className="p-1">{h}</th>)}</tr></thead>
+            <tbody>{correction.changes.map(change => <tr key={change.name} className="border-t">
+              <td className="p-1">{change.label}</td>
+              <td className="p-1 font-mono">{change.before ? formatQuantity(change.before) : "—"}</td>
+              <td className="p-1 font-mono">{change.after ? formatQuantity(change.after) : "—"}</td>
+              <td className="p-1">{CHANGE_LABELS[change.state]}</td>
+            </tr>)}</tbody></table>
+          <p>Temuan: {correction.findingCount.before ?? "—"} menjadi {correction.findingCount.after ?? "—"}.</p>
+          {correction.blockers.map((note, i) => <p key={i} className="text-red-700">{note}</p>)}
+          <p>Pengesahan versi pendahulu tidak berlaku untuk koreksi ini; keduanya memerlukan pengesahan lembaga dan validator baru.</p>
+        </section>}
         {canPrepare && <div className="flex flex-wrap gap-2">
-          <Button disabled={!!pending || !reportId || !narrative} onClick={() => act("Memeriksa draf…", () => save("HUMAN"))}>Simpan dan periksa draf</Button>
-          <Button variant="outline" disabled={!!pending || !reportId} onClick={() => act("Menyusun draf AI…", () => save("AI"))}>Susun dengan AI</Button>
+          <Button disabled={!!pending || !reportId || !narrative || (!!predecessor && !reason.trim())} onClick={() => act("Memeriksa draf…", () => save("HUMAN"))}>Simpan dan periksa draf</Button>
+          <Button variant="outline" disabled={!!pending || !reportId || (!!predecessor && !reason.trim())} onClick={() => act("Menyusun draf AI…", () => save("AI"))}>Susun dengan AI</Button>
         </div>}
       </fieldset>
     </>}
@@ -108,12 +146,13 @@ export function ReportPackageForm({ preparationId, token, canPrepare, commitment
       <ul className="space-y-1 text-xs">{saved.draft?.claims.map((claim, i) => <li key={i}>{claim.name}: {claim.value ? formatQuantity(claim.value) : claim.statedAmount}</li>)}</ul>
       {canPrepare && saved.draft && <Button variant="outline" disabled={!!pending} onClick={() => {
         setReportId(saved.reportId); setVersion(saved.version); setPredecessor(saved.predecessor ?? ""); setReason(saved.correctionReason ?? "");
-        setNarrative(saved.draft!.narrative); setAmounts(Object.fromEntries(saved.draft!.claims.map(c => [c.name, c.value?.amount ?? c.statedAmount ?? ""]))); setDisclosed(false);
+        setNarrative(saved.draft!.narrative); setAmounts(Object.fromEntries(saved.draft!.claims.map(c => [c.name, c.value?.amount ?? c.statedAmount ?? ""]))); setDisclosed(false); setCorrection(null);
       }}>Salin draf ke formulir untuk perbaikan</Button>}
       <ul className="list-disc pl-5 text-xs">{saved.limitations.map((note, i) => <li key={i}>{note}</li>)}</ul>
       {saved.verdict.prerequisites.map((note, i) => <p key={i} className="text-sm text-red-700">{note}</p>)}
       {saved.verdict.findings.map((f, i) => <p key={i} className="text-sm text-red-700">{f.message}{f.expected && ` Diharapkan: ${formatQuantity(f.expected)}.`}{f.claimed && ` Diklaim: ${formatQuantity(f.claimed)}.`}</p>)}
-      {saved.status === "FROZEN" && <RecordingPanel publication key={`publication:${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
+      {saved.status === "FROZEN" && <RecordingPanel publication key={`publication:${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token}
+        onCorrect={canPrepare ? id => void act("Membuka versi pendahulu…", () => loadCorrection(id)) : undefined} />}
       {saved.status === "FROZEN" && <RecordingPanel key={`${saved.id}:${token}`} saved={saved} preparationId={preparationId} token={token} />}
       <div className="flex flex-wrap gap-2">
         {canPrepare && saved.status !== "FROZEN" && <Button disabled={!!pending} onClick={() => act("Membekukan paket…", async () => { await acceptSaved((await freezeReport(preparationId, saved.id, token)).package); setHistory((await listReports(preparationId, token)).packages); })}>Bekukan paket untuk review pengesahan</Button>}

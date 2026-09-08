@@ -20,6 +20,11 @@ async function handle(c: import("hono").Context) {
   try {
     if (c.req.method === "GET") {
       if (tail[0] === "review" && tail.length === 1) return c.json(await packages.review(institution, preparationId));
+      if (tail[0] === "correction" && tail.length === 1) {
+        const predecessor = c.req.query("predecessor");
+        if (!predecessor) return c.json({ success: false, error: "Sebutkan paket pendahulu yang akan dikoreksi." }, 400);
+        return c.json({ correction: await packages.correction(institution, preparationId, predecessor) });
+      }
       if (tail.length === 0) return c.json({ packages: await packages.list(institution, preparationId) });
       if (tail.length === 1) return c.json({ package: await packages.read(institution, preparationId, tail[0]!) });
     }

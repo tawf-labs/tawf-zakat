@@ -3,6 +3,7 @@ import { keccak256, toHex } from "viem";
 import { canonicalJson, sha256Hex } from "./evidence-snapshot";
 import { createReportPackages, PackageError, wire } from "./report-package";
 import { createRecording } from "./registry-recording";
+import { attestationsForVersion, readOfficialLine } from "./report-history";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 
 export async function examinationFiles(runtime: WorkspaceRuntime, record: { files: { id: string; storageRef: string | null; contentSha256: string | null }[] }) {
@@ -31,6 +32,27 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
       publication: await createRecording(runtime, runtime.registry, institution, preparation, packageId, true).version(),
       recording: await createRecording(runtime, runtime.registry, institution, preparation, packageId).list(),
     };
+  }
+  /**
+   * The report's official line as a public reader may see it.
+   *
+   * Version titles and correction reasons are institution-authored free text and
+   * stay restricted; a public reader gets the version reference, who endorsed it,
+   * when it was accepted, and the link to the version it succeeded.
+   */
+  async function publicHistory(reportId: string) {
+    const line = await readOfficialLine(runtime, runtime.registry!, institution, reportId);
+    return line.map(entry => ({
+      packageId: entry.packageId, versionReference: keccak256(toHex(entry.version)), official: entry.official,
+      predecessorPackageId: entry.predecessor, commitment: entry.digest, policy: entry.policy, outcome: entry.outcome,
+      endorsements: entry.endorsements,
+      correctionReason: entry.predecessor ? "TERBATAS_BAGI_PEMBACA_BERWENANG" : null,
+      anchor: entry.anchor && { transactionHash: entry.anchor.transactionHash, state: entry.anchor.state,
+        blockNumber: entry.anchor.blockNumber ?? null, blockHash: entry.anchor.blockHash ?? null,
+        logIndex: entry.anchor.logIndex ?? null, blockTimestamp: entry.anchor.blockTimestamp ?? null,
+        confirmations: entry.anchor.confirmations, requiredConfirmations: entry.anchor.requiredConfirmations },
+      attestations: { state: entry.attestations.state, count: entry.attestations.entries.length },
+    }));
   }
   return {
     async publicSummary() {
@@ -64,14 +86,24 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         content = await store.getPublicReport(packageId);
       }
       const files = await examinationFiles(runtime, record);
+      const own = attestationsForVersion({ institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest });
+      const history = await publicHistory(saved.reportId);
       const intent = observed.publicationIntents.find(i => i.authorizationDigest === content.publicationAuthorizationDigest);
-      const history = observed.recording;
       const domain = runtime.registry.chain.domain;
       return {
         content, summaryDigest: sha256Hex(new TextEncoder().encode(canonicalJson(content))),
         publication: { state: observed.publication?.publication ?? "NOT_PUBLISHED", observation: intent?.observation ?? null },
-        recording: { state: history.some(i => i.observation.state === "CONFIRMED") ? "RECORDED" : "NOT_CONFIRMED" },
-        validator: { outcome: saved.verdict.outcome }, auditor: "NOT_EXAMINED",
+        // Which version identity this summary is, and whether a later correction has taken over.
+        version: { state: observed.publication?.versionState ?? "BUKAN_VERSI_RESMI",
+          predecessorPackageId: saved.predecessor ?? null,
+          supersededByPackageId: history.find(entry => entry.predecessorPackageId === packageId)?.packageId ?? null,
+          officialPackageId: observed.publication?.officialPackageId ?? null,
+          officialVersionReference: history.find(entry => entry.official)?.versionReference ?? null },
+        history,
+        recording: { state: observed.recording.some(i => i.observation.state === "CONFIRMED") ? "RECORDED" : "NOT_CONFIRMED" },
+        // Read by version identity only: a correction never inherits the audit state of the version it succeeds.
+        validator: { outcome: saved.verdict.outcome }, auditor: own.state,
+        attestations: { state: own.state, count: own.entries.length },
         files: { total: files.length, available: files.filter(f => f.state === "AVAILABLE").length,
           missing: files.filter(f => f.state === "MISSING").length, unavailable: files.filter(f => f.state === "UNAVAILABLE").length,
           integrityFailed: files.filter(f => f.state === "INTEGRITY_FAILED").length },
@@ -101,7 +133,10 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         format: "tawf.report.examination", version: 1, packageCanonical: stored!.canonical, packageDigest: saved.digest,
         snapshotCanonical: record.canonicalSnapshot, snapshotCommitment: record.commitment, commitmentSalt: record.commitmentSalt,
         files: await examinationFiles(runtime, record), proofs,
-        publication: observed.publication?.publication ?? "NOT_PUBLISHED", exportedAt: runtime.now(),
+        publication: observed.publication?.publication ?? "NOT_PUBLISHED",
+        versionState: observed.publication?.versionState ?? "BUKAN_VERSI_RESMI",
+        officialLine: runtime.registry ? await readOfficialLine(runtime, runtime.registry, institution, saved.reportId) : [],
+        exportedAt: runtime.now(),
         instructions: "Simpan JSON ini sebagai examination.json. Dari checkout proyek: bun backend/src/scripts/verify-report.ts examination.json. Untuk memeriksa anchor canonical, tambahkan --rpc URL_RPC --chain-id ID --registry ALAMAT yang diperoleh secara independen. Verifier tidak memanggil AI. Jangan publikasikan paket ini: berisi sumber privat dan pembuka commitment.",
       };
     },

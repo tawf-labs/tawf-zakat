@@ -7,6 +7,7 @@ import { canonicalJson, sha256Hex } from "./evidence-snapshot";
 import { createReportPackages, reviewSnapshot, assessReportDraft, wire, PackageError } from "./report-package";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 import type { RegistryChain } from "./registry-chain";
+import { publicationConflict, successionState } from "./report-history";
 
 export function createReportEndorsement(privateKey: Hex) {
   const signer = privateKeyToAccount(privateKey);
@@ -14,6 +15,9 @@ export function createReportEndorsement(privateKey: Hex) {
     async endorse(runtime: WorkspaceRuntime, chain: RegistryChain, institution: string, preparation: string, packageId: string, authorization: EvidenceAuthorization): Promise<NonNullable<RecordingIntent["validator"]>> {
       const saved = await verifyPublishablePackage(runtime, institution, preparation, packageId);
       if (authorization.digest !== saved.digest || authorization.action !== keccak256(toHex("PUBLISH_REPORT"))) throw new PackageError("Paket atau tujuan pengesahan tidak cocok.", 409);
+      // A correction is only endorsed against the version the registry currently treats as official.
+      const conflict = publicationConflict(await successionState(chain, institution, saved), saved);
+      if (conflict) throw new PackageError(conflict, 409);
       const role = await chain.validatorAuthority(signer.address);
       if (!role.active || signer.address.toLowerCase() === authorization.signer.toLowerCase()) throw new PackageError("Validator tidak berwenang atau sama dengan pengesah lembaga.", 409);
       const statement = { ...authorization, action: keccak256(toHex("VALIDATE_REPORT")), outcome: "LOLOS", signer: signer.address, authorityEpoch: role.epoch, nonce: toHex(randomBytes(32)) };

@@ -172,3 +172,15 @@ export function describeCommitment(verified: boolean): Described {
         tone: "unproven",
       };
 }
+
+/** Version state as the registry resolves it; display numbering is never the authority. */
+export const VERSION_STATE_LABELS: Record<string, string> = {
+  VERSI_RESMI_TERKINI: "Versi resmi terkini",
+  DIGANTIKAN_KOREKSI: "Digantikan oleh koreksi yang lebih baru",
+  BUKAN_VERSI_RESMI: "Belum menjadi versi resmi",
+};
+
+/** A block timestamp is seconds, and absent until a receipt has actually been observed. */
+export function formatBlockInstant(seconds: string | null | undefined): string {
+  return seconds ? new Date(Number(seconds) * 1000).toLocaleString("id-ID") : "waktu blok belum tersedia";
+}

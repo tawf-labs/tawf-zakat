@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/Button";
 import { evidenceTypedData, type RecordingIntent } from "../../../../shared/report-registry";
 import type { SavedReportPackage } from "./evidenceClient";
 import { recordingRequest } from "./recordingClient";
+import { formatBlockInstant, VERSION_STATE_LABELS } from "./evidenceText";
 
 const labels = {
   PREPARED: "Pengesahan disiapkan; belum dikirim", SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
@@ -17,7 +18,14 @@ const publicationLabels = { ...labels,
   REVERTED: "Transaksi gagal; laporan belum terbit", INVALID_EVENT: "Event tidak cocok; penerbitan tidak diakui",
   NONCANONICAL: "Blok berubah; penerbitan perlu diperiksa ulang",
 };
-export function RecordingPanel({ saved, preparationId, token, publication = false }: { saved: SavedReportPackage; preparationId: string; token: string; publication?: boolean }) {
+type PublishedVersion = { versionState: string; publication: string; predecessor: string | null;
+  correctionReason: string | null; officialVersion: string | null; officialPackageId: string | null };
+type VersionHistoryEntry = { packageId: string; version: string; official: boolean; predecessor: string | null;
+  correctionReason: string | null; endorsements: { institution: string; validator: string };
+  attestations: { state: string; entries: unknown[] };
+  anchor: { transactionHash?: string; state: string; blockNumber?: string; blockTimestamp?: string; confirmations: number; requiredConfirmations: number } | null };
+
+export function RecordingPanel({ saved, preparationId, token, publication = false, onCorrect }: { saved: SavedReportPackage; preparationId: string; token: string; publication?: boolean; onCorrect?: (packageId: string) => void }) {
   const { address, chainId } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
@@ -32,6 +40,9 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusUnavailable, setStatusUnavailable] = useState(false);
+  const [version, setVersion] = useState<PublishedVersion | null>(null);
+  const [versionLine, setVersionLine] = useState<VersionHistoryEntry[] | null>(null);
+  const [lineUnavailable, setLineUnavailable] = useState(false);
   const retryId = useRef<string>(crypto.randomUUID());
   const path = `${preparationId}/reports/${saved.id}/${publication ? "publication" : "recording"}`;
   const cacheKey = `tawf-recording:${path}:${address?.toLowerCase()}`;
@@ -68,6 +79,18 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
     const timer = setInterval(() => { void check(); }, 4000);
     return () => clearInterval(timer);
   }, [intent, path, token]);
+  // Version identity and the official line are read from the registry, never from the numbering on screen.
+  async function readLine() {
+    if (!publication) return;
+    try {
+      const [current, line] = await Promise.all([
+        recordingRequest<{ version: PublishedVersion }>(`${path}/version`, token),
+        recordingRequest<{ history: VersionHistoryEntry[] }>(`${path}/history`, token),
+      ]);
+      if (alive.current) { setVersion(current.version); setVersionLine(line.history); setLineUnavailable(false); }
+    } catch { if (alive.current) { setLineUnavailable(true); setVersion(null); setVersionLine(null); } }
+  }
+  useEffect(() => { void readLine(); }, [path, token, intent?.observation.state]);
   async function prepare() {
     setPreparing(true); setError(null);
     try {
@@ -101,7 +124,11 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
       setSignature(signed);
       const next = await recordingRequest(`${path}/${intent.id}/submit`, token, { signature: signed });
       if (alive.current) { setIntent(next.intent); setStatusUnavailable(false); }
-    } catch { if (alive.current) { setStatusUnavailable(true); setError("Tanda tangan atau pengiriman ditolak. Periksa status chain sebelum mencoba lagi; parameter pengesahan tetap sama."); } }
+    } catch (caught) {
+      // The server's own reason matters here: a losing correction must be told to reprepare, not just to retry.
+      const reason = caught instanceof Error && caught.message ? ` ${caught.message}` : "";
+      if (alive.current) { setStatusUnavailable(true); setError(`Tanda tangan atau pengiriman ditolak.${reason} Periksa status chain sebelum mencoba lagi; parameter pengesahan tetap sama.`); }
+    }
     finally { if (alive.current) setSubmitting(false); }
   }
   async function retry() {
@@ -144,6 +171,24 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
         <Button variant="outline" disabled={locked || checking || statusUnavailable} onClick={() => { retryId.current = crypto.randomUUID(); sessionStorage.removeItem(cacheKey); setIntent(null); setSignature(""); setReviewed(false); }}>Mulai tinjauan pengesahan baru</Button>
       </>}
     </>}
+    {publication && <section className="space-y-2 border-t pt-3 text-sm">
+      <h6 className="font-semibold">Versi resmi dan riwayat koreksi</h6>
+      {lineUnavailable ? <p role="alert">Riwayat versi belum dapat dibaca dari registry. Status resmi belum dapat dipastikan.</p> : <>
+        <p role="status">Paket ini: {version ? VERSION_STATE_LABELS[version.versionState] ?? "perlu diperiksa" : "belum diperiksa"}.
+          {version?.correctionReason && ` Alasan koreksi: ${version.correctionReason}`}</p>
+        {version?.officialPackageId && version.officialPackageId !== saved.id && <p>Versi resmi terkini kini paket {version.officialPackageId}. Penomoran pada layar bukan sumber kewenangan.</p>}
+        {onCorrect && version?.versionState === "VERSI_RESMI_TERKINI" && <Button variant="outline" onClick={() => onCorrect(saved.id)}>Mulai koreksi dari versi ini</Button>}
+        {versionLine && versionLine.length === 0 && <p>Laporan ini belum memiliki versi resmi.</p>}
+        {versionLine && versionLine.length > 0 && <ol className="list-none space-y-2">{versionLine.map(entry => <li key={entry.packageId} className="rounded border p-2">
+          <p className="font-semibold">Versi {entry.version} {entry.official ? "· resmi terkini" : "· digantikan"}</p>
+          <p className="break-all text-xs">Paket {entry.packageId}{entry.predecessor ? <><br />Menyusul paket {entry.predecessor}</> : <><br />Versi pertama; tidak menyusul versi lain.</>}</p>
+          <p className="text-xs">Alasan koreksi: {entry.correctionReason ?? "—"}</p>
+          <p className="break-all text-xs">Pengesah lembaga {entry.endorsements.institution}<br />Validator {entry.endorsements.validator}</p>
+          <p className="break-all text-xs">{entry.anchor ? <>Pencatatan {formatBlockInstant(entry.anchor.blockTimestamp)} · blok {entry.anchor.blockNumber} · konfirmasi {entry.anchor.confirmations}/{entry.anchor.requiredConfirmations}<br />Transaksi {entry.anchor.transactionHash}</> : "Receipt penerbitan tidak tersimpan pada ruang kerja ini."}</p>
+          <p className="text-xs">Atestasi auditor versi ini: {entry.attestations.entries.length === 0 ? "belum diperiksa" : `${entry.attestations.entries.length} tercatat`}. Atestasi versi lain tidak berlaku di sini.</p>
+        </li>)}</ol>}
+      </>}
+    </section>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
   </section>;
 }

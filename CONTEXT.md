@@ -92,6 +92,14 @@ Bentuk laporan pada satu penerbitan beserta paket bukti yang mendasarinya.
 Versi baru yang memperbaiki laporan sebelumnya, dengan rujukan ke versi tersebut, alasan perubahan, dan pengesahnya.
 _Avoid_: Menimpa laporan, menghapus riwayat.
 
+**Versi resmi terkini**:
+Versi laporan yang saat ini diperlakukan registry sebagai berlaku, dan satu-satunya versi yang boleh disusul [[Koreksi laporan]].
+_Avoid_: Versi terbaru menurut penomoran atau urutan penyimpanan; penomoran tampilan bukan sumber kewenangan.
+
+**Garis resmi laporan**:
+Rantai versi laporan dari [[Versi resmi terkini]] mundur melalui pendahulunya sampai versi pertama. Bercabang tidak mungkin: paling banyak satu penerus resmi per versi.
+_Avoid_: Daftar seluruh paket laporan; pengajuan yang kalah tetap tersimpan sebagai bukti tetapi tidak berada pada garis ini.
+
 **Temuan pemeriksaan**:
 Selisih atau masalah yang ditemukan ketika memeriksa catatan dan tetap menjadi bagian dari bukti pemeriksaan tersebut.
 _Avoid_: Bukti lolos, untuk keberadaan catatan temuan.

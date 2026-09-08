@@ -24,6 +24,7 @@ async function handle(c: import("hono").Context) {
     const tail = c.req.path.slice(c.req.path.indexOf(marker) + marker.length).split("/").filter(Boolean);
     if (c.req.method === "GET" && tail.length === 0) return c.json({ intents: await recording.list() });
     if (publication && c.req.method === "GET" && tail[0] === "version" && tail.length === 1) return c.json({ version: await recording.version() });
+    if (publication && c.req.method === "GET" && tail[0] === "history" && tail.length === 1) return c.json({ history: await recording.history() });
     if (c.req.method === "GET" && tail.length === 1) return c.json({ intent: await recording.status(tail[0]!) });
     if (c.req.method === "POST" && tail.length === 0) return c.json({ intent: await recording.prepare(auth.session.account as Hex, await c.req.json()) }, 201);
     if (c.req.method === "POST" && tail.length === 2 && tail[1] === "submit") return c.json({ intent: await recording.submit(auth.session.account as Hex, tail[0]!, await c.req.json()) });

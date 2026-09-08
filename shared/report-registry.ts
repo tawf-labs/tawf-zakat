@@ -28,7 +28,7 @@ export const evidenceTypedData = (domain: RegistryDomain, a: EvidenceAuthorizati
 export type RecordingObservation = {
   state: "PREPARED" | "SUBMITTED" | "INCLUDED" | "CONFIRMED" | "REVERTED" | "INVALID_EVENT" | "NONCANONICAL";
   confirmations: number; requiredConfirmations: number; confirmationPolicy: string;
-  blockNumber?: string; blockHash?: Hex; logIndex?: number;
+  blockNumber?: string; blockHash?: Hex; logIndex?: number; blockTimestamp?: string;
 };
 export type RecordingIntent = {
   validator?: { authorization: EvidenceAuthorization; authorizationDigest: Hex; signature: Hex };

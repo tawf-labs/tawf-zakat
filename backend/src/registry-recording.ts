@@ -7,6 +7,7 @@ import type { RegistryChain } from "./registry-chain";
 import type { RegistryStore } from "./registry-store";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 import { createReportPackages } from "./report-package";
+import { attestationsForVersion, publicationConflict, readOfficialLine, successionState } from "./report-history";
 
 export class RecordingError extends Error {
   constructor(message: string, readonly status: 400 | 403 | 404 | 409 | 503) { super(message); }
@@ -30,24 +31,37 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
     if (!attempt) return intent;
     return store.observe(intent, await chain.observe(intent, attempt.hash), attempt.hash);
   }
+  /** Publication may only extend the report's official line; the registry, not the caller, says what that line is. */
+  async function assertSuccession(saved: { id: string; reportId: string; version: string; predecessor: string | null }) {
+    const conflict = publicationConflict(await successionState(chain, institution, saved), saved);
+    if (conflict) throw new RecordingError(conflict, 409);
+  }
   return {
     status,
     list: async () => Promise.all((await store.list(institution, packageId)).filter(intent => intent.authorization.action === action).map(intent => status(intent.id))),
+    history: async () => readOfficialLine(runtime, registry, institution, (await packages.read(institution, preparation, packageId)).reportId),
     async version() {
       const saved = await packages.read(institution, preparation, packageId);
       const intents = await Promise.all((await store.list(institution, packageId)).filter(i => i.authorization.action === action).map(i => status(i.id)));
       const confirmed = intents.find(i => i.observation.state === "CONFIRMED");
       const accepted = await chain.publishedVersion(institution, saved.reportId, saved.version);
       const published = !!confirmed && accepted.institution.digest === saved.digest && accepted.institution.packageId === packageId;
+      const official = await chain.officialLine(institution, saved.reportId);
       return { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest,
-        publication: published ? "PUBLISHED" : "NOT_PUBLISHED", auditor: "NOT_EXAMINED",
+        predecessor: saved.predecessor ?? null, correctionReason: saved.correctionReason ?? null,
+        publication: published ? "PUBLISHED" : "NOT_PUBLISHED",
+        // A superseded version stays readable through its own identity; a losing package is never an official version.
+        versionState: !published ? "BUKAN_VERSI_RESMI" : official.packageId === packageId ? "VERSI_RESMI_TERKINI" : "DIGANTIKAN_KOREKSI",
+        officialVersion: official.version || null, officialPackageId: official.packageId || null,
+        auditor: "NOT_EXAMINED",
+        attestations: attestationsForVersion({ institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest }),
         anchor: confirmed ?? null, trust: "Kontrak memverifikasi pernyataan layanan validator. Perhitungan bergantung pada layanan dan sumber bank; bukan komputasi trustless." };
     },
     async prepare(account: Hex, raw: unknown) {
       const parsed = prepareInput.safeParse(raw);
       if (!parsed.success) throw new RecordingError("Identitas retry atau digest tidak sah.", 400);
       const input = parsed.data;
-      if (publication && input.retryId === "version") throw new RecordingError("Identitas retry ini dicadangkan untuk pembacaan versi.", 400);
+      if (publication && ["version", "history"].includes(input.retryId)) throw new RecordingError("Identitas retry ini dicadangkan untuk pembacaan versi dan riwayat.", 400);
       const saved = await packages.read(institution, preparation, packageId);
       if (saved.status !== "FROZEN" || saved.digest !== input.digest) throw new RecordingError("Tinjau paket beku dengan digest yang sama sebelum mengesahkan.", 409);
       const existing = await store.get(institution, input.retryId);
@@ -56,6 +70,10 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
         return intent;
       };
       if (existing) return sameReview(await readIntent(input.retryId));
+      if (publication) {
+        await assertSuccession(saved);
+        if (await chain.publishedPackageVersion(institution, packageId)) throw new RecordingError("Paket ini sudah menjadi versi resmi. Koreksi memerlukan paket dan pengesahan baru.", 409);
+      }
       const authority = await chain.authority(institution, account);
       if (!authority.active) throw new RecordingError("Akun tidak memiliki kewenangan pengesah lembaga pada registry.", 403);
       const authorization = {
@@ -95,7 +113,7 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
       const current = await status(id);
       if (current.observation.state !== "SUBMITTED" && current.observation.state !== "NONCANONICAL") return current;
     }
-    if (publication) await verifyPublishablePackage(runtime, institution, preparation, packageId);
+    if (publication) await assertSuccession(await verifyPublishablePackage(runtime, institution, preparation, packageId));
     try { await chain.validate(intent, signature); }
     catch { throw new RecordingError("Pengesahan ditolak atau kewenangan registry tidak dapat diperiksa. Periksa akun, masa berlaku, dan paket.", 409); }
     if (!attempt) attempt = await store.reserve(institution, id, chain.deployment, await chain.pendingNonce(), nonce => chain.build(intent, signature, nonce));

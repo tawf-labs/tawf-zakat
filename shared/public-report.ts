@@ -1,3 +1,13 @@
+export type PublicVersionEntry = {
+  packageId: string; versionReference: string; official: boolean; predecessorPackageId: string | null;
+  commitment: string; policy: string; outcome: string;
+  endorsements: { institution: string; validator: string };
+  /** Institution-authored free text stays restricted; the public line carries only that a reason exists. */
+  correctionReason: "TERBATAS_BAGI_PEMBACA_BERWENANG" | null;
+  anchor: { transactionHash?: string; state: string; blockNumber: string | null; blockHash: string | null;
+    logIndex: number | null; blockTimestamp: string | null; confirmations: number; requiredConfirmations: number } | null;
+  attestations: { state: string; count: number };
+};
 export type PublicReportSummary = {
   content: {
     format: string; formatVersion: number; packageId: string;
@@ -12,7 +22,12 @@ export type PublicReportSummary = {
   };
   summaryDigest: string;
   publication: { state: string; observation: unknown };
+  /** Which version identity this summary is, and whether a later correction has taken over. */
+  version: { state: string; predecessorPackageId: string | null; supersededByPackageId: string | null;
+    officialPackageId: string | null; officialVersionReference: string | null };
+  history: PublicVersionEntry[];
   recording: { state: string }; validator: { outcome: string }; auditor: string;
+  attestations: { state: string; count: number };
   files: { total: number; available: number; missing: number; unavailable: number; integrityFailed: number };
   network: { chainId: number; registry: string; name: string; confirmationPolicy: string; requiredConfirmations: number };
   anchor: { transactionHash?: string; authorizationDigest: string; validatorAuthorizationDigest?: string;

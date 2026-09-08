@@ -254,8 +254,8 @@ export function createEvidenceStore(db: EvidenceDatabase) {
       return rowsOf(await db.execute(sql`SELECT canonical, digest FROM report_packages
         WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} AND id = ${id}`))[0] ?? null;
     },
-    async findReportPackage(institutionId: string, id: string): Promise<{canonical: string} | null> {
-      return rowsOf(await db.execute(sql`SELECT canonical FROM report_packages WHERE institution_id = ${institutionId} AND id = ${id}`))[0] ?? null;
+    async findReportPackage(institutionId: string, id: string): Promise<{canonical: string; digest: string} | null> {
+      return rowsOf(await db.execute(sql`SELECT canonical, digest FROM report_packages WHERE institution_id = ${institutionId} AND id = ${id}`))[0] ?? null;
     },
     async listReportPackages(institutionId: string, preparationId: string): Promise<{id: string; digest: string}[]> {
       return rowsOf(await db.execute(sql`SELECT id, digest FROM report_packages

@@ -115,6 +115,8 @@ contract ReportEvidenceRegistry is EIP712 {
     struct Publication { Authorization institution; Authorization validator; bytes institutionSignature; bytes validatorSignature; }
     mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => Publication))) private publications;
     mapping(bytes32 => mapping(bytes32 => string)) private latestPackages;
+    mapping(bytes32 => mapping(bytes32 => string)) private latestVersions;
+    mapping(bytes32 => mapping(bytes32 => string)) private packageVersions;
     event ValidatorChanged(address indexed validator, bool active, uint256 epoch);
     event ReportPublished(bytes32 indexed institutionKey, bytes32 indexed packageKey, bytes32 indexed authorization,
         bytes32 action, bytes32 digest, address signer, bytes32 validatorAuthorization, address validator);
@@ -145,8 +147,15 @@ contract ReportEvidenceRegistry is EIP712 {
             || keccak256(bytes(a.outcome)) != keccak256("LOLOS") || publicationPayload(a) != publicationPayload(v)) revert InvalidAuthorization();
         bytes32 institutionKey = keccak256(bytes(a.institutionId));
         bytes32 reportKey = keccak256(bytes(a.reportId));
-        // First publication only. A future correction must explicitly check the predecessor and append.
-        if (bytes(a.predecessor).length != 0 || bytes(latestPackages[institutionKey][reportKey]).length != 0) revert AlreadyRecorded();
+        // A first version has no predecessor; a correction succeeds the current official version of this same report.
+        string memory latest = latestPackages[institutionKey][reportKey];
+        bool succeeds = bytes(a.predecessor).length != 0
+            && keccak256(bytes(latest)) == keccak256(bytes(a.predecessor))
+            && keccak256(bytes(a.packageId)) != keccak256(bytes(a.predecessor));
+        if (!succeeds && (bytes(a.predecessor).length != 0 || bytes(latest).length != 0)) revert AlreadyRecorded();
+        // Version and package identity are each written once; display numbering never authorizes.
+        if (bytes(publications[institutionKey][reportKey][keccak256(bytes(a.version))].institution.version).length != 0
+            || bytes(packageVersions[institutionKey][keccak256(bytes(a.packageId))]).length != 0) revert AlreadyRecorded();
         bytes32 recorded = evidence[institutionKey][keccak256(bytes(a.packageId))];
         if (recorded != bytes32(0) && recorded != a.digest) revert InvalidAuthorization();
         checkPublicationSignature(a, signature, signatories[institutionKey][a.signer]);
@@ -157,8 +166,11 @@ contract ReportEvidenceRegistry is EIP712 {
         bytes32 institutionKey = keccak256(bytes(a.institutionId));
         usedNonces[institutionKey][a.signer][a.nonce] = true;
         usedNonces[institutionKey][v.signer][v.nonce] = true;
-        publications[institutionKey][keccak256(bytes(a.reportId))][keccak256(bytes(a.version))] = Publication(a, v, signature, validatorSignature);
-        latestPackages[institutionKey][keccak256(bytes(a.reportId))] = a.packageId;
+        bytes32 reportKey = keccak256(bytes(a.reportId));
+        publications[institutionKey][reportKey][keccak256(bytes(a.version))] = Publication(a, v, signature, validatorSignature);
+        latestPackages[institutionKey][reportKey] = a.packageId;
+        latestVersions[institutionKey][reportKey] = a.version;
+        packageVersions[institutionKey][keccak256(bytes(a.packageId))] = a.version;
         evidence[institutionKey][keccak256(bytes(a.packageId))] = a.digest;
         emit ReportPublished(institutionKey, keccak256(bytes(a.packageId)), authorizationDigest(a), a.action,
             a.digest, a.signer, authorizationDigest(v), v.signer);
@@ -168,5 +180,13 @@ contract ReportEvidenceRegistry is EIP712 {
     }
     function latestPublishedPackage(string calldata institutionId, string calldata reportId) external view returns (string memory) {
         return latestPackages[keccak256(bytes(institutionId))][keccak256(bytes(reportId))];
+    }
+    /// @notice The version identity a reader must use; superseded versions stay readable through their own identity.
+    function latestPublishedVersion(string calldata institutionId, string calldata reportId) external view returns (string memory) {
+        return latestVersions[keccak256(bytes(institutionId))][keccak256(bytes(reportId))];
+    }
+    /// @notice Empty for a package that was never published, which is how a losing correction reads back.
+    function publishedPackageVersion(string calldata institutionId, string calldata packageId) external view returns (string memory) {
+        return packageVersions[keccak256(bytes(institutionId))][keccak256(bytes(packageId))];
     }
 }

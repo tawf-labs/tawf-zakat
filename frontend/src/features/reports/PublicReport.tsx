@@ -1,4 +1,4 @@
-import { originLabel, positionLabel, formatInstant } from "../workspace/evidenceText";
+import { originLabel, positionLabel, formatInstant, formatBlockInstant, VERSION_STATE_LABELS } from "../workspace/evidenceText";
 import { DISCREPANCY_LABELS } from "../reconciliation/format";
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "../../lib/contracts";
@@ -52,7 +52,8 @@ export function PublicReport({ packageId }: { packageId: string }) {
       <dt>Pencatatan bukti terpisah</dt><dd>{summary.recording.state === "RECORDED" ? "Terkonfirmasi" : "Belum terkonfirmasi"}</dd>
       <dt>Vonis validator</dt><dd>{summary.validator.outcome}</dd>
       <dt>Penerbitan lembaga</dt><dd role="status">{summary.publication.state === "PUBLISHED" ? "Laporan terbit" : "Penerbitan belum terkonfirmasi"}</dd>
-      <dt>Atestasi auditor</dt><dd>Belum diperiksa</dd>
+      <dt>Atestasi auditor versi ini</dt><dd>Belum diperiksa; atestasi versi lain tidak berlaku di sini.</dd>
+      <dt>Status versi</dt><dd role="status">{VERSION_STATE_LABELS[summary.version.state] ?? "Status versi perlu diperiksa"}</dd>
       <dt>Berkas sumber</dt><dd>{summary.files.available} dari {summary.files.total} tersedia; {summary.files.missing + summary.files.unavailable} tidak tersedia; {summary.files.integrityFailed} tidak cocok.</dd>
     </dl>
     <section className="space-y-2"><h3 className="font-semibold">Temuan dan batas pemeriksaan</h3>
@@ -60,6 +61,19 @@ export function PublicReport({ packageId }: { packageId: string }) {
       <p>Toleransi rekonsiliasi: {money(c.tolerance)}. Klaim draf tetap harus cocok persis.</p>
       <ul>{Object.entries(c.findings.counts).map(([kind, count]) => <li key={kind}>{DISCREPANCY_LABELS[kind as keyof typeof DISCREPANCY_LABELS] ?? "Temuan lainnya"}: {count}</li>)}</ul>
       <ul className="list-disc pl-5">{c.limitations.map(code => <li key={code}>{limitationText[code] ?? "Batas pemeriksaan lain tersedia dalam paket terbatas."}</li>)}</ul>
+    </section>
+    <section className="space-y-2"><h3 className="font-semibold">Riwayat versi resmi</h3>
+      {summary.version.supersededByPackageId && <p role="status">Versi ini telah dikoreksi. Versi resmi terkini adalah paket {summary.version.supersededByPackageId}; halaman versi lama tetap tersedia dan tidak diganti.</p>}
+      {summary.history.length === 0 ? <p>Belum ada versi resmi yang tercatat pada registry untuk laporan ini.</p>
+        : <ol className="list-none space-y-2 text-sm">{summary.history.map(entry => <li key={entry.packageId} className="rounded border border-stone-200 p-3">
+          <p className="font-semibold">{entry.official ? "Versi resmi terkini" : "Versi yang digantikan"}{entry.packageId === c.packageId ? " · halaman ini" : ""}</p>
+          <p className="break-all text-xs">Paket {entry.packageId}<br />Referensi versi {entry.versionReference}
+            {entry.predecessorPackageId ? <><br />Menyusul paket {entry.predecessorPackageId}</> : <><br />Versi pertama; tidak menyusul versi lain.</>}</p>
+          <p className="break-all text-xs">Pengesah lembaga {entry.endorsements.institution}<br />Validator {entry.endorsements.validator}</p>
+          <p className="text-xs">{entry.anchor ? `Diterima registry ${formatBlockInstant(entry.anchor.blockTimestamp)} · blok ${entry.anchor.blockNumber ?? "belum tersedia"} · konfirmasi ${entry.anchor.confirmations}/${entry.anchor.requiredConfirmations}` : "Bukti penerimaan transaksi tidak tersedia dari sumber ini."}</p>
+          <p className="text-xs">Alasan koreksi: {entry.correctionReason ? "tersedia bagi pembaca berwenang" : "—"}. Atestasi auditor versi ini: {entry.attestations.count === 0 ? "belum diperiksa" : `${entry.attestations.count} tercatat`}.</p>
+        </li>)}</ol>}
+      <p className="text-xs">Penomoran versi pada layar berasal dari judul lembaga dan bukan sumber kewenangan; urutan resmi berasal dari registry.</p>
     </section>
     <section className="space-y-2 break-all text-sm"><h3 className="font-semibold">Identitas dan referensi pemeriksaan</h3>
       <p>Paket {c.packageId}<br />Referensi laporan {c.reportReference}<br />Referensi versi resmi {c.versionReference}</p>

@@ -305,6 +305,30 @@ export const reportRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "latestPublishedVersion",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "reportId",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "pendingAdministrators",
     "inputs": [
       {
@@ -501,6 +525,30 @@ export const reportRegistryAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "publishedPackageVersion",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "packageId",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",

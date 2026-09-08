@@ -655,3 +655,325 @@ it("distinguishes corrupted source bytes from missing files in the actual examin
     await expect(verifyExamination(bundle)).rejects.toThrow("Integritas berkas");
   } finally { await files.put({ institutionId: institution, preparationId: publicPackage.preparationId, fileId: file.id, bytes: original! }); }
 });
+
+
+// ---- Ticket #75: corrections publish a successor version without overwriting history ----
+
+const manifestOf = () => frozen.snapshot.sides[0].manifest;
+async function correctionPreparation(claim: string, source: string, label: string) {
+  const manifest = manifestOf();
+  return (await json("evidence", {
+    files: [{ role: "SOURCE", fileName: "koreksi.txt", mimeType: "text/plain", contentBase64: Buffer.from(`sumber ${label} ${claim}/${source}`).toString("base64") }],
+    label, period: manifest.period, currencyUnit: "IDR", balanceSheetScope: "ON",
+    claim: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: claim, unit: "IDR" } }] },
+    source: { manifest, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: source, unit: "IDR" } }] },
+  })).preparation;
+}
+async function frozenVersion(preparationId: string, body: Record<string, unknown>) {
+  const base = `evidence/${preparationId}/reports`;
+  const review = await json(`${base}/review`);
+  const draft = (await json(base, { mode: "HUMAN", ...body, disclosure: review.disclosure,
+    draft: { narrative: "Selisih dilaporkan sesuai sumber.", claims: review.figures.map((f: any) => ({ name: f.name, amount: f.value.amount, unit: f.value.unit })) } })).package;
+  return (await json(`${base}/${draft.id}/freeze`, {})).package;
+}
+const publicationPath = (saved: any) => `evidence/${saved.preparationId}/reports/${saved.id}/publication`;
+async function publishVersion(saved: any, retryId: string) {
+  const path = publicationPath(saved);
+  const intent = (await json(path, { retryId, digest: saved.digest })).intent;
+  const signature = await account.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+  await json(`${path}/${intent.id}/submit`, { signature }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  return { path, intent, signature };
+}
+
+let correctedReport: string;
+let firstVersion: any;
+let correctedVersion: any;
+
+it("publishes a correction that succeeds the official version and keeps the superseded one readable", async () => {
+  correctedReport = `koreksi-${crypto.randomUUID()}`;
+  const first = await correctionPreparation("200", "100", "Versi pertama");
+  firstVersion = await frozenVersion(first.id, { reportId: correctedReport, version: "1" });
+  const original = await publishVersion(firstVersion, "koreksi-versi-1");
+  expect((await json(`${original.path}/version`)).version.versionState).toBe("VERSI_RESMI_TERKINI");
+
+  // A correction is prepared from a new snapshot; the review shows what changes before anything is saved.
+  const second = await correctionPreparation("200", "150", "Snapshot koreksi");
+  const preview = (await json(`evidence/${second.id}/reports/correction?predecessor=${firstVersion.id}`)).correction;
+  expect(preview.predecessor.version).toBe("1");
+  expect(preview.predecessor.digest).toBe(firstVersion.digest);
+  expect(preview.samePreparation).toBe(false);
+  expect(preview.reasonRequired).toBe(true);
+  expect(preview.sources.map((s: any) => s.role)).toEqual(["CLAIM", "SOURCE"]);
+  expect(preview.sources.every((s: any) => s.state === "TETAP")).toBe(true);
+  const delta = preview.changes.find((c: any) => c.name === "rekonsiliasi.selisih");
+  expect(delta.before.amount).toBe("100");
+  expect(delta.after.amount).toBe("50");
+  expect(delta.state).toBe("BERUBAH");
+  expect(preview.changes.some((c: any) => c.state === "TETAP")).toBe(true);
+
+  // A reason is required, and the predecessor must be another frozen version of the same report.
+  expect((await request(`evidence/${second.id}/reports`, { reportId: correctedReport, version: "2", mode: "HUMAN", predecessor: firstVersion.id, draft: { narrative: "x", claims: [] } })).status).toBe(400);
+  expect((await request(`evidence/${second.id}/reports`, { reportId: "laporan-lain", version: "2", mode: "HUMAN", predecessor: firstVersion.id, correctionReason: "salah", draft: { narrative: "x", claims: [] } })).status).toBe(400);
+
+  correctedVersion = await frozenVersion(second.id, { reportId: correctedReport, version: "2", predecessor: firstVersion.id, correctionReason: "Angka sumber diperbaiki setelah rekonsiliasi bank." });
+  expect(correctedVersion.predecessor).toBe(firstVersion.id);
+  const corrected = await publishVersion(correctedVersion, "koreksi-versi-2");
+
+  const now = (await json(`${corrected.path}/version`)).version;
+  expect(now.publication).toBe("PUBLISHED");
+  expect(now.versionState).toBe("VERSI_RESMI_TERKINI");
+  expect(now.predecessor).toBe(firstVersion.id);
+  expect(now.correctionReason).toContain("Angka sumber diperbaiki");
+  // The version it succeeded stays published under its own identity, now marked as superseded.
+  const superseded = (await json(`${original.path}/version`)).version;
+  expect(superseded.publication).toBe("PUBLISHED");
+  expect(superseded.versionState).toBe("DIGANTIKAN_KOREKSI");
+  expect(superseded.officialPackageId).toBe(correctedVersion.id);
+  // Neither version borrows the other's audit state.
+  expect(now.attestations.entries).toEqual([]);
+  expect(now.attestations.subject.packageId).toBe(correctedVersion.id);
+  expect(superseded.attestations.subject.packageId).toBe(firstVersion.id);
+  expect(superseded.attestations.state).toBe("NOT_EXAMINED");
+
+  const history = (await json(`${corrected.path}/history`)).history;
+  expect(history.map((entry: any) => entry.version)).toEqual(["2", "1"]);
+  expect(history[0].correctionReason).toContain("Angka sumber diperbaiki");
+  expect(history[0].predecessor).toBe(firstVersion.id);
+  expect(history[1].predecessor).toBeNull();
+  expect(history[1].correctionReason).toBeNull();
+  expect(history[0].endorsements.institution.toLowerCase()).toBe(account.address.toLowerCase());
+  expect(history[0].endorsements.validator.toLowerCase()).toBe(validator.address.toLowerCase());
+  expect(Number(history[0].anchor.blockTimestamp)).toBeGreaterThan(0);
+  expect(history[0].anchor.transactionHash).toBe(corrected.intent.transactionHash ?? history[0].anchor.transactionHash);
+  expect(history[1].anchor.transactionHash).not.toBe(history[0].anchor.transactionHash);
+  // Reading the same line from the superseded version gives the same history.
+  expect((await json(`${original.path}/history`)).history).toEqual(history);
+
+  // The superseded package, its snapshot and its files are untouched by the correction.
+  const old = (await json(`evidence/${firstVersion.preparationId}/reports/${firstVersion.id}`)).package;
+  expect(old.digest).toBe(firstVersion.digest);
+  expect(old.figures).toEqual(firstVersion.figures);
+  const bundle = await (await request(`evidence/${firstVersion.preparationId}/reports/${firstVersion.id}/examination`)).json();
+  const { verifyExamination } = await import("../src/report-verifier");
+  const checked = await verifyExamination(bundle);
+  expect(checked.recomputed.reconciliation.netDelta.amount).toBe("100");
+  expect(checked.version.superseded).toBe(true);
+  expect(checked.version.official).toBe(false);
+  expect(checked.version.line.map((v: any) => v.version)).toEqual(["2", "1"]);
+}, 30000);
+
+it("refuses a wrong predecessor, a second first version and a signature made for another version", async () => {
+  const preparation = await correctionPreparation("300", "300", "Pendahulu salah");
+  const wrongPredecessor = await frozenVersion(preparation.id, { reportId: correctedReport, version: "9",
+    predecessor: firstVersion.id, correctionReason: "Menyusul versi yang sudah digantikan." });
+  const stale = await request(publicationPath(wrongPredecessor), { retryId: "pendahulu-lama", digest: wrongPredecessor.digest });
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error).toContain("bukan versi resmi terkini");
+
+  // A cross-report predecessor never reaches the registry: the package boundary refuses it first.
+  const crossReport = await request(`evidence/${preparation.id}/reports`, { reportId: correctedReport, version: "10", mode: "HUMAN",
+    predecessor: publicPackage.id, correctionReason: "Pendahulu dari laporan lain.", draft: { narrative: "x", claims: [] } });
+  expect(crossReport.status).toBe(400);
+  // A package that really belongs to another institution is not visible as a predecessor at all.
+  const outsider = privateKeyToAccount(`0x${"0".repeat(63)}7`);
+  const otherStore = createWorkspaceStore(database.handle());
+  await otherStore.upsertMembership({ institutionId: "lpz-baitul-maal", account: outsider.address, role: "OFFICER" });
+  const otherChallenge = await json("workspace/challenge", { institutionId: "lpz-baitul-maal", account: outsider.address });
+  const otherToken = (await json("workspace/session", { nonce: otherChallenge.challenge.nonce, signature: await outsider.signTypedData(otherChallenge.typedData) })).token;
+  const manifest = manifestOf();
+  const otherPreparation = (await (await request("evidence", { label: "Lembaga lain", period: manifest.period, currencyUnit: "IDR", balanceSheetScope: "ON",
+    claim: { manifest: { ...manifest, institutionId: "lpz-baitul-maal" }, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "10", unit: "IDR" } }] },
+    source: { manifest: { ...manifest, institutionId: "lpz-baitul-maal" }, rows: [{ key: "a", bucket: "ZAKAT", balanceSheet: "ON", value: { amount: "10", unit: "IDR" } }] } }, otherToken)).json()).preparation;
+  const otherBase = `evidence/${otherPreparation.id}/reports`;
+  const otherDraft = await (await request(otherBase, { reportId: "laporan-lembaga-lain", version: "1", mode: "HUMAN", draft: { narrative: "Draf lembaga lain.", claims: [] } }, otherToken)).json();
+  const otherFrozen = await (await request(`${otherBase}/${otherDraft.package.id}/freeze`, {}, otherToken)).json();
+  const foreign = await request(`evidence/${preparation.id}/reports`, { reportId: correctedReport, version: "11", mode: "HUMAN",
+    predecessor: otherFrozen.package.id, correctionReason: "Pendahulu lembaga lain.", draft: { narrative: "x", claims: [] } });
+  expect(foreign.status).toBe(400);
+  expect((await foreign.json()).error).toContain("Pendahulu tidak ditemukan dalam lembaga ini");
+  // The other institution still reads its own package; nothing here leaked across the boundary.
+  expect((await (await request(`${otherBase}/${otherFrozen.package.id}`, undefined, otherToken)).json()).package.digest).toBe(otherFrozen.package.digest);
+
+  // A correction that reuses a published version label is refused with an actionable reason, not a bare revert.
+  const reusedLabel = await frozenVersion(preparation.id, { reportId: correctedReport, version: "1",
+    predecessor: correctedVersion.id, correctionReason: "Label versi diulang." });
+  const collision = await request(publicationPath(reusedLabel), { retryId: "label-terpakai", digest: reusedLabel.digest });
+  expect(collision.status).toBe(409);
+  expect((await collision.json()).error).toContain("sudah dipakai versi resmi lain");
+
+  // A report that already has an official version cannot receive a second first version.
+  const second = await frozenVersion(preparation.id, { reportId: correctedReport, version: "12" });
+  const root = await request(publicationPath(second), { retryId: "akar-kedua", digest: second.digest });
+  expect(root.status).toBe(409);
+  expect((await root.json()).error).toContain("sudah memiliki versi resmi");
+
+  // The institution signature accepted for version 1 does not authorize the correction.
+  const path = publicationPath(correctedVersion);
+  const replay = await request(`${path}/${(await json(`${path}`)).intents[0].id}/submit`, { signature: await account.signTypedData(evidenceTypedData(
+    { name: "Tawf Report Evidence", version: "1", chainId: 31337, verifyingContract: registry },
+    { ...(await json(`${publicationPath(firstVersion)}`)).intents[0].authorization })) });
+  expect(replay.status).toBe(409);
+  expect((await json(`${publicationPath(correctedVersion)}/version`)).version.versionState).toBe("VERSI_RESMI_TERKINI");
+});
+
+it("lets at most one of two competing corrections become official, and the loser reprepares", async () => {
+  const winnerSource = await correctionPreparation("400", "400", "Koreksi bersaing A");
+  const loserSource = await correctionPreparation("500", "500", "Koreksi bersaing B");
+  const winner = await frozenVersion(winnerSource.id, { reportId: correctedReport, version: "3a", predecessor: correctedVersion.id, correctionReason: "Koreksi A." });
+  const loser = await frozenVersion(loserSource.id, { reportId: correctedReport, version: "3b", predecessor: correctedVersion.id, correctionReason: "Koreksi B." });
+  // Both are endorsed while the same version is still official.
+  const winnerIntent = (await json(publicationPath(winner), { retryId: "bersaing-a", digest: winner.digest })).intent;
+  const loserIntent = (await json(publicationPath(loser), { retryId: "bersaing-b", digest: loser.digest })).intent;
+  const loserSignature = await account.signTypedData(evidenceTypedData(loserIntent.domain, loserIntent.authorization));
+  const attempts = await database.rowCount("registry_attempts");
+  await json(`${publicationPath(winner)}/${winnerIntent.id}/submit`, { signature: await account.signTypedData(evidenceTypedData(winnerIntent.domain, winnerIntent.authorization)) }, 200);
+  await rpc.request({ method: "evm_mine" as any });
+
+  const conflict = await request(`${publicationPath(loser)}/${loserIntent.id}/submit`, { signature: loserSignature });
+  expect(conflict.status).toBe(409);
+  expect((await conflict.json()).error).toContain("bukan versi resmi terkini");
+  // The refusal happens before the relayer signs anything, so there is nothing to rebroadcast either.
+  const retried = await request(`${publicationPath(loser)}/${loserIntent.id}/retry`, {});
+  expect(retried.status).toBe(409);
+  expect((await retried.json()).error).toContain("Belum ada transaksi tersimpan");
+  expect((await json(`${publicationPath(loser)}/version`)).version.publication).toBe("NOT_PUBLISHED");
+  expect(await database.rowCount("registry_attempts")).toBe(attempts + 1);
+
+  // The winner's retry is the same logical publication, not a second successor.
+  const repeated = (await json(`${publicationPath(winner)}/${winnerIntent.id}/retry`, {}, 200)).intent;
+  await database.reopen(); await configure();
+  const official = (await json(`${publicationPath(winner)}/version`)).version;
+  expect(official.versionState).toBe("VERSI_RESMI_TERKINI");
+  expect(repeated.transactionHash).toBe(official.anchor.transactionHash);
+  expect((await json(`${publicationPath(winner)}/history`)).history.map((e: any) => e.version)).toEqual(["3a", "2", "1"]);
+
+  // The loser's package and findings stay readable as a submission that never became a version.
+  const stillReadable = (await json(`evidence/${loser.preparationId}/reports/${loser.id}`)).package;
+  expect(stillReadable.digest).toBe(loser.digest);
+  expect((await json(`${publicationPath(loser)}/version`)).version.versionState).toBe("BUKAN_VERSI_RESMI");
+  expect((await json(`${publicationPath(loser)}/history`)).history.some((e: any) => e.packageId === loser.id)).toBe(false);
+
+  // Reprepared against the version that actually won, the loser publishes once.
+  const reprepared = await frozenVersion(loserSource.id, { reportId: correctedReport, version: "4", predecessor: winner.id, correctionReason: "Koreksi B disiapkan ulang terhadap versi terkini." });
+  await publishVersion(reprepared, "bersaing-b-ulang");
+  const line = (await json(`${publicationPath(reprepared)}/history`)).history;
+  expect(line.map((e: any) => e.version)).toEqual(["4", "3a", "2", "1"]);
+  expect(line.every((e: any, index: number) => index === 0 ? e.official : !e.official)).toBe(true);
+}, 30000);
+
+it("separates the official version from a superseded one in public summaries and exports", async () => {
+  const supersededSummary = (await (await request(`public/reports/${firstVersion.id}`, undefined, "")).json()).summary;
+  expect(supersededSummary.publication.state).toBe("PUBLISHED");
+  expect(supersededSummary.version.state).toBe("DIGANTIKAN_KOREKSI");
+  expect(supersededSummary.version.supersededByPackageId).toBe(correctedVersion.id);
+  expect(supersededSummary.version.predecessorPackageId).toBeNull();
+  expect(supersededSummary.attestations).toEqual({ state: "NOT_EXAMINED", count: 0 });
+  expect(supersededSummary.history[0].official).toBe(true);
+  expect(supersededSummary.history.at(-1).packageId).toBe(firstVersion.id);
+  // Institution-authored free text never reaches the public line.
+  const serialized = JSON.stringify(supersededSummary);
+  expect(serialized).not.toContain("Angka sumber diperbaiki");
+  expect(serialized).not.toContain(correctedReport);
+  expect(supersededSummary.history[0].correctionReason).toBe("TERBATAS_BAGI_PEMBACA_BERWENANG");
+  expect(Number(supersededSummary.history[0].anchor.blockTimestamp)).toBeGreaterThan(0);
+
+  const correctionSummary = (await (await request(`public/reports/${correctedVersion.id}`, undefined, "")).json()).summary;
+  expect(correctionSummary.version.predecessorPackageId).toBe(firstVersion.id);
+  expect(correctionSummary.version.supersededByPackageId).not.toBeNull();
+  expect(correctionSummary.content.commitment).toBe(correctedVersion.digest);
+  expect(correctionSummary.summaryDigest).not.toBe(supersededSummary.summaryDigest);
+
+  // The authorized export of the corrected version verifies its own line against the real registry.
+  const bundle = await (await request(`evidence/${correctedVersion.preparationId}/reports/${correctedVersion.id}/examination`)).json();
+  const { verifyExamination } = await import("../src/report-verifier");
+  const result = await verifyExamination(bundle, { rpcUrl, chainId: 31337, registry });
+  expect(result.ok).toBe(true);
+  expect(result.version.predecessor).toBe(firstVersion.id);
+  expect(result.version.correction).toBe(true);
+  for (const forge of [
+    (line: any[]) => { line[line.length - 1].predecessor = "dibuat-buat"; },
+    (line: any[]) => { line[1].predecessor = "dibuat-buat"; },
+    (line: any[]) => { line.splice(1, 1); },
+  ]) {
+    const forged = structuredClone(bundle);
+    forge(forged.officialLine);
+    await expect(verifyExamination(forged)).rejects.toThrow("satu garis resmi");
+  }
+  const relabelled = structuredClone(bundle);
+  relabelled.officialLine = relabelled.officialLine.filter((e: any) => e.packageId !== firstVersion.id);
+  await expect(verifyExamination(relabelled, { rpcUrl, chainId: 31337, registry })).rejects.toThrow();
+}, 20000);
+
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: publishes a first version, corrects it from the UI and reads both versions", async () => {
+  const reportId = `demo-koreksi-${crypto.randomUUID()}`;
+  const preparation = await correctionPreparation("700", "700", "Demo koreksi");
+  const first = await frozenVersion(preparation.id, { reportId, version: "1" });
+  await publishVersion(first, "demo-koreksi-1");
+  const prep = await json(`evidence/${preparation.id}`);
+  const bundles: Record<string, string> = {};
+  for (const [name, file] of [["public", "public-report-smoke.tsx"], ["private", "registry-smoke.tsx"]]) {
+    const built = await Bun.build({ entrypoints: [new URL(`../../frontend/test/${file}`, import.meta.url).pathname], target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "http://127.0.0.1:18575" }) } });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    bundles[name!] = await built.outputs[0]!.text();
+  }
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 18575, async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/public-demo" || path === "/") return new Response(`<div id="root"></div><script type="module" src="/${path === "/public-demo" ? "public" : "private"}.js"></script>`, { headers: { "Content-Type": "text/html" } });
+    if (path === "/public.js" || path === "/private.js") return new Response(bundles[path.slice(1, -3)], { headers: { "Content-Type": "text/javascript" } });
+    if (path === "/smoke-config") return Response.json({ preparationId: preparation.id, token, canPrepare: true, commitmentSalt: prep.preparation.commitmentSalt });
+    if (path === "/wallet-rpc") {
+      const { method, params } = await req.json();
+      if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([account.address]);
+      if (method === "eth_chainId") return Response.json("0x7a69");
+      if (method === "eth_signTypedData_v4") return Response.json(await account.signTypedData(JSON.parse(params[1])));
+      if (method === "wallet_requestPermissions" || method === "wallet_getPermissions") return Response.json([{ parentCapability: "eth_accounts" }]);
+      return Response.json(null);
+    }
+    return app.fetch(req);
+  } });
+  const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+  const browser = await chromium.launch({ ...(process.env.REGISTRY_BROWSER_EXECUTABLE ? { executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE } : {}), headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (error: Error) => console.error("Browser:", error.message));
+    await page.goto("http://127.0.0.1:18575/");
+    await page.getByLabel("Paket tersimpan").selectOption(first.id);
+    const publicationPanel = page.getByRole("heading", { name: "Penerbitan laporan", exact: true }).locator("..");
+    await publicationPanel.getByText("Paket ini: Versi resmi terkini.").waitFor();
+
+    // The correction starts from the published version and is reviewed before anything is saved.
+    await publicationPanel.getByRole("button", { name: "Mulai koreksi dari versi ini" }).click();
+    await page.getByRole("heading", { name: "Perubahan terhadap versi 1" }).waitFor();
+    expect(await page.getByLabel("Versi", { exact: true }).inputValue()).toBe("");
+    expect(await page.locator("body").innerText()).toContain("Pengesahan versi pendahulu tidak berlaku untuk koreksi ini");
+    const save = page.getByRole("button", { name: "Simpan dan periksa draf" });
+    await page.getByLabel("Narasi draf").fill("Koreksi narasi setelah rekonsiliasi ulang.");
+    await page.getByLabel("Versi", { exact: true }).fill("2");
+    expect(await save.isDisabled()).toBe(true);
+    await page.getByLabel(/Alasan koreksi/).fill("Narasi versi pertama keliru; angka sumber tetap sama.");
+    await page.getByLabel("Saya menyertakan seluruh sumber, temuan, dan batas pemeriksaan di atas sebagai bagian laporan.").check();
+    await save.click();
+    await page.getByText("· versi 2 · LOLOS · Draf tersimpan").waitFor();
+    await page.getByRole("button", { name: "Bekukan paket untuk review pengesahan" }).click();
+    await page.getByText("· versi 2 · LOLOS · Dibekukan").waitFor();
+
+    await publicationPanel.getByRole("button", { name: "Minta pengesahan validator" }).click();
+    await publicationPanel.getByLabel("Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.").check();
+    await publicationPanel.getByRole("button", { name: "Tandatangani penerbitan laporan" }).click();
+    await publicationPanel.getByText("Penerbitan masuk blok; menunggu konfirmasi", { exact: true }).waitFor();
+    await rpc.request({ method: "evm_mine" as any });
+    await publicationPanel.getByText("Laporan terbit; tingkat konfirmasi tercapai", { exact: true }).waitFor();
+    await publicationPanel.getByText("Versi 2 · resmi terkini", { exact: true }).waitFor();
+    await publicationPanel.getByText("Versi 1 · digantikan", { exact: true }).waitFor();
+    expect(await publicationPanel.innerText()).toContain("Narasi versi pertama keliru");
+    await page.screenshot({ path: "/tmp/ticket75-browser-correction.png", fullPage: true });
+
+    // Both versions stay readable to a public reader, each under its own identity.
+    await page.goto(`http://127.0.0.1:18575/public-demo?packageId=${first.id}`);
+    await page.getByText("Digantikan oleh koreksi yang lebih baru", { exact: true }).waitFor();
+    await page.getByText("Versi yang digantikan · halaman ini", { exact: true }).waitFor();
+    expect(await page.locator("body").innerText()).not.toContain("Narasi versi pertama keliru");
+    await page.screenshot({ path: "/tmp/ticket75-public-superseded.png", fullPage: true });
+  } finally { await browser.close(); server.stop(true); }
+}, 90000);

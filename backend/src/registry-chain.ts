@@ -43,6 +43,19 @@ export function createRegistryChain(config: RegistryConfig) {
       await assertDeployment();
       return rpc.readContract({ address: config.address, abi, functionName: "publishedVersion", args: [institution, report, version] });
     },
+    /** Which package the registry currently treats as official; display numbering never decides this. */
+    async officialLine(institution: string, report: string) {
+      await assertDeployment();
+      const [packageId, version] = await Promise.all([
+        rpc.readContract({ address: config.address, abi, functionName: "latestPublishedPackage", args: [institution, report] }),
+        rpc.readContract({ address: config.address, abi, functionName: "latestPublishedVersion", args: [institution, report] }),
+      ]);
+      return { packageId, version };
+    },
+    async publishedPackageVersion(institution: string, packageId: string) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "publishedPackageVersion", args: [institution, packageId] });
+    },
     async validate(intent: RecordingIntent, signature: Hex) {
       await assertDeployment();
       if (intent.validator) await rpc.readContract({ address: config.address, abi, functionName: "validatePublication", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] });
@@ -86,8 +99,9 @@ export function createRegistryChain(config: RegistryConfig) {
       const evidence = { blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash };
       const block = await rpc.getBlock({ blockNumber: receipt.blockNumber });
       if (block.hash !== receipt.blockHash) return { ...base, ...evidence, state: "NONCANONICAL" };
-      if (receipt.status !== "success") return { ...base, ...evidence, state: "REVERTED" };
-      if (receipt.transactionHash !== hash || receipt.to?.toLowerCase() !== config.address.toLowerCase()) return { ...base, ...evidence, state: "INVALID_EVENT" };
+      const timed = { ...evidence, blockTimestamp: block.timestamp.toString() };
+      if (receipt.status !== "success") return { ...base, ...timed, state: "REVERTED" };
+      if (receipt.transactionHash !== hash || receipt.to?.toLowerCase() !== config.address.toLowerCase()) return { ...base, ...timed, state: "INVALID_EVENT" };
       const matches = receipt.logs.filter(log => {
         if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
         try {
@@ -106,11 +120,11 @@ export function createRegistryChain(config: RegistryConfig) {
             && event.args.signer.toLowerCase() === a.signer.toLowerCase();
         } catch { return false; }
       });
-      if (matches.length !== 1 || matches[0]!.logIndex === null) return { ...base, ...evidence, state: "INVALID_EVENT" };
+      if (matches.length !== 1 || matches[0]!.logIndex === null) return { ...base, ...timed, state: "INVALID_EVENT" };
       const head = await rpc.getBlockNumber({ cacheTime: 0 });
-      if (head < receipt.blockNumber) return { ...base, ...evidence, state: "NONCANONICAL" };
+      if (head < receipt.blockNumber) return { ...base, ...timed, state: "NONCANONICAL" };
       const confirmations = Number(head - receipt.blockNumber + 1n);
-      return { ...base, ...evidence, confirmations, logIndex: matches[0]!.logIndex!, state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED" };
+      return { ...base, ...timed, confirmations, logIndex: matches[0]!.logIndex!, state: confirmations >= config.requiredConfirmations ? "CONFIRMED" : "INCLUDED" };
     },
   };
 }
