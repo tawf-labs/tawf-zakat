@@ -11,15 +11,15 @@
  *
  * Deploying the code is not the approval. The heuristic this ticket removes is
  * gone either way - the unit now comes from `currencyType`, which needs no
- * migration at all. What the column adds is exactness past 2^53 minor units,
- * and lifting the chain reader's refusal of amounts above it.
+ * migration at all. The column preserves exact amounts; legacy USDC without it remains
+ * unverified until the same proposal is recovered from a verified receipt.
  *
  * There is no inference backfill here either, but for a different reason than in
  * #67: a proposal *can* be paired, because it carries `proposalIdOnChain` and
  * the chain emits `DisbursementProposed` / `DisbursementExecuted` with the
- * amount. Backfilling from those events is legitimate work with its own
- * evidence - and it belongs in a ticket that can test it against a real chain,
- * not in a migration script that would have to do it unattended.
+ * amount. Operators recover rows through the existing receipt-confirmation
+ * endpoint, which verifies that identity before writing the current exact
+ * amount. The schema migration itself never backfills legacy values.
  */
 
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -66,8 +66,8 @@ async function main() {
     if (!report.migrated) {
       say("   Migrasi belum diterapkan: kolom jumlah eksak belum ada.");
       say(`   Proposal tersimpan: ${report.totalProposals}.`);
-      say(`   Proposal USDC yang dibaca lewat kolom angka: ${report.usdcWithoutExactAmount}.`);
-      say("   Satuannya tetap benar - diambil dari currency_type - hanya presisinya dibatasi 2^53.");
+      say(`   Proposal USDC belum terverifikasi: ${report.usdcWithoutExactAmount}.`);
+      say("   USDC tanpa amount_exact belum terverifikasi; jumlah lama tidak dipakai dalam perhitungan.");
       return;
     }
 
@@ -77,8 +77,7 @@ async function main() {
 
     if (report.usdcWithoutExactAmount > 0) {
       say();
-      say("   Proposal berikut masih dibaca lewat kolom angka. Satuannya benar, presisinya");
-      say("   dibatasi 2^53 satuan minor, dan tidak ada nilai yang ditebak dari besar angka:");
+      say("   Proposal berikut belum terverifikasi; pulihkan jumlahnya dari receipt proposal yang sama:");
       for (const id of report.inexactReferences) say(`     - proposal #${id}`);
     }
     say();

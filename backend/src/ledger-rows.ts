@@ -61,6 +61,9 @@ export function readProposalAmount(row: AmountRow): { value: Money } | { error: 
   const where = `Jumlah proposal #${row.proposalIdOnChain}`;
 
   if (row.amountExact !== undefined && row.amountExact !== null) {
+    if (typeof row.amountExact === "number" && !Number.isSafeInteger(row.amountExact)) {
+      return { error: `${where}: jumlah eksak numerik melampaui presisi aman.` };
+    }
     const exact = typeof row.amountExact === "number" ? String(row.amountExact) : row.amountExact.trim();
     if (!/^\d+$/.test(exact)) {
       return {
@@ -70,6 +73,10 @@ export function readProposalAmount(row: AmountRow): { value: Money } | { error: 
       };
     }
     return { value: money(BigInt(exact), unit) };
+  }
+
+  if (row.currencyType === 1) {
+    return { error: `${where}: jumlah USDC belum terverifikasi; amount_exact belum tersedia. Pulihkan hanya dari bukti onchain proposal yang sama.` };
   }
 
   try {

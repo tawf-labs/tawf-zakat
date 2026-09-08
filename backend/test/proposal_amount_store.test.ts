@@ -160,8 +160,8 @@ describe("reading proposals across the migration boundary", () => {
 
       expect(row).toHaveProperty("amount");
       expect(row).not.toHaveProperty("amountExact");
-      // Still readable, and still not rescaled: 0,5 USDC stays 0,5 USDC.
-      expect(proposalAmount(row as never).amount).toBe(500_000n);
+      // The row is readable, but its ambiguous legacy amount is not verified.
+      expect(() => proposalAmount(row as never)).toThrow("belum terverifikasi");
     } finally {
       await legacy.close();
     }
@@ -215,4 +215,41 @@ describe("verifying what the deployment holds", () => {
     expect(report.usdcWithoutExactAmount).toBe(1);
     expect(report.inexactReferences).toEqual([2]);
   });
+});
+
+describe("saving chain-confirmed proposal amounts", () => {
+  it("round trips full uint256 amounts through the confirmed proposal writer", async () => {
+    await applyProposalAmountMigration(db);
+    const { saveConfirmedProposal } = await import("../src/proposal-amount-store");
+    await saveConfirmedProposal(db, {
+      proposalIdOnChain: 9, currencyType: 1, amountExact: "123456789012345678901234567890",
+      asnafCategory: "Amil", beneficiaryHash: "0xabc", ipfsProofCID: "cid", periodId: 202609,
+    }, true);
+    const [row] = await db.select(proposalSelection(true)).from(schema.disbursementProposals);
+    expect(proposalAmount(row as never).amount).toBe(123456789012345678901234567890n);
+    expect(row.amount).toBe(-1);
+    expect(row.createdAt).toBeNull();
+  });
+});
+it("writes before migration and refuses amounts the legacy column cannot preserve", async () => {
+  const legacy = await unmigratedDatabase();
+  try {
+    const { saveConfirmedProposal } = await import("../src/proposal-amount-store");
+    const record = { proposalIdOnChain: 10, currencyType: 1, amountExact: "500000", asnafCategory: "Amil", beneficiaryHash: "0xabc", ipfsProofCID: "cid", periodId: 202609 };
+    await saveConfirmedProposal(legacy.db, record, false);
+    expect(rows(await legacy.db.execute(sql`SELECT amount FROM disbursement_proposals`))[0].amount).toBe(500000);
+    await expect(saveConfirmedProposal(legacy.db, { ...record, amountExact: "9007199254740993" }, false)).rejects.toThrow("migrasi");
+  } finally { await legacy.close(); }
+});
+it("recovers an existing proposal only from a confirmation of the same identity", async () => {
+  await applyProposalAmountMigration(db);
+  await insertProposal(db, 11, 1, 250n);
+  const { saveConfirmedProposal } = await import("../src/proposal-amount-store");
+  const record = { proposalIdOnChain: 11, currencyType: 1, amountExact: "250000000", asnafCategory: "Amil", beneficiaryHash: "0xabc", ipfsProofCID: "cid", periodId: 202609 };
+  await saveConfirmedProposal(db, record, true);
+  await saveConfirmedProposal(db, record, true);
+  const saved = await db.select(proposalSelection(true)).from(schema.disbursementProposals);
+  expect(saved).toHaveLength(1);
+  expect(proposalAmount(saved[0] as never).amount).toBe(250000000n);
+  await expect(saveConfirmedProposal(db, { ...record, beneficiaryHash: "0xdef" }, true)).rejects.toThrow("another deployment");
 });

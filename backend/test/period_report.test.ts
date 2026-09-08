@@ -137,7 +137,7 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
           proposal({ proposalIdOnChain: 1, amount: 3_000_000, asnafCategory: "Fakir" }),
           proposal({ proposalIdOnChain: 2, amount: 1_000_000, asnafCategory: "Ibnu Sabil" }),
           // Stored as the chain stores it: 250 USDC in 6-decimal minor units.
-          proposal({ proposalIdOnChain: 3, amount: 250_000_000, currencyType: 1, asnafCategory: "Miskin" }),
+          proposal({ proposalIdOnChain: 3, amount: 250_000_000, amountExact: "250000000", currencyType: 1, asnafCategory: "Miskin" }),
         ]
       ),
       AKHIR_TAHUN_2026
@@ -156,7 +156,7 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
   it("tidak lagi menskalakan penyaluran USDC di bawah satu USDC (#80)", () => {
     const figures = computePeriodFigures(
       rows([], [
-        proposal({ proposalIdOnChain: 1, amount: 500_000, currencyType: 1, asnafCategory: "Miskin" }),
+        proposal({ proposalIdOnChain: 1, amount: 500_000, amountExact: "500000", currencyType: 1, asnafCategory: "Miskin" }),
       ]),
       AKHIR_TAHUN_2026
     );
@@ -415,4 +415,10 @@ describe("Durasi penyaluran sebagai angka periode", () => {
       true
     );
   });
+});
+
+
+it("refuses a period total when executed USDC has no proven amount", () => {
+  expect(() => computePeriodFigures(rows([], [proposal({ proposalIdOnChain: 42,
+    currencyType: 1, amount: 500000 })]), AKHIR_TAHUN_2026)).toThrow(/belum terverifikasi/);
 });

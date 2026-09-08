@@ -350,3 +350,21 @@ describe("basis hak amil USDC (#80)", () => {
     expect(basis.reason).toMatch(/asnaf/i);
   });
 });
+
+
+describe("legacy USDC disbursement coverage", () => {
+  it("retains the unverified proposal and withholds the amil basis", () => {
+    const snapshot = snapshotOf({
+      events: [depositEvent(TX_MATCH, 0, "10000000")],
+      donations: [depositRow("USDC-1", "10000000", TX_MATCH, 0)],
+      proposals: [{ proposalIdOnChain: 42, currencyType: 1, amount: 500000,
+        status: "Executed", asnafCategory: "Amil", txHash: TX_PAIR }],
+    });
+    const { claim, unverified } = buildInternalLedgerSides(snapshot, "USDC_6DP");
+    expect(claim.entries.some(row => row.bucket === "DISBURSEMENT")).toBe(false);
+    expect(unverified).toEqual([expect.objectContaining({ side: "CLAIM", reference: "PROPOSAL#42",
+      reason: expect.stringMatching(/belum terverifikasi/i) })]);
+    expect(claim.amilBasis![0]!.collected).toBeNull();
+    expect(claim.amilBasis![0]!.actual).toBeNull();
+  });
+});

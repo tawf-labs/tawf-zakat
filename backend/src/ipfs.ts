@@ -263,7 +263,7 @@ export interface DisbursementReceiptMetadata {
   beneficiaryName: string;
   beneficiaryNIKMasked: string;
   beneficiaryHash: Hex;
-  disbursedAmount: number;
+  disbursedAmount: number | string;
   currency: "IDR" | "USDC";
   disbursementChannel: "BANK_TRANSFER" | "USDC_ONCHAIN" | "CASH_DIRECT";
   bankReferenceNumber?: string;
@@ -405,7 +405,7 @@ export interface AuditReportMetadata {
   proposalId: number;
   programTitle: string;
   beneficiaryHash: string;
-  disbursedAmount: number;
+  disbursedAmount: number | string;
   currency: string;
   asnafLabel: string;
   bankReferenceNumber?: string;

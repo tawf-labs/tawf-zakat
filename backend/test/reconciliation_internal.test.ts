@@ -53,7 +53,7 @@ describe("Mode Internal - mapping PostgreSQL and the chain onto one ledger", () 
       proposals: [
         { proposalIdOnChain: 1, currencyType: 0, amount: 126, status: "Executed", asnafCategory: "Amil" },
         { proposalIdOnChain: 2, currencyType: 0, amount: 500, status: "Pending", asnafCategory: "Amil" },
-        { proposalIdOnChain: 3, currencyType: 1, amount: 1_000_000, status: "Executed", asnafCategory: "Amil" },
+        { proposalIdOnChain: 3, currencyType: 1, amount: 1_000_000, amountExact: "1000000", status: "Executed", asnafCategory: "Amil" },
       ],
       events: [settledBatchEvent(1, "1000")],
     });
@@ -203,7 +203,7 @@ describe("Mode Internal - mapping PostgreSQL and the chain onto one ledger", () 
       ...emptySnapshot,
       proposals: [
         { proposalIdOnChain: 20, currencyType: 0, amount: 1_000_000, status: "Executed", txHash: "0xa" },
-        { proposalIdOnChain: 21, currencyType: 1, amount: 50_000_000, status: "Executed", txHash: "0xb" },
+        { proposalIdOnChain: 21, currencyType: 1, amount: 50_000_000, amountExact: "50000000", status: "Executed", txHash: "0xb" },
       ],
       events: [
         {

@@ -1007,6 +1007,8 @@ app.post("/api/proposals/:id/bast", async (c) => {
       return c.json({ error: "Proposal not found", success: false }, 404);
     }
 
+    if (targetProposal.amount === null) return c.json({ error: "Jumlah proposal belum terverifikasi", success: false }, 409);
+
     const receiptMetadata: DisbursementReceiptMetadata = {
       proposalId,
       programTitle: targetProposal.beneficiaryName
@@ -1246,6 +1248,8 @@ const handleAuditAttest = async (c: any) => {
     if (targetProposal.status !== "Executed" || !targetProposal.chainVerified) {
       return c.json({ error: "Audit hanya tersedia setelah eksekusi terverifikasi pada kontrak aktif", success: false }, 409);
     }
+
+    if (targetProposal.amount === null) return c.json({ error: "Jumlah proposal belum terverifikasi", success: false }, 409);
 
     const auditorName = auditorProfile.name;
     const standardString = "PSAK 109 & Fikih BAZNAS";

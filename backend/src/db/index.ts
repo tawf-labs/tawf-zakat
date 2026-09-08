@@ -3,7 +3,7 @@ import postgres from "postgres";
 import * as schema from "./schema";
 import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
-import { type Hex } from "viem";
+import { formatUnits, type Hex } from "viem";
 import { and, asc, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { CONTRACT_CONFIG } from "../config";
 import { STAGE_EVENT_NAMES } from "../disbursement-duration";
@@ -16,7 +16,7 @@ import {
   type DepositIntakeRecord,
 } from "../usdc-deposit-intake";
 import { donationSelection, hasNativeDepositColumns, saveUsdcDeposit } from "../usdc-deposit-store";
-import { hasExactAmountColumn, proposalSelection } from "../proposal-amount-store";
+import { hasExactAmountColumn, proposalSelection, saveConfirmedProposal } from "../proposal-amount-store";
 
 /**
  * Whether this deployment's `donations` table can hold a deposit identity
@@ -169,10 +169,7 @@ export const dbService = {
     const confirmed = await governanceChain.confirm(action, txHash, proposalId, metadata, signature);
     const p = confirmed.proposal;
     const canonical = {
-      currencyType: p.currencyType, amount: p.amount, asnafCategory: p.asnafLabel,
-      // Only where the column exists: running the migration is a separate act
-      // from deploying this code (ADR-0025), so both states have to work.
-      ...((await proposalAmountColumn()) ? { amountExact: p.amountExact } : {}),
+      currencyType: p.currencyType, amountExact: p.amountExact, asnafCategory: p.asnafLabel,
       beneficiaryHash: p.beneficiaryHash, ipfsProofCID: p.ipfsProofCID,
       periodId: p.periodId, approvalCount: p.approvalCount, status: p.status,
       txHash, ...(action === "execute" ? { executedAt: new Date(confirmed.timestamp) } : {}),
@@ -181,23 +178,10 @@ export const dbService = {
       ...(action === "execute" && metadata?.disbursementReceiptCID ? { disbursementReceiptCID: metadata.disbursementReceiptCID } : {}),
     };
     if (db) {
-      // The chain ID is the only proposal key; a database serial ID is not interchangeable.
-      await db.transaction(async tx => {
-        const existing = await tx.select(await proposalColumns()).from(schema.disbursementProposals)
-          .where(eq(schema.disbursementProposals.proposalIdOnChain, p.proposalId));
-        if (existing.length) {
-          if (existing.some(row => row.beneficiaryHash.toLowerCase() !== p.beneficiaryHash.toLowerCase())) {
-            throw new Error("Database proposal belongs to another deployment; reset required");
-          }
-          await tx.update(schema.disbursementProposals).set(canonical)
-            .where(eq(schema.disbursementProposals.proposalIdOnChain, p.proposalId));
-        } else {
-          await tx.insert(schema.disbursementProposals).values({
-            beneficiaryName: "", beneficiaryNIKMasked: "", ...canonical, proposalIdOnChain: p.proposalId,
-            approvedBy: "[]", createdAt: action === "propose" ? new Date(confirmed.timestamp) : null,
-          }).onConflictDoUpdate({ target: schema.disbursementProposals.proposalIdOnChain, set: canonical });
-        }
-      });
+      await saveConfirmedProposal(db, {
+        ...canonical, proposalIdOnChain: p.proposalId,
+        ...(action === "propose" ? { createdAt: new Date(confirmed.timestamp) } : {}),
+      }, await proposalAmountColumn());
     }
     const memory = dataStore.proposals.get(p.proposalId);
     const record = { ...memory, ...p, currencyType: p.currencyType as 0 | 1,
@@ -489,18 +473,18 @@ export const dbService = {
           return rows.map((r) => {
             const pId = r.proposalIdOnChain || r.id;
             const isUSDC = r.currencyType === 1;
-            const amountVal = Number(r.amount);
-            const amountUSDCVal = isUSDC
-              ? amountVal > 100000
-                ? (amountVal / 1000000).toString()
-                : amountVal.toString()
-              : undefined;
+            const exact = verified.get(r.id)?.amountExact ?? r.amountExact;
+            const amountVal = exact != null
+              ? BigInt(exact) <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(exact) : exact
+              : isUSDC ? null : r.amount;
+            const amountUSDCVal = isUSDC && exact != null ? formatUnits(BigInt(exact), 6) : undefined;
 
             return {
               id: pId,
               proposalId: pId,
               currencyType: (r.currencyType as 0 | 1) || 0,
               amount: amountVal,
+              amountExact: exact ?? null,
               amountIDR: !isUSDC ? amountVal : undefined,
               amountUSDC: amountUSDCVal,
               chainVerified: verified.has(r.id),
@@ -851,12 +835,14 @@ export const dbService = {
     const disputed = executed.filter((p) => p.auditStatus === "DISPUTED");
     const pendingAudit = executed.filter((p) => !p.auditStatus || p.auditStatus === "PENDING");
 
-    const totalDisbursedIDR = executed
-      .filter((p) => p.currencyType === 0)
-      .reduce((acc, p) => acc + p.amount, 0);
-    const totalDisbursedUSDC = executed
-      .filter((p) => p.currencyType === 1)
-      .reduce((acc, p) => acc + p.amount, 0);
+    const totalFor = (currencyType: number) => {
+      const rows = executed.filter((p) => p.currencyType === currencyType);
+      if (rows.some((p) => p.amount === null)) return null;
+      const total = rows.reduce((sum, p) => sum + BigInt(p.amount!), 0n);
+      return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : total.toString();
+    };
+    const totalDisbursedIDR = totalFor(0);
+    const totalDisbursedUSDC = totalFor(1);
 
     const wtpRatePercentage =
       executed.length > 0 ? Math.round((audited.length / executed.length) * 100) : 100;

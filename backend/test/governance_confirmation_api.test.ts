@@ -20,10 +20,10 @@ it("retires gasless simulation without writing proposals", async () => {
 
 it("persists canonical values, ignoring a caller-supplied status", async () => {
   const mock = spyOn(governanceChain, "confirm").mockResolvedValue({
-    proposal: { proposalId: 44, currencyType: 0, amount: 100, asnafCategory: 1, asnafLabel: "Miskin",
+    proposal: { proposalId: 44, currencyType: 0, amount: 100, amountExact: "100", asnafCategory: 1, asnafLabel: "Miskin",
       beneficiaryHash: `0x${"ab".repeat(32)}`, ipfsProofCID: "proof", periodId: 202609,
       usdcRecipient: "0x0000000000000000000000000000000000000000", approvalCount: 1, status: "Pending", chainVerified: true },
-    txHash: `0x${"12".repeat(32)}`, timestamp: "2026-09-08T00:00:00.000Z", sender: "0x0000000000000000000000000000000000000001",
+    cancelReason: undefined, txHash: `0x${"12".repeat(32)}`, timestamp: "2026-09-08T00:00:00.000Z", sender: "0x0000000000000000000000000000000000000001",
   });
   try {
     const response = await app.fetch(new Request("http://localhost/api/governance/confirm", { method: "POST",
@@ -42,4 +42,27 @@ it("blocks reads and writes while a new deployment is pending", async () => {
       expect(response.status).toBe(503);
     }
   } finally { process.env.DEPLOYMENT_PENDING = "false"; }
+});
+it("replays chain-confirmed USDC precision without accepting a caller amount", async () => {
+  const amountExact = "123456789012345678901234567890";
+  const mock = spyOn(governanceChain, "confirm").mockResolvedValue({
+    proposal: { proposalId: 45, currencyType: 1, amount: amountExact, amountExact,
+      asnafCategory: 2, asnafLabel: "Amil", beneficiaryHash: `0x${"ab".repeat(32)}`,
+      ipfsProofCID: "proof", periodId: 202609, usdcRecipient: "0x0000000000000000000000000000000000000000",
+      approvalCount: 2, status: "Executed", chainVerified: true },
+    cancelReason: undefined, txHash: `0x${"12".repeat(32)}`, timestamp: "2026-09-08T00:00:00.000Z", sender: "0x0000000000000000000000000000000000000001",
+  });
+  try {
+    for (let replay = 0; replay < 2; replay++) {
+      const response = await app.fetch(new Request("http://localhost/api/governance/confirm", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "execute", proposalId: 45, txHash: `0x${"12".repeat(32)}`, amountExact: "1" }),
+      }));
+      expect(response.status).toBe(200);
+      expect(dataStore.proposals.get(45)?.amountExact).toBe(amountExact);
+      expect(dataStore.proposals.get(45)?.amount).toBe(amountExact);
+      const overview = await app.fetch(new Request("http://localhost/api/audit/overview"));
+      expect((await overview.json() as any).totalDisbursedUSDC).toBe(amountExact);
+    }
+  } finally { mock.mockRestore(); dataStore.proposals.delete(45); }
 });

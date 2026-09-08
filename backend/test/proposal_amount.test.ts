@@ -34,7 +34,7 @@ describe("the unit comes from currencyType, never from the size of the number", 
     // 0,5 and 1,5 USDC bracket the boundary the old heuristic rescaled across;
     // exactly 1 USDC sat on it.
     for (const minorUnits of [1, 500_000, 1_000_000, 1_500_000, 2_500_000]) {
-      expect(proposalAmount(usdcRow({ amount: minorUnits })), `${minorUnits}`).toEqual({
+      expect(proposalAmount(usdcRow({ amount: minorUnits, amountExact: String(minorUnits) })), `${minorUnits}`).toEqual({
         amount: BigInt(minorUnits),
         unit: "USDC_6DP",
       });
@@ -43,8 +43,8 @@ describe("the unit comes from currencyType, never from the size of the number", 
 
   it("no longer multiplies a sub-USDC amount by a million", () => {
     // The regression this ticket exists for: 0,5 USDC reported as 500.000 USDC.
-    expect(proposalAmount(usdcRow({ amount: 500_000 })).amount).toBe(500_000n);
-    expect(proposalAmount(usdcRow({ amount: 500_000 })).amount).not.toBe(500_000_000_000n);
+    expect(proposalAmount(usdcRow({ amount: 500_000, amountExact: "500000" })).amount).toBe(500_000n);
+    expect(proposalAmount(usdcRow({ amount: 500_000, amountExact: "500000" })).amount).not.toBe(500_000_000_000n);
   });
 
   it("reads a rupiah proposal as rupiah, at any size", () => {
@@ -72,10 +72,12 @@ describe("the exact column wins over the number one", () => {
     });
   });
 
-  it("falls back to the stored number where the exact column is absent", () => {
-    // Not a guess: the unit is still `currencyType`, and the value is whatever
-    // the row holds. Only the reachable precision differs.
-    expect(proposalAmount(usdcRow({ amount: 750_000, amountExact: null })).amount).toBe(750_000n);
+  it("keeps legacy USDC unverified even when its number is a safe integer", () => {
+    for (const amount of [250, 500_000, 1_000_000, 1_500_000]) {
+      const read = readProposalAmount(usdcRow({ amount, amountExact: null }));
+      expect("error" in read).toBe(true);
+      if ("error" in read) expect(read.error).toMatch(/belum terverifikasi/i);
+    }
   });
 });
 
@@ -87,7 +89,7 @@ describe("what it refuses rather than rounds", () => {
   });
 
   it("refuses an exact column that is not a decimal integer", () => {
-    for (const value of ["1.5", "abc", "-1", " "]) {
+    for (const value of ["1.5", "abc", "-1", " ", Number("9007199254740993")]) {
       const read = readProposalAmount(usdcRow({ amountExact: value }));
       expect("error" in read, JSON.stringify(value)).toBe(true);
     }

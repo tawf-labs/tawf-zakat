@@ -28,13 +28,8 @@ export const governanceChain = {
       functionName: "proposals", args: [BigInt(proposalId)],
     });
     if (p[0] !== BigInt(proposalId)) throw new Error("Proposal tidak ditemukan pada kontrak aktif");
-    // `amount` stays a number for the legacy column and its readers; `amountExact`
-    // is the value as the chain actually stated it (ticket #80). The number form
-    // is clamped rather than silently truncated, so a caller reading it can never
-    // see a rounded amount - it sees a refusal, and the exact form beside it.
-    if (p[2] > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Amount exceeds database precision");
     return {
-      proposalId, currencyType: p[1], amount: Number(p[2]), amountExact: p[2].toString(), asnafCategory: p[3],
+      proposalId, currencyType: p[1], amount: p[2] <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(p[2]) : p[2].toString(), amountExact: p[2].toString(), asnafCategory: p[3],
       asnafLabel: CHAIN_ASNAF[p[3]] ?? "Unknown", beneficiaryHash: p[4],
       ipfsProofCID: p[5], periodId: Number(p[6]), usdcRecipient: p[7],
       approvalCount: Number(p[8]), status: CHAIN_STATUSES[p[9]], chainVerified: true,

@@ -212,7 +212,8 @@ describe("Validator draf - vonis deterministik atas angka, bukan atas kata sifat
         {
           proposalIdOnChain: 3,
           currencyType: 1,
-          amount: 250,
+          amount: 250_000_000,
+          amountExact: "250000000",
           asnafCategory: "Miskin",
           status: "Executed",
           executedAt: "2026-03-04T00:00:00.000Z",

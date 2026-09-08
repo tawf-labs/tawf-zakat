@@ -94,9 +94,8 @@ export type ProposalAmountReport = {
   /** Rows carrying an exact amount. `null` before the migration. */
   exact: number | null;
   /**
-   * USDC proposals still read through the number column. Not an error - the
-   * unit is still `currencyType` and the value is still whatever the row holds -
-   * but their precision is bounded by 2^53 minor units.
+   * USDC proposals without chain-confirmed exact amounts remain unverified.
+   * Their legacy number column cannot establish the original amount or unit.
    */
   usdcWithoutExactAmount: number;
   /** Their on-chain proposal ids, so an operator can look rather than count. */
@@ -129,4 +128,36 @@ export async function verifyProposalAmounts(
     usdcWithoutExactAmount: inexactUsdc.length,
     inexactReferences: inexactUsdc.map((row) => Number(row.proposal_id_on_chain)),
   };
+}
+
+/** Persist only chain-confirmed values. Large amounts require the exact column;
+ * -1 in the legacy column explicitly means unavailable, never a rounded amount.
+ * Explicit columns also keep inserts working before the additive migration.
+ */
+export async function saveConfirmedProposal(
+  db: ProposalDatabase,
+  proposal: Omit<schema.NewDisbursementProposal, "amount" | "beneficiaryName" | "beneficiaryNIKMasked"> & { beneficiaryName?: string; beneficiaryNIKMasked?: string } & { amountExact: string },
+  migrated: boolean,
+): Promise<void> {
+  const exact = BigInt(proposal.amountExact);
+  const safe = exact <= BigInt(Number.MAX_SAFE_INTEGER);
+  if (!safe && !migrated) throw new Error("Jumlah proposal memerlukan migrasi amount_exact sebelum disimpan");
+  const { amountExact, ...fields } = proposal;
+  const values = { ...fields, amount: safe ? Number(exact) : -1, ...(migrated ? { amountExact } : {}) };
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+  const insertEntries = Object.entries({ beneficiaryName: "", beneficiaryNIKMasked: "", createdAt: null, ...values }).filter(([, value]) => value !== undefined);
+  const columns = insertEntries.map(([key]) => sql.identifier((schema.disbursementProposals as any)[key].name));
+  const parameters = insertEntries.map(([, value]) => sql`${value instanceof Date ? value.toISOString() : value}`);
+  const updates = entries.filter(([key]) => key !== "proposalIdOnChain").map(([key]) => {
+    const column = sql.identifier((schema.disbursementProposals as any)[key].name);
+    return sql`${column} = excluded.${column}`;
+  });
+  const inserted = rowsOf(await db.execute(sql`
+    INSERT INTO disbursement_proposals (${sql.join(columns, sql`, `)})
+    VALUES (${sql.join(parameters, sql`, `)})
+    ON CONFLICT (proposal_id_on_chain) DO UPDATE SET ${sql.join(updates, sql`, `)}
+    WHERE lower(disbursement_proposals.beneficiary_hash) = lower(excluded.beneficiary_hash)
+    RETURNING id
+  `));
+  if (inserted.length !== 1) throw new Error("Database proposal belongs to another deployment; reset required");
 }

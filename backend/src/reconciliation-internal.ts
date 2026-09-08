@@ -211,10 +211,10 @@ function usdcAmilBasis(snapshot: InternalSnapshot, base: AmilBasis): AmilBasis {
   }
 
   let actual = 0n;
-  for (const proposal of executed.filter((p) => asnafOf(p.asnafCategory) === "AMIL")) {
+  for (const proposal of executed) {
     const read = readProposalAmount(proposal);
     if ("error" in read) return { ...base, reason: `${read.error} Plafon hak amil USDC tidak dapat dihitung.` };
-    actual += read.value.amount;
+    if (asnafOf(proposal.asnafCategory) === "AMIL") actual += read.value.amount;
   }
 
   return {
@@ -364,13 +364,19 @@ export function buildInternalLedgerSides(
   for (const proposal of snapshot.proposals) {
     if (unitOfCurrencyType(proposal.currencyType) !== unit) continue;
 
+    const read = readProposalAmount(proposal);
+    if ("error" in read) {
+      deposits.unverified.push({ side: "CLAIM", reference: proposalKey(proposal.proposalIdOnChain), reason: read.error });
+      continue;
+    }
+
     // A proposal row claims an on-chain proposal only once it carries its tx.
     if (proposal.txHash) {
       claimEntries.push(
         entry(
           proposalKey(proposal.proposalIdOnChain),
           "PROPOSAL",
-          proposalAmount(proposal),
+          read.value,
           `Proposal penyaluran #${proposal.proposalIdOnChain}`
         )
       );
@@ -381,7 +387,7 @@ export function buildInternalLedgerSides(
         entry(
           disbursementKey(proposal.proposalIdOnChain),
           "DISBURSEMENT",
-          proposalAmount(proposal),
+          read.value,
           `Penyaluran tereksekusi #${proposal.proposalIdOnChain}`
         )
       );

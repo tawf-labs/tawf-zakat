@@ -14,7 +14,8 @@ export interface ProposalRecord {
   chainVerified?: boolean;
   proposalId: number;
   currencyType: 0 | 1; // 0 = IDR, 1 = USDC
-  amount: number;
+  amount: number | string;
+  amountExact?: string;
   asnafCategory: number; // 0=Fakir, 1=Miskin, 2=Amil, 3=Mualaf, 4=Riqab, 5=Gharimin, 6=Fisabilillah, 7=Ibnu Sabil
   asnafLabel: string;
   beneficiaryName: string;
