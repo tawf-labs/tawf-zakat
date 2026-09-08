@@ -28,6 +28,16 @@ export const donations = pgTable("donations", {
   batchId: integer("batch_id"),
   createdAt: timestamp("created_at").defaultNow(),
   paidAt: timestamp("paid_at"),
+  // USDC deposit identity and native amount (ticket #67). Nullable because a
+  // fiat donation has none and a legacy USDC row never captured one; the columns
+  // are added by an explicit migration, not at boot. Text rather than bigint:
+  // the driver hands a bigint column back as a JavaScript number, and a deposit
+  // amount must survive past 2^53 minor units intact.
+  amountUsdc6dp: text("amount_usdc_6dp"),
+  depositChainId: integer("deposit_chain_id"),
+  depositContract: text("deposit_contract"),
+  depositTxHash: text("deposit_tx_hash"),
+  depositLogIndex: integer("deposit_log_index"),
 });
 
 // 3. Disbursement Proposals Table

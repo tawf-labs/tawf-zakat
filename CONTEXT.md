@@ -135,6 +135,10 @@ _Avoid_: Daftar kosong, sebagai jawaban atas sumber yang tidak terbaca.
 Sisi ledger yang dibangun server dari deposit USDC protokol ini sendiri: baris ledger internal pada satu sisi, event `USDCDeposited` terindeks pada sisi lain. Jumlahnya integer satuan minor USDC_6DP dan identitasnya mengikat chain, kontrak, transaction hash, serta log index, sehingga beberapa deposit dalam satu transaksi tetap terpisah.
 _Avoid_: Estimasi rupiah pada baris donasi USDC, sebagai jumlah deposit; menebak satuan dari besar angka.
 
+**Identitas deposit**:
+Chain, kontrak, transaction hash, dan log index satu deposit USDC, disimpan bersama barisnya dan dijaga unik oleh basis data. Dua deposit dalam transaksi yang sama dibedakan oleh log index, dan event yang diproses ulang jatuh pada baris yang sama.
+_Avoid_: Transaction hash sendirian sebagai identitas; `trxId` acak yang membuat pemrosesan ulang menyisipkan baris kedua.
+
 **Cakupan blok**:
 Rentang blok yang benar-benar diperiksa satu sumber on-chain, beserta checkpoint indexer yang membatasinya. Dibekukan ke dalam [[Manifest sumber]]; deposit setelah checkpoint dinyatakan belum terperiksa, bukan tidak ada.
 _Avoid_: "Sudah dibandingkan dengan chain", tanpa menyebut sampai blok berapa.

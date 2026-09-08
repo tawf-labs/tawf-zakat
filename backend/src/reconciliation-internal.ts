@@ -32,6 +32,14 @@ import {
 import { proposalAmount, toWholeAmount, unitOfCurrencyType, withinPeriod } from "./ledger-rows";
 import { asnafOf } from "./period-report";
 import type { AmilBasis } from "./reconciliation-amil";
+import {
+  mapDepositEvents,
+  mapLedgerDeposits,
+  USDC_DEPOSIT_BUCKET,
+  USDC_DEPOSIT_EVENT,
+  type LedgerDepositRow,
+} from "./internal-usdc-source";
+import type { NormalizedRow, UnverifiedRecord } from "./evidence-source";
 
 export type InternalDonationRow = {
   trxId: string;
@@ -40,6 +48,17 @@ export type InternalDonationRow = {
   status?: string;
   paymentMethod?: string | null;
   createdAt?: Date | string | null;
+  /**
+   * Native USDC minor units and the deposit's event identity (ticket #67).
+   * Absent on a fiat row and on a USDC row written before that ticket, and
+   * absence is the signal that the row cannot be paired - never a reason to
+   * fall back on `amountIDR`.
+   */
+  amountUsdc?: string | number | null;
+  depositChainId?: number | null;
+  depositContract?: string | null;
+  depositTxHash?: string | null;
+  depositLogIndex?: number | null;
 };
 
 export type InternalBatchRow = {
@@ -66,14 +85,25 @@ export type InternalEventRow = {
   txHash: string;
   blockNumber: number;
   logIndex?: number;
+  /** Which contract emitted it. Needed to scope deposits to one deployment. */
+  contractAddress?: string | null;
   argsJson: string;
 };
+
+/** The chain and contract this deployment's deposits belong to. */
+export type InternalChainScope = { chainId: number; contract: string };
 
 export type InternalSnapshot = {
   donations: InternalDonationRow[];
   batches: InternalBatchRow[];
   proposals: InternalProposalRow[];
   events: InternalEventRow[];
+  /**
+   * `null` where the deployment does not name one. Deposits are then left out
+   * entirely rather than compared against an unnamed contract, since a key that
+   * does not say which chain it came from is not an identity.
+   */
+  chain?: InternalChainScope | null;
 };
 
 /** The ledger streams the internal mode reconciles. */
@@ -82,6 +112,7 @@ export const INTERNAL_BUCKETS = [
   "DONASI_FIAT",
   "PROPOSAL",
   "DISBURSEMENT",
+  USDC_DEPOSIT_BUCKET,
 ] as const;
 
 export const INTERNAL_UNITS: readonly CurrencyUnit[] = ["IDR", "USDC_6DP"];
@@ -118,7 +149,19 @@ function internalAmilBasis(snapshot: InternalSnapshot, unit: CurrencyUnit): Amil
     key: "PROTOKOL", label: "Snapshot batch settled dan penyaluran tereksekusi",
     balanceSheet: "ON", collected: null, actual: null,
   };
-  if (unit !== "IDR") return { ...base, reason: "Jumlah deposit USDC asli belum tersimpan; estimasi IDR tidak dipakai sebagai basis plafon." };
+  // Deposits now carry their native amount (#67), so collection in USDC is
+  // knowable. The amil share is not: an executed USDC proposal's amount still
+  // passes through a magnitude heuristic on the way out of storage, so a ceiling
+  // computed from it would be a number nobody can stand behind.
+  if (unit !== "IDR") {
+    return {
+      ...base,
+      reason:
+        "Hak amil dalam USDC belum dapat diperiksa: jumlah penyaluran USDC masih dibaca dengan " +
+        "heuristik besar angka, sehingga plafonnya tidak dapat dihitung. Estimasi rupiah tidak " +
+        "dipakai sebagai basis.",
+    };
+  }
   const batches = snapshot.batches.filter(isSettled);
   const executed = snapshot.proposals.filter((p) => p.status === "Executed" && p.currencyType === 0);
   if (batches.length === 0 && executed.length === 0) return { ...base, reason: "Tidak ada data batch settled atau penyaluran IDR dalam snapshot ini." };
@@ -134,17 +177,110 @@ function internalAmilBasis(snapshot: InternalSnapshot, unit: CurrencyUnit): Amil
   return base;
 }
 
+/** A mapped deposit row, as the engine wants it. The key already carries identity. */
+const depositEntry = (row: NormalizedRow): LedgerEntry => ({
+  key: row.key,
+  bucket: row.bucket,
+  balanceSheet: row.balanceSheet,
+  value: money(BigInt(row.amount), "USDC_6DP"),
+  ...(row.label !== null ? { label: row.label } : {}),
+});
+
+/**
+ * Deposits on both sides, mapped by the same pure module the evidence package
+ * uses (ticket #79), so the two surfaces cannot drift into two answers about one
+ * deposit.
+ *
+ * Ledger rows are read as `LedgerDepositRow`s, which is where the refusal to
+ * guess lives: a row with no event identity or no native amount becomes an
+ * unverified record with its reason, never an entry carrying `amountIDR`.
+ */
+function depositSides(snapshot: InternalSnapshot): {
+  claim: LedgerEntry[];
+  source: LedgerEntry[];
+  unverified: UnverifiedRecord[];
+} {
+  const chain = snapshot.chain;
+  if (!chain) {
+    // An unscoped deployment cannot form a deposit identity, so nothing is
+    // compared. Returning three empty lists would let `reconcile` report a
+    // balanced deposit population it never looked at - the empty-list-as-answer
+    // this project refuses everywhere else. Every row and event that would have
+    // been examined is named as unverified instead.
+    const reason =
+      "Deployment ini tidak menyebut chain dan kontrak deposit, sehingga identitas deposit tidak " +
+      "dapat dibentuk dan tidak ada deposit yang diperbandingkan.";
+    return {
+      claim: [],
+      source: [],
+      unverified: [
+        ...snapshot.donations
+          .filter((row) => String(row.paymentMethod ?? "").toUpperCase() === "USDC")
+          .map((row) => ({ side: "CLAIM" as const, reference: row.trxId, reason })),
+        ...snapshot.events
+          .filter((event) => event.eventName === USDC_DEPOSIT_EVENT)
+          .map((event) => ({
+            side: "SOURCE" as const,
+            reference: `${String(event.txHash).toLowerCase()}#${event.logIndex ?? 0}`,
+            reason,
+          })),
+      ],
+    };
+  }
+
+  const scope = { chainId: chain.chainId, contract: chain.contract };
+  const ledgerRows: LedgerDepositRow[] = snapshot.donations
+    .filter((row) => String(row.paymentMethod ?? "").toUpperCase() === "USDC")
+    .map((row) => ({
+      trxId: row.trxId,
+      amountUsdc: row.amountUsdc ?? null,
+      depositChainId: row.depositChainId ?? null,
+      depositContract: row.depositContract ?? null,
+      depositTxHash: row.depositTxHash ?? null,
+      depositLogIndex: row.depositLogIndex ?? null,
+      amountIDR: row.amountIDR,
+      createdAt: row.createdAt ?? null,
+    }));
+
+  const claimSide = mapLedgerDeposits(ledgerRows, scope);
+  const sourceSide = mapDepositEvents(
+    snapshot.events.map((event) => ({
+      eventName: event.eventName,
+      txHash: event.txHash,
+      logIndex: event.logIndex ?? 0,
+      blockNumber: event.blockNumber,
+      contractAddress: event.contractAddress ?? "",
+      argsJson: event.argsJson,
+    })),
+    scope
+  );
+
+  return {
+    claim: claimSide.rows.map(depositEntry),
+    source: sourceSide.rows.map(depositEntry),
+    unverified: [...claimSide.unverified, ...sourceSide.unverified],
+  };
+}
+
 /**
  * Builds both sides of the internal ledger for one currency unit. Rupiah and
  * USDC are never mixed into the same report - they are different units and the
  * engine refuses to add them.
+ *
+ * `unverified` carries the records neither side could prove. They are returned
+ * beside the sides rather than dropped, because a deposit that could not be
+ * examined is a gap in the comparison, and a comparison that hides its gaps
+ * reads as more complete than it is.
  */
 export function buildInternalLedgerSides(
   snapshot: InternalSnapshot,
   unit: CurrencyUnit
-): { claim: LedgerSide; source: LedgerSide } {
+): { claim: LedgerSide; source: LedgerSide; unverified: UnverifiedRecord[] } {
   const claimEntries: LedgerEntry[] = [];
   const sourceEntries: LedgerEntry[] = [];
+  const deposits = unit === "USDC_6DP" ? depositSides(snapshot) : { claim: [], source: [], unverified: [] };
+  claimEntries.push(...deposits.claim);
+  sourceEntries.push(...deposits.source);
 
   if (unit === "IDR") {
     for (const batch of snapshot.batches) {
@@ -252,12 +388,15 @@ export function buildInternalLedgerSides(
       collected: null, actual: null,
       reason: "Event penyaluran tidak memuat asnaf; plafon hak amil sisi sumber belum dapat diperiksa.",
     }] },
+    unverified: deposits.unverified,
   };
 }
 
 /** Rows as the database hands them over, before this module shapes them. */
 export type InternalRowSources = {
   donationRows: Array<Record<string, any>>;
+  /** The deployment's chain and contract, for scoping deposits. */
+  chain?: InternalChainScope | null;
   /** Already mapped by `dbService.getBatches`, hence `batchId` rather than `batchNumber`. */
   batchRows: Array<Record<string, any>>;
   proposalRows: Array<Record<string, any>>;
@@ -279,6 +418,7 @@ export function snapshotFromRows(
     !period || withinPeriod(timestamp, period);
 
   return {
+    chain: sources.chain ?? null,
     donations: sources.donationRows
       .filter((row) => keep(row.createdAt))
       .map((row) => ({
@@ -288,6 +428,13 @@ export function snapshotFromRows(
         status: row.status,
         paymentMethod: row.paymentMethod ?? null,
         createdAt: row.createdAt ?? null,
+        // Left exactly as stored. Whether these amount to a provable pairing is
+        // the deposit mapper's judgement, not this shaper's.
+        amountUsdc: row.amountUsdc6dp ?? row.amountUsdc ?? null,
+        depositChainId: row.depositChainId ?? null,
+        depositContract: row.depositContract ?? null,
+        depositTxHash: row.depositTxHash ?? null,
+        depositLogIndex: row.depositLogIndex ?? null,
       })),
     batches: sources.batchRows
       .filter((row) => keep(row.settledAt))
@@ -317,6 +464,7 @@ export function snapshotFromRows(
         txHash: row.txHash,
         blockNumber: Number(row.blockNumber),
         logIndex: Number(row.logIndex ?? 0),
+        contractAddress: row.contractAddress ?? null,
         argsJson: row.argsJson,
       })),
   };

@@ -53,7 +53,7 @@ Per ADR-0016 this is the one feature candidate that neither SiMBA nor the incumb
 - No schema change means v0 can ship and be demonstrated before the storage shape is decided.
 
 ### Negative / Known limits
-- **USDC deposits are not reconciled per deposit.** A USDC row in `donations` stores an *estimated* IDR value and no transaction hash, so it cannot be tied to its `USDCDeposited` event. Closing this needs columns that v0's no-migration constraint rules out.
+- **USDC deposits are not reconciled per deposit.** A USDC row in `donations` stores an *estimated* IDR value and no transaction hash, so it cannot be tied to its `USDCDeposited` event. Closing this needs columns that v0's no-migration constraint rules out. _Closed post-v0 by [ADR-0025](0025-usdc-deposit-identity-and-native-amount-storage.md) (ticket #67), which narrows decision 9 rather than replacing it: the no-migration boundary still holds for the v0 engine and its callers._
 - **A narrowed block range bounds the chain side only.** Database rows carry no block number, so rows outside the range would read as `MISSING_IN_SOURCE`; the endpoint returns an explicit `scopeWarning` and points at the reporting period, which bounds both sides symmetrically.
 - **Results are not stored.** Every run is recomputed, and there is no history to compare across time.
 - **No tenant separation or authentication in v0**, so the inter-institution endpoint works on whatever the caller uploads.

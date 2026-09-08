@@ -318,10 +318,11 @@ describe("snapshotFromRows", () => {
     // report the older settlement as MISSING_IN_CLAIM out of nowhere.
     expect(snapshot.events).toHaveLength(1);
 
-    const result = reconcile(
-      ...(Object.values(buildInternalLedgerSides(snapshot, "IDR")) as [any, any]),
-      { period: { kind: "AKHIR_TAHUN", year: 2026 }, allowedBuckets: INTERNAL_BUCKETS }
-    );
+    const { claim, source } = buildInternalLedgerSides(snapshot, "IDR");
+    const result = reconcile(claim, source, {
+      period: { kind: "AKHIR_TAHUN", year: 2026 },
+      allowedBuckets: INTERNAL_BUCKETS,
+    });
     expect(result.balanced).toBe(true);
   });
 });

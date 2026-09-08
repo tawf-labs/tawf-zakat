@@ -75,6 +75,12 @@ export type DonationRow = {
   paymentMethod?: string | null;
   createdAt?: Date | string | null;
   paidAt?: Date | string | null;
+  /**
+   * Native USDC minor units, where the row carries them (ticket #67). Absent on
+   * a fiat row and on a USDC row recorded before that ticket; absence keeps the
+   * row out of the USDC figure rather than converting its rupiah estimate.
+   */
+  amountUsdc6dp?: string | number | null;
 };
 
 export type ProposalRow = {
@@ -220,6 +226,17 @@ const isCollected = (row: DonationRow): boolean =>
 const isUsdcDonation = (row: DonationRow): boolean =>
   String(row.paymentMethod ?? "").toUpperCase() === "USDC";
 
+/**
+ * The row's native USDC amount, or `null` when it has none this figure is
+ * willing to state. Decimal text only: a value that has already been through a
+ * float cannot be shown as an exact figure, so it is treated as absent.
+ */
+function readNativeUsdc(value: string | number | null | undefined): bigint | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  const text = typeof value === "string" ? value.trim() : "";
+  return /^\d+$/.test(text) ? BigInt(text) : null;
+}
+
 export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod): PeriodFigures {
   let undatedRows = 0;
 
@@ -244,10 +261,23 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
   const collectedByJenisDana = new Map<string, bigint>(JENIS_DANA.map((jenis) => [jenis, 0n]));
   let usdcEstimatedIDR = 0n;
 
+  let usdcCollected = 0n;
+  let usdcRowsWithoutNativeAmount = 0;
+
   for (const row of donations) {
     const amount = toWholeAmount(row.amountIDR, `Donasi ${row.trxId ?? "(tanpa trxId)"}`);
     if (isUsdcDonation(row)) {
-      usdcEstimatedIDR += amount;
+      // Two figures, never one. A row that carries its native amount is counted
+      // in USDC; a legacy row carries only a rupiah estimate at a hardcoded rate
+      // and is counted as exactly that, because converting it back would invent
+      // the deposit it was never able to prove.
+      const native = readNativeUsdc(row.amountUsdc6dp);
+      if (native === null) {
+        usdcEstimatedIDR += amount;
+        usdcRowsWithoutNativeAmount += 1;
+      } else {
+        usdcCollected += native;
+      }
       continue;
     }
     collectedByJenisDana.set("ZAKAT", collectedByJenisDana.get("ZAKAT")! + amount);
@@ -265,8 +295,13 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
     ),
     figure("pengumpulan.total", "Total pengumpulan", idr(collectedTotal)),
     figure(
+      "pengumpulan.usdc",
+      "Donasi USDC (jumlah asli, di luar total pengumpulan rupiah)",
+      usdc(usdcCollected)
+    ),
+    figure(
       "pengumpulan.usdc_estimasi_idr",
-      "Donasi USDC (estimasi rupiah, di luar total pengumpulan)",
+      "Donasi USDC tanpa jumlah asli (estimasi rupiah warisan, di luar total pengumpulan)",
       idr(usdcEstimatedIDR)
     ),
   ];
@@ -409,7 +444,14 @@ export function computePeriodFigures(rows: PeriodRows, period: ReportingPeriod):
     durations,
     notes: [
       "Basis data tidak menyimpan jenis dana per donasi, sehingga seluruh donasi fiat dihitung sebagai Zakat dan jenis dana lainnya bernilai nol.",
-      "Donasi USDC dicatat sebagai estimasi rupiah pada kurs tetap, sehingga dilaporkan terpisah dan tidak dijumlahkan ke pengumpulan per jenis dana.",
+      "Donasi USDC dilaporkan dalam satuan aslinya dan tidak dijumlahkan ke pengumpulan rupiah per jenis dana.",
+      ...(usdcRowsWithoutNativeAmount > 0
+        ? [
+            `${usdcRowsWithoutNativeAmount} baris donasi USDC tidak menyimpan jumlah aslinya dan hanya ` +
+              `memiliki estimasi rupiah pada kurs tetap. Baris tersebut dilaporkan terpisah sebagai ` +
+              `estimasi warisan, tidak dikonversi kembali ke USDC, dan tidak masuk angka pengumpulan USDC.`,
+          ]
+        : []),
       "Penyaluran dihitung dari proposal berstatus Executed pada periode ini; rupiah dan USDC dilaporkan sebagai satuan yang berbeda.",
       "Baris tanpa tanggal yang dapat dibaca dikeluarkan dari periode ini - bukan dihitung di setiap periode - dan jumlahnya dilaporkan sebagai angka tersendiri.",
       ...durations.notes,

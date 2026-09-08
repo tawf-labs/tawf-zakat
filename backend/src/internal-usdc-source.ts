@@ -144,9 +144,16 @@ export type InternalLedgerReader = {
   ledgerDeposits: () => Promise<LedgerDepositRead>;
 };
 
-const isHex = (value: unknown, bytes?: number): value is string =>
+/**
+ * Hex of an exact byte length, or of any length when none is given.
+ *
+ * The `0x` prefix is matched case-insensitively: an address that arrived through
+ * an upper-cased string is still that address, and refusing it would drop a
+ * deposit over a keystroke.
+ */
+export const isHex = (value: unknown, bytes?: number): value is string =>
   typeof value === "string" &&
-  new RegExp(`^0x[0-9a-fA-F]{${bytes ? bytes * 2 : "1,"}}$`).test(value.trim());
+  new RegExp(`^0[xX][0-9a-fA-F]{${bytes ? bytes * 2 : "1,"}}$`).test(value.trim());
 
 /**
  * USDC minor units, exactly as recorded, or the reason they cannot be read.
@@ -185,10 +192,14 @@ export function readMinorUnits(raw: unknown): { amount: bigint } | { error: stri
 }
 
 /**
- * One deposit's identity: chain, contract, transaction, log.
+ * One deposit's **reconciliation key**: chain, contract, transaction, log.
  *
  * The log index is part of it, so two deposits in the same transaction are two
  * rows on both sides rather than one row that quietly wins.
+ *
+ * Distinct from `depositTrxId` in `usdc-deposit-intake`, which names the ledger
+ * *row* from the same four facts. This one is what the engine matches on and
+ * what a reader sees in a finding, so it stays readable as an identity.
  */
 export const depositKeyOf = (identity: {
   chainId: number;

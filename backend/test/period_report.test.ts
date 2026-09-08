@@ -66,9 +66,16 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
     expect(amountOf(figures, "pengumpulan.zakat")).toBe(4_000_000n);
     expect(amountOf(figures, "pengumpulan.total")).toBe(4_000_000n);
     expect(amountOf(figures, "pengumpulan.fitrah")).toBe(0n);
-    expect(figures.collection.map((f) => f.value.unit)).toEqual(
-      figures.collection.map(() => "IDR")
-    );
+    // Every collection figure states its own unit. The rupiah ones are rupiah;
+    // the USDC one is USDC, and the two are never added together.
+    expect(
+      Object.fromEntries(figures.collection.map((f) => [f.name, f.value.unit]))
+    ).toMatchObject({
+      "pengumpulan.zakat": "IDR",
+      "pengumpulan.total": "IDR",
+      "pengumpulan.usdc": "USDC_6DP",
+      "pengumpulan.usdc_estimasi_idr": "IDR",
+    });
   });
 
   it("menahan donasi USDC di luar pengumpulan rupiah karena nilainya sebuah estimasi", () => {
@@ -82,7 +89,44 @@ describe("Angka periode - dihitung dari baris, bukan dari koneksi", () => {
 
     expect(amountOf(figures, "pengumpulan.total")).toBe(2_000_000n);
     expect(amountOf(figures, "pengumpulan.usdc_estimasi_idr")).toBe(16_200_000n);
+    // A row with only an estimate contributes nothing to the USDC figure: the
+    // rate that produced it cannot be run backwards into a deposit (#67).
+    expect(amountOf(figures, "pengumpulan.usdc")).toBe(0n);
     expect(figures.notes.join(" ")).toMatch(/estimasi/i);
+  });
+
+  it("melaporkan donasi USDC dalam satuan aslinya begitu jumlah native tersimpan", () => {
+    const figures = computePeriodFigures(
+      rows([
+        donation({ trxId: "TRX-1", amountIDR: 2_000_000 }),
+        donation({ trxId: "USDC-1", amountIDR: 0, paymentMethod: "USDC", amountUsdc6dp: "500000" }),
+        donation({ trxId: "USDC-2", amountIDR: 0, paymentMethod: "USDC", amountUsdc6dp: "1500000" }),
+      ]),
+      AKHIR_TAHUN_2026
+    );
+
+    expect(amountOf(figures, "pengumpulan.usdc")).toBe(2_000_000n);
+    // 0,5 USDC stays 0,5 USDC: no rescaling by magnitude anywhere on the way in.
+    expect(amountOf(figures, "pengumpulan.total")).toBe(2_000_000n);
+    expect(amountOf(figures, "pengumpulan.usdc_estimasi_idr")).toBe(0n);
+    expect(figures.notes.join(" ")).not.toMatch(/tidak menyimpan jumlah aslinya/);
+  });
+
+  it("tidak menghitung jumlah USDC yang sudah melewati float sebagai angka pasti", () => {
+    const figures = computePeriodFigures(
+      rows([
+        donation({
+          trxId: "USDC-1",
+          amountIDR: 0,
+          paymentMethod: "USDC",
+          amountUsdc6dp: "1.5",
+        }),
+      ]),
+      AKHIR_TAHUN_2026
+    );
+
+    expect(amountOf(figures, "pengumpulan.usdc")).toBe(0n);
+    expect(figures.notes.join(" ")).toMatch(/tidak menyimpan jumlah aslinya/);
   });
 
   it("memecah penyaluran per asnaf dan menjaga IDR dan USDC tetap terpisah", () => {

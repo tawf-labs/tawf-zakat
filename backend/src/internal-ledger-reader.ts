@@ -27,35 +27,13 @@ import type {
   LedgerDepositRow,
 } from "./internal-usdc-source";
 import { USDC_DEPOSIT_EVENT } from "./internal-usdc-source";
-
-/** Any Drizzle PostgreSQL handle that can run a statement. */
-export type LedgerDatabase = { execute: (query: any) => Promise<any> };
-
-const rowsOfResult = (result: any): any[] =>
-  Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : [];
+import { hasNativeDepositColumns, rowsOf, type DepositDatabase } from "./usdc-deposit-store";
 
 /**
- * The columns #67 adds. All of them, or none of them: a half-migrated ledger
- * cannot pair a deposit either, and treating it as if it could is how a partial
- * migration becomes a confident wrong answer.
+ * Any Drizzle PostgreSQL handle that can run a statement. The same handle the
+ * deposit store takes, named here for the reader's own signatures.
  */
-export const NATIVE_DEPOSIT_COLUMNS = [
-  "amount_usdc_6dp",
-  "deposit_chain_id",
-  "deposit_contract",
-  "deposit_tx_hash",
-  "deposit_log_index",
-] as const;
-
-export async function hasNativeDepositColumns(db: LedgerDatabase): Promise<boolean> {
-  const found = rowsOfResult(
-    await db.execute(sql`
-      SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'donations'
-    `)
-  ).map((row: any) => String(row.column_name));
-  return NATIVE_DEPOSIT_COLUMNS.every((column) => found.includes(column));
-}
+export type LedgerDatabase = DepositDatabase;
 
 export type LedgerReaderConfig = {
   chainId: number;
@@ -75,7 +53,7 @@ export function createInternalLedgerReader(
     scope: () => ({ ...config, contract: config.contract.toLowerCase() }),
 
     async checkpoint(): Promise<ChainScope["checkpoint"]> {
-      const rows = rowsOfResult(
+      const rows = rowsOf(
         await db.execute(sql`
           SELECT last_indexed_block, status, last_sync_at FROM indexer_state
           WHERE indexer_key = ${config.indexerKey} LIMIT 1
@@ -102,7 +80,7 @@ export function createInternalLedgerReader(
       // produces before it has read a first block. That is a read, not a failure.
       if (toBlock < fromBlock) return Promise.resolve(sourceRead<DepositEventRow>([]));
       return attemptRead(async () =>
-        rowsOfResult(
+        rowsOf(
           await db.execute(sql`
             SELECT tx_hash, log_index, block_number, event_name, contract_address, args_json, created_at
             FROM onchain_events
@@ -145,7 +123,7 @@ export function createInternalLedgerReader(
         : sql``;
 
       const read = await attemptRead(async () =>
-        rowsOfResult(
+        rowsOf(
           await db.execute(sql`
             SELECT trx_id, amount_idr, created_at${native}
             FROM donations WHERE payment_method = 'USDC' ORDER BY id ASC

@@ -9,6 +9,49 @@ import { CONTRACT_CONFIG } from "../config";
 import { STAGE_EVENT_NAMES } from "../disbursement-duration";
 import { governanceChain, type GOVERNANCE_ACTIONS, type GovernanceMetadata } from "../governance-chain";
 import { attemptRead, sourceMissing, type SourceRead } from "../source-read";
+import { randomUUID } from "node:crypto";
+import {
+  readDepositIntake,
+  type DepositEventInput,
+  type DepositIntakeRecord,
+} from "../usdc-deposit-intake";
+import { donationSelection, hasNativeDepositColumns, saveUsdcDeposit } from "../usdc-deposit-store";
+
+/**
+ * Whether this deployment's `donations` table can hold a deposit identity
+ * (#67). Resolved on first use and kept, so the catalog is not queried once per
+ * indexed event or once per read.
+ */
+let depositColumnsPresent: boolean | null = null;
+
+/**
+ * The columns a `donations` query may name on *this* deployment.
+ *
+ * Running the migration is deliberately separate from deploying the code, so a
+ * database without the deposit columns is a supported state - and Drizzle names
+ * every column of the model unless told otherwise, which would fail every read.
+ */
+/**
+ * A donation row as this deployment can actually answer for it.
+ *
+ * The deposit fields are optional rather than nullable: on an unmigrated
+ * database they are not `null`, they are not there at all, and a reader that
+ * has to tell those apart is asking a question the table cannot answer.
+ */
+export type DonationLedgerRow = Omit<schema.Donation, DepositColumn> &
+  Partial<Pick<schema.Donation, DepositColumn>>;
+
+type DepositColumn =
+  | "amountUsdc6dp"
+  | "depositChainId"
+  | "depositContract"
+  | "depositTxHash"
+  | "depositLogIndex";
+
+async function donationColumns() {
+  if (db) depositColumnsPresent ??= await hasNativeDepositColumns(db);
+  return donationSelection(depositColumnsPresent ?? false);
+}
 
 const indexerKeyForDeployment = () => `${CONTRACT_CONFIG.CHAIN_ID}:${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase()}`;
 
@@ -183,7 +226,7 @@ export const dbService = {
     if (db) {
       try {
         const rows = await db
-          .select()
+          .select(await donationColumns())
           .from(schema.donations)
           .where(eq(schema.donations.trxId, trxId))
           .limit(1);
@@ -240,7 +283,7 @@ export const dbService = {
     if (db) {
       try {
         const rows = await db
-          .select()
+          .select(await donationColumns())
           .from(schema.donations)
           .where(and(
             eq(schema.donations.status, "PAID"),
@@ -911,7 +954,7 @@ export const dbService = {
   async getDonationRows() {
     if (db) {
       try {
-        return await db.select().from(schema.donations).orderBy(asc(schema.donations.id));
+        return await db.select(await donationColumns()).from(schema.donations).orderBy(asc(schema.donations.id));
       } catch (err) {
         console.error("Failed to fetch donation rows:", err);
       }
@@ -978,9 +1021,11 @@ export const dbService = {
    * It is knowledge this module has before it tries, never inferred from an
    * exception, which is why it is not produced by `attemptRead`.
    */
-  async readDonationRows(): Promise<SourceRead<schema.Donation>> {
+  async readDonationRows(): Promise<SourceRead<DonationLedgerRow>> {
     if (!db) return sourceMissing(NO_DATABASE);
-    return attemptRead(() => db!.select().from(schema.donations).orderBy(asc(schema.donations.id)));
+    return attemptRead(async () =>
+      db!.select(await donationColumns()).from(schema.donations).orderBy(asc(schema.donations.id))
+    );
   },
 
   async readProposalRows(): Promise<SourceRead<schema.DisbursementProposal>> {
@@ -1257,57 +1302,87 @@ export const dbService = {
     return [];
   },
 
-  // --- USDC ON-CHAIN DONATION AUTO-RECORDING ---
-  async recordUSDCDonation(data: {
-    txHash: string;
-    donor: string;
-    amountUSDC: number; // Raw USDC value (6 decimals or human number)
-    isAnonymous: boolean;
-    commitmentHash?: string;
-    blockNumber?: number;
-    timestamp?: string;
-  }) {
-    const timestampStr = data.timestamp || new Date().toISOString();
-    const dateStr = timestampStr.slice(0, 10).replace(/-/g, "");
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const trxId = `USDC-${dateStr}-${randomSuffix}`;
-    const salt = `usdc_salt_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+  /**
+   * Records one indexed USDC deposit, at most once (ticket #67).
+   *
+   * Three things changed here and each was a way a deposit stopped being
+   * checkable:
+   *
+   * - The amount no longer passes through `Number`, is no longer rescaled by a
+   *   magnitude heuristic, and is no longer stored only as an estimated rupiah
+   *   figure at a hardcoded rate. It is kept as exact minor units.
+   * - The row carries the chain, contract, transaction hash and log index it
+   *   came from, so it can be paired with the event that produced it.
+   * - The `trxId` is derived from that identity instead of a random suffix, so
+   *   a reprocessed event lands on the row it already wrote rather than beside
+   *   it.
+   *
+   * Reading the event and keeping it are separate: `readDepositIntake` decides
+   * what the event says, `saveUsdcDeposit` decides what the database does about
+   * it, and neither can be reached without the other having succeeded.
+   */
+  async recordUSDCDonation(
+    event: DepositEventInput
+  ): Promise<
+    | { success: true; record: DepositIntakeRecord; trxId: string; stored: "INSERTED" | "UNCHANGED" }
+    | { success: false; error: string }
+  > {
+    const read = readDepositIntake({
+      ...event,
+      occurredAt: event.occurredAt ?? new Date().toISOString(),
+    });
+    if ("error" in read) return { success: false, error: read.error };
 
-    // Compute approximate IDR equivalent for unified ledger reporting (e.g. 1 USDC = ~16,200 IDR)
-    // Human amount in USDC: raw / 1e6
-    const humanUSDC = data.amountUSDC > 1e6 ? data.amountUSDC / 1e6 : data.amountUSDC;
-    const estimatedIDR = Math.round(humanUSDC * 16200);
-
-    const record: DonationRecord = {
-      trxId,
-      donorName: data.isAnonymous ? "Hamba Allah" : `Muzakki Web3 (${data.donor.slice(0, 6)}...${data.donor.slice(-4)})`,
-      isAnonymous: Boolean(data.isAnonymous),
-      salt,
-      amountIDR: estimatedIDR,
-      timestamp: timestampStr,
-      status: "PAID",
-      paymentMethod: "USDC",
-    };
+    const { record } = read;
+    // One salt for both copies of the row. Two would give the durable row and
+    // the in-memory mirror different leaves for the same donation.
+    const salt = `usdc_salt_${randomUUID()}`;
+    let stored: "INSERTED" | "UNCHANGED" = "UNCHANGED";
 
     if (db) {
       try {
-        await db.insert(schema.donations).values({
-          trxId,
-          donorName: record.donorName,
-          isAnonymous: record.isAnonymous,
-          amountIDR: record.amountIDR,
-          salt: record.salt,
-          status: "PAID",
-          paymentMethod: "USDC",
-          createdAt: new Date(timestampStr),
-          paidAt: new Date(timestampStr),
-        }).onConflictDoNothing();
+        // The catalog is asked once per process, not once per deposit: the
+        // columns cannot appear or vanish while the indexer is running, and a
+        // migration is a restart-worthy event either way.
+        depositColumnsPresent ??= await hasNativeDepositColumns(db);
+        const outcome = await saveUsdcDeposit(db, record, {
+          salt,
+          migrated: depositColumnsPresent,
+        });
+        stored = outcome.stored;
+        if (!outcome.identityPreserved) {
+          console.warn(
+            `[USDC] Migrasi identitas deposit (#67) belum diterapkan pada deployment ini, ` +
+              `sehingga ${record.trxId} tersimpan tanpa jumlah native dan identitas event. ` +
+              `Jumlahnya tetap utuh pada onchain_events (${record.identity.txHash}#` +
+              `${record.identity.logIndex}) dan baris ini menjadi lengkap setelah migrasi ` +
+              `dijalankan dan event diindeks ulang. Estimasi rupiah tidak dipakai sebagai gantinya.`
+          );
+        }
       } catch (err) {
         console.error("Failed to record USDC donation in DB:", err);
+        return { success: false, error: String((err as any)?.message ?? err) };
       }
     }
 
-    dataStore.recordDonation(record);
-    return { success: true, record, trxId };
+    // The in-memory mirror is keyed by trxId, so a reprocessed event would
+    // overwrite the row - including a batch id it has since been given. An
+    // already known deposit is left exactly as it is.
+    if (!dataStore.getDonation(record.trxId)) {
+      dataStore.recordDonation({
+        trxId: record.trxId,
+        donorName: record.donorName,
+        isAnonymous: record.isAnonymous,
+        salt,
+        // Rupiah is not the unit this deposit was made in, and no rate is
+        // applied to invent one. The native amount lives on the stored row.
+        amountIDR: 0,
+        timestamp: record.occurredAt,
+        status: "PAID",
+        paymentMethod: "USDC",
+      });
+    }
+
+    return { success: true, record, trxId: record.trxId, stored };
   },
 };

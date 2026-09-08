@@ -139,26 +139,37 @@ export class IndexerEngine {
     // 2. State-specific domain updates
     switch (eventName) {
       case "USDCDeposited": {
-        const donor = args.donor as string;
-        const amountUSDC = Number(args.amountUSDC);
-        const isAnonymous = Boolean(args.isAnonymous);
-        const commitmentHash = args.commitmentHash as string;
-
-        await dbService.recordUSDCDonation({
+        // The amount stays the `bigint` the ABI decoded and is read by the pure
+        // intake boundary. It used to go through `Number` here, which is where
+        // both the precision and the identity of a deposit were lost (#67).
+        const recorded = await dbService.recordUSDCDonation({
+          chainId: CONTRACT_CONFIG.CHAIN_ID,
+          contract: this.contractAddress,
           txHash,
-          donor,
-          amountUSDC,
-          isAnonymous,
-          commitmentHash,
+          logIndex,
           blockNumber,
+          amountUSDC: args.amountUSDC,
+          donor: args.donor,
+          isAnonymous: args.isAnonymous,
+          commitmentHash: args.commitmentHash,
         });
+
+        if (!recorded.success) {
+          // A deposit this application cannot read is not a deposit it silently
+          // drops: it stays in `onchain_events` above, and the reason is said.
+          console.error(`[Indexer] USDCDeposited tidak dapat dicatat: ${recorded.error}`);
+          break;
+        }
 
         eventBus.broadcast("DONATION_RECEIVED", {
           currency: "USDC",
-          donor,
-          amountUSDC,
-          isAnonymous,
+          donor: recorded.record.donorName,
+          // Decimal text, never a float: a subscriber that parses this must be
+          // able to get the same integer back.
+          amountUSDC6dp: recorded.record.amountUsdc6dp,
+          isAnonymous: recorded.record.isAnonymous,
           txHash,
+          logIndex,
         });
         break;
       }

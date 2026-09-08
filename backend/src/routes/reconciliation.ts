@@ -34,6 +34,7 @@ import {
   WireInputError,
 } from "../wire";
 import { dbService } from "../db/index";
+import { CONTRACT_CONFIG } from "../config";
 import {
   coverageIsComplete,
   coverageOf,
@@ -317,13 +318,27 @@ reconciliationRoutes.post("/internal", async (c) => {
     const eventRows = rowsOf(events)!;
 
     const snapshot = snapshotFromRows(
-      { donationRows, batchRows, proposalRows, eventRows },
+      {
+        donationRows,
+        batchRows,
+        proposalRows,
+        eventRows,
+        // Deposits are only an identity when the chain and contract they came
+        // from are named. This deployment names them; nothing is inferred from
+        // a transaction hash on its own.
+        chain: {
+          chainId: CONTRACT_CONFIG.CHAIN_ID,
+          contract: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase(),
+        },
+      },
       request.period
     );
 
     const reports: Record<string, ReturnType<typeof serializeReport>> = {};
+    const unverified: Record<string, ReturnType<typeof buildInternalLedgerSides>["unverified"]> = {};
     for (const unit of INTERNAL_UNITS) {
-      const { claim, source } = buildInternalLedgerSides(snapshot, unit);
+      const { claim, source, unverified: unproven } = buildInternalLedgerSides(snapshot, unit);
+      if (unproven.length > 0) unverified[unit] = unproven;
       const options: ReconciliationOptions = {
         period: request.period ?? { kind: "AKHIR_TAHUN", year: new Date().getUTCFullYear() },
         allowedBuckets: INTERNAL_BUCKETS,
@@ -349,9 +364,19 @@ reconciliationRoutes.post("/internal", async (c) => {
       lastIndexedBlock,
       period: request.period ?? null,
       blockRange: { fromBlock, toBlock },
+      // The chain and contract the deposit identities are scoped to, so a
+      // downloaded result says which deployment it was read from.
+      chain: {
+        chainId: CONTRACT_CONFIG.CHAIN_ID,
+        contract: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase(),
+      },
       indexerStatus: indexerState.status,
       sources,
       ...(scopeWarning ? { scopeWarning } : {}),
+      // Records that exist and could not be paired with a provable on-chain
+      // amount. Reported beside the verdict rather than folded into it: they are
+      // the part of the population that was not compared at all.
+      unverified,
       reports,
     });
   } catch (error: any) {
