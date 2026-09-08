@@ -1,6 +1,6 @@
 /** Version identity and succession read from the registry, never from display numbering or local ordering. */
 import { hashTypedData, keccak256, toHex, type Hex } from "viem";
-import { evidenceTypedData } from "../../shared/report-registry";
+import { evidenceTypedData, NO_ATTESTATION } from "../../shared/report-registry";
 import type { RegistryChain } from "./registry-chain";
 import type { RegistryRuntime } from "./registry-recording";
 import type { WorkspaceRuntime } from "./workspace-runtime";
@@ -10,16 +10,38 @@ export const OFFICIAL_LINE_LIMIT = 100;
 export const PUBLISH_ACTION = keccak256(toHex("PUBLISH_REPORT"));
 
 export type VersionSubject = { institutionId: string; reportId: string; version: string; packageId: string; digest: string };
+export type VersionAttestation = {
+  id: Hex; auditor: Hex; scope: string; conclusion: string; evidenceCommitment: Hex;
+  predecessor: Hex | null; authorityEpoch: string; mandate: string;
+};
 /**
  * Attestations belong to the version identity that was examined.
  *
- * A correction therefore starts with its own empty list even though its
- * predecessor may have been examined: audit state is never inherited, and this
- * stays true while no attestation flow exists at all.
+ * They are read from the registry by that identity - never by report id - so a
+ * correction starts with its own empty list even when the version it succeeded
+ * carries several conclusions. Audit state is never inherited. A record whose
+ * package or digest does not match this version is dropped rather than shown,
+ * because an opinion about other bytes is not an opinion about these.
  */
-export function attestationsForVersion(subject: VersionSubject) {
-  return { subject, state: "NOT_EXAMINED" as const, entries: [] as VersionSubject[] };
+export async function attestationsForVersion(chain: RegistryChain, subject: VersionSubject) {
+  const records = (await chain.versionAttestations(subject.institutionId, subject.reportId, subject.version))
+    .filter(record => record.statement.packageId === subject.packageId && record.statement.packageDigest === subject.digest);
+  const entries: VersionAttestation[] = records.map(record => ({
+    id: record.id, auditor: record.statement.auditor, scope: record.statement.scope,
+    conclusion: record.statement.conclusion, evidenceCommitment: record.statement.evidenceCommitment,
+    predecessor: record.statement.predecessor === NO_ATTESTATION ? null : record.statement.predecessor,
+    authorityEpoch: record.statement.authorityEpoch.toString(),
+    // The engagement the institution recorded when it granted this scope, so a reader can weigh it.
+    mandate: record.mandate,
+  }));
+  return {
+    subject, entries,
+    state: entries.length === 0 ? "NOT_EXAMINED" as const : "ATTESTED" as const,
+    // A recorded mandate is an engagement, not proof of independence or of a compliance certification.
+    basis: "Kewenangan auditor dicatat lembaga yang diperiksa; peran teknis ini bukan bukti independensi atau sertifikasi kepatuhan menyeluruh.",
+  };
 }
+
 
 export type PublicationSubject = { id: string; reportId: string; version: string; predecessor: string | null };
 export type SuccessionState = { officialPackage: string; versionPackage: string };
@@ -107,7 +129,7 @@ export async function readOfficialLine(runtime: WorkspaceRuntime, registry: Regi
       digest: accepted.institution.digest, policy: accepted.institution.policy, outcome: accepted.institution.outcome,
       endorsements: { institution: accepted.institution.signer, validator: accepted.validator.signer },
       anchor: await anchorOf(registry, institution, cursor, authorizationDigest),
-      attestations: attestationsForVersion({ institutionId: institution, reportId, version, packageId: cursor, digest: accepted.institution.digest }),
+      attestations: await attestationsForVersion(chain, { institutionId: institution, reportId, version, packageId: cursor, digest: accepted.institution.digest }),
     });
     cursor = accepted.institution.predecessor;
   }

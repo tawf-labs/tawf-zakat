@@ -100,6 +100,17 @@ _Avoid_: Versi terbaru menurut penomoran atau urutan penyimpanan; penomoran tamp
 Rantai versi laporan dari [[Versi resmi terkini]] mundur melalui pendahulunya sampai versi pertama. Bercabang tidak mungkin: paling banyak satu penerus resmi per versi.
 _Avoid_: Daftar seluruh paket laporan; pengajuan yang kalah tetap tersimpan sebagai bukti tetapi tidak berada pada garis ini.
 
+**Atestasi versi laporan**:
+[[Atestasi auditor]] atas satu [[Versi laporan]] tertentu pada registry bukti, beserta lingkup, kesimpulan, commitment bukti pemeriksaan, dan mandat auditornya. Dicatat di samping versi; tidak mengubah angka, pengesahan lembaga, atau vonis validator. Lingkup: `REKONSILIASI_PERIODE`, `SUMBER_DAN_KOMITMEN`, `TINDAK_LANJUT_TEMUAN`. Kesimpulan: `WAJAR_TANPA_PENGECUALIAN`, `WAJAR_DENGAN_PENGECUALIAN`, `TIDAK_WAJAR`, `TIDAK_MENYATAKAN_PENDAPAT`. Keadaan versi: `NOT_EXAMINED` sebelum ada atestasi, `ATTESTED` sesudahnya.
+_Avoid_: Bukti independensi atau sertifikasi kepatuhan menyeluruh; kewenangan teknis dicatat oleh lembaga yang diperiksa. Atestasi penyaluran pada vault lama, yang merupakan jalur terpisah.
+
+**Mandat auditor**:
+Dasar penugasan yang dicatat lembaga ketika memberi kewenangan atestasi pada registry, beserta masa kewenangannya. Setiap perubahan mandat membatalkan material yang belum dieksekusi.
+_Avoid_: Keanggotaan pembaca ruang kerja, yang tidak memberi hak atestasi.
+
+**Tindak lanjut atestasi**:
+Catatan auditor berikutnya yang menyusul catatannya sendiri pada versi yang sama. Menambah, tidak mengganti; kesimpulan sebelumnya tetap terbaca.
+
 **Temuan pemeriksaan**:
 Selisih atau masalah yang ditemukan ketika memeriksa catatan dan tetap menjadi bagian dari bukti pemeriksaan tersebut.
 _Avoid_: Bukti lolos, untuk keberadaan catatan temuan.

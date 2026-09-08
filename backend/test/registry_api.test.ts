@@ -16,7 +16,7 @@ import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/ins
 import { createRegistryStore } from "../src/registry-store";
 import { createRegistryChain } from "../src/registry-chain";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
-import { evidenceTypedData } from "../../shared/report-registry";
+import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
 
 // Published local Anvil key. This suite never accepts a network URL from the environment.
 const account = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
@@ -868,7 +868,8 @@ it("separates the official version from a superseded one in public summaries and
   expect(supersededSummary.version.state).toBe("DIGANTIKAN_KOREKSI");
   expect(supersededSummary.version.supersededByPackageId).toBe(correctedVersion.id);
   expect(supersededSummary.version.predecessorPackageId).toBeNull();
-  expect(supersededSummary.attestations).toEqual({ state: "NOT_EXAMINED", count: 0 });
+  expect(supersededSummary.attestations.state).toBe("NOT_EXAMINED");
+  expect(supersededSummary.attestations.entries).toEqual([]);
   expect(supersededSummary.history[0].official).toBe(true);
   expect(supersededSummary.history.at(-1).packageId).toBe(firstVersion.id);
   // Institution-authored free text never reaches the public line.
@@ -975,5 +976,290 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: publishes a first vers
     await page.getByText("Versi yang digantikan · halaman ini", { exact: true }).waitFor();
     expect(await page.locator("body").innerText()).not.toContain("Narasi versi pertama keliru");
     await page.screenshot({ path: "/tmp/ticket75-public-superseded.png", fullPage: true });
+  } finally { await browser.close(); server.stop(true); }
+}, 90000);
+
+
+// ---- Ticket #76: auditor attestations recorded against one version identity ----
+
+const auditorKey = `0x${"0".repeat(60)}9abc` as Hex;
+const auditor = privateKeyToAccount(auditorKey);
+const attestationPath = (saved: any) => `evidence/${saved.preparationId}/reports/${saved.id}/attestation`;
+const workingPaper = (text: string) => [{ fileName: "kertas-kerja.txt", mimeType: "text/plain", contentBase64: Buffer.from(text).toString("base64") }];
+async function auditorSession() {
+  const store = createWorkspaceStore(database.handle());
+  await store.upsertMembership({ institutionId: institution, account: auditor.address, role: "READER" });
+  const challenge = await json("workspace/challenge", { institutionId: institution, account: auditor.address });
+  return (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await auditor.signTypedData(challenge.typedData) })).token;
+}
+async function auditorJson(path: string, body?: unknown, status = body === undefined ? 200 : 201) {
+  const response = await request(path, body, auditorToken);
+  const result = await response.json();
+  expect({ status: response.status, error: result.error }).toEqual({ status, error: undefined });
+  return result;
+}
+async function attestVersion(saved: any, token: string, body: Record<string, unknown>) {
+  const path = attestationPath(saved);
+  const intent = (await (await request(path, { packageDigest: saved.digest, scope: "REKONSILIASI_PERIODE", evidence: workingPaper("kertas kerja"), ...body }, token)).json()).intent;
+  const signature = await auditor.signTypedData(attestationTypedData(intent.domain, intent.statement));
+  const sent = await request(`${path}/${intent.id}/submit`, { signature }, token);
+  expect(sent.status).toBe(200);
+  await rpc.request({ method: "evm_mine" as any });
+  return { path, intent, signature };
+}
+
+let auditorToken: string;
+let attestedVersion: any;
+
+it("records an auditor conclusion against one version without touching its endorsement", async () => {
+  auditorToken = await auditorSession();
+  attestedVersion = firstVersion;
+  const path = attestationPath(attestedVersion);
+  // Reader membership opens the page; it does not grant the right to attest.
+  const unmandated = await request(path, { retryId: "tanpa-mandat", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("x") }, auditorToken);
+  expect(unmandated.status).toBe(403);
+  expect((await unmandated.json()).error).toContain("Keanggotaan pembaca tidak memberi hak atestasi");
+
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, true, "Surat penugasan 2026/01"] }) });
+  // A conclusion the caller did not choose from the recorded vocabulary is refused outright.
+  expect((await request(path, { retryId: "karangan", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "SUDAH DIAUDIT PENUH", evidence: workingPaper("x") }, auditorToken)).status).toBe(400);
+  expect((await request(path, { retryId: "digest-salah", packageDigest: keccak256(toHex("lain")), scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("x") }, auditorToken)).status).toBe(409);
+
+  const { intent } = await attestVersion(attestedVersion, auditorToken, { retryId: "atestasi-pertama", conclusion: "WAJAR_DENGAN_PENGECUALIAN" });
+  expect(intent.statement.version).toBe("1");
+  expect(intent.evidence.files[0].contentSha256).toBeString();
+  expect(JSON.stringify(intent)).not.toContain("storageRefs");
+  const paperPath = `${path}/${intent.id}/files/${intent.evidence.files[0].id}`;
+  const paper = await request(paperPath, undefined, auditorToken);
+  expect(paper.status).toBe(200);
+  expect(await paper.text()).toBe("kertas kerja");
+  expect((await request(paperPath, undefined, token)).status).toBe(404);
+  expect((await request(paperPath, undefined, "")).status).toBe(401);
+
+  const version = (await json(`${publicationPath(attestedVersion)}/version`)).version;
+  expect(version.attestations.state).toBe("ATTESTED");
+  expect(version.attestations.entries).toHaveLength(1);
+  expect(version.attestations.entries[0].conclusion).toBe("WAJAR_DENGAN_PENGECUALIAN");
+  expect(version.attestations.entries[0].auditor.toLowerCase()).toBe(auditor.address.toLowerCase());
+  expect(version.attestations.entries[0].mandate).toBe("Surat penugasan 2026/01");
+  expect(version.attestations.basis).toContain("bukan bukti independensi");
+  // The institution's own publication is untouched by anything an auditor says.
+  expect(version.publication).toBe("PUBLISHED");
+  expect(version.digest).toBe(attestedVersion.digest);
+  expect((await json(`evidence/${attestedVersion.preparationId}/reports/${attestedVersion.id}`)).package.digest).toBe(attestedVersion.digest);
+}, 20000);
+
+it("keeps each version's attestations separate and refuses a foreign or unpublished subject", async () => {
+  // The corrected version of the same report starts with its own empty list.
+  const corrected = (await json(`${publicationPath(correctedVersion)}/version`)).version;
+  expect(corrected.attestations.state).toBe("NOT_EXAMINED");
+  expect(corrected.attestations.entries).toEqual([]);
+  expect(corrected.version).not.toBe((await json(`${publicationPath(attestedVersion)}/version`)).version.version);
+  // Reading the line shows the opinion on exactly one version, addressed by version identity.
+  const history = (await json(`${publicationPath(correctedVersion)}/history`)).history;
+  expect(history.filter((e: any) => e.attestations.entries.length > 0).map((e: any) => e.version)).toEqual(["1"]);
+
+  // A package that was never published as a version cannot be attested.
+  const draftOnly = await frozenVersion((await correctionPreparation("900", "900", "Belum terbit")).id, { reportId: `belum-terbit-${crypto.randomUUID()}`, version: "1" });
+  const refused = await request(attestationPath(draftOnly), { retryId: "belum-terbit", packageDigest: draftOnly.digest, scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("x") }, auditorToken);
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toContain("belum menjadi versi terbit");
+}, 20000);
+
+it("appends a follow-up from the same auditor and refuses another auditor's record", async () => {
+  const path = attestationPath(attestedVersion);
+  const first = (await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries[0];
+  await attestVersion(attestedVersion, auditorToken, { retryId: "tindak-lanjut", conclusion: "WAJAR_TANPA_PENGECUALIAN", scope: "TINDAK_LANJUT_TEMUAN", predecessor: first.id, evidence: workingPaper("kertas kerja lanjutan") });
+  const entries = (await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries;
+  expect(entries).toHaveLength(2);
+  // The earlier conclusion is still readable exactly as it was signed.
+  expect(entries.map((e: any) => e.conclusion)).toEqual(["WAJAR_DENGAN_PENGECUALIAN", "WAJAR_TANPA_PENGECUALIAN"]);
+  expect(entries[1].predecessor).toBe(first.id);
+  expect(entries[0].predecessor).toBeNull();
+
+  // A second auditor cannot follow up on the first auditor's record.
+  const other = privateKeyToAccount(`0x${"0".repeat(60)}def0` as Hex);
+  const store = createWorkspaceStore(database.handle());
+  await store.upsertMembership({ institutionId: institution, account: other.address, role: "READER" });
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, other.address, true, "Surat penugasan kedua"] }) });
+  const challenge = await json("workspace/challenge", { institutionId: institution, account: other.address });
+  const otherToken = (await json("workspace/session", { nonce: challenge.challenge.nonce, signature: await other.signTypedData(challenge.typedData) })).token;
+  const hijack = await request(path, { retryId: "rebut", packageDigest: attestedVersion.digest, scope: "TINDAK_LANJUT_TEMUAN", conclusion: "WAJAR_TANPA_PENGECUALIAN", predecessor: first.id, evidence: workingPaper("x") }, otherToken);
+  expect(hijack.status).toBe(409);
+  expect((await hijack.json()).error).toContain("catatan auditor ini sendiri");
+  expect((await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries).toHaveLength(2);
+
+  // An unsigned draft conclusion belongs to its auditor; membership does not open it to everyone.
+  const draft = (await auditorJson(path, { retryId: "draf-privat", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "TIDAK_MENYATAKAN_PENDAPAT", evidence: workingPaper("kertas kerja privat") })).intent;
+  expect((await request(`${path}/${draft.id}`, undefined, otherToken)).status).toBe(404);
+  expect((await request(`${path}/${draft.id}`, undefined, token)).status).toBe(404);
+  expect(JSON.stringify(await (await request(path, undefined, otherToken)).json())).not.toContain("kertas-kerja.txt");
+  expect((await auditorJson(`${path}/${draft.id}`)).intent.statement.conclusion).toBe("TIDAK_MENYATAKAN_PENDAPAT");
+  // Accepted conclusions stay readable to everyone, because they come from the registry.
+  expect((await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries).toHaveLength(2);
+}, 20000);
+
+it("keeps one logical attestation across retry, reload and a rejected broadcast", async () => {
+  const path = attestationPath(attestedVersion);
+  const prepared = (await auditorJson(path, { retryId: "durable", packageDigest: attestedVersion.digest, scope: "SUMBER_DAN_KOMITMEN", conclusion: "TIDAK_MENYATAKAN_PENDAPAT", evidence: workingPaper("kertas kerja durable") })).intent;
+  // The same retry identity returns the same statement rather than signing a second one.
+  const again = (await auditorJson(path, { retryId: "durable", packageDigest: attestedVersion.digest, scope: "SUMBER_DAN_KOMITMEN", conclusion: "TIDAK_MENYATAKAN_PENDAPAT", evidence: workingPaper("berbeda") })).intent;
+  expect(again.statement).toEqual(prepared.statement);
+  const signature = await auditor.signTypedData(attestationTypedData(prepared.domain, prepared.statement));
+
+  rejectBroadcast = true;
+  try { expect((await request(`${path}/${prepared.id}/submit`, { signature }, auditorToken)).status).toBe(503); }
+  finally { rejectBroadcast = false; }
+  const attempts = await database.rowCount("registry_attempts");
+  await database.reopen(); await configure();
+  await auditorJson(`${path}/${prepared.id}/retry`, {}, 200);
+  await rpc.request({ method: "evm_mine" as any });
+  expect((await auditorJson(`${path}/${prepared.id}`)).intent.observation.state).toBe("CONFIRMED");
+  // Retrying a confirmed attestation is the same logical action, not a third conclusion.
+  expect((await auditorJson(`${path}/${prepared.id}/retry`, {}, 200)).intent.transactionHash).toBe((await auditorJson(`${path}/${prepared.id}`)).intent.transactionHash);
+  expect(await database.rowCount("registry_attempts")).toBe(attempts);
+  expect((await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries).toHaveLength(3);
+}, 20000);
+
+it("does not mark a version audited when evidence storage fails or the event is wrong", async () => {
+  const path = attestationPath(attestedVersion);
+  const before = (await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries.length;
+  // A store that cannot write: its root is a regular file, so every put throws.
+  const working = files;
+  const blocked = join(fileDirectory, "bukan-direktori");
+  await Bun.write(blocked, "x");
+  files = createEncryptedFileStore({ directory: blocked, key: Buffer.alloc(32, 73) });
+  await configure();
+  try {
+    const failed = await request(path, { retryId: "bukti-gagal", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("tidak tersimpan") }, auditorToken);
+    expect(failed.status).toBe(409);
+    expect((await failed.json()).error).toContain("gagal disimpan");
+  } finally { files = working; await configure(); }
+  expect((await request(`${path}/bukti-gagal`, undefined, auditorToken)).status).toBe(404);
+  expect((await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries).toHaveLength(before);
+
+  // A receipt whose event does not match is never read back as an attestation.
+  const { intent } = await attestVersion(attestedVersion, auditorToken, { retryId: "event-salah", conclusion: "TIDAK_WAJAR" });
+  try {
+    mutateRpc = (method, body) => { if (method === "eth_getTransactionReceipt") body.result.logs = []; return body; };
+    expect((await auditorJson(`${path}/${intent.id}`)).intent.observation.state).toBe("INVALID_EVENT");
+  } finally { mutateRpc = null; }
+  expect((await auditorJson(`${path}/${intent.id}`)).intent.observation.state).toBe("CONFIRMED");
+  // An unfavourable conclusion is shown as it was signed, never softened.
+  const entries = (await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries;
+  expect(entries.map((e: any) => e.conclusion)).toContain("TIDAK_WAJAR");
+}, 25000);
+
+it("shows actual conclusions on the public summary of the attested version only", async () => {
+  const attested = (await (await request(`public/reports/${attestedVersion.id}`, undefined, "")).json()).summary;
+  expect(attested.attestations.state).toBe("ATTESTED");
+  expect(attested.attestations.entries.map((e: any) => e.conclusion)).toContain("TIDAK_WAJAR");
+  expect(attested.attestations.basis).toContain("bukan bukti independensi");
+  expect(attested.auditor).toBe("ATTESTED");
+  const line = attested.history.find((entry: any) => entry.packageId === attestedVersion.id);
+  expect(line.attestations.count).toBe(attested.attestations.count);
+  expect(attested.history.find((entry: any) => entry.packageId === correctedVersion.id).attestations.count).toBe(0);
+  // Nothing an auditor said changes what the institution published.
+  expect(attested.publication.state).toBe("PUBLISHED");
+  expect(attested.validator.outcome).toBe("LOLOS");
+  const correctedSummary = (await (await request(`public/reports/${correctedVersion.id}`, undefined, "")).json()).summary;
+  expect(correctedSummary.attestations.state).toBe("NOT_EXAMINED");
+  expect(correctedSummary.auditor).toBe("NOT_EXAMINED");
+}, 20000);
+
+it("refuses a revoked mandate, another account's signature and a stale authority epoch", async () => {
+  const path = attestationPath(attestedVersion);
+  const prepared = (await auditorJson(path, { retryId: "dicabut", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("kertas kerja dicabut") })).intent;
+  const signature = await auditor.signTypedData(attestationTypedData(prepared.domain, prepared.statement));
+  // A signature from an account that is not the named auditor never reaches the relayer.
+  const foreign = await account.signTypedData(attestationTypedData(prepared.domain, prepared.statement));
+  expect((await request(`${path}/${prepared.id}/submit`, { signature: foreign }, auditorToken)).status).toBe(409);
+  expect((await request(`${path}/${prepared.id}/submit`, { signature }, token)).status).toBe(404);
+
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, false, "dicabut"] }) });
+  expect((await request(`${path}/${prepared.id}/submit`, { signature }, auditorToken)).status).toBe(409);
+  // Reactivating raises the epoch, so the outstanding material stays invalid and a new review is needed.
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, true, "Surat penugasan 2026/02"] }) });
+  expect((await request(`${path}/${prepared.id}/submit`, { signature }, auditorToken)).status).toBe(409);
+  const renewed = (await auditorJson(path, { retryId: "mandat-baru", packageDigest: attestedVersion.digest, scope: "REKONSILIASI_PERIODE", conclusion: "WAJAR_TANPA_PENGECUALIAN", evidence: workingPaper("kertas kerja mandat baru") })).intent;
+  expect(renewed.statement.authorityEpoch).not.toBe(prepared.statement.authorityEpoch);
+  const oldNotes = (await json(`${publicationPath(attestedVersion)}/version`)).version.attestations.entries;
+  expect(oldNotes[0].mandate).toBe("Surat penugasan 2026/01");
+  await auditorJson(`${path}/${renewed.id}/submit`, { signature: await auditor.signTypedData(attestationTypedData(renewed.domain, renewed.statement)) }, 200);
+}, 25000);
+
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: an auditor signs a conclusion on one version and both readers see it", async () => {
+  const reportId = `demo-atestasi-${crypto.randomUUID()}`;
+  const preparation = await correctionPreparation("800", "800", "Demo atestasi");
+  const version = await frozenVersion(preparation.id, { reportId, version: "1" });
+  await publishVersion(version, "demo-atestasi-1");
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName: "setAuditor", args: [institution, auditor.address, true, "Surat penugasan demo"] }) });
+  const prep = await json(`evidence/${preparation.id}`);
+  const readerToken = await auditorSession();
+  const bundles: Record<string, string> = {};
+  for (const [name, file] of [["public", "public-report-smoke.tsx"], ["private", "registry-smoke.tsx"]]) {
+    const built = await Bun.build({ entrypoints: [new URL(`../../frontend/test/${file}`, import.meta.url).pathname], target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "http://127.0.0.1:18576" }) } });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    bundles[name!] = await built.outputs[0]!.text();
+  }
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 18576, async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/public-demo" || path === "/") return new Response(`<div id="root"></div><script type="module" src="/${path === "/public-demo" ? "public" : "private"}.js"></script>`, { headers: { "Content-Type": "text/html" } });
+    if (path === "/public.js" || path === "/private.js") return new Response(bundles[path.slice(1, -3)], { headers: { "Content-Type": "text/javascript" } });
+    if (path === "/smoke-config") return Response.json({ preparationId: preparation.id, token: readerToken, canPrepare: false, commitmentSalt: prep.preparation.commitmentSalt });
+    if (path === "/wallet-rpc") {
+      const { method, params } = await req.json();
+      if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([auditor.address]);
+      if (method === "eth_chainId") return Response.json("0x7a69");
+      if (method === "eth_signTypedData_v4") return Response.json(await auditor.signTypedData(JSON.parse(params[1])));
+      if (method === "wallet_requestPermissions" || method === "wallet_getPermissions") return Response.json([{ parentCapability: "eth_accounts" }]);
+      return Response.json(null);
+    }
+    return app.fetch(req);
+  } });
+  const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+  const browser = await chromium.launch({ ...(process.env.REGISTRY_BROWSER_EXECUTABLE ? { executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE } : {}), headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (error: Error) => console.error("Browser:", error.message));
+    await page.goto("http://127.0.0.1:18576/");
+    await page.getByLabel("Paket tersimpan").selectOption(version.id);
+    const panel = page.getByRole("heading", { name: "Atestasi auditor", exact: true }).locator("..");
+    await panel.getByText("Belum diperiksa.", { exact: true }).waitFor();
+    expect(await panel.innerText()).toContain("bukan bukti independensi");
+
+    await panel.getByLabel("Kesimpulan").selectOption("TIDAK_WAJAR");
+    await panel.getByLabel("Bukti pemeriksaan (kertas kerja)").setInputFiles({ name: "kertas-kerja.txt", mimeType: "text/plain", buffer: Buffer.from("Kertas kerja pemeriksaan.".repeat(12000)) });
+    const prepareButton = panel.getByRole("button", { name: "Siapkan atestasi untuk versi ini" });
+    await page.route("**/attestation", async (route: any) => {
+      if (route.request().method() === "POST") await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Bukti gagal disimpan; coba lagi." }) });
+      else await route.continue();
+    });
+    await prepareButton.click();
+    await panel.getByRole("alert").filter({ hasText: "Bukti gagal disimpan" }).waitFor();
+    expect(await prepareButton.isEnabled()).toBe(true);
+    await page.unroute("**/attestation");
+    await prepareButton.click();
+    const sign = panel.getByRole("button", { name: "Tandatangani atestasi versi ini" });
+    await sign.waitFor();
+    await page.reload();
+    await page.getByLabel("Paket tersimpan").selectOption(version.id);
+    await sign.waitFor();
+    expect(await sign.isDisabled()).toBe(true);
+    await panel.getByLabel("Saya telah meninjau identitas versi, digest, lingkup, kesimpulan, dan bukti pemeriksaan di atas.").check();
+    await sign.click();
+    await panel.getByText("Atestasi masuk blok; konfirmasi belum cukup", { exact: true }).waitFor();
+    await rpc.request({ method: "evm_mine" as any });
+    await panel.getByText("Atestasi tercatat pada versi ini", { exact: true }).waitFor();
+    // The recorded list re-reads itself, so the version stops saying it was never examined.
+    await panel.getByText("Tidak wajar (TIDAK_WAJAR)", { exact: true }).waitFor();
+    expect(await panel.innerText()).not.toContain("Belum diperiksa.");
+    await page.screenshot({ path: "/tmp/ticket76-browser-attestation.png", fullPage: true });
+
+    // The unfavourable conclusion reaches a public reader as it was signed.
+    await page.goto(`http://127.0.0.1:18576/public-demo?packageId=${version.id}`);
+    await page.getByText("Tidak wajar (TIDAK_WAJAR) · Rekonsiliasi periode (REKONSILIASI_PERIODE)", { exact: true }).waitFor();
+    expect(await page.locator("body").innerText()).toContain("bukan bukti independensi");
+    await page.screenshot({ path: "/tmp/ticket76-public-attestation.png", fullPage: true });
   } finally { await browser.close(); server.stop(true); }
 }, 90000);

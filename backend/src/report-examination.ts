@@ -3,7 +3,14 @@ import { keccak256, toHex } from "viem";
 import { canonicalJson, sha256Hex } from "./evidence-snapshot";
 import { createReportPackages, PackageError, wire } from "./report-package";
 import { createRecording } from "./registry-recording";
-import { attestationsForVersion, readOfficialLine } from "./report-history";
+import { attestationsForVersion, readOfficialLine, type VersionAttestation } from "./report-history";
+
+/** What a public reader sees of an auditor's note: the on-chain facts, and nothing an auditor typed. */
+const publicAttestations = (attestations: { state: string; basis: string; entries: VersionAttestation[] }) => ({
+  state: attestations.state, count: attestations.entries.length, basis: attestations.basis,
+  entries: attestations.entries.map(note => ({ id: note.id, auditor: note.auditor, scope: note.scope,
+    conclusion: note.conclusion, evidenceCommitment: note.evidenceCommitment, predecessor: note.predecessor, mandate: note.mandate })),
+});
 import type { WorkspaceRuntime } from "./workspace-runtime";
 
 export async function examinationFiles(runtime: WorkspaceRuntime, record: { files: { id: string; storageRef: string | null; contentSha256: string | null }[] }) {
@@ -51,7 +58,8 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         blockNumber: entry.anchor.blockNumber ?? null, blockHash: entry.anchor.blockHash ?? null,
         logIndex: entry.anchor.logIndex ?? null, blockTimestamp: entry.anchor.blockTimestamp ?? null,
         confirmations: entry.anchor.confirmations, requiredConfirmations: entry.anchor.requiredConfirmations },
-      attestations: { state: entry.attestations.state, count: entry.attestations.entries.length },
+      // Conclusions are a fixed vocabulary recorded on chain, so the public line may carry them verbatim.
+      attestations: publicAttestations(entry.attestations),
     }));
   }
   return {
@@ -86,7 +94,7 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         content = await store.getPublicReport(packageId);
       }
       const files = await examinationFiles(runtime, record);
-      const own = attestationsForVersion({ institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest });
+      const own = await attestationsForVersion(runtime.registry.chain, { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest });
       const history = await publicHistory(saved.reportId);
       const intent = observed.publicationIntents.find(i => i.authorizationDigest === content.publicationAuthorizationDigest);
       const domain = runtime.registry.chain.domain;
@@ -103,7 +111,7 @@ export function createExamination(runtime: WorkspaceRuntime, institution: string
         recording: { state: observed.recording.some(i => i.observation.state === "CONFIRMED") ? "RECORDED" : "NOT_CONFIRMED" },
         // Read by version identity only: a correction never inherits the audit state of the version it succeeds.
         validator: { outcome: saved.verdict.outcome }, auditor: own.state,
-        attestations: { state: own.state, count: own.entries.length },
+        attestations: publicAttestations(own),
         files: { total: files.length, available: files.filter(f => f.state === "AVAILABLE").length,
           missing: files.filter(f => f.state === "MISSING").length, unavailable: files.filter(f => f.state === "UNAVAILABLE").length,
           integrityFailed: files.filter(f => f.state === "INTEGRITY_FAILED").length },

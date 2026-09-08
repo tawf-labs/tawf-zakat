@@ -6,7 +6,13 @@ export type PublicVersionEntry = {
   correctionReason: "TERBATAS_BAGI_PEMBACA_BERWENANG" | null;
   anchor: { transactionHash?: string; state: string; blockNumber: string | null; blockHash: string | null;
     logIndex: number | null; blockTimestamp: string | null; confirmations: number; requiredConfirmations: number } | null;
-  attestations: { state: string; count: number };
+  attestations: PublicAttestations;
+};
+export type PublicAttestations = {
+  state: string; count: number; basis: string;
+  /** A fixed vocabulary recorded on chain, so a public reader sees the actual conclusion. */
+  entries: { id: string; auditor: string; scope: string; conclusion: string; evidenceCommitment: string;
+    predecessor: string | null; mandate: string }[];
 };
 export type PublicReportSummary = {
   content: {
@@ -27,7 +33,7 @@ export type PublicReportSummary = {
     officialPackageId: string | null; officialVersionReference: string | null };
   history: PublicVersionEntry[];
   recording: { state: string }; validator: { outcome: string }; auditor: string;
-  attestations: { state: string; count: number };
+  attestations: PublicAttestations;
   files: { total: number; available: number; missing: number; unavailable: number; integrityFailed: number };
   network: { chainId: number; registry: string; name: string; confirmationPolicy: string; requiredConfirmations: number };
   anchor: { transactionHash?: string; authorizationDigest: string; validatorAuthorizationDigest?: string;

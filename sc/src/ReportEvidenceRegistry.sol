@@ -189,4 +189,106 @@ contract ReportEvidenceRegistry is EIP712 {
     function publishedPackageVersion(string calldata institutionId, string calldata packageId) external view returns (string memory) {
         return packageVersions[keccak256(bytes(institutionId))][keccak256(bytes(packageId))];
     }
+
+    bytes32 public constant ATTEST_REPORT = keccak256("ATTEST_REPORT");
+    bytes32 public constant ATTESTATION_TYPEHASH = keccak256("Attestation(bytes32 action,string institutionId,string reportId,string version,string packageId,bytes32 packageDigest,string scope,string conclusion,bytes32 evidenceCommitment,bytes32 predecessor,address auditor,uint256 authorityEpoch,bytes32 nonce,uint256 deadline)");
+    /// @notice An engagement scope recorded by the institution being examined. It is not evidence of independence.
+    mapping(bytes32 => mapping(address => Authority)) public auditors;
+    mapping(bytes32 => mapping(address => string)) private auditorMandates;
+
+    struct Attestation {
+        bytes32 action;
+        string institutionId;
+        string reportId;
+        string version;
+        string packageId;
+        bytes32 packageDigest;
+        string scope;
+        string conclusion;
+        bytes32 evidenceCommitment;
+        bytes32 predecessor;
+        address auditor;
+        uint256 authorityEpoch;
+        bytes32 nonce;
+        uint256 deadline;
+    }
+    struct AttestationRecord { Attestation statement; bytes signature; string mandate; }
+    mapping(bytes32 => AttestationRecord) private attestationRecords;
+    mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => bytes32[]))) private versionAttestations;
+
+    event AuditorChanged(bytes32 indexed institutionKey, address indexed auditor, bool active, uint256 epoch, string mandate);
+    event ReportAttested(bytes32 indexed institutionKey, bytes32 indexed packageKey, bytes32 indexed attestation,
+        bytes32 action, bytes32 packageDigest, address auditor, bytes32 evidenceCommitment, bytes32 predecessor);
+
+    /// @notice Reader membership grants nothing here; only an explicit institution-scoped mandate does.
+    function setAuditor(string calldata institutionId, address auditor, bool active, string calldata mandate) external {
+        bytes32 key = keccak256(bytes(institutionId));
+        if (msg.sender != administrators[key]) revert Unauthorized();
+        if (auditor == address(0) || (active && bytes(mandate).length == 0)) revert InvalidAuthorization();
+        Authority storage authority = auditors[key][auditor];
+        authority.active = active;
+        // Every mandate change invalidates outstanding material, including reactivation.
+        authority.epoch++;
+        auditorMandates[key][auditor] = mandate;
+        emit AuditorChanged(key, auditor, active, authority.epoch, mandate);
+    }
+    function auditorMandate(string calldata institutionId, address auditor) external view returns (string memory) {
+        return auditorMandates[keccak256(bytes(institutionId))][auditor];
+    }
+    function attestationDigest(Attestation calldata a) public view returns (bytes32) {
+        return _hashTypedDataV4(keccak256(abi.encode(ATTESTATION_TYPEHASH, a.action,
+            keccak256(bytes(a.institutionId)), keccak256(bytes(a.reportId)), keccak256(bytes(a.version)),
+            keccak256(bytes(a.packageId)), a.packageDigest, keccak256(bytes(a.scope)), keccak256(bytes(a.conclusion)),
+            a.evidenceCommitment, a.predecessor, a.auditor, a.authorityEpoch, a.nonce, a.deadline)));
+    }
+    function validateAttestation(Attestation calldata a, bytes calldata signature) public view {
+        if (a.action != ATTEST_REPORT || a.packageDigest == bytes32(0) || a.evidenceCommitment == bytes32(0)
+            || a.nonce == bytes32(0) || bytes(a.scope).length == 0 || bytes(a.conclusion).length == 0
+            || bytes(a.reportId).length == 0 || bytes(a.version).length == 0 || bytes(a.packageId).length == 0) revert InvalidAuthorization();
+        bytes32 scope = keccak256(bytes(a.scope));
+        bytes32 conclusion = keccak256(bytes(a.conclusion));
+        if (scope != keccak256("REKONSILIASI_PERIODE") && scope != keccak256("SUMBER_DAN_KOMITMEN")
+            && scope != keccak256("TINDAK_LANJUT_TEMUAN")) revert InvalidAuthorization();
+        if (conclusion != keccak256("WAJAR_TANPA_PENGECUALIAN") && conclusion != keccak256("WAJAR_DENGAN_PENGECUALIAN")
+            && conclusion != keccak256("TIDAK_WAJAR") && conclusion != keccak256("TIDAK_MENYATAKAN_PENDAPAT")) revert InvalidAuthorization();
+        bytes32 institutionKey = keccak256(bytes(a.institutionId));
+        // An attestation names the version it examined, so that version must exist and match the package it claims.
+        Authorization storage accepted = publications[institutionKey][keccak256(bytes(a.reportId))][keccak256(bytes(a.version))].institution;
+        if (keccak256(bytes(accepted.packageId)) != keccak256(bytes(a.packageId)) || accepted.digest != a.packageDigest) revert InvalidAuthorization();
+        if (a.predecessor != bytes32(0)) {
+            // A follow-up extends one auditor's own record on this same version; it never replaces anyone's.
+            Attestation storage previous = attestationRecords[a.predecessor].statement;
+            if (previous.auditor != a.auditor || keccak256(bytes(previous.institutionId)) != institutionKey
+                || keccak256(bytes(previous.reportId)) != keccak256(bytes(a.reportId))
+                || keccak256(bytes(previous.version)) != keccak256(bytes(a.version))
+                || keccak256(bytes(previous.packageId)) != keccak256(bytes(a.packageId))) revert InvalidAuthorization();
+        }
+        Authority memory authority = auditors[institutionKey][a.auditor];
+        if (!authority.active || authority.epoch != a.authorityEpoch) revert Unauthorized();
+        if (block.timestamp > a.deadline) revert Expired();
+        if (usedNonces[institutionKey][a.auditor][a.nonce]) revert Replayed();
+        if (attestationRecords[attestationDigest(a)].statement.auditor != address(0)) revert AlreadyRecorded();
+        if (!SignatureChecker.isValidSignatureNow(a.auditor, attestationDigest(a), signature)) revert InvalidAuthorization();
+    }
+    /// @notice Appends an examination note to one version. It changes no figure and no institutional endorsement.
+    function attestReport(Attestation calldata a, bytes calldata signature) external {
+        validateAttestation(a, signature);
+        bytes32 institutionKey = keccak256(bytes(a.institutionId));
+        bytes32 id = attestationDigest(a);
+        usedNonces[institutionKey][a.auditor][a.nonce] = true;
+        // Preserve the accepted engagement even after renewal or revocation.
+        attestationRecords[id] = AttestationRecord(a, signature, auditorMandates[institutionKey][a.auditor]);
+        versionAttestations[institutionKey][keccak256(bytes(a.reportId))][keccak256(bytes(a.version))].push(id);
+        emit ReportAttested(institutionKey, keccak256(bytes(a.packageId)), id, a.action, a.packageDigest, a.auditor, a.evidenceCommitment, a.predecessor);
+    }
+    /// @notice Attestations are held per version identity; a report id alone never addresses them.
+    function attestationCount(string calldata institutionId, string calldata reportId, string calldata version) external view returns (uint256) {
+        return versionAttestations[keccak256(bytes(institutionId))][keccak256(bytes(reportId))][keccak256(bytes(version))].length;
+    }
+    function attestationIdAt(string calldata institutionId, string calldata reportId, string calldata version, uint256 index) external view returns (bytes32) {
+        return versionAttestations[keccak256(bytes(institutionId))][keccak256(bytes(reportId))][keccak256(bytes(version))][index];
+    }
+    function attestationById(bytes32 id) external view returns (AttestationRecord memory) {
+        return attestationRecords[id];
+    }
 }

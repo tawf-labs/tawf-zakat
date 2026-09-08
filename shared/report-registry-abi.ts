@@ -13,6 +13,32 @@ export const reportRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "ATTESTATION_TYPEHASH",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ATTEST_REPORT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "AUTHORIZATION_TYPEHASH",
     "inputs": [],
     "outputs": [
@@ -104,6 +130,411 @@ export const reportRegistryAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "attestReport",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Attestation",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageDigest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "scope",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "conclusion",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "evidenceCommitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "predecessor",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "auditor",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "signature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "attestationById",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.AttestationRecord",
+        "components": [
+          {
+            "name": "statement",
+            "type": "tuple",
+            "internalType": "struct ReportEvidenceRegistry.Attestation",
+            "components": [
+              {
+                "name": "action",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "institutionId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "reportId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "version",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "packageId",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "packageDigest",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "scope",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "conclusion",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "evidenceCommitment",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "predecessor",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "auditor",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "authorityEpoch",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "signature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "mandate",
+            "type": "string",
+            "internalType": "string"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "attestationCount",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "reportId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "attestationDigest",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Attestation",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageDigest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "scope",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "conclusion",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "evidenceCommitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "predecessor",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "auditor",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "attestationIdAt",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "reportId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "auditorMandate",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "auditor",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "auditors",
+    "inputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -822,6 +1253,34 @@ export const reportRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "setAuditor",
+    "inputs": [
+      {
+        "name": "institutionId",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "auditor",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "mandate",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setSignatory",
     "inputs": [
       {
@@ -917,6 +1376,96 @@ export const reportRegistryAbi = [
         "internalType": "bool"
       }
     ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "validateAttestation",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "tuple",
+        "internalType": "struct ReportEvidenceRegistry.Attestation",
+        "components": [
+          {
+            "name": "action",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "institutionId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "reportId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "packageDigest",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "scope",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "conclusion",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "evidenceCommitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "predecessor",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "auditor",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "authorityEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "deadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "signature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
     "stateMutability": "view"
   },
   {
@@ -1242,6 +1791,43 @@ export const reportRegistryAbi = [
   },
   {
     "type": "event",
+    "name": "AuditorChanged",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "auditor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "mandate",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "EIP712DomainChanged",
     "inputs": [],
     "anonymous": false
@@ -1310,6 +1896,61 @@ export const reportRegistryAbi = [
         "type": "address",
         "indexed": false,
         "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ReportAttested",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "packageKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "attestation",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "action",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "packageDigest",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "auditor",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "evidenceCommitment",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "predecessor",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
       }
     ],
     "anonymous": false

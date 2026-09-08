@@ -1,10 +1,12 @@
 import { createPublicClient, createWalletClient, defineChain, http, encodeFunctionData, decodeEventLog, keccak256, toHex, TransactionReceiptNotFoundError, BlockNotFoundError, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { reportRegistryAbi as abi } from "../../shared/report-registry-abi";
-import { contractAuthorization, type RecordingIntent, type RegistryDomain, type RecordingObservation } from "../../shared/report-registry";
-import type { RegistryAttempt } from "./registry-store";
+import { contractAttestation, contractAuthorization, type AttestationIntent, type AttestationStatement, type RecordingIntent, type RegistryDomain, type RecordingObservation } from "../../shared/report-registry";
+import { isAttestation, type RegistryAttempt } from "./registry-store";
 
 export type RegistryConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number };
+/** Everything the relayer can carry: recording, publication and attestation share one durable path. */
+export type RegistryIntent = RecordingIntent | AttestationIntent;
 export function createRegistryChain(config: RegistryConfig) {
   if (!Number.isSafeInteger(config.chainId) || config.chainId < 1 || !Number.isSafeInteger(config.requiredConfirmations) || config.requiredConfirmations < 1) throw new Error("Konfigurasi registry tidak sah.");
   const chain = defineChain({ id: config.chainId, name: "Report evidence registry", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
@@ -56,18 +58,51 @@ export function createRegistryChain(config: RegistryConfig) {
       await assertDeployment();
       return rpc.readContract({ address: config.address, abi, functionName: "publishedPackageVersion", args: [institution, packageId] });
     },
-    async validate(intent: RecordingIntent, signature: Hex) {
+    /** An engagement scope recorded by the institution being examined; never evidence of independence. */
+    async auditorAuthority(institution: string, auditor: Hex) {
       await assertDeployment();
-      if (intent.validator) await rpc.readContract({ address: config.address, abi, functionName: "validatePublication", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] });
+      const [[active, epoch], mandate, code] = await Promise.all([
+        rpc.readContract({ address: config.address, abi, functionName: "auditors", args: [keccak256(toHex(institution)), auditor] }),
+        rpc.readContract({ address: config.address, abi, functionName: "auditorMandate", args: [institution, auditor] }),
+        rpc.getCode({ address: auditor }),
+      ]);
+      return { active, epoch: epoch.toString(), mandate, accountKind: code && code !== "0x" ? "ERC1271" as const : "EOA" as const };
+    },
+    async attestationRecord(id: Hex) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "attestationById", args: [id] });
+    },
+    /** Attestations are addressed by version identity; a report id alone never reaches them. */
+    async versionAttestations(institution: string, report: string, version: string) {
+      await assertDeployment();
+      const count = await rpc.readContract({ address: config.address, abi, functionName: "attestationCount", args: [institution, report, version] });
+      const records = [];
+      for (let index = 0n; index < count; index++) {
+        const id = await rpc.readContract({ address: config.address, abi, functionName: "attestationIdAt", args: [institution, report, version, index] });
+        const record = await rpc.readContract({ address: config.address, abi, functionName: "attestationById", args: [id] });
+        records.push({ id, statement: record.statement, signature: record.signature, mandate: record.mandate });
+      }
+      return records;
+    },
+    async validate(intent: RegistryIntent, signature: Hex) {
+      await assertDeployment();
+      if (isAttestation(intent)) await rpc.readContract({ address: config.address, abi, functionName: "validateAttestation", args: [contractAttestation(intent.statement), signature] });
+      else if (intent.validator) await rpc.readContract({ address: config.address, abi, functionName: "validatePublication", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] });
       else await rpc.readContract({ address: config.address, abi, functionName: "validateAuthorization", args: [contractAuthorization(intent.authorization), signature] });
+    },
+    async attestationDigest(statement: AttestationStatement) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "attestationDigest", args: [contractAttestation(statement)] });
     },
     async accountSignatureCall({ to, data }: { to: string; data: Hex }): Promise<string> {
       await assertDeployment();
       return (await rpc.call({ to: to as Hex, data })).data ?? "0x";
     },
     pendingNonce: () => rpc.getTransactionCount({ address: account.address, blockTag: "pending" }),
-    async build(intent: RecordingIntent, signature: Hex, nonce: number): Promise<RegistryAttempt> {
-      const data = intent.validator
+    async build(intent: RegistryIntent, signature: Hex, nonce: number): Promise<RegistryAttempt> {
+      const data = isAttestation(intent)
+        ? encodeFunctionData({ abi, functionName: "attestReport", args: [contractAttestation(intent.statement), signature] })
+        : intent.validator
         ? encodeFunctionData({ abi, functionName: "publishReport", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] })
         : encodeFunctionData({ abi, functionName: "recordEvidence", args: [contractAuthorization(intent.authorization), signature] });
       const tx = await wallet.prepareTransactionRequest({ to: config.address, data, nonce });
@@ -78,7 +113,7 @@ export function createRegistryChain(config: RegistryConfig) {
       const hash = await rpc.sendRawTransaction({ serializedTransaction: attempt.raw });
       if (hash !== attempt.hash) throw new Error("Identitas transaksi berubah.");
     },
-    async observe(intent: RecordingIntent, hash: Hex): Promise<RecordingObservation> {
+    async observe(intent: RegistryIntent, hash: Hex): Promise<RecordingObservation> {
       await assertDeployment();
       let receipt;
       try { receipt = await rpc.getTransactionReceipt({ hash }); }
@@ -105,6 +140,14 @@ export function createRegistryChain(config: RegistryConfig) {
       const matches = receipt.logs.filter(log => {
         if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
         try {
+          if (isAttestation(intent)) {
+            const event = decodeEventLog({ abi, eventName: "ReportAttested", topics: log.topics, data: log.data, strict: true });
+            const a = intent.statement;
+            return event.args.institutionKey === keccak256(toHex(a.institutionId)) && event.args.packageKey === keccak256(toHex(a.packageId))
+              && event.args.attestation === intent.statementDigest && event.args.action === a.action
+              && event.args.packageDigest === a.packageDigest && event.args.evidenceCommitment === a.evidenceCommitment
+              && event.args.predecessor === a.predecessor && event.args.auditor.toLowerCase() === a.auditor.toLowerCase();
+          }
           if (intent.validator) {
             const event = decodeEventLog({ abi, eventName: "ReportPublished", topics: log.topics, data: log.data, strict: true });
             const a = intent.authorization, v = intent.validator;

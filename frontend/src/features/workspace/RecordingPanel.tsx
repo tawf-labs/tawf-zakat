@@ -5,7 +5,8 @@ import { Button } from "../../components/ui/Button";
 import { evidenceTypedData, type RecordingIntent } from "../../../../shared/report-registry";
 import type { SavedReportPackage } from "./evidenceClient";
 import { recordingRequest } from "./recordingClient";
-import { formatBlockInstant, VERSION_STATE_LABELS } from "./evidenceText";
+import { conclusionLabel, formatBlockInstant, VERSION_STATE_LABELS } from "./evidenceText";
+import { AttestationPanel, type VersionAttestation } from "./AttestationPanel";
 
 const labels = {
   PREPARED: "Pengesahan disiapkan; belum dikirim", SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
@@ -18,11 +19,13 @@ const publicationLabels = { ...labels,
   REVERTED: "Transaksi gagal; laporan belum terbit", INVALID_EVENT: "Event tidak cocok; penerbitan tidak diakui",
   NONCANONICAL: "Blok berubah; penerbitan perlu diperiksa ulang",
 };
+type VersionAttestations = { state: string; entries: VersionAttestation[]; basis: string };
 type PublishedVersion = { versionState: string; publication: string; predecessor: string | null;
-  correctionReason: string | null; officialVersion: string | null; officialPackageId: string | null };
+  correctionReason: string | null; officialVersion: string | null; officialPackageId: string | null;
+  attestations: VersionAttestations };
 type VersionHistoryEntry = { packageId: string; version: string; official: boolean; predecessor: string | null;
   correctionReason: string | null; endorsements: { institution: string; validator: string };
-  attestations: { state: string; entries: unknown[] };
+  attestations: VersionAttestations;
   anchor: { transactionHash?: string; state: string; blockNumber?: string; blockTimestamp?: string; confirmations: number; requiredConfirmations: number } | null };
 
 export function RecordingPanel({ saved, preparationId, token, publication = false, onCorrect }: { saved: SavedReportPackage; preparationId: string; token: string; publication?: boolean; onCorrect?: (packageId: string) => void }) {
@@ -144,7 +147,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
   return <section className="space-y-3 rounded border p-3">
     <h5 className="font-semibold">{publication ? "Penerbitan laporan" : "Pengesahan pencatatan bukti"}</h5>
-    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan layanan validator untuk paket yang sama. Kontrak memverifikasi pernyataan layanan; perhitungan bergantung pada layanan dan sumber bank, bukan komputasi trustless. Atestasi auditor: belum diperiksa." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
+    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan layanan validator untuk paket yang sama. Kontrak memverifikasi pernyataan layanan; perhitungan bergantung pada layanan dan sumber bank, bukan komputasi trustless. Atestasi auditor diperiksa terpisah dan dibaca per versi." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
     <details><summary>Cakupan sumber dan temuan paket beku</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ snapshot: saved.snapshot, reconciliation: saved.reconciliation, disclosure: saved.disclosure, policy: saved.policy }, null, 2)}</pre></details>
     {history.length > 0 && <label className="block text-sm">Riwayat pengesahan paket<select className="block w-full rounded border p-2" value={intent?.id ?? ""} disabled={locked || checking} onChange={e => {
       const selected = history.find(item => item.id === e.target.value);
@@ -156,7 +159,7 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
       <p className="text-xs">Konfirmasi: {statusUnavailable ? "belum diketahui" : intent.observation.confirmations} / {intent.observation.requiredConfirmations}. {publication ? `Laporan ${saved.reportId} · versi ${saved.version}` : "Pengesahan ini hanya untuk pencatatan bukti."}</p>
       <p className="text-xs">Kebijakan {intent.observation.confirmationPolicy}. Kedalaman blok ini bukan finalitas settlement L1. {intent.domain.chainId === 31337 ? "EVM lokal, data uji." : intent.domain.chainId === 421614 ? "Arbitrum Sepolia, testnet." : "Periksa jaringan deployment sebelum menandatangani."}</p>
       <p className="break-all text-xs">Chain {intent.domain.chainId} · Registry {intent.domain.verifyingContract} <button onClick={() => navigator.clipboard.writeText(intent.domain.verifyingContract)}>Salin registry</button><br />Pengesah {intent.authorization.signer} <button onClick={() => navigator.clipboard.writeText(intent.authorization.signer)}>Salin akun</button><br />Berlaku sampai {new Date(Number(intent.authorization.deadline) * 1000).toLocaleString()}</p>
-      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Validator: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}; kewenangan diperiksa kembali saat eksekusi` : "belum tersedia"}. Auditor: belum diperiksa.</p>}
+      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Validator: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}; kewenangan diperiksa kembali saat eksekusi` : "belum tersedia"}. Auditor: {version?.attestations?.entries.length ? version.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ") : "belum diperiksa"}.</p>}
       {publication && intent.validator && <details><summary>Pernyataan layanan validator</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(intent.validator, null, 2)}</pre></details>}
       <details><summary>Parameter pengesahan yang akan ditandatangani</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value, 2)}</pre></details>
       <Button variant="outline" onClick={() => navigator.clipboard.writeText(JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value))}>Salin data pengesahan untuk wallet</Button>
@@ -185,10 +188,13 @@ export function RecordingPanel({ saved, preparationId, token, publication = fals
           <p className="text-xs">Alasan koreksi: {entry.correctionReason ?? "—"}</p>
           <p className="break-all text-xs">Pengesah lembaga {entry.endorsements.institution}<br />Validator {entry.endorsements.validator}</p>
           <p className="break-all text-xs">{entry.anchor ? <>Pencatatan {formatBlockInstant(entry.anchor.blockTimestamp)} · blok {entry.anchor.blockNumber} · konfirmasi {entry.anchor.confirmations}/{entry.anchor.requiredConfirmations}<br />Transaksi {entry.anchor.transactionHash}</> : "Receipt penerbitan tidak tersimpan pada ruang kerja ini."}</p>
-          <p className="text-xs">Atestasi auditor versi ini: {entry.attestations.entries.length === 0 ? "belum diperiksa" : `${entry.attestations.entries.length} tercatat`}. Atestasi versi lain tidak berlaku di sini.</p>
+          <p className="text-xs">Atestasi auditor versi ini: {entry.attestations.entries.length === 0 ? "belum diperiksa"
+            : entry.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ")}. Atestasi versi lain tidak berlaku di sini.</p>
         </li>)}</ol>}
       </>}
     </section>}
+    {publication && version?.publication === "PUBLISHED" && <AttestationPanel key={`${saved.id}:${token}:${address}`} saved={saved} preparationId={preparationId} token={token}
+      recorded={version.attestations?.entries ?? null} basis={version.attestations?.basis ?? null} onRecorded={() => void readLine()} />}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
   </section>;
 }

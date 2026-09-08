@@ -1,4 +1,4 @@
-import { originLabel, positionLabel, formatInstant, formatBlockInstant, VERSION_STATE_LABELS } from "../workspace/evidenceText";
+import { originLabel, positionLabel, formatInstant, formatBlockInstant, conclusionLabel, scopeLabel, VERSION_STATE_LABELS } from "../workspace/evidenceText";
 import { DISCREPANCY_LABELS } from "../reconciliation/format";
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "../../lib/contracts";
@@ -52,7 +52,9 @@ export function PublicReport({ packageId }: { packageId: string }) {
       <dt>Pencatatan bukti terpisah</dt><dd>{summary.recording.state === "RECORDED" ? "Terkonfirmasi" : "Belum terkonfirmasi"}</dd>
       <dt>Vonis validator</dt><dd>{summary.validator.outcome}</dd>
       <dt>Penerbitan lembaga</dt><dd role="status">{summary.publication.state === "PUBLISHED" ? "Laporan terbit" : "Penerbitan belum terkonfirmasi"}</dd>
-      <dt>Atestasi auditor versi ini</dt><dd>Belum diperiksa; atestasi versi lain tidak berlaku di sini.</dd>
+      <dt>Atestasi auditor versi ini</dt><dd>{summary.attestations.entries.length === 0
+        ? "Belum diperiksa; atestasi versi lain tidak berlaku di sini."
+        : summary.attestations.entries.map(note => `${conclusionLabel(note.conclusion)} · ${scopeLabel(note.scope)}`).join("; ")}</dd>
       <dt>Status versi</dt><dd role="status">{VERSION_STATE_LABELS[summary.version.state] ?? "Status versi perlu diperiksa"}</dd>
       <dt>Berkas sumber</dt><dd>{summary.files.available} dari {summary.files.total} tersedia; {summary.files.missing + summary.files.unavailable} tidak tersedia; {summary.files.integrityFailed} tidak cocok.</dd>
     </dl>
@@ -71,7 +73,7 @@ export function PublicReport({ packageId }: { packageId: string }) {
             {entry.predecessorPackageId ? <><br />Menyusul paket {entry.predecessorPackageId}</> : <><br />Versi pertama; tidak menyusul versi lain.</>}</p>
           <p className="break-all text-xs">Pengesah lembaga {entry.endorsements.institution}<br />Validator {entry.endorsements.validator}</p>
           <p className="text-xs">{entry.anchor ? `Diterima registry ${formatBlockInstant(entry.anchor.blockTimestamp)} · blok ${entry.anchor.blockNumber ?? "belum tersedia"} · konfirmasi ${entry.anchor.confirmations}/${entry.anchor.requiredConfirmations}` : "Bukti penerimaan transaksi tidak tersedia dari sumber ini."}</p>
-          <p className="text-xs">Alasan koreksi: {entry.correctionReason ? "tersedia bagi pembaca berwenang" : "—"}. Atestasi auditor versi ini: {entry.attestations.count === 0 ? "belum diperiksa" : `${entry.attestations.count} tercatat`}.</p>
+          <p className="text-xs">Alasan koreksi: {entry.correctionReason ? "tersedia bagi pembaca berwenang" : "—"}. Atestasi auditor versi ini: {entry.attestations.count === 0 ? "belum diperiksa" : entry.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ")}.</p>
         </li>)}</ol>}
       <p className="text-xs">Penomoran versi pada layar berasal dari judul lembaga dan bukan sumber kewenangan; urutan resmi berasal dari registry.</p>
     </section>
@@ -86,6 +88,7 @@ export function PublicReport({ packageId }: { packageId: string }) {
       <p>Kebijakan konfirmasi {summary.network.confirmationPolicy}</p>
     </section>
     <p className="text-sm">{summary.trust}</p>
+    {summary.attestations.entries.length > 0 && <p className="text-sm">{summary.attestations.basis}</p>}
     <p className="text-sm">Pembaca berwenang dapat membuka ruang kerja lembaga untuk mengunduh sumber dan paket pemeriksaan versi ini. Referensi laporan/versi berupa hash; judul bebas dan narasi tetap terbatas.</p>
   </article>;
 }

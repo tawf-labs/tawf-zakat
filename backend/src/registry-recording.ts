@@ -8,6 +8,7 @@ import type { RegistryStore } from "./registry-store";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 import { createReportPackages } from "./report-package";
 import { attestationsForVersion, publicationConflict, readOfficialLine, successionState } from "./report-history";
+import { createRelay } from "./registry-relay";
 
 export class RecordingError extends Error {
   constructor(message: string, readonly status: 400 | 403 | 404 | 409 | 503) { super(message); }
@@ -19,18 +20,14 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
   const { store, chain } = registry;
   const action = keccak256(toHex(publication ? "PUBLISH_REPORT" : "RECORD_EVIDENCE"));
   const packages = createReportPackages(runtime.evidence!, runtime.files, runtime.reportAmilRules);
+  const relay = createRelay(store, chain, institution, (message, code) => new RecordingError(message, code));
   async function readIntent(id: string) {
     const intent = await store.get(institution, id);
     if (!intent || intent.authorization.packageId !== packageId || intent.authorization.action !== action) throw new RecordingError("Percobaan pencatatan tidak ditemukan.", 404);
     if (JSON.stringify(intent.domain) !== JSON.stringify(chain.domain)) throw new RecordingError("Deployment berbeda dari pengesahan yang ditinjau.", 409);
     return intent;
   }
-  async function status(id: string) {
-    const intent = await readIntent(id);
-    const attempt = await store.attempt(institution, id);
-    if (!attempt) return intent;
-    return store.observe(intent, await chain.observe(intent, attempt.hash), attempt.hash);
-  }
+  const status = async (id: string) => relay.status(await readIntent(id));
   /** Publication may only extend the report's official line; the registry, not the caller, says what that line is. */
   async function assertSuccession(saved: { id: string; reportId: string; version: string; predecessor: string | null }) {
     const conflict = publicationConflict(await successionState(chain, institution, saved), saved);
@@ -54,7 +51,7 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
         versionState: !published ? "BUKAN_VERSI_RESMI" : official.packageId === packageId ? "VERSI_RESMI_TERKINI" : "DIGANTIKAN_KOREKSI",
         officialVersion: official.version || null, officialPackageId: official.packageId || null,
         auditor: "NOT_EXAMINED",
-        attestations: attestationsForVersion({ institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest }),
+        attestations: await attestationsForVersion(chain, { institutionId: institution, reportId: saved.reportId, version: saved.version, packageId, digest: saved.digest }),
         anchor: confirmed ?? null, trust: "Kontrak memverifikasi pernyataan layanan validator. Perhitungan bergantung pada layanan dan sumber bank; bukan komputasi trustless." };
     },
     async prepare(account: Hex, raw: unknown) {
@@ -83,7 +80,7 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
       };
       const intent: RecordingIntent = {
         id: input.retryId, domain: chain.domain, authorization, authorizationDigest: hashTypedData(evidenceTypedData(chain.domain, authorization)),
-        accountKind: authority.accountKind, observation: { state: "PREPARED", confirmations: 0, requiredConfirmations: chain.requiredConfirmations, confirmationPolicy: chain.confirmationPolicy },
+        accountKind: authority.accountKind, observation: relay.prepared(),
       };
       if (publication) {
         if (!registry.endorsement) throw new RecordingError("Layanan validator belum tersedia. Paket dan temuan tetap tersimpan.", 503);
@@ -107,19 +104,11 @@ export function createRecording(runtime: WorkspaceRuntime, registry: RegistryRun
     const signature = input.data.signature.toLowerCase() as Hex;
     const intent = await readIntent(id);
     if (intent.authorization.signer.toLowerCase() !== account.toLowerCase()) throw new RecordingError("Pengesah berbeda dari akun sesi.", 403);
-    let attempt = await store.attempt(institution, id);
-    if (attempt) {
-      if (attempt.signature !== signature) throw new RecordingError("Retry harus membawa tanda tangan yang sama.", 409);
-      const current = await status(id);
-      if (current.observation.state !== "SUBMITTED" && current.observation.state !== "NONCANONICAL") return current;
-    }
+    const done = await relay.settled(intent, signature);
+    if (done) return done;
     if (publication) await assertSuccession(await verifyPublishablePackage(runtime, institution, preparation, packageId));
     try { await chain.validate(intent, signature); }
     catch { throw new RecordingError("Pengesahan ditolak atau kewenangan registry tidak dapat diperiksa. Periksa akun, masa berlaku, dan paket.", 409); }
-    if (!attempt) attempt = await store.reserve(institution, id, chain.deployment, await chain.pendingNonce(), nonce => chain.build(intent, signature, nonce));
-    if (attempt.signature !== signature) throw new RecordingError("Retry berbeda dari percobaan tersimpan.", 409);
-    // Broadcast ambiguity is recoverable: exact signed bytes and hash are already durable.
-    await chain.broadcast(attempt);
-    return store.observe(intent, { state: "SUBMITTED", confirmations: 0, requiredConfirmations: chain.requiredConfirmations, confirmationPolicy: chain.confirmationPolicy }, attempt.hash);
+    return relay.send(intent, signature);
   }
 }

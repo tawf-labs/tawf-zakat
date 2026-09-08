@@ -1,3 +1,5 @@
+import { ATTESTATION_SCOPES as scopes, ATTESTATION_CONCLUSIONS as conclusions, type AttestationScope, type AttestationConclusion } from "../../../../shared/report-registry";
+
 /**
  * Saying what a stored preparation actually is (Spec #68, ticket #70).
  *
@@ -184,3 +186,23 @@ export const VERSION_STATE_LABELS: Record<string, string> = {
 export function formatBlockInstant(seconds: string | null | undefined): string {
   return seconds ? new Date(Number(seconds) * 1000).toLocaleString("id-ID") : "waktu blok belum tersedia";
 }
+
+/** The registry's fixed attestation vocabulary, and how a reader sees it. */
+const scopeLabels: Record<AttestationScope, string> = {
+  REKONSILIASI_PERIODE: "Rekonsiliasi periode",
+  SUMBER_DAN_KOMITMEN: "Sumber dan commitment",
+  TINDAK_LANJUT_TEMUAN: "Tindak lanjut temuan",
+};
+const conclusionLabels: Record<AttestationConclusion, string> = {
+  WAJAR_TANPA_PENGECUALIAN: "Wajar tanpa pengecualian",
+  WAJAR_DENGAN_PENGECUALIAN: "Wajar dengan pengecualian",
+  TIDAK_WAJAR: "Tidak wajar",
+  TIDAK_MENYATAKAN_PENDAPAT: "Tidak menyatakan pendapat",
+};
+export const ATTESTATION_SCOPES = scopes.map(value => ({ value, label: scopeLabels[value] }));
+export const ATTESTATION_CONCLUSIONS = conclusions.map(value => ({ value, label: conclusionLabels[value] }));
+/** The code travels with the label: it is what the registry holds and what an examiner will compare. */
+export const conclusionLabel = (value: string) =>
+  `${ATTESTATION_CONCLUSIONS.find(item => item.value === value)?.label ?? "Kesimpulan lain"} (${value})`;
+export const scopeLabel = (value: string) =>
+  `${ATTESTATION_SCOPES.find(item => item.value === value)?.label ?? "Lingkup lain"} (${value})`;
