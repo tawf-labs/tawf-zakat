@@ -99,7 +99,7 @@ class ProtocolDataStore {
     this.batchTrees.set(batchId, tree);
 
     for (const d of donationList) {
-      this.donations.set(d.trxId, { ...d, batchId });
+      this.donations.set(d.trxId, { ...d, status: "BATCHED", batchId });
     }
 
     return batch;

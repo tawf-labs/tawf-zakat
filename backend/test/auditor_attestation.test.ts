@@ -1,147 +1,71 @@
-import { describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { privateKeyToAccount } from "viem/accounts";
 import app, { AUDITOR_EIP712_DOMAIN, AUDITOR_EIP712_TYPES } from "../src/index";
 import { dbService } from "../src/db/index";
-import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import type { Hex } from "viem";
+import * as ipfs from "../src/ipfs";
+import { dataStore } from "../src/store";
+import { isolateProtocolStore, seedProposal } from "./helpers/protocol-fixture";
 
-const AUDITOR_ROLE_HASH = "0x3003ae5751e460db709762380ceeb0a0a748c8f2a9e2fe711468f692be74570c";
-const AUDITOR_NAME = "Kantor Akuntan Publik (KAP) Sharia Trust";
-
-describe("Independent Auditor Attestation Engine & On-Chain Certification (Ticket #33 & ADR-0009)", () => {
-  it("should record auditor attestation with EIP-712 cryptographic signature and verify authorship", async () => {
-    // 1. Setup a test Auditor Account
-    const auditorPrivateKey = generatePrivateKey();
-    const auditorAccount = privateKeyToAccount(auditorPrivateKey);
-
-    // 2. Intake proposal
-    const intakeRes = await app.fetch(
-      new Request("http://localhost:3001/api/proposals/intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          programTitle: "Bantuan Modal Usaha Asnaf Miskin",
-          asnafCategory: 2, // Miskin
-          amount: 5000000,
-          currencyType: 0,
-          beneficiaryName: "Ibu Maryam",
-          beneficiaryNIK: "3171019988770001",
-          locationCity: "Jakarta Selatan",
-          assessmentSummary: "Pedagang gorengan keliling membutuhkan modal bahan pokok.",
-          periodId: 202608,
-        }),
-      })
-    );
-    expect(intakeRes.status).toBe(200);
-    const intakeData = await intakeRes.json();
-    const proposalId = intakeData.proposal.proposalId;
-    const beneficiaryHash = intakeData.proposal.beneficiaryHash;
-
-    // 3. Approve & Execute
-    await app.fetch(
-      new Request(`http://localhost:3001/api/proposals/${proposalId}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approverRole: "Dewan Pengawas Syariah (DPS)" }),
-      })
-    );
-
-    await app.fetch(
-      new Request(`http://localhost:3001/api/proposals/${proposalId}/bast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bankReferenceNumber: "TRX-BSI-AUDIT-001",
-          disbursementChannel: "BANK_TRANSFER",
-          signedByAmil: "Amil Lapangan",
-        }),
-      })
-    );
-
-    await app.fetch(
-      new Request(`http://localhost:3001/api/proposals/${proposalId}/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ txHash: "0x9999888877776666555544443333222211110000aaaabbbbccccddddeeeeffff" }),
-      })
-    );
-
-    // 4. Onboard the auditor (AUDITOR_ROLE + registry profile) — attestation now
-    // requires both, since the name/standing is no longer free-typed per submission.
-    await dbService.grantRoleMember(AUDITOR_ROLE_HASH, "AUDITOR_ROLE", auditorAccount.address);
-    await dbService.upsertAuditorProfile({
-      accountAddress: auditorAccount.address,
-      name: AUDITOR_NAME,
-      kapLicenseNumber: "AP.5678",
-      licenseProofCID: "ipfs://QmLicenseProofUnitTest",
-      registeredBy: "0xTestAdmin0000000000000000000000000000",
+// Signing uses a public test-only key. RPC and profile storage are controlled boundaries.
+describe("Auditor attestation verification", () => {
+  isolateProtocolStore();
+  const account = privateKeyToAccount(`0x${"11".repeat(32)}`);
+  const mocks: Array<{ mockRestore(): void }> = [];
+  const auditorName = "Test audit firm";
+  let profile: ReturnType<typeof spyOn<typeof dbService, "getAuditorProfile">>;
+  beforeEach(() => {
+    profile = spyOn(dbService, "getAuditorProfile").mockResolvedValue({
+      id: 1, accountAddress: account.address, name: auditorName, kapLicenseNumber: "TEST",
+      licenseProofCID: "ipfs://test-license", isActive: true, registeredBy: account.address,
+      registeredAt: new Date(), updatedAt: new Date(),
     });
+    mocks.push(profile);
+    mocks.push(spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "eth_call") throw new Error(`Unexpected RPC: ${request.method}`);
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: `0x${"0".repeat(63)}1` });
+    }, { preconnect: fetch.preconnect })));
+  });
+  afterEach(() => { for (const mock of mocks.splice(0)) mock.mockRestore(); });
 
-    const laiDocumentCID = "ipfs://QmLaiDocumentUnitTest";
-    const financialStatementsCID = "ipfs://QmFinancialStatementsUnitTest";
+  async function signedPayload() {
+    const proposal = seedProposal({ status: "Executed" });
+    const timestamp = Math.floor(Date.now() / 1000);
+    const documents = { laiDocumentCID: "ipfs://test-lai", financialStatementsCID: "ipfs://test-financials" };
+    const signature = await account.signTypedData({ domain: AUDITOR_EIP712_DOMAIN, types: AUDITOR_EIP712_TYPES,
+      primaryType: "AuditorAttestation", message: { proposalId: BigInt(proposal.proposalId),
+        beneficiaryHash: proposal.beneficiaryHash, amountIDR: BigInt(proposal.amount), auditOpinion: "WTP",
+        standard: "PSAK 109 & Fikih BAZNAS", auditorName, ...documents, timestamp: BigInt(timestamp) } });
+    return { proposalId: proposal.proposalId, auditorAddress: account.address, auditOpinion: "WTP", ...documents, timestamp, signature };
+  }
+  const post = (body: unknown) => app.fetch(new Request("http://localhost/api/audit/attest", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }));
 
-    // 5. Generate valid EIP-712 signature from Auditor Wallet
-    const messageTimestamp = Math.floor(Date.now() / 1000);
-    const signature = await auditorAccount.signTypedData({
-      domain: AUDITOR_EIP712_DOMAIN,
-      types: AUDITOR_EIP712_TYPES,
-      primaryType: "AuditorAttestation",
-      message: {
-        proposalId: BigInt(proposalId),
-        beneficiaryHash: beneficiaryHash as Hex,
-        amountIDR: 5000000n,
-        auditOpinion: "WTP",
-        standard: "PSAK 109 & Fikih BAZNAS",
-        auditorName: AUDITOR_NAME,
-        laiDocumentCID,
-        financialStatementsCID,
-        timestamp: BigInt(messageTimestamp),
-      },
-    });
-
-    // 6. Test Invalid/Forged Signature Rejection
-    const invalidSignature = "0x" + "9".repeat(130);
-    const rejectRes = await app.fetch(
-      new Request("http://localhost:3001/api/audit/attest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId,
-          auditorAddress: auditorAccount.address,
-          auditOpinion: "WTP",
-          laiDocumentCID,
-          financialStatementsCID,
-          signature: invalidSignature,
-          timestamp: messageTimestamp,
-        }),
-      })
-    );
-    expect(rejectRes.status).toBe(401);
-
-    // 7. Test Valid EIP-712 Attestation Submission
-    const attestRes = await app.fetch(
-      new Request("http://localhost:3001/api/audit/attest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposalId,
-          auditorAddress: auditorAccount.address,
-          auditOpinion: "WTP",
-          auditNotes: "Penyaluran sesuai standar PSAK 109, mutasi bank cocok dengan BAST.",
-          laiDocumentCID,
-          financialStatementsCID,
-          signature,
-          timestamp: messageTimestamp,
-        }),
-      })
-    );
-
-    expect(attestRes.status).toBe(200);
-    const attestData = await attestRes.json();
-    expect(attestData.success).toBe(true);
-    expect(attestData.isCryptographicallySigned).toBe(true);
-    expect(attestData.auditorSignature).toBe(signature);
-    expect(attestData.auditReportCID).toBeDefined();
-    expect(attestData.auditTxHash).toBeDefined();
-    expect(attestData.proposal.auditStatus).toBe("AUDITED_WTP");
-  }, 20000);
+  it("rejects forged signatures and document substitution without recording an audit", async () => {
+    const body = await signedPayload();
+    for (const altered of [{ ...body, signature: `0x${"99".repeat(65)}` }, { ...body, laiDocumentCID: "ipfs://substituted" }]) {
+      expect((await post(altered)).status).toBe(401);
+      expect(dataStore.proposals.get(body.proposalId)?.auditStatus).toBeUndefined();
+    }
+  });
+  it("requires both registered identity and confirmed execution", async () => {
+    const body = await signedPayload();
+    dataStore.proposals.get(body.proposalId)!.chainVerified = false;
+    expect((await post(body)).status).toBe(409);
+    profile.mockResolvedValue(null);
+    expect((await post(body)).status).toBe(403);
+    expect(dataStore.proposals.get(body.proposalId)?.auditStatus).toBeUndefined();
+  });
+  it("verifies a valid signature but does not invent an audit transaction without a relayer", async () => {
+    const body = await signedPayload();
+    const upload = spyOn(ipfs, "uploadAuditReportToIPFS").mockResolvedValue({ cid: "test-audit", gatewayUrl: "https://example.test/test-audit" });
+    mocks.push(upload);
+    expect(process.env.PRIVATE_KEY).toBeUndefined();
+    const response = await post(body);
+    expect(response.status).toBe(503);
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ auditorSignature: body.signature, auditorName }));
+    expect(dataStore.proposals.get(body.proposalId)?.auditTxHash).toBeUndefined();
+    expect(dataStore.proposals.get(body.proposalId)?.auditStatus).toBeUndefined();
+  });
 });

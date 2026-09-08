@@ -1,37 +1,29 @@
 import { describe, expect, it } from "bun:test";
 import app from "../src/index";
 import { settleBatchOnChain } from "../src/relayer";
-import { computeDonationLeaf, MerkleTree } from "../src/merkle";
+import { dataStore } from "../src/store";
+import { isolateProtocolStore } from "./helpers/protocol-fixture";
 
-describe("Onchain Relayer Engine", () => {
-  it("should generate root and return valid txHash structure from relayer", async () => {
-    const leaf = computeDonationLeaf("TRX-TEST-1", "salt_1", 1000000);
-    const tree = new MerkleTree([leaf]);
-    const root = tree.getRoot();
-
-    const testBatchId = Math.floor(10000 + Math.random() * 90000);
-    const result = await settleBatchOnChain(testBatchId, root, 1000000, false);
-
-    expect(result.success).toBe(true);
-    expect(result.txHash.startsWith("0x")).toBe(true);
-    expect(result.explorerUrl.includes("sepolia.etherscan.io")).toBe(true);
+describe("Unconfigured live relayer fails closed", () => {
+  isolateProtocolStore();
+  it("returns failure without fabricating a transaction hash", async () => {
+    const result = await settleBatchOnChain(91001, `0x${"12".repeat(32)}`, 1000000, false);
+    expect(result.success).toBe(false);
+    expect(result.txHash).toBe("");
+    expect(result.explorerUrl).toBe("");
+    expect(result.error).toContain("private key");
   });
-
-  it("POST /api/relayer/settle-batch should execute settlement and return onchain confirmation", async () => {
-    const dynamicBatchId = Math.floor(100000 + Math.random() * 900000);
-    const res = await app.fetch(
-      new Request("http://localhost:3001/api/relayer/settle-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ batchId: dynamicBatchId }),
-      })
-    );
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.merkleRoot.startsWith("0x")).toBe(true);
-    expect(body.txHash.startsWith("0x")).toBe(true);
-    expect(body.explorerUrl.includes("sepolia.etherscan.io")).toBe(true);
+  it("returns a settlement error and preserves the pending queue", async () => {
+    dataStore.recordDonation({ trxId: "test-relayer", donorName: "Test", isAnonymous: true,
+      salt: "test", amountIDR: 1000000, status: "PAID", paymentMethod: "QRIS",
+      timestamp: "2026-09-09T00:00:00.000Z" });
+    const before = structuredClone([...dataStore.donations]);
+    const response = await app.fetch(new Request("http://localhost/api/relayer/settle-batch", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    }));
+    expect(response.status).toBe(500);
+    expect((await response.json()).success).toBe(false);
+    expect([...dataStore.donations]).toEqual(before);
+    expect(dataStore.batches.size).toBe(0);
   });
 });

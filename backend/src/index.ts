@@ -1813,27 +1813,12 @@ app.post("/api/relayer/settle-batch", async (c) => {
       }
     }
 
-    // Get unbatched PAID donations
-    let donationList = await dbService.getUnbatchedPaidDonations();
-
+    const donationList = await dbService.getUnbatchedPaidDonations();
     if (donationList.length === 0) {
-      // Fallback: If no pending paid donations, check all donations in store for demo/test
-      donationList = Array.from(dataStore.donations.values()).filter(d => d.status === "PAID" || !d.status);
-    }
-
-    if (donationList.length === 0) {
-      // Create a default donation if completely empty
-      const sampleDonation: DonationRecord = {
-        trxId: `TRX-${Date.now()}`,
-        donorName: "Muzakki Online",
-        isAnonymous: false,
-        salt: `salt_${Date.now()}`,
-        amountIDR: 2500000,
-        status: "PAID",
-        timestamp: new Date().toISOString(),
-      };
-      donationList = [sampleDonation];
-      await dbService.recordDonation(sampleDonation);
+      return c.json({
+        success: false,
+        error: "Tidak ada donasi fiat PAID yang belum dibatch",
+      }, 409);
     }
 
     const leaves = donationList.map((d) =>
