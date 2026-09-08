@@ -14,6 +14,11 @@
  * event. Reconciling that stream per deposit needs columns the v0 ticket rules
  * out (no new tables, no migrations), so USDC deposits are deliberately left out
  * of the claim side rather than compared against an estimate.
+ *
+ * Deposits per transaction are examined on their own path instead - see
+ * `internal-usdc-source` (ticket #79), which maps them as an evidence-package
+ * source in native USDC minor units and reports the ledger side as unsupported
+ * until #67 lands the columns that would pair it.
  */
 
 import {

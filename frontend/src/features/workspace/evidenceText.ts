@@ -135,6 +135,53 @@ export const DETAIL_LABELS: Record<string, string> = {
 export const transactionDetailLabel = (detail: string): string => DETAIL_LABELS[detail] ?? detail;
 
 /**
+ * Which chain, contract and blocks a source was read against (ticket #79).
+ *
+ * The checkpoint is part of the sentence, not a footnote: "compared against the
+ * chain" without it reads as complete, when what was actually examined stops at
+ * whatever block the indexer had reached.
+ */
+export type ChainScopeView = {
+  chainId: number;
+  contract: string;
+  indexerKey: string;
+  fromBlock: number;
+  toBlock: number;
+  checkpoint: { lastIndexedBlock: number; status: string; lastSyncAt: string | null };
+  observed: { firstBlock: number; lastBlock: number; eventCount: number } | null;
+  blockHashes: "RETAINED" | "NOT_RETAINED";
+};
+
+export function describeChainScope(scope: ChainScopeView): Described {
+  const observed = scope.observed
+    ? `${scope.observed.eventCount} event pada blok ${scope.observed.firstBlock}-${scope.observed.lastBlock}`
+    : "tidak ada event yang cocok pada rentang ini";
+  return {
+    label: `Cakupan blok ${scope.fromBlock}-${scope.toBlock}`,
+    detail:
+      `Kontrak ${scope.contract} di chain eip155:${scope.chainId}; ${observed}. ` +
+      `Checkpoint indexer berada di blok ${scope.checkpoint.lastIndexedBlock} ` +
+      `(status ${scope.checkpoint.status}); deposit setelah blok itu belum terperiksa.` +
+      (scope.blockHashes === "NOT_RETAINED"
+        ? " Cermin event menyimpan nomor blok tanpa block hash, sehingga kanonisitas blok tidak diklaim."
+        : ""),
+    tone: scope.observed ? "neutral" : "unproven",
+  };
+}
+
+/** A record that exists and could not be proved. Never shown as a zero. */
+export function describeUnverified(count: number): Described {
+  return {
+    label: `Belum terverifikasi (${count})`,
+    detail:
+      "Catatan ini ada pada sumbernya dan tidak dapat dipasangkan dengan jumlah on-chain yang " +
+      "dapat dibuktikan, sehingga tidak masuk perbandingan. Jumlahnya tidak diperkirakan dari kurs, " +
+      "estimasi rupiah, atau tanggal.",
+    tone: "unproven",
+  };
+}
+
+/**
  * A cut-off is an instant; showing it as one is what makes coverage checkable.
  *
  * Only an ISO 8601 instant is reformatted. `new Date` alone would not do: it

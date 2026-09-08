@@ -58,6 +58,14 @@ export type ManifestPosition = (typeof MANIFEST_POSITIONS)[number];
 export const TRANSACTION_DETAIL = ["PRESENT", "NOT_AVAILABLE"] as const;
 export type TransactionDetail = (typeof TRANSACTION_DETAIL)[number];
 
+/**
+ * Which chain, contract, block range and indexer checkpoint a source was read
+ * against (ticket #79). Present only on sources the server built from this
+ * protocol's own indexed events; a pasted or uploaded source has no such scope
+ * and carries the field not at all rather than carrying an empty one.
+ */
+export type ChainScope = import("./internal-usdc-source").ChainScope;
+
 export type SourceManifest = {
   role: SourceRole;
   label: string;
@@ -76,6 +84,39 @@ export type SourceManifest = {
   mappingVersion: string;
   transactionDetail: TransactionDetail;
   note: string | null;
+  /** Only for server-built on-chain sources. Omitted entirely otherwise. */
+  chainScope?: ChainScope;
+};
+
+/**
+ * Where a row came from on chain, bound to the row itself (ticket #79).
+ *
+ * The key already encodes chain, contract, transaction and log, but a key is a
+ * matching device; this is the evidence. `blockNumber` is null on a side that
+ * legitimately does not know it - a ledger row records which event it came from,
+ * not which block the mirror read it in - and is never filled in by inference.
+ */
+export type RowOrigin = {
+  chainId: number;
+  contract: string;
+  txHash: string;
+  logIndex: number;
+  blockNumber: number | null;
+  blockHash: string | null;
+};
+
+/**
+ * A record that exists and could not be proved (ticket #79).
+ *
+ * Kept apart from a row on purpose: it has no amount this application is willing
+ * to state. It travels with its side so that "not examined" is visible in the
+ * package, rather than disappearing into a smaller row count.
+ */
+export type UnverifiedRecord = {
+  side: SourceRole;
+  /** Whatever names the record on its own side: a trxId, or txHash#logIndex. */
+  reference: string;
+  reason: string;
 };
 
 /**
@@ -94,13 +135,22 @@ export type NormalizedRow = {
   amilAmount: string | null;
   label: string | null;
   isDeclaredTotal: boolean;
+  /** Only for rows mapped from on-chain identity. Omitted entirely otherwise. */
+  origin?: RowOrigin;
 };
 
-export type ReadSide = { manifest: SourceManifest; status: "READ"; rows: NormalizedRow[] };
+export type ReadSide = {
+  manifest: SourceManifest;
+  status: "READ";
+  rows: NormalizedRow[];
+  /** Records this side holds but cannot prove. Omitted when there are none. */
+  unverified?: UnverifiedRecord[];
+};
 export type UnreadSide = {
   manifest: SourceManifest;
   status: "MISSING" | "FAILED";
   detail: string;
+  unverified?: UnverifiedRecord[];
 };
 export type SubmittedSide = ReadSide | UnreadSide;
 

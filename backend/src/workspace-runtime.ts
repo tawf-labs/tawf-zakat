@@ -43,6 +43,12 @@ export type WorkspaceRuntime = {
    */
   files?: PrivateFileStore;
   reportAmilRules?: import("./report-package").AmilRule[];
+  /**
+   * This deployment's own deposit ledger and indexed events (ticket #79).
+   * Optional, and absent means absent: the internal source path answers that it
+   * is unavailable rather than building a side out of nothing.
+   */
+  internalLedger?: import("./internal-usdc-source").InternalLedgerReader;
 };
 
 let runtime: WorkspaceRuntime | null = null;

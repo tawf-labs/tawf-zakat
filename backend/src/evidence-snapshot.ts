@@ -28,7 +28,13 @@
 
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { CurrencyUnit, DiscrepancyKind, ReportingPeriod } from "./reconciliation";
-import type { ManifestPosition, NormalizedRow, SourceManifest, SubmittedSide } from "./evidence-source";
+import type {
+  ManifestPosition,
+  NormalizedRow,
+  SourceManifest,
+  SubmittedSide,
+  UnverifiedRecord,
+} from "./evidence-source";
 
 export const SNAPSHOT_FORMAT = "tawf.evidence.snapshot" as const;
 export const SNAPSHOT_VERSION = 1 as const;
@@ -55,6 +61,12 @@ export type SnapshotSide = {
   /** Why an unread source was not read. `null` when it was. */
   detail: string | null;
   rows: NormalizedRow[];
+  /**
+   * Records this side holds that could not be proved (ticket #79). Present only
+   * where a mapper produced some; a side with none omits the field entirely, so
+   * the bytes of every package frozen before this existed stay reproducible.
+   */
+  unverified?: UnverifiedRecord[];
 };
 
 export type EvidenceSnapshot = {
@@ -103,6 +115,10 @@ const sideOf = (side: SubmittedSide): SnapshotSide => ({
   status: side.status,
   detail: side.status === "READ" ? null : side.detail,
   rows: side.status === "READ" ? side.rows : [],
+  // An unread side keeps its unverified records: they are the population that
+  // was not examined, and dropping them here would turn a named gap into
+  // silence exactly where the package is at its weakest.
+  ...(side.unverified && side.unverified.length > 0 ? { unverified: side.unverified } : {}),
 });
 
 /**
@@ -189,6 +205,13 @@ export type PublicSourceSummary = {
   status: "READ" | "MISSING" | "FAILED";
   /** How many rows the source held. `null` when it was never read. */
   rowCount: number | null;
+  /**
+   * How many records the source held but could not prove. A count, never the
+   * references themselves - those name transactions and internal ids. Omitted
+   * where there are none, so a summary from before this existed still hashes to
+   * the digest it was published under.
+   */
+  unverifiedCount?: number;
 };
 
 export type PublicSummary = {
@@ -251,6 +274,9 @@ export function publicSummaryOf(
         transactionDetail: side.manifest.transactionDetail,
         status: side.status,
         rowCount: side.status === "READ" ? side.rows.length : null,
+        ...(side.unverified && side.unverified.length > 0
+          ? { unverifiedCount: side.unverified.length }
+          : {}),
       })
     ),
     files: {
@@ -274,6 +300,14 @@ export function publicSummaryOf(
           ? [`Sisi ${name} berupa rekap tanpa rincian transaksi.`]
           : [];
       }),
+      ...snapshot.sides.flatMap((side) =>
+        side.unverified && side.unverified.length > 0
+          ? [
+              `Sisi ${side.manifest.role === "CLAIM" ? "klaim" : "sumber"} memuat ` +
+                `${side.unverified.length} catatan berstatus belum terverifikasi yang tidak masuk perbandingan.`,
+            ]
+          : []
+      ),
       ...(snapshot.files.some((file) => file.storageStatus === "FAILED")
         ? ["Sebagian berkas tidak tersimpan; rincian tersedia bagi pembaca berwenang."]
         : []),

@@ -1,12 +1,26 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "../../components/ui/Button";
-import { EvidenceRequestError, prepareEvidence, type EvidenceIssue } from "./evidenceClient";
+import {
+  EvidenceRequestError,
+  fetchInternalSources,
+  prepareEvidence,
+  type EvidenceIssue,
+  type InternalSourceStream,
+} from "./evidenceClient";
+import { describeChainScope, describeSourceStatus, roleLabel } from "./evidenceText";
 
 type Side = "CLAIM" | "SOURCE";
 const SIDES: Side[] = ["CLAIM", "SOURCE"];
 const sideName = (side: Side) => side === "CLAIM" ? "Sisi klaim" : "Sisi sumber";
 const inputClass = "mt-1 w-full rounded-lg border border-stone-300 bg-white p-2 text-sm text-stone-900";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The one internal stream this deployment offers (ticket #79). Named here rather
+ * than typed by the operator: a source the server does not know how to build is
+ * a request that fails after the decision was already made.
+ */
+const USDC_DEPOSIT_STREAM = "USDC_DEPOSITS";
 
 // A documented source template, not institution data. Amounts remain strings
 // from the editor to the API; no Number conversion is applied to money.
@@ -38,6 +52,60 @@ async function attachment(file: File, role: Side) {
   return { role, fileName: file.name, mimeType: file.type || "application/octet-stream", contentBase64 };
 }
 
+/**
+ * What choosing the internal deposit source would actually bring in.
+ *
+ * Shown before the choice, not after: block range, indexer checkpoint, what each
+ * side would be read as, and the records that exist and cannot be examined. A
+ * side that is unavailable says why on its own row - the rest of the form, and
+ * every other structured source, keeps working.
+ */
+function InternalSourcePanel({ stream }: { stream: InternalSourceStream }) {
+  const scope = stream.chainScope ? describeChainScope(stream.chainScope) : null;
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-stone-200 bg-white p-3 text-xs text-stone-700">
+      {stream.reason && <p className="text-stone-600">{stream.reason}</p>}
+      {scope && (
+        <p>
+          <span className="font-semibold">{scope.label}.</span> {scope.detail}
+        </p>
+      )}
+      <ul className="space-y-2">
+        {stream.sides.map((side) => {
+          const status = describeSourceStatus(side.status, side.rowCount, side.detail);
+          return (
+            <li key={side.role} className="rounded border border-stone-200 p-2">
+              <p className="font-semibold text-stone-900">
+                {roleLabel(side.role)} · {status.label}
+              </p>
+              <p className="mt-1 text-stone-600">{status.detail}</p>
+              {side.unverified.length > 0 && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer font-semibold">
+                    Belum terverifikasi ({side.unverified.length})
+                  </summary>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {side.unverified.slice(0, 20).map((record) => (
+                      <li key={record.reference}>
+                        <span className="font-mono">{record.reference}</span>: {record.reason}
+                      </li>
+                    ))}
+                  </ul>
+                  {side.unverified.length > 20 && (
+                    <p className="mt-1">
+                      Menampilkan 20 dari {side.unverified.length}; seluruhnya tersimpan dalam paket.
+                    </p>
+                  )}
+                </details>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved }: {
   token: string;
   scopeUnit: string;
@@ -55,6 +123,35 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
   const [issues, setIssues] = useState<EvidenceIssue[]>([]);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState<Side | null>(null);
+  const [internal, setInternal] = useState<Record<Side, boolean>>({ CLAIM: false, SOURCE: false });
+  const [stream, setStream] = useState<InternalSourceStream | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+
+  // Read what the deployment's own ledger would contribute for the chosen
+  // period, so the choice is made against a real block range and checkpoint
+  // rather than against the word "internal".
+  useEffect(() => {
+    let current = true;
+    const parsedYear = Number(year);
+    if (!Number.isInteger(parsedYear)) return;
+    setStreamError(null);
+    fetchInternalSources(token, { kind: periodKind, year: parsedYear })
+      .then((payload) => {
+        if (current) setStream(payload.streams[0] ?? null);
+      })
+      .catch((caught) => {
+        if (!current) return;
+        setStream(null);
+        setStreamError(
+          caught instanceof Error
+            ? `Sumber internal tidak dapat dibaca: ${caught.message}`
+            : "Sumber internal tidak dapat dibaca."
+        );
+      });
+    return () => {
+      current = false;
+    };
+  }, [token, periodKind, year]);
 
   const upload = async (side: Side, file?: File) => {
     if (!file) return;
@@ -81,6 +178,10 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
     try {
       const parsed = {} as Record<Side, unknown>;
       for (const side of SIDES) {
+        // An internal side is named, never pasted: the server reads this
+        // deployment's own ledger and indexed events, and nothing typed here
+        // could stand in for what the chain recorded.
+        if (internal[side]) { parsed[side] = { internal: { stream: USDC_DEPOSIT_STREAM } }; continue; }
         try { parsed[side] = JSON.parse(editors[side]); }
         catch { throw new Error(`${sideName(side)}: JSON belum sah. Periksa tanda kutip, koma, dan kurung sesuai contoh.`); }
       }
@@ -141,6 +242,28 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
           {SIDES.map((side) => (
             <div key={side} className="space-y-3 rounded-lg border border-stone-200 bg-white p-3">
               <h5 className="font-semibold text-stone-800">{sideName(side)}</h5>
+              <label className="flex items-start gap-2 text-sm text-stone-800">
+                <input type="checkbox" className="mt-1" checked={internal[side]}
+                  onChange={(e) => setInternal((current) => ({ ...current, [side]: e.target.checked }))} />
+                <span>
+                  Pakai sumber internal: deposit USDC on-chain
+                  <span className="block text-xs text-stone-600">
+                    Dibaca server dari event terindeks dan ledger internal, dalam satuan minor USDC yang
+                    presisi. Pilih unit USDC (6 desimal) dan cakupan on balance sheet.
+                  </span>
+                </span>
+              </label>
+              {internal[side] && streamError && (
+                <p role="alert" className="rounded bg-amber-50 p-2 text-xs text-amber-900">{streamError}</p>
+              )}
+              {internal[side] && stream && <InternalSourcePanel stream={stream} />}
+              {internal[side] ? (
+                <p className="text-xs text-stone-500">
+                  Sisi ini tidak diisi dari editor. Manifest, cakupan blok, checkpoint indexer, dan
+                  catatan yang belum terverifikasi ikut dibekukan bersama paket.
+                </p>
+              ) : (
+              <>
               <details className="text-xs text-stone-600">
                 <summary className="cursor-pointer">Contoh format JSON (data sintetis)</summary>
                 <pre className="mt-2 overflow-x-auto rounded bg-stone-100 p-2">{example(side, scopeUnit, scopeLevel)}</pre>
@@ -150,7 +273,7 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
                   onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; void upload(side, file); }} />
               </label>
               <label className="block text-sm">Tempel atau perbaiki ledger dan manifest
-                <textarea required spellCheck={false} rows={15} value={editors[side]} className={`${inputClass} font-mono text-xs`}
+                <textarea required={!internal[side]} spellCheck={false} rows={15} value={editors[side]} className={`${inputClass} font-mono text-xs`}
                   onChange={(e) => setEditors((current) => ({ ...current, [side]: e.target.value }))} />
               </label>
               <p className="text-xs text-stone-500">
@@ -166,6 +289,8 @@ export function EvidencePreparationForm({ token, scopeUnit, scopeLevel, onSaved 
                 <span className="break-all">Lampiran: {files[side].name}</span>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setFiles((current) => ({ ...current, [side]: undefined }))}>Lepas</Button>
               </div>}
+              </>
+              )}
             </div>
           ))}
         </div>

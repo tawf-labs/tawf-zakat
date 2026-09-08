@@ -8,6 +8,7 @@
     "indexer": "bun src/indexer.ts",
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/indexer.ts --outdir ./dist --target bun",
     "demo:evidence": "NODE_ENV=test bun src/scripts/demo-evidence-snapshot.ts",
+    "demo:usdc-source": "NODE_ENV=test bun src/scripts/demo-internal-usdc-source.ts",
     "seed:workspace": "bun src/scripts/seed-workspace.ts"
   },
   "dependencies": {

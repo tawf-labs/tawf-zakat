@@ -17,10 +17,12 @@ import {
   type EvidenceSummary,
 } from "./evidenceClient";
 import {
+  describeChainScope,
   describeCommitment,
   describeFileStatus,
   describeOutcome,
   describeSourceStatus,
+  describeUnverified,
   formatInstant,
   originLabel,
   positionLabel,
@@ -119,6 +121,22 @@ function SourceCard({ source }: { source: EvidencePreparation["sources"][number]
       </dl>
 
       <p className="mt-3 border-t border-stone-100 pt-3 text-xs text-stone-600">{status.detail}</p>
+      {manifest.chainScope && <div className="mt-3"><Note described={describeChainScope(manifest.chainScope)} /></div>}
+      {source.unverified.length > 0 && (
+        <details className="mt-3 text-xs text-stone-700">
+          <summary className="cursor-pointer font-semibold">
+            {describeUnverified(source.unverified.length).label}
+          </summary>
+          <p className="mt-1 text-stone-600">{describeUnverified(source.unverified.length).detail}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {source.unverified.map((record) => (
+              <li key={record.reference}>
+                <span className="font-mono">{record.reference}</span>: {record.reason}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {source.status === "READ" && source.rows.length > 0 && (
         <details className="mt-3 text-xs text-stone-700">
           <summary className="cursor-pointer font-semibold">Baris sumber tersimpan ({source.rows.length})</summary>
@@ -126,7 +144,12 @@ function SourceCard({ source }: { source: EvidencePreparation["sources"][number]
             <table className="w-full text-left">
               <thead><tr>{["Identitas", "Jenis dana", "Posisi", "Nilai", "Hak amil"].map((title) => <th key={title} className="p-2">{title}</th>)}</tr></thead>
               <tbody>{source.rows.map((row, index) => <tr key={index} className="border-t border-stone-100">
-                <td className="p-2">{row.key}{row.label && <span className="block">{row.label}</span>}{row.isDeclaredTotal && <span className="block">Total deklarasi</span>}</td>
+                <td className="p-2">{row.key}{row.label && <span className="block">{row.label}</span>}{row.isDeclaredTotal && <span className="block">Total deklarasi</span>}
+                  {row.origin && <span className="block font-mono text-[11px] text-stone-500">
+                    tx {row.origin.txHash.slice(0, 10)}… · log {row.origin.logIndex} ·{" "}
+                    {row.origin.blockNumber === null ? "blok tidak dicatat sisi ini" : `blok ${row.origin.blockNumber}`}
+                  </span>}
+                </td>
                 <td className="p-2">{bucketLabel(row.bucket)}</td>
                 <td className="p-2">{positionLabel(row.balanceSheet)}</td>
                 <td className="whitespace-nowrap p-2 font-mono">{formatQuantity({ amount: row.amount, unit: row.unit })}</td>

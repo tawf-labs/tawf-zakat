@@ -14,6 +14,7 @@
 import { getApiBaseUrl } from "../../lib/contracts";
 import { WorkspaceRequestError } from "./workspaceClient";
 import type {
+  ChainScopeView,
   ExaminationOutcome,
   FileStorageStatus,
   SourceStatus,
@@ -49,6 +50,25 @@ export type EvidenceManifest = {
   mappingVersion: string;
   transactionDetail: string;
   note: string | null;
+  /** Present only on sources the server built from indexed events (ticket #79). */
+  chainScope?: ChainScopeView;
+};
+
+/** Where a row came from on chain. Absent on pasted and uploaded rows. */
+export type EvidenceRowOrigin = {
+  chainId: number;
+  contract: string;
+  txHash: string;
+  logIndex: number;
+  blockNumber: number | null;
+  blockHash: string | null;
+};
+
+/** A record a side holds and cannot prove. It has no amount, on purpose. */
+export type UnverifiedRecord = {
+  side: "CLAIM" | "SOURCE";
+  reference: string;
+  reason: string;
 };
 
 export type EvidenceRow = {
@@ -60,6 +80,7 @@ export type EvidenceRow = {
   amilAmount: string | null;
   label: string | null;
   isDeclaredTotal: boolean;
+  origin?: EvidenceRowOrigin;
 };
 
 export type EvidenceSource = {
@@ -69,6 +90,7 @@ export type EvidenceSource = {
   manifest: EvidenceManifest;
   rowCount: number;
   rows: EvidenceRow[];
+  unverified: UnverifiedRecord[];
 };
 
 export type EvidenceFinding = {
@@ -160,6 +182,43 @@ async function call(path: string, token: string, body?: unknown): Promise<any> {
   }
   return payload;
 }
+
+/** One internal source this deployment can offer, and how far it reaches. */
+export type InternalSourceSide = {
+  role: "CLAIM" | "SOURCE";
+  label: string;
+  status: SourceStatus;
+  detail: string | null;
+  rowCount: number | null;
+  unverified: UnverifiedRecord[];
+  manifest: EvidenceManifest;
+};
+
+export type InternalSourceStream = {
+  stream: string;
+  bucket: string;
+  currencyUnit: WireQuantity["unit"];
+  balanceSheetScope: string;
+  available: boolean;
+  reason: string | null;
+  chainScope: ChainScopeView | null;
+  sides: InternalSourceSide[];
+  coverageNotes?: string[];
+};
+
+/**
+ * What the deployment's own ledger and indexed events would contribute, read
+ * before anything is frozen.
+ *
+ * Deliberately a separate call from preparing a package: choosing a source is a
+ * decision, and it is made with the block range, the checkpoint and the
+ * unexaminable records already visible.
+ */
+export const fetchInternalSources = (
+  token: string,
+  period: { kind: string; year: number }
+): Promise<{ streams: InternalSourceStream[] }> =>
+  call(`/internal-sources?periodKind=${encodeURIComponent(period.kind)}&year=${period.year}`, token);
 
 export const listEvidencePreparations = (token: string): Promise<{ preparations: EvidenceSummary[] }> =>
   call("", token);

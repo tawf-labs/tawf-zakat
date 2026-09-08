@@ -49,6 +49,7 @@ export const BUCKET_LABELS: Record<string, string> = {
   DONASI_FIAT: "Donasi fiat dalam batch",
   PROPOSAL: "Proposal penyaluran",
   DISBURSEMENT: "Penyaluran tereksekusi",
+  DEPOSIT_USDC: "Deposit USDC on-chain",
 };
 
 export const bucketLabel = (bucket: string): string =>

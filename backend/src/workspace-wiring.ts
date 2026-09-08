@@ -29,6 +29,7 @@ import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
 import { startRegistryRecovery } from "./registry-recovery";
 import { registryFromEnvironment } from "./registry-wiring";
+import { createInternalLedgerReader } from "./internal-ledger-reader";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
@@ -74,6 +75,13 @@ export function installWorkspaceRuntime(): void {
     reportAmilRules,
     store,
     evidence,
+    // The same chain, contract and indexer key the indexer writes under, so a
+    // package names the deployment it was actually read from.
+    internalLedger: createInternalLedgerReader(db, {
+      chainId: CONTRACT_CONFIG.CHAIN_ID,
+      contract: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase(),
+      indexerKey: `${CONTRACT_CONFIG.CHAIN_ID}:${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase()}`,
+    }),
     ...(key ? { files: createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key }) } : {}),
     // Institutional contract accounts are checked on the explicitly configured registry chain.
     ethCall: registry?.chain.accountSignatureCall ?? ethCall,

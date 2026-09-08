@@ -65,6 +65,16 @@ import {
   type FileReference,
   type Quantity,
 } from "../evidence-snapshot";
+import {
+  depositCoverageNotes,
+  usdcDepositClaimSide,
+  usdcDepositSourceSide,
+  USDC_DEPOSIT_BUCKET,
+  USDC_DEPOSIT_STREAM,
+  type ChainScope,
+  type InternalLedgerReader,
+  type InternalManifestBase,
+} from "../internal-usdc-source";
 import { EvidenceFileError, MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
 import type { StoredFile, StoredFinding, StoredPreparation } from "../evidence-store";
 import { serializeReport } from "./reconciliation";
@@ -306,34 +316,43 @@ const countByKind = (discrepancies: readonly Discrepancy[]): Partial<Record<Disc
 };
 
 /** The restricted view of a stored preparation. The storage locator never appears. */
-const restrictedView = (preparation: StoredPreparation) => ({
-  id: preparation.id,
-  institutionId: preparation.institutionId,
-  label: preparation.label,
-  period: { kind: preparation.periodKind, year: preparation.periodYear },
-  currencyUnit: preparation.currencyUnit,
-  outcome: preparation.outcome,
-  preparedBy: preparation.preparedBy,
-  createdAt: preparation.createdAt,
-  commitment: preparation.commitment,
-  commitmentScheme: preparation.commitmentScheme,
-  // Restricted on purpose: the salt is what lets an authorized reader verify the
-  // commitment, and what stops anyone else guessing a low-entropy source from it.
-  commitmentSalt: preparation.commitmentSalt,
-  snapshot: parseSnapshot(preparation.canonicalSnapshot),
-  result: preparation.resultJson ? JSON.parse(preparation.resultJson) : null,
-  findings: preparation.findings,
-  sources: preparation.sides.map((side) => ({
-    role: side.role,
-    status: side.status,
-    detail: side.detail,
-    manifest: side.manifest,
-    rowCount: side.rowCount,
-    rows: side.rows,
-  })),
-  files: preparation.files.map((file) => publicFileView(file)),
-  publicSummary: preparation.publicSummary,
-});
+const restrictedView = (preparation: StoredPreparation) => {
+  // Unverified records live in the frozen bytes, which are the record; the side
+  // rows beside them are a projection. Reading them from the snapshot keeps the
+  // two from drifting.
+  const frozen = parseSnapshot(preparation.canonicalSnapshot);
+  const unverifiedOf = (role: "CLAIM" | "SOURCE") =>
+    frozen.sides.find((side) => side.manifest.role === role)?.unverified ?? [];
+  return {
+    id: preparation.id,
+    institutionId: preparation.institutionId,
+    label: preparation.label,
+    period: { kind: preparation.periodKind, year: preparation.periodYear },
+    currencyUnit: preparation.currencyUnit,
+    outcome: preparation.outcome,
+    preparedBy: preparation.preparedBy,
+    createdAt: preparation.createdAt,
+    commitment: preparation.commitment,
+    commitmentScheme: preparation.commitmentScheme,
+    // Restricted on purpose: the salt is what lets an authorized reader verify the
+    // commitment, and what stops anyone else guessing a low-entropy source from it.
+    commitmentSalt: preparation.commitmentSalt,
+    snapshot: frozen,
+    result: preparation.resultJson ? JSON.parse(preparation.resultJson) : null,
+    findings: preparation.findings,
+    sources: preparation.sides.map((side) => ({
+      role: side.role,
+      status: side.status,
+      detail: side.detail,
+      manifest: side.manifest,
+      rowCount: side.rowCount,
+      rows: side.rows,
+      unverified: unverifiedOf(side.role),
+    })),
+    files: preparation.files.map((file) => publicFileView(file)),
+    publicSummary: preparation.publicSummary,
+  };
+};
 
 /** What a reader is told about a file. Never where it is kept. */
 const publicFileView = (file: StoredFile) => ({
@@ -346,6 +365,117 @@ const publicFileView = (file: StoredFile) => ({
   storageStatus: file.storageStatus,
   failureReason: file.failureReason,
 });
+
+
+/**
+ * Reading an internal source, once, for whichever sides asked for it
+ * (ticket #79).
+ *
+ * Both sides are built from one checkpoint, one block range and one cut-off. Two
+ * reads would let the indexer advance between them, and a package whose two
+ * sides were examined against different amounts of chain reports the gap between
+ * two moments as a discrepancy between two ledgers.
+ */
+async function readInternalUsdc(
+  reader: InternalLedgerReader,
+  base: InternalManifestBase,
+  window: { fromBlock: number | null; toBlock: number | null }
+): Promise<{ chainScope: ChainScope; claim: SubmittedSide; source: SubmittedSide }> {
+  const scope = reader.scope();
+  const checkpoint = await reader.checkpoint();
+
+  // The chain is only examinable as far as the indexer has actually read. A
+  // caller asking beyond the checkpoint is answered within it, and the scope
+  // frozen into the manifest says where the examination really stopped.
+  const fromBlock = Math.max(0, window.fromBlock ?? 0);
+  const toBlock = Math.min(window.toBlock ?? checkpoint.lastIndexedBlock, checkpoint.lastIndexedBlock);
+
+  const chainScope: ChainScope = {
+    chainId: scope.chainId,
+    contract: scope.contract,
+    indexerKey: scope.indexerKey,
+    fromBlock,
+    toBlock,
+    checkpoint,
+    observed: null,
+    blockHashes: "NOT_RETAINED",
+  };
+
+  const [events, ledger] = await Promise.all([
+    reader.depositEvents(fromBlock, toBlock),
+    reader.ledgerDeposits(),
+  ]);
+
+  return {
+    chainScope,
+    claim: usdcDepositClaimSide(base, chainScope, ledger),
+    source: usdcDepositSourceSide(base, chainScope, events),
+  };
+}
+
+/** The internal source a side asked for, or `null` when it asked for none. */
+function readInternalRequest(
+  raw: unknown,
+  role: "CLAIM" | "SOURCE",
+  issues: SourceIssue[]
+): { fromBlock: number | null; toBlock: number | null } | null {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : null;
+  const internal = record?.internal;
+  if (internal === undefined || internal === null) return null;
+
+  const where = role === "CLAIM" ? "claim.internal" : "source.internal";
+  const asked = typeof internal === "object" && !Array.isArray(internal)
+    ? (internal as Record<string, unknown>)
+    : null;
+  if (!asked) {
+    issues.push(issue(where, "Pilihan sumber internal harus berupa objek."));
+    return null;
+  }
+
+  if (text(asked.stream) !== USDC_DEPOSIT_STREAM) {
+    issues.push(
+      issue(
+        `${where}.stream`,
+        `Sumber internal yang tersedia hanya "${USDC_DEPOSIT_STREAM}". ` +
+          `Diterima: ${JSON.stringify(asked.stream)}.`
+      )
+    );
+    return null;
+  }
+
+  const bound = (field: "fromBlock" | "toBlock"): number | null => {
+    const value = asked[field];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      issues.push(issue(`${where}.${field}`, "Batas blok harus bilangan bulat tidak negatif."));
+      return null;
+    }
+    return value;
+  };
+
+  return { fromBlock: bound("fromBlock"), toBlock: bound("toBlock") };
+}
+
+/** The header a deposit source can be examined under, checked before any read. */
+function checkInternalHeader(header: Header, issues: SourceIssue[]): void {
+  if (header.currencyUnit !== "USDC_6DP") {
+    issues.push(
+      issue(
+        "currencyUnit",
+        `Sumber internal deposit USDC hanya dapat diperiksa dalam unit USDC_6DP; persiapan ini ` +
+          `memakai ${header.currencyUnit}. Rupiah dan USDC tidak pernah dikonversi.`
+      )
+    );
+  }
+  if (header.balanceSheetScope !== "ON") {
+    issues.push(
+      issue(
+        "balanceSheetScope",
+        "Deposit USDC tercatat on balance sheet, sehingga cakupan pemeriksaannya harus \"ON\"."
+      )
+    );
+  }
+}
 
 evidenceRoutes.post("/", async (c) => {
   const runtime = runtimeWithStore(c);
@@ -365,8 +495,45 @@ evidenceRoutes.post("/", async (c) => {
   const issues: SourceIssue[] = [];
   const header = readHeader(body, issues);
 
-  const claim = normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
-  const source = normalizeSide(body.source, "SOURCE", auth.session.institutionId);
+  // A side may name an internal source instead of carrying one. The server then
+  // builds it from this deployment's own ledger and indexed events; nothing a
+  // client sends can stand in for what the chain actually recorded.
+  const internalAsked = {
+    CLAIM: readInternalRequest(body.claim, "CLAIM", issues),
+    SOURCE: readInternalRequest(body.source, "SOURCE", issues),
+  };
+  const wantsInternal = internalAsked.CLAIM !== null || internalAsked.SOURCE !== null;
+  if (wantsInternal && header) checkInternalHeader(header, issues);
+  if (wantsInternal && !runtime.internalLedger) {
+    return unconfigured(c, "Ledger internal dan event terindeks deployment ini");
+  }
+
+  let internal: Awaited<ReturnType<typeof readInternalUsdc>> | null = null;
+  if (wantsInternal && header && issues.length === 0) {
+    const institution = await runtime.store.getInstitution(auth.session.institutionId);
+    if (!institution) return refuse(c, 404, "not-found");
+    const window = {
+      // One window for both sides, widest of what either asked for, so the two
+      // sides are never examined against different amounts of chain.
+      fromBlock: internalAsked.CLAIM?.fromBlock ?? internalAsked.SOURCE?.fromBlock ?? null,
+      toBlock: internalAsked.CLAIM?.toBlock ?? internalAsked.SOURCE?.toBlock ?? null,
+    };
+    const base: InternalManifestBase = {
+      institutionId: auth.session.institutionId,
+      scopeUnit: institution.scopeUnit,
+      scopeLevel: institution.scopeLevel,
+      period: header.period,
+      cutOff: new Date(runtime.now() * 1000).toISOString(),
+    };
+    internal = await readInternalUsdc(runtime.internalLedger!, base, window);
+  }
+
+  const claim = internalAsked.CLAIM
+    ? { side: internal?.claim ?? null, issues: [] as SourceIssue[] }
+    : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
+  const source = internalAsked.SOURCE
+    ? { side: internal?.source ?? null, issues: [] as SourceIssue[] }
+    : normalizeSide(body.source, "SOURCE", auth.session.institutionId);
   issues.push(
     ...claim.issues.map((item) => ({ ...item, side: "CLAIM" as const })),
     ...source.issues.map((item) => ({ ...item, side: "SOURCE" as const }))
@@ -425,6 +592,14 @@ evidenceRoutes.post("/", async (c) => {
   }
 
   const coverageNotes = coverageNotesFor(sides);
+  if (internal) {
+    coverageNotes.push(
+      ...depositCoverageNotes(
+        internal.chainScope,
+        sides.filter((side) => side.manifest.origin === "INTERNAL_LEDGER")
+      )
+    );
+  }
   for (const reference of fileReferences) {
     if (reference.storageStatus === "FAILED") {
       coverageNotes.push(
@@ -584,6 +759,101 @@ evidenceRoutes.get("/", async (c) => {
     success: true,
     institutionId: auth.session.institutionId,
     preparations: await runtime.evidence.listPreparations(auth.session.institutionId),
+  });
+});
+
+/**
+ * What internal sources this deployment can offer, and how far they reach
+ * (ticket #79).
+ *
+ * A selection surface, not a package: it reads the ledger and the indexed events
+ * the same way `POST /` would and reports what each side would look like -
+ * status, row count, records that cannot be proved, the block range, and the
+ * indexer checkpoint the range stops at. Nothing here is frozen and nothing is
+ * committed to, so choosing a source is a decision made with the limits already
+ * on screen rather than discovered afterwards inside a package.
+ *
+ * The proposed manifest travels with it so a pasted counterpart can be given the
+ * same cut-off and scope; a mismatch there is refused later, and refusing it
+ * without first saying what to match would be a puzzle rather than a check.
+ */
+evidenceRoutes.get("/internal-sources", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!runtime.internalLedger) {
+    return c.json({
+      success: true,
+      streams: [
+        {
+          stream: USDC_DEPOSIT_STREAM,
+          bucket: USDC_DEPOSIT_BUCKET,
+          currencyUnit: "USDC_6DP",
+          balanceSheetScope: "ON",
+          available: false,
+          reason:
+            "Deployment ini tidak memiliki ledger internal dan event terindeks yang dapat dibaca, " +
+            "sehingga sumber internal USDC belum didukung. Sumber terstruktur lain tetap dapat dipakai.",
+          chainScope: null,
+          sides: [],
+        },
+      ],
+    });
+  }
+
+  const institution = await runtime.store.getInstitution(auth.session.institutionId);
+  if (!institution) return refuse(c, 404, "not-found");
+
+  const year = Number(c.req.query("year") ?? new Date(runtime.now() * 1000).getUTCFullYear());
+  const kind = c.req.query("periodKind") === "SEMESTER" ? "SEMESTER" : "AKHIR_TAHUN";
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    return badRequest(c, "Tahun periode harus bilangan bulat antara 2000 dan 2100.");
+  }
+
+  const base: InternalManifestBase = {
+    institutionId: auth.session.institutionId,
+    scopeUnit: institution.scopeUnit,
+    scopeLevel: institution.scopeLevel,
+    period: { kind, year },
+    cutOff: new Date(runtime.now() * 1000).toISOString(),
+  };
+
+  const internal = await readInternalUsdc(runtime.internalLedger, base, {
+    fromBlock: null,
+    toBlock: null,
+  });
+
+  const describe = (side: SubmittedSide) => ({
+    role: side.manifest.role,
+    label: side.manifest.label,
+    status: side.status,
+    detail: side.status === "READ" ? null : side.detail,
+    rowCount: side.status === "READ" ? side.rows.length : null,
+    unverified: side.unverified ?? [],
+    manifest: side.manifest,
+  });
+
+  const sides = [internal.claim, internal.source];
+  return c.json({
+    success: true,
+    streams: [
+      {
+        stream: USDC_DEPOSIT_STREAM,
+        bucket: USDC_DEPOSIT_BUCKET,
+        currencyUnit: "USDC_6DP",
+        balanceSheetScope: "ON",
+        // A stream is offered while any side of it can be read. A side that
+        // cannot says so on its own row, rather than hiding the whole stream.
+        available: sides.some((side) => side.status === "READ"),
+        reason: null,
+        chainScope: internal.source.manifest.chainScope ?? internal.chainScope,
+        sides: sides.map(describe),
+        coverageNotes: depositCoverageNotes(internal.chainScope, sides),
+      },
+    ],
   });
 });
 

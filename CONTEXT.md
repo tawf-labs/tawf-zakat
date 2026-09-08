@@ -131,6 +131,18 @@ _Avoid_: Judul berkas, untuk keterangan asal dan cakupan sumber.
 Bagaimana suatu sumber menjawab ketika dibaca: `READ` (berhasil, boleh tanpa baris), `MISSING` (sumbernya belum ada), atau `FAILED` (dibaca dan gagal). Ketiganya berbeda; hanya yang pertama membuat angka nol berarti nol.
 _Avoid_: Daftar kosong, sebagai jawaban atas sumber yang tidak terbaca.
 
+**Sumber internal deposit USDC**:
+Sisi ledger yang dibangun server dari deposit USDC protokol ini sendiri: baris ledger internal pada satu sisi, event `USDCDeposited` terindeks pada sisi lain. Jumlahnya integer satuan minor USDC_6DP dan identitasnya mengikat chain, kontrak, transaction hash, serta log index, sehingga beberapa deposit dalam satu transaksi tetap terpisah.
+_Avoid_: Estimasi rupiah pada baris donasi USDC, sebagai jumlah deposit; menebak satuan dari besar angka.
+
+**Cakupan blok**:
+Rentang blok yang benar-benar diperiksa satu sumber on-chain, beserta checkpoint indexer yang membatasinya. Dibekukan ke dalam [[Manifest sumber]]; deposit setelah checkpoint dinyatakan belum terperiksa, bukan tidak ada.
+_Avoid_: "Sudah dibandingkan dengan chain", tanpa menyebut sampai blok berapa.
+
+**Catatan belum terverifikasi**:
+Catatan yang ada pada sumbernya dan tidak dapat dipasangkan dengan jumlah on-chain yang dapat dibuktikan. Ikut tersimpan bersama sisinya beserta alasannya, dan tidak masuk perbandingan.
+_Avoid_: Menghilangkannya dari jumlah baris; menaksir jumlahnya dari kurs, estimasi rupiah, atau tanggal.
+
 **Commitment paket**:
 Nilai yang mengikat isi snapshot, dihitung dengan salt per snapshot sehingga sumber berentropi rendah tidak dapat ditebak dari nilainya. Salt merupakan material terbatas, bukan bagian [[Ringkasan publik]].
 _Avoid_: Hash dokumen tanpa salt, sebagai mekanisme privasi.
