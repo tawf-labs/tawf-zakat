@@ -24,7 +24,16 @@ Petugas lembaga yang menyiapkan pengajuan, catatan, dan bukti pengelolaan atau p
 _Avoid_: Auditor, DPS, untuk peran pelaksana operasional.
 
 **Dewan Pengawas Syariah (DPS)**:
-Pihak pengawas syariah lembaga yang menelaah kelayakan syariah pengajuan penyaluran.
+Pihak pengawas syariah lembaga yang menelaah kelayakan syariah sesuai penugasan dan SOP lembaganya.
+_Avoid_: Pemberi persetujuan wajib untuk setiap pengajuan di semua lembaga.
+
+**Pemeriksa pengajuan**:
+Pihak yang memeriksa kelengkapan administrasi dan kelayakan pengajuan sebelum keputusan penyaluran.
+_Avoid_: Auditor independen, untuk pemeriksaan operasional sebelum penyaluran.
+
+**Pemberi persetujuan penyaluran**:
+Pihak yang berwenang memutuskan pengajuan penyaluran sesuai SOP lembaga dan terpisah dari penyusun pengajuan tersebut.
+_Avoid_: Administrator lembaga, hanya karena mengelola akun; DPS, sebagai jabatan universal untuk fungsi ini.
 
 **Auditor Independen**:
 Pihak yang memeriksa catatan dan bukti pengelolaan dana secara independen setelah kegiatan yang diperiksa berlangsung.
@@ -33,6 +42,18 @@ _Avoid_: Pemberi persetujuan operasional, untuk peran auditor.
 **Ruang kerja lembaga**:
 Lingkup kerja privat milik satu Pengelola Zakat pada aplikasi ini. Lembaga yang diwakili seorang pengguna ditentukan oleh keanggotaannya, bukan oleh isi permintaan.
 _Avoid_: Tenant, workspace, dalam teks berbahasa Indonesia.
+
+**Identitas akun lembaga**:
+Nama dan keterkaitan akun dengan lembaga yang dikelola oleh administrator lembaga, dengan pembedaan akun orang dan akun bersama milik lembaga atau tim.
+_Avoid_: Menganggap nama akun bersama sebagai identitas orang yang sedang bertindak; menganggap nama tampilan sebagai pemberian kewenangan.
+
+**Akun kerja pribadi**:
+Akun seorang petugas yang ditautkan ke lembaga untuk mengenali pelaku pekerjaan dan mencatat tindakannya.
+_Avoid_: Akun bersama lembaga, sebagai bukti siapa petugas yang bertindak.
+
+**Akun pengesahan lembaga**:
+Akun yang mewakili lembaga dalam pengesahan, dicatat terpisah dari [[Akun kerja pribadi]] pelaku pekerjaan.
+_Avoid_: Bukti identitas operator; bukti seluruh peserta pleno menandatangani secara digital.
 
 **Peran ruang kerja**:
 Kewenangan seseorang **di dalam** ruang kerja lembaganya. Tiga peran, disimpan sebagai `ADMIN`, `OFFICER`, dan `READER`:
@@ -60,15 +81,60 @@ Kategori penerima zakat: Fakir, Miskin, Amil, Muallaf, Riqab, Gharimin, Fisabili
 Bagian dana untuk pengelolaan zakat oleh amil menurut kebijakan yang berlaku bagi dana dan lembaganya.
 _Avoid_: Pendapatan ZKT, biaya langganan vendor.
 
+**Program bantuan**:
+Wadah kegiatan bantuan lembaga dengan tujuan tertentu yang dapat menaungi banyak [[Pengajuan penyaluran]].
+_Avoid_: Pengajuan penyaluran, untuk keseluruhan program yang berjalan melalui beberapa pengajuan.
+
+**Pagu referensi program**:
+Nilai anggaran program yang menjadi acuan dan peringatan saat menelaah pengajuan; ketersediaan dananya dipastikan lembaga.
+_Avoid_: Saldo bank terverifikasi; dana yang telah direservasi untuk pengajuan.
+
 **Pengajuan penyaluran**:
-Usulan penyaluran dengan penerima, jumlah, tujuan, dan bukti kelayakan yang akan ditelaah.
+Usulan penyaluran dalam satu [[Program bantuan]], disiapkan [[Amil operasional]] untuk satu atau banyak penerima beserta rincian bantuan, tujuan, dan bukti kelayakan yang akan ditelaah.
+_Avoid_: Program bantuan, untuk satu usulan penyaluran di dalam program.
+
+**Daftar penerima pengajuan**:
+Rincian calon penerima dan bantuan masing-masing yang menjadi cakupan satu [[Pengajuan penyaluran]].
+_Avoid_: Identitas penanggung jawab, sebagai pengganti seluruh identitas penerima; bukti bantuan telah diterima.
+
+**Penanggung jawab pengajuan**:
+Pihak yang bertanggung jawab atas kegiatan yang diajukan, dicatat tersendiri dari [[Daftar penerima pengajuan]].
+_Avoid_: Mustahik, hanya karena namanya tercantum sebagai penanggung jawab.
+
+**Perwakilan penerima**:
+Wali atau pihak yang mewakili penerima bantuan, dengan hubungan dan dasar perwakilan yang dapat diperiksa.
+_Avoid_: Pengganti identitas seluruh penerima dalam satu pengajuan.
+
+**Penerima pembayaran**:
+Pihak yang menerima pembayaran terkait bantuan, yang dapat berupa penerima manfaat, sekolah, atau penyedia yang dibayar untuk bantuan tersebut.
+_Avoid_: Mustahik, hanya karena menerima transfer.
+
+**Revisi pengajuan**:
+Perubahan penerima atau rincian hak bantuan setelah pengajuan disetujui, dengan alasan dan persetujuan kembali serta riwayat sebelumnya yang tetap tersimpan.
+_Avoid_: Menimpa realisasi yang sudah terjadi; koreksi laporan periode.
+
+**Penutupan sisa bantuan**:
+Keputusan lembaga beserta alasan untuk mengakhiri bagian bantuan yang disetujui tetapi tidak jadi disalurkan.
+_Avoid_: Bukti penyaluran; pemindahan bantuan ke penerima lain tanpa persetujuan.
 
 **Persetujuan DPS**:
 Persetujuan syariah atas pengajuan penyaluran oleh DPS yang berwenang.
-_Avoid_: Kuorum umum, persetujuan auditor.
+_Avoid_: Kuorum umum, persetujuan auditor, atau pengganti seluruh keputusan penyaluran lembaga.
+
+**Persetujuan penyaluran**:
+Keputusan [[Pemberi persetujuan penyaluran]] atas pengajuan yang telah diperiksa menurut SOP lembaganya.
+_Avoid_: Bukti bantuan telah diserahkan; opini auditor.
 
 **Penyaluran**:
 Pemberian dana atau bantuan kepada penerima yang dituju.
+
+**Realisasi penyaluran**:
+Catatan pemberian bantuan yang benar-benar dilakukan, beserta penerima, jumlah uang atau barang, dan bukti yang mendukungnya.
+_Avoid_: Nilai yang disetujui, sebagai bukti nilai yang sudah disalurkan.
+
+**Penyaluran sebagian**:
+Keadaan ketika sebagian bantuan yang disetujui telah disalurkan, sedangkan sisanya masih belum tersalurkan.
+_Avoid_: Selesai, hanya karena sudah ada satu realisasi.
 
 **Periode bantuan**:
 Rentang yang menjadi cakupan pemberian bantuan kepada penerima.
@@ -114,6 +180,10 @@ Catatan auditor berikutnya yang menyusul catatannya sendiri pada versi yang sama
 **Temuan pemeriksaan**:
 Selisih atau masalah yang ditemukan ketika memeriksa catatan dan tetap menjadi bagian dari bukti pemeriksaan tersebut.
 _Avoid_: Bukti lolos, untuk keberadaan catatan temuan.
+
+**Tanggapan temuan**:
+Penjelasan atau bukti tambahan yang disampaikan amil terhadap temuan auditor, dengan riwayat yang dapat ditelusuri dan tindak lanjut yang ditetapkan auditor.
+_Avoid_: Perubahan otomatis atas transaksi, snapshot, atau atestasi yang telah tercatat.
 
 **Snapshot sumber**:
 Salinan tetap dari data dan bukti yang digunakan untuk menyusun atau memeriksa suatu laporan.
