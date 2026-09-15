@@ -75,6 +75,7 @@ export type Membership = {
   account: Address;
   role: WorkspaceRole;
   isActive: boolean;
+  officerId?: string | null;
 };
 
 export type Capabilities = {

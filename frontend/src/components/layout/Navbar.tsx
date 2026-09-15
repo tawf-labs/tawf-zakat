@@ -1,18 +1,43 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
-import { Menu, X, HeartHandshake, Eye, CheckCircle2, Home, Landmark, Scale, FileCheck, Building2 } from "lucide-react";
+import {
+  Menu,
+  X,
+  HeartHandshake,
+  Eye,
+  CheckCircle2,
+  Home,
+  Landmark,
+  Scale,
+  FileCheck,
+  Building2,
+  User,
+  Copy,
+  Check,
+  LogOut,
+  ShieldAlert,
+  ChevronDown,
+} from "lucide-react";
+import { useOptionalWorkspaceAccess } from "../../features/workspace/useWorkspaceAccess";
 
 export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [identityMenuOpen, setIdentityMenuOpen] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState(false);
+  const access = useOptionalWorkspaceAccess();
+
   useEffect(() => {
-    if (!mobileMenuOpen) return;
+    if (!mobileMenuOpen && !identityMenuOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileMenuOpen(false);
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        setIdentityMenuOpen(false);
+      }
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [mobileMenuOpen]);
+  }, [mobileMenuOpen, identityMenuOpen]);
 
   const navLinks = [
     { to: "/", label: "Beranda", icon: Home },
@@ -47,6 +72,194 @@ export function Navbar() {
 
         {/* Right Actions */}
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {/* Workspace Officer Identity Pill (Ticket #87) */}
+          {access?.state === "READY" && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIdentityMenuOpen((prev) => !prev)}
+                className={`px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-full text-xs font-semibold tracking-wide transition-all duration-200 cursor-pointer flex items-center gap-2 whitespace-nowrap border shadow-2xs ${
+                  access.workspace.officer
+                    ? "bg-[#f4f8f3] text-[#17332c] border-[#1b765e]/30 hover:border-[#1b765e]"
+                    : "bg-amber-50 text-amber-900 border-amber-300 hover:border-amber-400"
+                }`}
+                aria-haspopup="dialog"
+                aria-expanded={identityMenuOpen}
+                aria-label="Detail identitas petugas dan ruang kerja lembaga"
+              >
+                <Building2 className="w-3.5 h-3.5 text-[#1b765e] shrink-0" />
+                <div className="flex items-center gap-1.5 text-left">
+                  <span className="max-w-28 sm:max-w-36 truncate font-medium">
+                    {access.workspace.officer?.displayName || "Profil Belum Diatur"}
+                  </span>
+                  <span className="hidden lg:inline text-[10px] text-stone-400">·</span>
+                  <span className="hidden lg:inline max-w-32 truncate text-stone-600 font-normal">
+                    {access.workspace.institution.legalName}
+                  </span>
+                </div>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    access.workspace.role === "ADMIN"
+                      ? "bg-purple-100 text-purple-800"
+                      : access.workspace.role === "OFFICER"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-blue-100 text-blue-800"
+                  }`}
+                >
+                  {access.workspace.role}
+                </span>
+                <ChevronDown className="w-3 h-3 text-stone-400 shrink-0" />
+              </button>
+
+              {/* Detail Menu Popover */}
+              {identityMenuOpen && (
+                <div
+                  role="dialog"
+                  aria-modal="false"
+                  aria-label="Informasi akun kerja dan identitas lembaga"
+                  className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-[#dbe7dd] bg-white p-4 shadow-xl z-50 text-[#17332c] animate-in fade-in zoom-in-95"
+                >
+                  <div className="flex items-start justify-between border-b border-[#dbe7dd]/80 pb-3">
+                    <div>
+                      <h3 className="font-semibold text-sm flex items-center gap-1.5">
+                        <User className="w-4 h-4 text-[#1b765e]" />
+                        {access.workspace.officer?.displayName || "Profil Belum Diatur"}
+                      </h3>
+                      <p className="text-xs text-stone-500 mt-0.5">
+                        {access.workspace.officer?.id ? (
+                          <>
+                            ID Petugas:{" "}
+                            <code className="font-mono text-[11px] text-stone-700">
+                              {access.workspace.officer.id}
+                            </code>
+                          </>
+                        ) : (
+                          <span className="text-amber-700 font-medium">Belum memiliki ID petugas</span>
+                        )}
+                      </p>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        access.workspace.role === "ADMIN"
+                          ? "bg-purple-100 text-purple-800"
+                          : access.workspace.role === "OFFICER"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-blue-100 text-blue-800"
+                      }`}
+                    >
+                      {access.workspace.role}
+                    </span>
+                  </div>
+
+                  {/* Honest Profile Status Warning */}
+                  {!access.workspace.officer && (
+                    <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-200">
+                      <div className="flex items-start gap-2">
+                        <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold">Profil Belum Lengkap</p>
+                          <p className="mt-0.5 text-amber-800">
+                            Administrator lembaga belum menautkan profil petugas ke akun ini. Tindakan yang
+                            memerlukan identitas amil lengkap ditahan.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Institution Details */}
+                  <div className="mt-3 space-y-2 text-xs">
+                    <div>
+                      <span className="text-stone-500 block font-medium">Lembaga</span>
+                      <span className="font-semibold text-stone-800">
+                        {access.workspace.institution.legalName}
+                      </span>
+                      <span className="text-stone-500 block text-[11px]">
+                        {access.workspace.institution.scopeUnit} · cakupan{" "}
+                        {access.workspace.institution.scopeLevel}
+                      </span>
+                    </div>
+
+                    {/* Linked Wallet Account */}
+                    <div>
+                      <span className="text-stone-500 block font-medium">
+                        Akun Kerja Tertaut (Wallet)
+                      </span>
+                      <div className="mt-1 flex items-center justify-between gap-2 rounded-lg bg-[#f4f8f3] border border-[#dbe7dd] px-2.5 py-1.5 font-mono text-[11px] text-stone-800">
+                        <span className="break-all">{access.workspace.account}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(access.workspace.account);
+                            setCopiedAddress(true);
+                            setTimeout(() => setCopiedAddress(false), 2000);
+                          }}
+                          className="shrink-0 p-1 text-stone-500 hover:text-[#1b765e] transition-colors"
+                          title="Salin alamat wallet"
+                          aria-label="Salin alamat wallet"
+                        >
+                          {copiedAddress ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Capabilities */}
+                    <div className="pt-2 border-t border-[#dbe7dd]/60">
+                      <span className="text-stone-500 block font-medium">Kemampuan Terverifikasi</span>
+                      <div className="mt-1 grid grid-cols-2 gap-1 text-[11px] text-stone-700">
+                        <span className="flex items-center gap-1">
+                          <Check className="w-3 h-3 text-emerald-600" /> Buka Ruang Kerja
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {access.workspace.capabilities.prepareEvidence ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <span className="text-stone-400 font-bold text-[10px]">✕</span>
+                          )}
+                          Siapkan Bukti
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {access.workspace.capabilities.manageMembers ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <span className="text-stone-400 font-bold text-[10px]">✕</span>
+                          )}
+                          Kelola Anggota
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="mt-4 pt-3 border-t border-[#dbe7dd]/80 flex items-center justify-between gap-2">
+                    <Link
+                      to="/ruang-kerja"
+                      onClick={() => setIdentityMenuOpen(false)}
+                      className="text-xs font-semibold text-[#1b765e] hover:underline"
+                    >
+                      Buka Ruang Kerja →
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIdentityMenuOpen(false);
+                        access.leave();
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-red-700 hover:bg-red-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Keluar Sesi
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Connect Wallet Button */}
           <SafeConnectKitButton>
             {({ isConnected: isWalletConnected, isConnecting, show, address, truncatedAddress }) => {

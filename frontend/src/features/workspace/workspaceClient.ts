@@ -32,12 +32,23 @@ export type Capabilities = {
   manageMembers: boolean;
 };
 
+export type OfficerProfile = {
+  id: string;
+  displayName: string;
+  isActive: boolean;
+};
+
+export type OfficerWithAccounts = OfficerProfile & {
+  accounts: { account: string; role: WorkspaceRole; isActive: boolean }[];
+};
+
 export type Workspace = {
   institution: Institution;
   account: string;
   role: WorkspaceRole;
+  officer: OfficerProfile | null;
   capabilities: Capabilities;
-  members?: { account: string; role: WorkspaceRole }[];
+  members?: { account: string; role: WorkspaceRole; officerId?: string | null; displayName?: string | null }[];
   evidencePackages: EvidenceSummary[];
 };
 
@@ -83,3 +94,56 @@ async function call(path: string, init: RequestInit = {}): Promise<any> {
 
 export const fetchOnboardingFixtures = (): Promise<{ institutions: Institution[] }> =>
   call("/institutions");
+
+import type { PrivateRequests } from "./privateRequests";
+
+export async function fetchOfficers(requests: PrivateRequests): Promise<OfficerWithAccounts[]> {
+  const result = await requests.json("/api/workspace/officers");
+  return result.officers ?? [];
+}
+
+export async function createOfficer(
+  requests: PrivateRequests,
+  input: { displayName: string; id?: string; account?: string; role?: WorkspaceRole }
+): Promise<OfficerProfile> {
+  const result = await requests.json("/api/workspace/officers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return result.officer;
+}
+
+export async function updateOfficer(
+  requests: PrivateRequests,
+  officerId: string,
+  input: { displayName?: string; isActive?: boolean }
+): Promise<OfficerProfile> {
+  const result = await requests.json(`/api/workspace/officers/${encodeURIComponent(officerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  return result.officer;
+}
+
+export async function linkOfficerAccount(
+  requests: PrivateRequests,
+  officerId: string,
+  input: { account: string; role?: WorkspaceRole }
+): Promise<void> {
+  await requests.json(`/api/workspace/officers/${encodeURIComponent(officerId)}/accounts`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function unlinkOfficerAccount(
+  requests: PrivateRequests,
+  officerId: string,
+  account: string
+): Promise<void> {
+  await requests.json(
+    `/api/workspace/officers/${encodeURIComponent(officerId)}/accounts/${encodeURIComponent(account)}`,
+    { method: "DELETE" }
+  );
+}
+

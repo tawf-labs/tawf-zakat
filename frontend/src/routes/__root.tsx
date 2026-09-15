@@ -12,6 +12,7 @@ import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { RoleProvider } from "../features/governance";
 import React, { useState } from "react";
 import { DeploymentGate } from "../components/DeploymentGate";
+import { RootWorkspaceAccessProvider } from "../features/workspace/useWorkspaceAccess";
 
 import appCss from "../styles.css?url";
 
@@ -118,12 +119,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               <WalletProvider>
                 <RoleProvider>
                   <WebSocketProvider>
-                    <Toaster richColors position="top-right" closeButton theme="light" />
-                    <Navbar />
-                    <ErrorBoundary>
-                      <div className="flex-1">{children}</div>
-                    </ErrorBoundary>
-                    <Footer />
+                    <RootWorkspaceAccessProvider>
+                      <Toaster richColors position="top-right" closeButton theme="light" />
+                      <Navbar />
+                      <ErrorBoundary>
+                        <div className="flex-1">{children}</div>
+                      </ErrorBoundary>
+                      <Footer />
+                    </RootWorkspaceAccessProvider>
                   </WebSocketProvider>
                 </RoleProvider>
               </WalletProvider>

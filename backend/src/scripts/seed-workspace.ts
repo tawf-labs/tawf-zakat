@@ -66,6 +66,24 @@ async function main() {
           account: member.account,
           role: member.role,
         });
+        if (member.officerProfile) {
+          const now = Math.floor(Date.now() / 1000);
+          await store.createOfficerProfile({
+            id: member.officerProfile.id,
+            institutionId: institution.id,
+            displayName: member.officerProfile.displayName,
+            actor: member.account,
+            now,
+          }).catch(() => { /* idempotent if exists */ });
+          await store.linkOfficerAccount({
+            officerId: member.officerProfile.id,
+            institutionId: institution.id,
+            account: member.account,
+            role: member.role,
+            actor: member.account,
+            now,
+          }).catch(() => { /* idempotent */ });
+        }
         console.log(`  ${institution.id}  ${member.role.padEnd(7)} ${member.account}  (${member.describes})`);
       }
       console.log(`✓ ${institution.legalName}`);

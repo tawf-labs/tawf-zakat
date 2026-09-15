@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Building2, DoorOpen, KeyRound, LogOut, ShieldAlert, Users } from "lucide-react";
+import { Building2, DoorOpen, KeyRound, LogOut, ShieldAlert, Users, UserCheck } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { useWorkspaceAccess, useWalletWorkspaceAccess, WorkspaceAccessProvider } from "./useWorkspaceAccess";
 import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
+import { OfficerManagementSection } from "./OfficerManagementSection";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -108,10 +109,22 @@ function WorkspaceContents() {
             <p className="mt-1 text-sm text-stone-600">
               {institution.scopeUnit} · cakupan {institution.scopeLevel} · <code>{institution.id}</code>
             </p>
-            <p className="mt-3 text-sm text-stone-700">
-              Masuk sebagai <span className="font-mono">{workspace.account}</span> dengan peran{" "}
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-stone-700">
+              <span>
+                Masuk sebagai <span className="font-mono">{workspace.account}</span>
+              </span>
               <Badge>{role}</Badge>
-            </p>
+              {workspace.officer ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-850 border border-emerald-300">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>{workspace.officer.displayName}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-900 border border-amber-300" title="Akun ini belum terhubung dengan profil petugas lembaga">
+                  Profil belum tersedia
+                </span>
+              )}
+            </div>
           </div>
 
           <Button variant="outline" disabled={busy} onClick={() => signOut()}>
@@ -143,6 +156,14 @@ function WorkspaceContents() {
         </p>
       </div>
 
+      {capabilities.manageMembers && (
+        <OfficerManagementSection
+          key={`officers:${requests.contextId}`}
+          requests={requests}
+          institutionId={institution.id}
+        />
+      )}
+
       {capabilities.manageMembers && members && (
         <div className="rounded-2xl border border-stone-200 bg-white p-6">
           <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
@@ -151,7 +172,14 @@ function WorkspaceContents() {
           <ul className="mt-3 space-y-2 text-sm">
             {members.map((member) => (
               <li key={member.account} className="flex items-center justify-between gap-3">
-                <span className="truncate font-mono text-stone-700">{member.account}</span>
+                <div className="min-w-0">
+                  <span className="truncate font-mono text-stone-700">{member.account}</span>
+                  {member.displayName && (
+                    <span className="ml-2 text-xs text-stone-500 font-sans">
+                      ({member.displayName})
+                    </span>
+                  )}
+                </div>
                 <Badge>{member.role}</Badge>
               </li>
             ))}

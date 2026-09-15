@@ -28,6 +28,10 @@ export type SyntheticMember = {
   role: WorkspaceRole;
   /** Which human role this stands for, in the project's own vocabulary. */
   describes: string;
+  officerProfile?: {
+    id: string;
+    displayName: string;
+  };
 };
 
 export type SyntheticInstitution = InstitutionRecord & { members: SyntheticMember[] };
@@ -50,6 +54,10 @@ export const SYNTHETIC_INSTITUTIONS: readonly SyntheticInstitution[] = [
         account: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         role: "OFFICER",
         describes: "Amil operasional",
+        officerProfile: {
+          id: "off-sinar-fauzi",
+          displayName: "Ahmad Fauzi (Amil)",
+        },
       },
       {
         account: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
@@ -75,6 +83,10 @@ export const SYNTHETIC_INSTITUTIONS: readonly SyntheticInstitution[] = [
         account: "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65",
         role: "OFFICER",
         describes: "Amil operasional",
+        officerProfile: {
+          id: "off-baitul-hasan",
+          displayName: "Hasan Basri (Amil)",
+        },
       },
     ],
   },

@@ -5,10 +5,15 @@ import { createWorkspaceAccess, type UnsavedReport } from "./workspaceAccessCont
 import type { PrivateRequests } from "./privateRequests";
 
 type WorkspaceAccess = ReturnType<typeof createWorkspaceAccess>;
-const AccessContext = createContext<WorkspaceAccess | null>(null);
+export const AccessContext = createContext<WorkspaceAccess | null>(null);
 
 export function WorkspaceAccessProvider({ access, children }: { access: WorkspaceAccess; children: ReactNode }) {
   return <AccessContext.Provider value={access}>{children}</AccessContext.Provider>;
+}
+
+export function RootWorkspaceAccessProvider({ children }: { children: ReactNode }) {
+  const access = useWalletWorkspaceAccess();
+  return <WorkspaceAccessProvider access={access}>{children}</WorkspaceAccessProvider>;
 }
 
 export function useWalletWorkspaceAccess() {
@@ -32,6 +37,16 @@ function useOwner() {
   const owner = useContext(AccessContext);
   if (!owner) throw new Error("Ruang kerja memerlukan pemilik akses.");
   return owner;
+}
+
+export function useOptionalWorkspaceAccess() {
+  const owner = useContext(AccessContext);
+  const state = useSyncExternalStore(
+    owner ? owner.subscribe : () => () => {},
+    owner ? owner.getSnapshot : () => ({ state: "CLOSED" as const, account: null, error: null, generation: 0 }),
+    owner ? owner.getSnapshot : () => ({ state: "CLOSED" as const, account: null, error: null, generation: 0 })
+  );
+  return owner ? { ...state, enter: owner.enter, leave: owner.leave } : null;
 }
 
 export function useWorkspaceAccess() {

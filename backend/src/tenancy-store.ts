@@ -64,6 +64,17 @@ export type ChallengeConsumption =
   | { outcome: "already-consumed" }
   | { outcome: "unknown" };
 
+export type OfficerProfileRecord = {
+  id: string;
+  institutionId: string;
+  displayName: string;
+  isActive: boolean;
+};
+
+export type OfficerWithAccounts = OfficerProfileRecord & {
+  accounts: { account: string; role: WorkspaceRole; isActive: boolean }[];
+};
+
 /**
  * The dev migration, as one ordered list. Every statement is `IF NOT EXISTS`,
  * so running it twice is a no-op and running it against a deployment that
@@ -80,17 +91,27 @@ export const WORKSPACE_SCHEMA_STATEMENTS = [
      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
    );`,
+  `CREATE TABLE IF NOT EXISTS officer_profiles (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     display_name TEXT NOT NULL,
+     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+   );`,
   `CREATE TABLE IF NOT EXISTS institution_memberships (
      id SERIAL PRIMARY KEY,
      institution_id TEXT NOT NULL REFERENCES institutions (id),
      account_address TEXT NOT NULL,
      role TEXT NOT NULL,
+     officer_id TEXT REFERENCES officer_profiles (id),
      is_active BOOLEAN NOT NULL DEFAULT TRUE,
      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
      CONSTRAINT institution_memberships_pair_unique UNIQUE (institution_id, account_address),
      CONSTRAINT institution_memberships_role_known CHECK (role IN ('ADMIN', 'OFFICER', 'READER'))
    );`,
+  `ALTER TABLE institution_memberships ADD COLUMN IF NOT EXISTS officer_id TEXT REFERENCES officer_profiles (id);`,
   // One active institution per account. A deactivated row stays for the record.
   `CREATE UNIQUE INDEX IF NOT EXISTS institution_memberships_one_active_per_account
      ON institution_memberships (account_address) WHERE is_active;`,
@@ -214,7 +235,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async activeMembershipFor(account: string): Promise<Membership | null> {
       const row = await one(sql`
-        SELECT institution_id, account_address, role FROM institution_memberships
+        SELECT institution_id, account_address, role, officer_id FROM institution_memberships
         WHERE account_address = ${normalizeAccount(account)} AND is_active
       `);
       if (!row) return null;
@@ -223,6 +244,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         account: row.account_address,
         role: asRole(row.role),
         isActive: true,
+        ...(row.officer_id ? { officerId: row.officer_id } : {}),
       };
     },
 
@@ -326,15 +348,22 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
     },
 
     async membersOf(institutionId: string): Promise<
-      { account: string; role: WorkspaceRole }[]
+      { account: string; role: WorkspaceRole; officerId?: string | null; displayName?: string | null }[]
     > {
       const rows = rowsOf(
         await db.execute(sql`
-          SELECT account_address, role FROM institution_memberships
-          WHERE institution_id = ${institutionId} AND is_active ORDER BY account_address ASC
+          SELECT m.account_address, m.role, m.officer_id, o.display_name
+          FROM institution_memberships m
+          LEFT JOIN officer_profiles o ON m.officer_id = o.id
+          WHERE m.institution_id = ${institutionId} AND m.is_active ORDER BY m.account_address ASC
         `)
       );
-      return rows.map((row) => ({ account: row.account_address, role: asRole(row.role) }));
+      return rows.map((row) => ({
+        account: row.account_address,
+        role: asRole(row.role),
+        officerId: row.officer_id ?? null,
+        displayName: row.display_name ?? null,
+      }));
     },
 
     async saveChallenge(challenge: AccessChallenge): Promise<void> {
@@ -429,6 +458,207 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         UPDATE workspace_sessions SET revoked_at = ${now}
         WHERE token_hash = ${tokenHash} AND revoked_at IS NULL
       `);
+    },
+
+    async createOfficerProfile(input: {
+      id?: string;
+      institutionId: string;
+      displayName: string;
+      actor: string;
+      now: number;
+    }): Promise<OfficerProfileRecord> {
+      const name = input.displayName.trim();
+      if (!name) throw new Error("Nama petugas tidak boleh kosong.");
+      const id = input.id?.trim() || `off_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      const actor = normalizeAccount(input.actor);
+
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`
+          INSERT INTO officer_profiles (id, institution_id, display_name, is_active)
+          VALUES (${id}, ${input.institutionId}, ${name}, TRUE)
+        `);
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          VALUES (${input.institutionId}, ${actor}, ${id}, 'OFFICER', 'CREATE_OFFICER', ${input.now})
+        `);
+        return {
+          id,
+          institutionId: input.institutionId,
+          displayName: name,
+          isActive: true,
+        };
+      });
+    },
+
+    async updateOfficerProfile(input: {
+      officerId: string;
+      institutionId: string;
+      displayName?: string;
+      isActive?: boolean;
+      actor: string;
+      now: number;
+    }): Promise<OfficerProfileRecord | null> {
+      const actor = normalizeAccount(input.actor);
+      return db.transaction(async (tx) => {
+        const rows = rowsOf(await tx.execute(sql`
+          SELECT id, institution_id, display_name, is_active FROM officer_profiles
+          WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
+        `));
+        const existing = rows[0] ?? null;
+        if (!existing) return null;
+
+        const newName = input.displayName !== undefined ? input.displayName.trim() : existing.display_name;
+        if (!newName) throw new Error("Nama petugas tidak boleh kosong.");
+        const newActive = input.isActive !== undefined ? input.isActive : Boolean(existing.is_active);
+
+        await tx.execute(sql`
+          UPDATE officer_profiles
+          SET display_name = ${newName}, is_active = ${newActive}, updated_at = NOW()
+          WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
+        `);
+
+        if (!newActive) {
+          await tx.execute(sql`
+            UPDATE workspace_sessions SET revoked_at = ${input.now}
+            WHERE institution_id = ${input.institutionId} AND account_address IN (
+              SELECT account_address FROM institution_memberships
+              WHERE institution_id = ${input.institutionId} AND officer_id = ${input.officerId}
+            ) AND revoked_at IS NULL
+          `);
+        }
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          VALUES (${input.institutionId}, ${actor}, ${input.officerId}, 'OFFICER', 'UPDATE_OFFICER', ${input.now})
+        `);
+
+        return {
+          id: input.officerId,
+          institutionId: input.institutionId,
+          displayName: newName,
+          isActive: newActive,
+        };
+      });
+    },
+
+    async linkOfficerAccount(input: {
+      officerId: string;
+      institutionId: string;
+      account: string;
+      role: WorkspaceRole;
+      actor: string;
+      now: number;
+    }): Promise<boolean> {
+      const actor = normalizeAccount(input.actor);
+      const account = normalizeAccount(input.account);
+
+      return db.transaction(async (tx) => {
+        const rows = rowsOf(await tx.execute(sql`
+          SELECT id, is_active FROM officer_profiles
+          WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
+        `));
+        const officer = rows[0] ?? null;
+        if (!officer || !officer.is_active) return false;
+
+        await tx.execute(sql`
+          INSERT INTO institution_memberships (institution_id, account_address, role, officer_id, is_active)
+          VALUES (${input.institutionId}, ${account}, ${input.role}, ${input.officerId}, TRUE)
+          ON CONFLICT (institution_id, account_address) DO UPDATE SET
+            role = EXCLUDED.role, officer_id = EXCLUDED.officer_id, is_active = TRUE, updated_at = NOW()
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          VALUES (${input.institutionId}, ${actor}, ${account}, ${input.role}, 'LINK_ACCOUNT', ${input.now})
+        `);
+
+        return true;
+      });
+    },
+
+    async unlinkOfficerAccount(input: {
+      officerId: string;
+      institutionId: string;
+      account: string;
+      actor: string;
+      now: number;
+    }): Promise<boolean> {
+      const actor = normalizeAccount(input.actor);
+      const account = normalizeAccount(input.account);
+
+      return db.transaction(async (tx) => {
+        const rows = rowsOf(await tx.execute(sql`
+          UPDATE institution_memberships
+          SET is_active = FALSE, updated_at = NOW()
+          WHERE institution_id = ${input.institutionId} AND account_address = ${account} AND officer_id = ${input.officerId}
+          RETURNING id
+        `));
+        const updated = rows[0] ?? null;
+        if (!updated) return false;
+
+        await tx.execute(sql`
+          UPDATE workspace_sessions SET revoked_at = ${input.now}
+          WHERE institution_id = ${input.institutionId} AND account_address = ${account} AND revoked_at IS NULL
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+          VALUES (${input.institutionId}, ${actor}, ${account}, 'OFFICER', 'UNLINK_ACCOUNT', ${input.now})
+        `);
+
+        return true;
+      });
+    },
+
+    async getOfficerForAccount(account: string, institutionId: string): Promise<OfficerProfileRecord | null> {
+      const row = await one(sql`
+        SELECT o.id, o.institution_id, o.display_name, o.is_active
+        FROM institution_memberships m
+        JOIN officer_profiles o ON m.officer_id = o.id
+        WHERE m.account_address = ${normalizeAccount(account)}
+          AND m.institution_id = ${institutionId}
+          AND m.is_active
+      `);
+      if (!row) return null;
+      return {
+        id: row.id,
+        institutionId: row.institution_id,
+        displayName: row.display_name,
+        isActive: Boolean(row.is_active),
+      };
+    },
+
+    async listOfficers(institutionId: string): Promise<OfficerWithAccounts[]> {
+      const officers = rowsOf(await db.execute(sql`
+        SELECT id, institution_id, display_name, is_active
+        FROM officer_profiles
+        WHERE institution_id = ${institutionId}
+        ORDER BY created_at ASC, id ASC
+      `));
+
+      const memberships = rowsOf(await db.execute(sql`
+        SELECT account_address, role, is_active, officer_id
+        FROM institution_memberships
+        WHERE institution_id = ${institutionId} AND officer_id IS NOT NULL
+        ORDER BY id ASC
+      `));
+
+      return officers.map((o) => {
+        const linked = memberships
+          .filter((m) => m.officer_id === o.id)
+          .map((m) => ({
+            account: m.account_address,
+            role: asRole(m.role),
+            isActive: Boolean(m.is_active),
+          }));
+        return {
+          id: o.id,
+          institutionId: o.institution_id,
+          displayName: o.display_name,
+          isActive: Boolean(o.is_active),
+          accounts: linked,
+        };
+      });
     },
 
 

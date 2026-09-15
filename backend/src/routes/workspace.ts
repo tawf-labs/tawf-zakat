@@ -231,11 +231,20 @@ workspaceRoutes.get("/", async (c) => {
   const institution = await runtime.store.getInstitution(auth.session.institutionId);
   if (!institution) return refuse(c, 403, "no-membership");
 
+  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+
   return c.json({
     success: true,
     institution,
     account: auth.session.account,
     role: auth.session.role,
+    officer: officer
+      ? {
+          id: officer.id,
+          displayName: officer.displayName,
+          isActive: officer.isActive,
+        }
+      : null,
     capabilities: capabilitiesFor(auth.session.role),
     members: authorize(auth.session.role, "manageMembers")
       ? await runtime.store.membersOf(auth.session.institutionId)
@@ -320,6 +329,148 @@ for (const [path, action] of [["/members/revoke", "REVOKE"], ["/administrator/pr
     return c.json({ success: true, account, action });
   });
 }
+
+workspaceRoutes.get("/officers", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  const officers = await runtime.store.listOfficers(auth.session.institutionId);
+  return c.json({ success: true, officers });
+});
+
+workspaceRoutes.post("/officers", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
+  if (!displayName) return badRequest(c, "Nama petugas tidak boleh kosong.");
+
+  const customId = typeof body.id === "string" && body.id.trim() !== "" ? body.id.trim() : undefined;
+  const officer = await runtime.store.createOfficerProfile({
+    id: customId,
+    institutionId: auth.session.institutionId,
+    displayName,
+    actor: auth.session.account,
+    now: runtime.now(),
+  });
+
+  const account = typeof body.account === "string" ? body.account.trim() : "";
+  if (account) {
+    if (!ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
+    const role = isWorkspaceRole(body.role) ? body.role : "OFFICER";
+    if (role === "ADMIN") {
+      return badRequest(c, "Akun petugas tidak boleh memiliki peran ADMIN.");
+    }
+    await runtime.store.linkOfficerAccount({
+      officerId: officer.id,
+      institutionId: auth.session.institutionId,
+      account,
+      role,
+      actor: auth.session.account,
+      now: runtime.now(),
+    });
+  }
+
+  return c.json({ success: true, officer }, 201);
+});
+
+workspaceRoutes.patch("/officers/:id", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const officerId = c.req.param("id");
+  const displayName = typeof body.displayName === "string" ? body.displayName : undefined;
+  const isActive = typeof body.isActive === "boolean" ? body.isActive : undefined;
+
+  try {
+    const updated = await runtime.store.updateOfficerProfile({
+      officerId,
+      institutionId: auth.session.institutionId,
+      displayName,
+      isActive,
+      actor: auth.session.account,
+      now: runtime.now(),
+    });
+    if (!updated) return refuse(c, 404, "not-found");
+    return c.json({ success: true, officer: updated });
+  } catch (err: any) {
+    return badRequest(c, err?.message || "Gagal memperbarui profil petugas.");
+  }
+});
+
+workspaceRoutes.post("/officers/:id/accounts", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const officerId = c.req.param("id");
+  const account = typeof body.account === "string" ? body.account.trim() : "";
+  if (!ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
+
+  const role = isWorkspaceRole(body.role) ? body.role : "OFFICER";
+  if (role === "ADMIN") {
+    return badRequest(c, "Akun petugas tidak boleh memiliki peran ADMIN.");
+  }
+
+  try {
+    const linked = await runtime.store.linkOfficerAccount({
+      officerId,
+      institutionId: auth.session.institutionId,
+      account,
+      role,
+      actor: auth.session.account,
+      now: runtime.now(),
+    });
+    if (!linked) return refuse(c, 404, "not-found");
+    return c.json({ success: true, officerId, account: normalizeAccount(account), role }, 201);
+  } catch {
+    return c.json(
+      { success: false, error: "Akun tersebut sudah aktif pada lembaga lain. Nonaktifkan keanggotaan lamanya lebih dahulu." },
+      409
+    );
+  }
+});
+
+workspaceRoutes.delete("/officers/:id/accounts/:account", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const officerId = c.req.param("id");
+  const account = c.req.param("account");
+  if (!ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
+
+  const unlinked = await runtime.store.unlinkOfficerAccount({
+    officerId,
+    institutionId: auth.session.institutionId,
+    account,
+    actor: auth.session.account,
+    now: runtime.now(),
+  });
+  if (!unlinked) return refuse(c, 404, "not-found");
+
+  return c.json({ success: true, officerId, account: normalizeAccount(account) });
+});
 
 /**
  * The institutions actually onboarded on this deployment - read from the

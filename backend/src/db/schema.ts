@@ -172,11 +172,24 @@ export const institutions = pgTable("institutions", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const officerProfiles = pgTable("officer_profiles", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  displayName: text("display_name").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type OfficerProfileRow = typeof officerProfiles.$inferSelect;
+export type NewOfficerProfileRow = typeof officerProfiles.$inferInsert;
+
 export const institutionMemberships = pgTable("institution_memberships", {
   id: serial("id").primaryKey(),
-  institutionId: text("institution_id").notNull(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
   accountAddress: text("account_address").notNull(),
   role: text("role").notNull(), // 'ADMIN' | 'OFFICER' | 'READER'
+  officerId: text("officer_id").references(() => officerProfiles.id),
   // Deactivated rows are kept: rotation preserves history, it does not delete it.
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
