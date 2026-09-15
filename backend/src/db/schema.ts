@@ -286,8 +286,31 @@ export type EvidenceSource = typeof evidenceSources.$inferSelect;
 export type EvidenceFinding = typeof evidenceFindings.$inferSelect;
 export type EvidenceFile = typeof evidenceFiles.$inferSelect;
 
+export const evidenceDrafts = pgTable("evidence_drafts", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  createdBy: text("created_by").notNull(),
+  label: text("label").notNull(),
+  periodKind: text("period_kind").notNull(),
+  periodYear: integer("period_year").notNull(),
+  currencyUnit: text("currency_unit").notNull(),
+  balanceSheetScope: text("balance_sheet_scope").notNull(),
+  tolerance: text("tolerance"),
+  claimDataJson: text("claim_data_json").notNull(),
+  sourceDataJson: text("source_data_json").notNull(),
+  filesJson: text("files_json").notNull().default("[]"),
+  issuesJson: text("issues_json").notNull().default("[]"),
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export type EvidenceDraft = typeof evidenceDrafts.$inferSelect;
+export type NewEvidenceDraft = typeof evidenceDrafts.$inferInsert;
+
 export type Institution = typeof institutions.$inferSelect;
 export type NewInstitution = typeof institutions.$inferInsert;
 
 export type InstitutionMembership = typeof institutionMemberships.$inferSelect;
 export type NewInstitutionMembership = typeof institutionMemberships.$inferInsert;
+

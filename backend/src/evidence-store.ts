@@ -105,6 +105,37 @@ export type PreparationSummary = {
   findingCount: number;
 };
 
+export type StoredDraft = {
+  id: string;
+  institutionId: string;
+  createdBy: string;
+  label: string;
+  periodKind: string;
+  periodYear: number;
+  currencyUnit: string;
+  balanceSheetScope: string;
+  tolerance: string | null;
+  claimData: any;
+  sourceData: any;
+  files: any[];
+  issues: any[];
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DraftSummary = {
+  id: string;
+  label: string;
+  periodKind: string;
+  periodYear: number;
+  currencyUnit: string;
+  balanceSheetScope: string;
+  issueCount: number;
+  version: number;
+  updatedAt: number;
+};
+
 export type StoredPreparation = PreparationRecord;
 
 /**
@@ -193,12 +224,51 @@ export const EVIDENCE_SCHEMA_STATEMENTS = [
     digest TEXT NOT NULL,
     FOREIGN KEY (institution_id, preparation_id) REFERENCES evidence_preparations (institution_id, id)
   );`,
+  `CREATE TABLE IF NOT EXISTS evidence_drafts (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     created_by TEXT NOT NULL,
+     label TEXT NOT NULL,
+     period_kind TEXT NOT NULL,
+     period_year INTEGER NOT NULL,
+     currency_unit TEXT NOT NULL,
+     balance_sheet_scope TEXT NOT NULL,
+     tolerance TEXT,
+     claim_data_json TEXT NOT NULL,
+     source_data_json TEXT NOT NULL,
+     files_json TEXT NOT NULL DEFAULT '[]',
+     issues_json TEXT NOT NULL DEFAULT '[]',
+     version INTEGER NOT NULL DEFAULT 1,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS evidence_drafts_by_institution
+     ON evidence_drafts (institution_id, updated_at DESC);`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
   Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : [];
 
 const asSeconds = (value: unknown): number => Number(value);
+
+const draftFrom = (row: any): StoredDraft => ({
+  id: row.id,
+  institutionId: row.institution_id,
+  createdBy: row.created_by,
+  label: row.label,
+  periodKind: row.period_kind,
+  periodYear: Number(row.period_year),
+  currencyUnit: row.currency_unit,
+  balanceSheetScope: row.balance_sheet_scope,
+  tolerance: row.tolerance ?? null,
+  claimData: JSON.parse(row.claim_data_json),
+  sourceData: JSON.parse(row.source_data_json),
+  files: JSON.parse(row.files_json ?? "[]"),
+  issues: JSON.parse(row.issues_json ?? "[]"),
+  version: Number(row.version),
+  createdAt: asSeconds(row.created_at),
+  updatedAt: asSeconds(row.updated_at),
+});
 
 const sideFrom = (row: any): StoredSide => ({
   role: row.role,
@@ -440,6 +510,81 @@ export function createEvidenceStore(db: EvidenceDatabase) {
         `)
       )[0];
       return row ? fileFrom(row) : null;
+    },
+
+    /**
+     * Private drafts: saves or updates an unverified preparation with its errors and attached files.
+     * Isolated by institution, with safe retry and incrementing version.
+     */
+    async saveDraft(draft: StoredDraft): Promise<void> {
+      await db.execute(sql`
+        INSERT INTO evidence_drafts (
+          id, institution_id, created_by, label, period_kind, period_year, currency_unit,
+          balance_sheet_scope, tolerance, claim_data_json, source_data_json, files_json,
+          issues_json, version, created_at, updated_at
+        ) VALUES (
+          ${draft.id}, ${draft.institutionId}, ${draft.createdBy}, ${draft.label},
+          ${draft.periodKind}, ${draft.periodYear}, ${draft.currencyUnit},
+          ${draft.balanceSheetScope}, ${draft.tolerance}, ${JSON.stringify(draft.claimData)},
+          ${JSON.stringify(draft.sourceData)}, ${JSON.stringify(draft.files)},
+          ${JSON.stringify(draft.issues)}, ${draft.version}, ${draft.createdAt}, ${draft.updatedAt}
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          label = EXCLUDED.label,
+          period_kind = EXCLUDED.period_kind,
+          period_year = EXCLUDED.period_year,
+          currency_unit = EXCLUDED.currency_unit,
+          balance_sheet_scope = EXCLUDED.balance_sheet_scope,
+          tolerance = EXCLUDED.tolerance,
+          claim_data_json = EXCLUDED.claim_data_json,
+          source_data_json = EXCLUDED.source_data_json,
+          files_json = EXCLUDED.files_json,
+          issues_json = EXCLUDED.issues_json,
+          version = evidence_drafts.version + 1,
+          updated_at = EXCLUDED.updated_at
+        WHERE evidence_drafts.institution_id = EXCLUDED.institution_id
+      `);
+    },
+
+    async getDraft(institutionId: string, id: string): Promise<StoredDraft | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM evidence_drafts
+          WHERE id = ${id} AND institution_id = ${institutionId}
+        `)
+      )[0];
+      return row ? draftFrom(row) : null;
+    },
+
+    async listDrafts(institutionId: string): Promise<DraftSummary[]> {
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT id, label, period_kind, period_year, currency_unit, balance_sheet_scope,
+                 issues_json, version, updated_at
+          FROM evidence_drafts
+          WHERE institution_id = ${institutionId}
+          ORDER BY updated_at DESC, id DESC
+        `)
+      );
+      return rows.map((row) => ({
+        id: row.id,
+        label: row.label,
+        periodKind: row.period_kind,
+        periodYear: Number(row.period_year),
+        currencyUnit: row.currency_unit,
+        balanceSheetScope: row.balance_sheet_scope,
+        issueCount: (JSON.parse(row.issues_json || "[]") as any[]).length,
+        version: Number(row.version),
+        updatedAt: asSeconds(row.updated_at),
+      }));
+    },
+
+    async deleteDraft(institutionId: string, id: string): Promise<boolean> {
+      const result = await db.execute(sql`
+        DELETE FROM evidence_drafts
+        WHERE id = ${id} AND institution_id = ${institutionId}
+      `);
+      return (result?.rowCount ?? 1) > 0;
     },
   };
 }

@@ -266,3 +266,104 @@ export const listReports = (id: string, requests: PrivateRequests): Promise<{ pa
 export const readReport = (id: string, packageId: string, requests: PrivateRequests): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}`, requests);
 export const saveReport = (id: string, requests: PrivateRequests, input: unknown): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports`, requests, input);
 export const freezeReport = (id: string, packageId: string, requests: PrivateRequests): Promise<{ package: SavedReportPackage }> => call(`/${id}/reports/${packageId}/freeze`, requests, {});
+
+export type TabularPreviewRow = {
+  rowNumber: number;
+  isValid: boolean;
+  row: EvidenceRow | null;
+  rawCells: Record<string, string>;
+  issues: Array<{ field?: string; message: string }>;
+};
+
+export type TabularPreviewResult = {
+  success: boolean;
+  fileName: string;
+  format: "xlsx" | "csv";
+  totalRows: number;
+  validCount: number;
+  invalidCount: number;
+  isPartial: boolean;
+  calculableTotal: string;
+  allRowsPreview: TabularPreviewRow[];
+  issues: Array<{ field?: string; message: string; rowIndex?: number | null }>;
+};
+
+export type EvidenceDraftSummary = {
+  id: string;
+  label: string;
+  periodKind: string;
+  periodYear: number;
+  currencyUnit: string;
+  balanceSheetScope: string;
+  issueCount: number;
+  version: number;
+  updatedAt: number;
+};
+
+export type StoredEvidenceDraft = {
+  id: string;
+  institutionId: string;
+  createdBy: string;
+  label: string;
+  periodKind: string;
+  periodYear: number;
+  currencyUnit: string;
+  balanceSheetScope: string;
+  tolerance: string | null;
+  claimData: any;
+  sourceData: any;
+  files: any[];
+  issues: any[];
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export async function downloadSourceTemplate(format: "xlsx" | "csv"): Promise<Blob> {
+  const res = await fetch(`/api/evidence/template?format=${format}`);
+  if (!res.ok) throw new Error("Gagal mengunduh template sumber laporan.");
+  return res.blob();
+}
+
+export async function previewTabularSource(
+  requests: PrivateRequests,
+  fileName: string,
+  contentBase64: string
+): Promise<TabularPreviewResult> {
+  return call("/preview", requests, { fileName, contentBase64 });
+}
+
+export async function listEvidenceDrafts(
+  requests: PrivateRequests
+): Promise<{ drafts: EvidenceDraftSummary[] }> {
+  return call("/drafts", requests);
+}
+
+export async function getEvidenceDraft(
+  id: string,
+  requests: PrivateRequests
+): Promise<{ draft: StoredEvidenceDraft }> {
+  return call(`/drafts/${id}`, requests);
+}
+
+export async function saveEvidenceDraft(
+  requests: PrivateRequests,
+  draft: Partial<StoredEvidenceDraft> & { sourceTable?: { fileName: string; contentBase64: string } }
+): Promise<{ draft: StoredEvidenceDraft }> {
+  return call("/drafts", requests, draft);
+}
+
+export async function deleteEvidenceDraft(
+  id: string,
+  requests: PrivateRequests
+): Promise<{ success: boolean }> {
+  return requests.json(`/api/evidence/drafts/${id}`, { method: "DELETE" });
+}
+
+export async function freezeEvidenceDraft(
+  id: string,
+  requests: PrivateRequests
+): Promise<{ preparation: EvidencePreparation }> {
+  return call(`/drafts/${id}/freeze`, requests, {});
+}
+

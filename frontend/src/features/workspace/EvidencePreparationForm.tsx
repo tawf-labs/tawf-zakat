@@ -5,26 +5,36 @@ import {
   EvidenceRequestError,
   fetchInternalSources,
   prepareEvidence,
+  downloadSourceTemplate,
+  previewTabularSource,
+  listEvidenceDrafts,
+  getEvidenceDraft,
+  saveEvidenceDraft,
+  deleteEvidenceDraft,
   type EvidenceIssue,
   type InternalSourceStream,
+  type TabularPreviewResult,
+  type EvidenceDraftSummary,
 } from "./evidenceClient";
 import { describeChainScope, describeSourceStatus, roleLabel } from "./evidenceText";
 
 type Side = "CLAIM" | "SOURCE";
 const SIDES: Side[] = ["CLAIM", "SOURCE"];
 const sideName = (side: Side) => side === "CLAIM" ? "Sisi klaim" : "Sisi sumber";
-const inputClass = "mt-1 w-full rounded-lg border border-stone-300 bg-white p-2 text-sm text-stone-900";
+const inputClass = "mt-1 w-full rounded-lg border border-stone-300 bg-white p-2 text-sm text-stone-900 focus:border-[#0F3D30] focus:ring-1 focus:ring-[#0F3D30]";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
-/**
- * The one internal stream this deployment offers (ticket #79). Named here rather
- * than typed by the operator: a source the server does not know how to build is
- * a request that fails after the decision was already made.
- */
 const USDC_DEPOSIT_STREAM = "USDC_DEPOSITS";
 
-// A documented source template, not institution data. Amounts remain strings
-// from the editor to the API; no Number conversion is applied to money.
+function formatRupiah(amountStr: string): string {
+  try {
+    const n = BigInt(amountStr || "0");
+    return new Intl.NumberFormat("id-ID").format(n);
+  } catch {
+    return amountStr;
+  }
+}
+
 function example(side: Side, scopeUnit: string, scopeLevel: string) {
   return JSON.stringify({
     manifest: {
@@ -53,14 +63,6 @@ async function attachment(file: File, role: Side) {
   return { role, fileName: file.name, mimeType: file.type || "application/octet-stream", contentBase64 };
 }
 
-/**
- * What choosing the internal deposit source would actually bring in.
- *
- * Shown before the choice, not after: block range, indexer checkpoint, what each
- * side would be read as, and the records that exist and cannot be examined. A
- * side that is unavailable says why on its own row - the rest of the form, and
- * every other structured source, keeps working.
- */
 function InternalSourcePanel({ stream }: { stream: InternalSourceStream }) {
   const scope = stream.chainScope ? describeChainScope(stream.chainScope) : null;
   return (
@@ -128,9 +130,30 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
   const [stream, setStream] = useState<InternalSourceStream | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
 
-  // Read what the deployment's own ledger would contribute for the chosen
-  // period, so the choice is made against a real block range and checkpoint
-  // rather than against the word "internal".
+  // Tabular Source Import & Drafts State (Spec #86, Ticket #88)
+  const [sourceImportMode, setSourceImportMode] = useState<"TABULAR" | "MANUAL_JSON">("TABULAR");
+  const [tabularFile, setTabularFile] = useState<{ fileName: string; contentBase64: string } | null>(null);
+  const [tabularPreview, setTabularPreview] = useState<TabularPreviewResult | null>(null);
+  const [tabularLoading, setTabularLoading] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null);
+
+  // Drafts management
+  const [draftsList, setDraftsList] = useState<EvidenceDraftSummary[]>([]);
+  const [selectedDraftId, setSelectedDraftId] = useState<string>("");
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftFeedback, setDraftFeedback] = useState<string | null>(null);
+
+  // Load drafts on mount
+  const refreshDrafts = () => {
+    listEvidenceDrafts(requests)
+      .then((res) => setDraftsList(res.drafts))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshDrafts();
+  }, [requests]);
+
   useEffect(() => {
     let current = true;
     const parsedYear = Number(year);
@@ -154,7 +177,176 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     };
   }, [requests, periodKind, year]);
 
-  const upload = async (side: Side, file?: File) => {
+  const handleDownloadTemplate = async (format: "xlsx" | "csv") => {
+    setDownloadingTemplate(format);
+    setError(null);
+    try {
+      const blob = await downloadSourceTemplate(format);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tawf.source.template.v1.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setError(err?.message || "Gagal mengunduh template sumber laporan.");
+    } finally {
+      setDownloadingTemplate(null);
+    }
+  };
+
+  const handleTabularFileSelected = async (file?: File) => {
+    if (!file) return;
+    setTabularLoading(true);
+    setError(null);
+    setIssues([]);
+    try {
+      if (!file.size || file.size > MAX_FILE_BYTES) {
+        throw new Error("Berkas spreadsheet harus berisi data dan paling besar 5 MiB.");
+      }
+
+      const contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(new Error("Gagal membaca berkas spreadsheet."));
+        reader.readAsDataURL(file);
+      });
+
+      const preview = await previewTabularSource(requests, file.name, contentBase64);
+      setTabularFile({ fileName: file.name, contentBase64 });
+      setTabularPreview(preview);
+      setSourceImportMode("TABULAR");
+
+      // Populate default claim template if claim editor is still empty
+      if (!editors.CLAIM) {
+        setEditors((prev) => ({
+          ...prev,
+          CLAIM: example("CLAIM", scopeUnit, scopeLevel),
+        }));
+      }
+    } catch (err: any) {
+      setError(err?.message || "Gagal membaca berkas spreadsheet. Periksa format dan isi berkas.");
+      if (err instanceof EvidenceRequestError) setIssues(err.issues);
+    } finally {
+      setTabularLoading(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    setDraftSaving(true);
+    setError(null);
+    setDraftFeedback(null);
+    try {
+      let claimPayload: any = null;
+      if (internal.CLAIM) {
+        claimPayload = { internal: { stream: USDC_DEPOSIT_STREAM } };
+      } else if (editors.CLAIM.trim()) {
+        try {
+          claimPayload = JSON.parse(editors.CLAIM);
+        } catch {
+          claimPayload = { raw: editors.CLAIM };
+        }
+      }
+
+      const draftPayload = {
+        id: selectedDraftId || undefined,
+        label: label.trim() || "Draf Sumber Laporan",
+        period: { kind: periodKind, year: Number(year) },
+        currencyUnit: unit,
+        balanceSheetScope: position,
+        claim: claimPayload,
+        source: sourceImportMode === "MANUAL_JSON" && editors.SOURCE.trim()
+          ? (function() { try { return JSON.parse(editors.SOURCE); } catch { return { raw: editors.SOURCE }; } })()
+          : undefined,
+        sourceTable: sourceImportMode === "TABULAR" && tabularFile ? tabularFile : undefined,
+        issues: tabularPreview ? tabularPreview.issues : [],
+      };
+
+      const res = await saveEvidenceDraft(requests, draftPayload as any);
+      setSelectedDraftId(res.draft.id);
+      setDraftFeedback(`Draf berhasil disimpan pada ${new Date().toLocaleTimeString("id-ID")}.`);
+      refreshDrafts();
+    } catch (err: any) {
+      setError(err?.message || "Gagal menyimpan draf.");
+    } finally {
+      setDraftSaving(false);
+    }
+  };
+
+  const handleSelectDraft = async (draftId: string) => {
+    setSelectedDraftId(draftId);
+    setError(null);
+    setDraftFeedback(null);
+    if (!draftId) return;
+
+    try {
+      setBusy(true);
+      const res = await getEvidenceDraft(draftId, requests);
+      const draft = res.draft;
+      setLabel(draft.label);
+      setPeriodKind(draft.periodKind);
+      setYear(String(draft.periodYear));
+      setUnit(draft.currencyUnit);
+      setPosition(draft.balanceSheetScope);
+
+      if (draft.claimData) {
+        if (draft.claimData.internal) {
+          setInternal((prev) => ({ ...prev, CLAIM: true }));
+        } else {
+          setInternal((prev) => ({ ...prev, CLAIM: false }));
+          setEditors((prev) => ({
+            ...prev,
+            CLAIM: typeof draft.claimData === "string" ? draft.claimData : JSON.stringify(draft.claimData, null, 2),
+          }));
+        }
+      }
+
+      if (draft.sourceData?.tabular) {
+        setSourceImportMode("TABULAR");
+        setTabularFile(draft.sourceData.tabular);
+        try {
+          const preview = await previewTabularSource(
+            requests,
+            draft.sourceData.tabular.fileName,
+            draft.sourceData.tabular.contentBase64
+          );
+          setTabularPreview(preview);
+        } catch {
+          // Preview generation on draft reload
+        }
+      } else if (draft.sourceData) {
+        setSourceImportMode("MANUAL_JSON");
+        setEditors((prev) => ({
+          ...prev,
+          SOURCE: typeof draft.sourceData === "string" ? draft.sourceData : JSON.stringify(draft.sourceData, null, 2),
+        }));
+      }
+      setDraftFeedback(`Draf "${draft.label}" berhasil dimuat.`);
+    } catch (err: any) {
+      setError(err?.message || "Gagal memuat draf yang dipilih.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteCurrentDraft = async () => {
+    if (!selectedDraftId) return;
+    try {
+      setBusy(true);
+      await deleteEvidenceDraft(selectedDraftId, requests);
+      setSelectedDraftId("");
+      setDraftFeedback("Draf berhasil dihapus.");
+      refreshDrafts();
+    } catch (err: any) {
+      setError(err?.message || "Gagal menghapus draf.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadJson = async (side: Side, file?: File) => {
     if (!file) return;
     setReading(side);
     setError(null);
@@ -176,22 +368,70 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     setBusy(true);
     setError(null);
     setIssues([]);
+
+    // Validation for Tabular Import Mode
+    if (sourceImportMode === "TABULAR") {
+      if (!tabularFile) {
+        setError("Sisi sumber: Unggah berkas spreadsheet XLSX atau CSV terlebih dahulu.");
+        setBusy(false);
+        return;
+      }
+      if (tabularPreview && tabularPreview.invalidCount > 0) {
+        setError(
+          `Sisi sumber: Draf belum dapat dibekukan karena masih terdapat ${tabularPreview.invalidCount} baris yang bermasalah. Perbaiki berkas atau simpan sebagai draf.`
+        );
+        setBusy(false);
+        return;
+      }
+    }
+
     try {
       const parsed = {} as Record<Side, unknown>;
-      for (const side of SIDES) {
-        // An internal side is named, never pasted: the server reads this
-        // deployment's own ledger and indexed events, and nothing typed here
-        // could stand in for what the chain recorded.
-        if (internal[side]) { parsed[side] = { internal: { stream: USDC_DEPOSIT_STREAM } }; continue; }
-        try { parsed[side] = JSON.parse(editors[side]); }
-        catch { throw new Error(`${sideName(side)}: JSON belum sah. Periksa tanda kutip, koma, dan kurung sesuai contoh.`); }
+
+      // Claim side resolution
+      if (internal.CLAIM) {
+        parsed.CLAIM = { internal: { stream: USDC_DEPOSIT_STREAM } };
+      } else {
+        try {
+          parsed.CLAIM = JSON.parse(editors.CLAIM);
+        } catch {
+          throw new Error("Sisi klaim: JSON belum sah. Periksa tanda kutip, koma, dan kurung sesuai contoh.");
+        }
       }
-      const attachments = await Promise.all(SIDES.flatMap((side) => files[side] ? [attachment(files[side], side)] : []));
-      const { preparation } = await prepareEvidence(requests, {
-        label, period: { kind: periodKind, year: Number(year) },
-        currencyUnit: unit, balanceSheetScope: position,
-        claim: parsed.CLAIM, source: parsed.SOURCE, files: attachments,
-      });
+
+      // Source side resolution
+      if (sourceImportMode === "MANUAL_JSON") {
+        if (internal.SOURCE) {
+          parsed.SOURCE = { internal: { stream: USDC_DEPOSIT_STREAM } };
+        } else {
+          try {
+            parsed.SOURCE = JSON.parse(editors.SOURCE);
+          } catch {
+            throw new Error("Sisi sumber: JSON belum sah. Periksa tanda kutip, koma, dan kurung sesuai contoh.");
+          }
+        }
+      }
+
+      const attachments = await Promise.all(
+        SIDES.flatMap((side) => (files[side] ? [attachment(files[side]!, side)] : []))
+      );
+
+      const payload: any = {
+        label,
+        period: { kind: periodKind, year: Number(year) },
+        currencyUnit: unit,
+        balanceSheetScope: position,
+        claim: parsed.CLAIM,
+        files: attachments,
+      };
+
+      if (sourceImportMode === "TABULAR" && tabularFile) {
+        payload.sourceTable = tabularFile;
+      } else {
+        payload.source = parsed.SOURCE;
+      }
+
+      const { preparation } = await prepareEvidence(requests, payload);
       onSaved(preparation.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Persiapan gagal disimpan.");
@@ -201,112 +441,479 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     }
   };
 
+  const isFreezeBlocked =
+    sourceImportMode === "TABULAR" &&
+    (!tabularFile || (tabularPreview !== null && tabularPreview.invalidCount > 0));
+
   return (
     <form onSubmit={submit} className="mt-5 rounded-xl border border-stone-200 bg-stone-50 p-4">
-      <h4 className="font-semibold text-stone-900">Siapkan snapshot sumber</h4>
-      <p className="mt-2 text-sm text-stone-600">
-        Tempel atau unggah dua ledger JSON beserta manifestnya. Saat disimpan, sumber dibekukan
-        dan direkonsiliasi; selisih tetap disimpan sebagai temuan pemeriksaan.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3">
+        <div>
+          <h4 className="font-semibold text-stone-900">Siapkan Snapshot Sumber & Rekonsiliasi</h4>
+          <p className="text-xs text-stone-600">
+            Impor spreadsheet XLSX/CSV sumber laporan atau gunakan JSON. Sumber dibekukan menjadi snapshot kanonikal yang tak dapat dimutasi.
+          </p>
+        </div>
+
+        {/* Drafts Toolbar */}
+        <div className="flex flex-wrap items-center gap-2">
+          {draftsList.length > 0 && (
+            <select
+              aria-label="Pilih draf tersimpan"
+              value={selectedDraftId}
+              onChange={(e) => void handleSelectDraft(e.target.value)}
+              className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs text-stone-900"
+            >
+              <option value="">-- Buka Draf Tersimpan ({draftsList.length}) --</option>
+              {draftsList.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label} (v{d.version} · {d.issueCount > 0 ? `${d.issueCount} isu` : "0 isu"})
+                </option>
+              ))}
+            </select>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void handleSaveDraft()}
+            disabled={busy || draftSaving}
+          >
+            {draftSaving ? "Menyimpan Draf…" : "💾 Simpan Draf"}
+          </Button>
+
+          {selectedDraftId && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleDeleteCurrentDraft()}
+              disabled={busy}
+              className="text-red-700 hover:bg-red-50"
+            >
+              Hapus Draf
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {draftFeedback && (
+        <div role="status" className="mt-3 rounded-lg bg-emerald-50 p-2.5 text-xs text-emerald-800 flex items-center justify-between">
+          <span>✓ {draftFeedback}</span>
+          <button type="button" onClick={() => setDraftFeedback(null)} className="text-emerald-600 hover:text-emerald-900">✕</button>
+        </div>
+      )}
+
       <fieldset disabled={busy || reading !== null} className="mt-4 space-y-4">
-        <label className="block text-sm">Nama persiapan
-          <input required value={label} onChange={(e) => setLabel(e.target.value)} className={inputClass} />
+        <label className="block text-sm">
+          Nama persiapan
+          <input
+            required
+            value={label}
+            placeholder="mis. Rekonsiliasi Zakat Akhir Tahun 2024"
+            onChange={(e) => setLabel(e.target.value)}
+            className={inputClass}
+          />
         </label>
+
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="text-sm">Periode
+          <label className="text-sm">
+            Periode
             <select value={periodKind} onChange={(e) => setPeriodKind(e.target.value)} className={inputClass}>
-              <option value="AKHIR_TAHUN">Akhir tahun</option><option value="SEMESTER">Semester pertama</option>
+              <option value="AKHIR_TAHUN">Akhir tahun</option>
+              <option value="SEMESTER">Semester pertama</option>
             </select>
           </label>
-          <label className="text-sm">Tahun
-            <input required type="number" min="2000" max="2100" value={year} onChange={(e) => setYear(e.target.value)} className={inputClass} />
+          <label className="text-sm">
+            Tahun
+            <input
+              required
+              type="number"
+              min="2000"
+              max="2100"
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              className={inputClass}
+            />
           </label>
-          <label className="text-sm">Unit mata uang
+          <label className="text-sm">
+            Unit mata uang
             <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputClass}>
-              <option value="IDR">Rupiah (IDR)</option><option value="USDC_6DP">USDC (6 desimal)</option>
+              <option value="IDR">Rupiah (IDR)</option>
+              <option value="USDC_6DP">USDC (6 desimal)</option>
             </select>
           </label>
-          <label className="text-sm">Cakupan posisi neraca
+          <label className="text-sm">
+            Cakupan posisi neraca
             <select value={position} onChange={(e) => setPosition(e.target.value)} className={inputClass}>
-              <option value="ON">On balance sheet</option><option value="OFF">Off balance sheet</option><option value="BOTH">Kedua posisi</option>
+              <option value="ON">On balance sheet</option>
+              <option value="OFF">Off balance sheet</option>
+              <option value="BOTH">Kedua posisi</option>
             </select>
           </label>
         </div>
-        <p className="text-xs text-stone-600">
-          Manifest setiap sisi harus menyebut asal, unit/lembaga, jenis dana, posisi neraca, mata uang,
-          periode, cut-off, format, versi pemetaan, dan ketersediaan rincian transaksi. Samakan periode
-          serta mata uang manifest dengan pilihan di atas. Jumlah ditulis sebagai teks integer:
-          "1500000" berarti Rp1.500.000 untuk IDR atau 1,5 USDC untuk USDC_6DP.
-          Ekspor SiMBA, PDF, dan CSV belum didukung sebagai ledger; berkasnya dapat dilampirkan sebagai sumber asli.
-        </p>
+
         <div className="grid gap-4 xl:grid-cols-2">
-          {SIDES.map((side) => (
-            <div key={side} className="space-y-3 rounded-lg border border-stone-200 bg-white p-3">
-              <h5 className="font-semibold text-stone-800">{sideName(side)}</h5>
-              <label className="flex items-start gap-2 text-sm text-stone-800">
-                <input type="checkbox" className="mt-1" checked={internal[side]}
-                  onChange={(e) => setInternal((current) => ({ ...current, [side]: e.target.checked }))} />
-                <span>
-                  Pakai sumber internal: deposit USDC on-chain
-                  <span className="block text-xs text-stone-600">
-                    Dibaca server dari event terindeks dan ledger internal, dalam satuan minor USDC yang
-                    presisi. Pilih unit USDC (6 desimal) dan cakupan on balance sheet.
-                  </span>
-                </span>
-              </label>
-              {internal[side] && streamError && (
-                <p role="alert" className="rounded bg-amber-50 p-2 text-xs text-amber-900">{streamError}</p>
-              )}
-              {internal[side] && stream && <InternalSourcePanel stream={stream} />}
-              {internal[side] ? (
-                <p className="text-xs text-stone-500">
-                  Sisi ini tidak diisi dari editor. Manifest, cakupan blok, checkpoint indexer, dan
-                  catatan yang belum terverifikasi ikut dibekukan bersama paket.
-                </p>
-              ) : (
-              <>
-              <details className="text-xs text-stone-600">
-                <summary className="cursor-pointer">Contoh format JSON (data sintetis)</summary>
-                <pre className="mt-2 overflow-x-auto rounded bg-stone-100 p-2">{example(side, scopeUnit, scopeLevel)}</pre>
-              </details>
-              <label className="block text-sm">Unggah ledger JSON
-                <input type="file" accept=".json,application/json" className="mt-1 block w-full text-xs"
-                  onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; void upload(side, file); }} />
-              </label>
-              <label className="block text-sm">Tempel atau perbaiki ledger dan manifest
-                <textarea required={!internal[side]} spellCheck={false} rows={15} value={editors[side]} className={`${inputClass} font-mono text-xs`}
-                  onChange={(e) => setEditors((current) => ({ ...current, [side]: e.target.value }))} />
-              </label>
-              <p className="text-xs text-stone-500">
-                rows: [] menyatakan sumber berhasil dibaca dan kosong. Bila belum tersedia/gagal,
-                gunakan status MISSING/FAILED beserta detail alasan, tanpa baris. Rekap memakai
-                transactionDetail: NOT_AVAILABLE.
-              </p>
-              <label className="block text-sm">Berkas asli pendukung (opsional, maksimal 5 MiB)
-                <input type="file" className="mt-1 block w-full text-xs"
-                  onChange={(e) => { const file = e.target.files?.[0]; setFiles((current) => ({ ...current, [side]: file })); }} />
-              </label>
-              {files[side] && <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="break-all">Lampiran: {files[side].name}</span>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setFiles((current) => ({ ...current, [side]: undefined }))}>Lepas</Button>
-              </div>}
-              </>
-              )}
+          {/* SISI KLAIM */}
+          <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-3">
+            <div className="flex items-center justify-between">
+              <h5 className="font-semibold text-stone-800">1. Sisi Klaim (Ledger Organisasi)</h5>
+              <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] text-stone-600">Klaim</span>
             </div>
-          ))}
+
+            <label className="flex items-start gap-2 text-sm text-stone-800">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={internal.CLAIM}
+                onChange={(e) => setInternal((current) => ({ ...current, CLAIM: e.target.checked }))}
+              />
+              <span>
+                Pakai sumber internal: deposit USDC on-chain
+                <span className="block text-xs text-stone-600">
+                  Dibaca server dari event terindeks dan ledger internal, dalam satuan minor USDC yang presisi.
+                </span>
+              </span>
+            </label>
+
+            {internal.CLAIM && streamError && (
+              <p role="alert" className="rounded bg-amber-50 p-2 text-xs text-amber-900">{streamError}</p>
+            )}
+            {internal.CLAIM && stream && <InternalSourcePanel stream={stream} />}
+
+            {!internal.CLAIM && (
+              <>
+                <details className="text-xs text-stone-600">
+                  <summary className="cursor-pointer font-medium text-stone-700 hover:text-stone-900">
+                    Contoh format klaim JSON (data sintetis)
+                  </summary>
+                  <pre className="mt-2 overflow-x-auto rounded bg-stone-100 p-2">{example("CLAIM", scopeUnit, scopeLevel)}</pre>
+                </details>
+                <label className="block text-sm">
+                  Unggah klaim JSON
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="mt-1 block w-full text-xs"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      void uploadJson("CLAIM", file);
+                    }}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Tempel atau perbaiki ledger klaim dan manifest
+                  <textarea
+                    required
+                    spellCheck={false}
+                    rows={12}
+                    value={editors.CLAIM}
+                    className={`${inputClass} font-mono text-xs`}
+                    onChange={(e) => setEditors((current) => ({ ...current, CLAIM: e.target.value }))}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+
+          {/* SISI SUMBER (XLSX/CSV Tabular Import & Manual JSON) */}
+          <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2">
+              <h5 className="font-semibold text-stone-800">2. Sisi Sumber Laporan (Evidence Source)</h5>
+              
+              {/* Mode switch */}
+              <div className="flex rounded-lg bg-stone-100 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSourceImportMode("TABULAR")}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    sourceImportMode === "TABULAR"
+                      ? "bg-white text-[#0F3D30] shadow-sm"
+                      : "text-stone-600 hover:text-stone-900"
+                  }`}
+                >
+                  📊 Impor Spreadsheet
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSourceImportMode("MANUAL_JSON")}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    sourceImportMode === "MANUAL_JSON"
+                      ? "bg-white text-[#0F3D30] shadow-sm"
+                      : "text-stone-600 hover:text-stone-900"
+                  }`}
+                >
+                  📝 Tempel JSON Manual
+                </button>
+              </div>
+            </div>
+
+            {sourceImportMode === "TABULAR" ? (
+              <div className="space-y-3">
+                {/* Template Download Buttons */}
+                <div className="rounded-lg border border-emerald-200/60 bg-emerald-50/40 p-3">
+                  <p className="text-xs font-medium text-emerald-900">Template Sumber Laporan Resmi (v1):</p>
+                  <p className="mt-0.5 text-[11px] text-emerald-700">
+                    Memuat lembar petunjuk, format kolom resmi, tipe data teks, dan contoh data sintetis.
+                  </p>
+                  <div className="mt-2.5 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => void handleDownloadTemplate("xlsx")}
+                      disabled={downloadingTemplate !== null}
+                    >
+                      {downloadingTemplate === "xlsx" ? "Mengunduh…" : "📥 Unduh Template XLSX (Utama)"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleDownloadTemplate("csv")}
+                      disabled={downloadingTemplate !== null}
+                    >
+                      {downloadingTemplate === "csv" ? "Mengunduh…" : "📥 Unduh Template CSV (Alternatif)"}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Upload Spreadsheet Box */}
+                <div>
+                  <label className="block text-sm font-medium text-stone-800">
+                    Unggah Berkas Spreadsheet (XLSX / CSV)
+                    <input
+                      type="file"
+                      accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                      disabled={tabularLoading}
+                      className="mt-1.5 block w-full rounded-lg border border-stone-300 bg-stone-50 p-2 text-xs text-stone-900 file:mr-3 file:rounded-md file:border-0 file:bg-[#0F3D30] file:px-3 file:py-1 file:text-xs file:font-medium file:text-white hover:file:bg-[#1A5242]"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        void handleTabularFileSelected(file);
+                      }}
+                    />
+                  </label>
+                  <p className="mt-1 text-[11px] text-stone-500">
+                    Maksimal 5 MiB, 5.000 baris, 50 kolom. Formula dan makro (.xlsm) ditolak secara ketat demi keamanan.
+                  </p>
+                </div>
+
+                {tabularLoading && (
+                  <p className="rounded bg-stone-100 p-2 text-center text-xs text-stone-600 animate-pulse">
+                    Membaca dan memetakan spreadsheet…
+                  </p>
+                )}
+
+                {/* Live Preview Panel */}
+                {tabularPreview && (
+                  <div className="space-y-2.5 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-stone-900">
+                        Pratinjau Impor: {tabularPreview.fileName} ({tabularPreview.format.toUpperCase()})
+                      </span>
+                      {tabularPreview.isPartial ? (
+                        <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                          ⚠️ Total Parsial (belum lengkap)
+                        </span>
+                      ) : (
+                        <span className="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                          ✓ 100% Valid ({tabularPreview.validCount} baris)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Metric Cards */}
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-xs">
+                      <div className="rounded bg-white p-2 border border-stone-200">
+                        <span className="text-stone-500">Total Baris:</span>
+                        <p className="font-semibold text-stone-900">{tabularPreview.totalRows}</p>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-stone-200">
+                        <span className="text-stone-500">Baris Valid:</span>
+                        <p className="font-semibold text-emerald-700">{tabularPreview.validCount}</p>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-stone-200">
+                        <span className="text-stone-500">Bermasalah:</span>
+                        <p className={`font-semibold ${tabularPreview.invalidCount > 0 ? "text-red-600" : "text-stone-900"}`}>
+                          {tabularPreview.invalidCount}
+                        </p>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-stone-200">
+                        <span className="text-stone-500">Total Valid:</span>
+                        <p className="font-semibold text-stone-900 truncate" title={`Rp ${formatRupiah(tabularPreview.calculableTotal)}`}>
+                          Rp {formatRupiah(tabularPreview.calculableTotal)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Table View of Rows */}
+                    <div className="max-h-64 overflow-y-auto rounded border border-stone-200 bg-white">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="sticky top-0 bg-stone-100 text-stone-700 border-b border-stone-200">
+                          <tr>
+                            <th className="p-1.5 w-10">No</th>
+                            <th className="p-1.5">Key</th>
+                            <th className="p-1.5">Jenis Dana</th>
+                            <th className="p-1.5">Posisi</th>
+                            <th className="p-1.5 text-right">Nominal</th>
+                            <th className="p-1.5">Status / Masalah</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          {tabularPreview.allRowsPreview.slice(0, 100).map((r) => (
+                            <tr
+                              key={r.rowNumber}
+                              className={r.isValid ? "hover:bg-stone-50" : "bg-red-50/70 text-red-950 font-medium"}
+                            >
+                              <td className="p-1.5 text-stone-500">{r.rowNumber}</td>
+                              <td className="p-1.5 font-mono">{r.row?.key ?? r.rawCells.key ?? r.rawCells.identitas_entri ?? "-"}</td>
+                              <td className="p-1.5">{r.row?.bucket ?? r.rawCells.jenis_dana ?? "-"}</td>
+                              <td className="p-1.5">{r.row?.balanceSheet ?? r.rawCells.posisi_neraca ?? "-"}</td>
+                              <td className="p-1.5 text-right font-mono">
+                                {r.row ? formatRupiah(r.row.amount) : (r.rawCells.nilai ?? r.rawCells.amount ?? "-")}
+                              </td>
+                              <td className="p-1.5">
+                                {r.isValid ? (
+                                  <span className="text-emerald-700">✓ Sah</span>
+                                ) : (
+                                  <span className="text-red-700" title={r.issues.map((i) => i.message).join(", ")}>
+                                    ⚠️ {r.issues[0]?.message ?? "Baris tidak valid"}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {tabularPreview.allRowsPreview.length > 100 && (
+                        <p className="p-2 text-center text-[11px] text-stone-500 bg-stone-50 border-t border-stone-200">
+                          Menampilkan 100 dari {tabularPreview.allRowsPreview.length} baris; seluruhnya tersimpan dalam draf dan snapshot.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Manual JSON Editor (Fallback / Advanced) */
+              <div className="space-y-3">
+                <details className="text-xs text-stone-600">
+                  <summary className="cursor-pointer font-medium text-stone-700 hover:text-stone-900">
+                    Contoh format JSON sumber (data sintetis)
+                  </summary>
+                  <pre className="mt-2 overflow-x-auto rounded bg-stone-100 p-2">{example("SOURCE", scopeUnit, scopeLevel)}</pre>
+                </details>
+                <label className="block text-sm">
+                  Unggah ledger JSON
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="mt-1 block w-full text-xs"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      void uploadJson("SOURCE", file);
+                    }}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Tempel atau perbaiki ledger sumber dan manifest
+                  <textarea
+                    required={sourceImportMode === "MANUAL_JSON"}
+                    spellCheck={false}
+                    rows={12}
+                    value={editors.SOURCE}
+                    className={`${inputClass} font-mono text-xs`}
+                    onChange={(e) => setEditors((current) => ({ ...current, SOURCE: e.target.value }))}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
-        <Button type="submit">{busy ? "Membekukan dan menyimpan…" : reading ? "Membaca unggahan…" : "Bekukan, rekonsiliasi, dan simpan"}</Button>
+
+        {/* Supporting Documents (Lampiran Bukti Fisik / SK) */}
+        <div className="rounded-lg border border-stone-200 bg-white p-3 space-y-2">
+          <h5 className="font-semibold text-xs text-stone-800 uppercase tracking-wide">
+            Dokumen Asli Pendukung (Opsional, Maksimal 5 MiB per berkas)
+          </h5>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {SIDES.map((side) => (
+              <div key={side} className="space-y-1">
+                <label className="block text-xs font-medium text-stone-700">
+                  Lampiran {sideName(side)}:
+                  <input
+                    type="file"
+                    className="mt-1 block w-full text-xs"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      setFiles((current) => ({ ...current, [side]: file }));
+                    }}
+                  />
+                </label>
+                {files[side] && (
+                  <div className="flex items-center justify-between gap-2 text-xs bg-stone-50 p-1.5 rounded">
+                    <span className="break-all truncate">📎 {files[side]!.name}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setFiles((current) => ({ ...current, [side]: undefined }))}
+                    >
+                      Lepas
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Action Button & Freeze Guard Notice */}
+        <div className="pt-2">
+          <Button
+            type="submit"
+            disabled={busy || reading !== null || isFreezeBlocked}
+            className="w-full sm:w-auto"
+          >
+            {busy
+              ? "Membekukan dan merekonsiliasi…"
+              : reading
+              ? "Membaca unggahan…"
+              : "🔒 Bekukan Snapshot, Rekonsiliasi, dan Simpan"}
+          </Button>
+
+          {isFreezeBlocked && (
+            <p className="mt-2 text-xs font-medium text-amber-800">
+              ⚠️ Tombol bekukan dinonaktifkan:{" "}
+              {!tabularFile
+                ? "Unggah berkas spreadsheet sumber laporan terlebih dahulu."
+                : `Draf hanya dapat dibekukan jika 0 baris bermasalah (terdapat ${tabularPreview?.invalidCount ?? 0} baris yang perlu diperbaiki). Anda tetap dapat menyimpan sebagai draf.`}
+            </p>
+          )}
+        </div>
       </fieldset>
-      {error && <div role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-        <p>{error}</p>
-        {issues.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">
-          {issues.map((issue, index) => <li key={index}>
-            {issue.side && `${sideName(issue.side)} · `}
-            {issue.rowIndex !== null && `${issue.scope === "total" ? "Total" : "Baris"} ${issue.rowIndex + 1} · `}
-            {issue.field}: {issue.message}
-          </li>)}
-        </ul>}
-      </div>}
+
+      {/* Error & Issues Alert */}
+      {error && (
+        <div role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800 border border-red-200">
+          <p className="font-semibold">{error}</p>
+          {issues.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-700">
+              {issues.map((issue, index) => (
+                <li key={index}>
+                  {issue.side && `${sideName(issue.side)} · `}
+                  {issue.rowIndex !== null && `${issue.scope === "total" ? "Total" : "Baris"} ${issue.rowIndex + 1} · `}
+                  {issue.field}: {issue.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </form>
   );
 }

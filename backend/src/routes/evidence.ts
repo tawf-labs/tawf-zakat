@@ -76,11 +76,26 @@ import {
   type InternalManifestBase,
 } from "../internal-usdc-source";
 import { EvidenceFileError, MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
-import type { StoredFile, StoredFinding, StoredPreparation } from "../evidence-store";
 import { serializeReport } from "./reconciliation";
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
 import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
+import {
+  decodeTabular,
+  sanitizeForExport,
+  TabularSecurityError,
+  TabularValidationError,
+} from "../../../shared/tabular-reader";
+import {
+  mapSourceTabular,
+  type TabularSourceMappingResult,
+} from "../source-tabular-schema";
+import {
+  generateSourceXlsxTemplate,
+  generateSourceCsvTemplate,
+} from "../source-template-generator";
+import type { SourceManifest } from "../evidence-source";
+import type { StoredDraft, DraftSummary, StoredFile, StoredFinding, StoredPreparation } from "../evidence-store";
 
 const evidenceRoutes = new Hono();
 
@@ -477,117 +492,146 @@ function checkInternalHeader(header: Header, issues: SourceIssue[]): void {
   }
 }
 
-evidenceRoutes.post("/", async (c) => {
-  const runtime = runtimeWithStore(c);
-  if (runtime instanceof Response) return runtime;
-
-  const body = await readJson(c);
-  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
-
-  const auth = await authenticateWorkspace(
-    c,
-    runtime,
-    typeof body.institutionId === "string" ? body.institutionId : undefined
-  );
-  if (!auth.ok) return auth.response;
-  if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
-
-  const issues: SourceIssue[] = [];
-  const header = readHeader(body, issues);
-
-  // A side may name an internal source instead of carrying one. The server then
-  // builds it from this deployment's own ledger and indexed events; nothing a
-  // client sends can stand in for what the chain actually recorded.
-  const internalAsked = {
-    CLAIM: readInternalRequest(body.claim, "CLAIM", issues),
-    SOURCE: readInternalRequest(body.source, "SOURCE", issues),
+function defaultPreviewManifest(institutionId: string, partial?: any): SourceManifest {
+  return {
+    role: "SOURCE",
+    label: text(partial?.label) || "Sumber Tabular Laporan",
+    origin: "UPLOAD",
+    institutionId,
+    scopeUnit: text(partial?.scopeUnit) || "PUSAT",
+    scopeLevel: text(partial?.scopeLevel) || "NASIONAL",
+    fundTypes: Array.isArray(partial?.fundTypes) && partial.fundTypes.length > 0
+      ? partial.fundTypes
+      : ["ZAKAT", "FITRAH", "INFAK_SEDEKAH", "KURBAN", "DSKL"],
+    balanceSheet: (text(partial?.balanceSheet) as ManifestPosition) || "BOTH",
+    currencyUnit: (text(partial?.currencyUnit) as CurrencyUnit) || "IDR",
+    period: partial?.period?.kind && partial?.period?.year
+      ? { kind: partial.period.kind, year: Number(partial.period.year) }
+      : { kind: "SEMESTER", year: 2025 },
+    cutOff: text(partial?.cutOff) || new Date().toISOString(),
+    format: text(partial?.format) || "XLSX",
+    mappingVersion: "tawf.source.template.v1",
+    transactionDetail: "PRESENT",
+    note: text(partial?.note) || null,
   };
-  const wantsInternal = internalAsked.CLAIM !== null || internalAsked.SOURCE !== null;
-  if (wantsInternal && header) checkInternalHeader(header, issues);
-  if (wantsInternal && !runtime.internalLedger) {
-    return unconfigured(c, "Ledger internal dan event terindeks deployment ini");
-  }
+}
 
-  let internal: Awaited<ReturnType<typeof readInternalUsdc>> | null = null;
-  if (wantsInternal && header && issues.length === 0) {
-    const institution = await runtime.store.getInstitution(auth.session.institutionId);
-    if (!institution) return refuse(c, 404, "not-found");
-    const window = {
-      // One window for both sides, widest of what either asked for, so the two
-      // sides are never examined against different amounts of chain.
-      fromBlock: internalAsked.CLAIM?.fromBlock ?? internalAsked.SOURCE?.fromBlock ?? null,
-      toBlock: internalAsked.CLAIM?.toBlock ?? internalAsked.SOURCE?.toBlock ?? null,
+function resolveTabularSide(
+  tabularPayload: { fileName: string; contentBase64: string },
+  institutionId: string,
+  header: Header | null,
+  manifestRaw: any,
+  issues: SourceIssue[]
+): SubmittedSide | null {
+  try {
+    const bytes = new Uint8Array(Buffer.from(tabularPayload.contentBase64, "base64"));
+    const decoded = decodeTabular(bytes, tabularPayload.fileName);
+    if (!decoded.success || !decoded.table) {
+      for (const iss of decoded.issues) {
+        issues.push({
+          scope: "manifest",
+          rowIndex: iss.rowNumber,
+          field: iss.column ?? "tabular",
+          message: iss.message,
+        });
+      }
+      return null;
+    }
+
+    const manifest: SourceManifest = {
+      role: "SOURCE",
+      label: text(manifestRaw?.label) || "Sumber Tabular",
+      origin: "UPLOAD",
+      institutionId,
+      scopeUnit: text(manifestRaw?.scopeUnit) || "PUSAT",
+      scopeLevel: text(manifestRaw?.scopeLevel) || "NASIONAL",
+      fundTypes: Array.isArray(manifestRaw?.fundTypes) && manifestRaw.fundTypes.length > 0
+        ? manifestRaw.fundTypes
+        : ["ZAKAT", "FITRAH", "INFAK_SEDEKAH", "KURBAN", "DSKL"],
+      balanceSheet: (text(manifestRaw?.balanceSheet) as ManifestPosition) || header?.balanceSheetScope || "BOTH",
+      currencyUnit: header?.currencyUnit || (text(manifestRaw?.currencyUnit) as CurrencyUnit) || "IDR",
+      period: header?.period || { kind: "SEMESTER", year: 2025 },
+      cutOff: text(manifestRaw?.cutOff) || new Date().toISOString(),
+      format: (decoded.format || (decoded.table?.sheetName === "CSV" ? "csv" : "xlsx")).toUpperCase(),
+      mappingVersion: "tawf.source.template.v1",
+      transactionDetail: "PRESENT",
+      note: text(manifestRaw?.note) || null,
     };
-    const base: InternalManifestBase = {
-      institutionId: auth.session.institutionId,
-      scopeUnit: institution.scopeUnit,
-      scopeLevel: institution.scopeLevel,
-      period: header.period,
-      cutOff: new Date(runtime.now() * 1000).toISOString(),
+
+    const mapped = mapSourceTabular(decoded.table, manifest);
+    for (const iss of mapped.issues) {
+      issues.push(iss);
+    }
+
+    if (mapped.invalidRowCount > 0 || mapped.issues.length > 0) {
+      return null;
+    }
+
+    return {
+      manifest,
+      status: "READ",
+      rows: mapped.validRows,
+      declaredTotals: mapped.declaredTotals,
     };
-    internal = await readInternalUsdc(runtime.internalLedger!, base, window);
+  } catch (err: any) {
+    issues.push({
+      scope: "manifest",
+      rowIndex: null,
+      field: "tabular",
+      message: err?.message || "Gagal menguraikan berkas tabular.",
+    });
+    return null;
   }
+}
 
-  const claim = internalAsked.CLAIM
-    ? { side: internal?.claim ?? null, issues: [] as SourceIssue[] }
-    : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
-  const source = internalAsked.SOURCE
-    ? { side: internal?.source ?? null, issues: [] as SourceIssue[] }
-    : normalizeSide(body.source, "SOURCE", auth.session.institutionId);
-  issues.push(
-    ...claim.issues.map((item) => ({ ...item, side: "CLAIM" as const })),
-    ...source.issues.map((item) => ({ ...item, side: "SOURCE" as const }))
-  );
-
-  if (header && claim.side) checkAgreement(claim.side, header, issues);
-  if (header && source.side) checkAgreement(source.side, header, issues);
-
-  const files = readFiles(body.files, issues);
-
-  if (issues.length > 0 || !header || !claim.side || !source.side) {
-    // Every issue at once. A person fixing a pasted table wants the whole list,
-    // not one line per round trip.
-    return c.json(
-      {
-        success: false,
-        error: `Masukan ditolak: ${issues.length} hal perlu diperbaiki sebelum sumber dapat dibekukan.`,
-        issues,
-      },
-      400
-    );
-  }
-
-  const sides = [claim.side, source.side];
+async function executeFreezeAndStorePreparation(
+  c: Context,
+  runtime: EvidenceRuntime,
+  auth: { session: { institutionId: string; account: string; role: string } },
+  header: Header,
+  claimSide: SubmittedSide,
+  sourceSide: SubmittedSide,
+  files: SubmittedFile[],
+  internal: Awaited<ReturnType<typeof readInternalUsdc>> | null
+): Promise<Response> {
+  const sides = [claimSide, sourceSide];
   const preparationId = newId("prep");
 
-  // Files are stored before the snapshot is frozen, so the snapshot can record
-  // what actually happened to each one. A failure here is recorded as a failure
-  // and never as an identifier for a file that is not there.
   const fileReferences: FileReference[] = [];
   const fileRows: StoredFile[] = [];
   for (const file of files) {
     const id = newId("file");
     let storedFile: StoredFile = {
-      id, role: file.role, fileName: file.fileName, mimeType: file.mimeType,
-      sizeBytes: file.bytes.byteLength, contentSha256: null,
-      storageStatus: "FAILED", storageRef: null,
-      failureReason: "Penyimpanan dokumen terbatas belum dikonfigurasi (EVIDENCE_FILE_KEY), sehingga berkas tidak disimpan.",
+      id,
+      role: file.role,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      sizeBytes: file.bytes.byteLength,
+      contentSha256: null,
+      storageStatus: "FAILED",
+      storageRef: null,
+      failureReason:
+        "Penyimpanan dokumen terbatas belum dikonfigurasi (EVIDENCE_FILE_KEY), sehingga berkas tidak disimpan.",
     };
     if (runtime.files) {
       try {
         const stored = await runtime.files.put({
-          institutionId: auth.session.institutionId, preparationId, fileId: id, bytes: file.bytes,
+          institutionId: auth.session.institutionId,
+          preparationId,
+          fileId: id,
+          bytes: file.bytes,
         });
         storedFile = { ...storedFile, ...stored, storageStatus: "STORED", failureReason: null };
       } catch (error: any) {
-        storedFile.failureReason = error instanceof EvidenceFileError ? error.message
-          : error?.code === "ENOSPC"
+        storedFile.failureReason =
+          error instanceof EvidenceFileError
+            ? error.message
+            : error?.code === "ENOSPC"
             ? "Penyimpanan berkas gagal: disk penuh. Hubungi operator penyimpanan."
             : "Penyimpanan berkas gagal. Hubungi operator untuk memeriksa kapasitas dan izin penyimpanan.";
       }
     }
     fileRows.push(storedFile);
-    // Explicit projection keeps the private storage locator out of the snapshot.
     fileReferences.push(publicFileView(storedFile));
   }
 
@@ -618,8 +662,6 @@ evidenceRoutes.post("/", async (c) => {
     currencyUnit: header.currencyUnit,
     balanceSheetScope: header.balanceSheetScope,
     tolerance: header.tolerance,
-    // Derived from the manifests rather than accepted from the caller, so a
-    // request cannot widen the vocabulary its own rows were checked against.
     allowedBuckets: [
       ...new Set(sides.flatMap((side) => side.manifest.fundTypes)),
     ].sort(),
@@ -633,8 +675,6 @@ evidenceRoutes.post("/", async (c) => {
   const salt = newCommitmentSalt();
   const commitment = commitmentFor(bytes, salt);
 
-  // Reconcile from the *frozen* snapshot, not from the request body. Recomputing
-  // later from the stored bytes then cannot disagree with the result kept here.
   const frozen = parseSnapshot(canonical);
   const frozenClaim = frozen.sides.find((side) => side.manifest.role === "CLAIM")!;
   const frozenSource = frozen.sides.find((side) => side.manifest.role === "SOURCE")!;
@@ -721,11 +761,6 @@ evidenceRoutes.post("/", async (c) => {
       files: fileRows,
     });
   } catch (error: any) {
-    // The write is one transaction, so no half-written package survives. What
-    // can survive is ciphertext already written for files that now belong to no
-    // preparation: unreferenced, unreadable without the deployment key, and
-    // costing only disk. Left in place deliberately rather than deleted on an
-    // error path, where a second failure would be the one nobody sees.
     return c.json(
       {
         success: false,
@@ -746,6 +781,395 @@ evidenceRoutes.post("/", async (c) => {
   }
 
   return c.json({ success: true, preparation: restrictedView(stored) }, 201);
+}
+
+// --------------------------------------------------------------------------
+// Tabular Source & Draft Endpoints (Spec #86, Ticket #88)
+// --------------------------------------------------------------------------
+
+evidenceRoutes.get("/template", async (c) => {
+  const format = (c.req.query("format") || "xlsx").toLowerCase();
+  if (format === "csv") {
+    const csv = generateSourceCsvTemplate();
+    return c.body(csv, 200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="tawf.source.template.v1.csv"',
+      "Cache-Control": "no-cache",
+    });
+  }
+
+  const buf = generateSourceXlsxTemplate();
+  return c.body(buf as unknown as ArrayBuffer, 200, {
+    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": 'attachment; filename="tawf.source.template.v1.xlsx"',
+    "Cache-Control": "no-cache",
+  });
+});
+
+evidenceRoutes.post("/preview", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const contentType = c.req.header("content-type") || "";
+  let fileName = "laporan.xlsx";
+  let bytes: Uint8Array;
+  let customManifest: any = null;
+
+  if (contentType.includes("multipart/form-data")) {
+    try {
+      const formData = await c.req.formData();
+      const file = formData.get("file");
+      if (!file || typeof file === "string") {
+        return badRequest(c, "Formulir harus menyertakan berkas.");
+      }
+      const blob = file as Blob;
+      fileName = blob.name || "laporan.xlsx";
+      bytes = new Uint8Array(await blob.arrayBuffer());
+    } catch {
+      return badRequest(c, "Gagal memproses multipart form data.");
+    }
+  } else {
+    const body = await readJson(c);
+    if (!body || !body.contentBase64) {
+      return badRequest(c, 'Badan permintaan harus berupa JSON dengan "fileName" dan "contentBase64".');
+    }
+    fileName = text(body.fileName) || "laporan.xlsx";
+    try {
+      bytes = new Uint8Array(Buffer.from(text(body.contentBase64), "base64"));
+    } catch {
+      return badRequest(c, "Isi berkas harus berformat base64 yang sah.");
+    }
+    customManifest = body.manifest;
+  }
+
+  const decoded = decodeTabular(bytes, fileName);
+  if (!decoded.success || !decoded.table) {
+    return c.json(
+      {
+        success: false,
+        error: decoded.issues.map((i) => i.message).join("; ") || "Berkas tabular tidak dapat dibaca.",
+        issues: decoded.issues,
+      },
+      400
+    );
+  }
+
+  const manifest = defaultPreviewManifest(auth.session.institutionId, customManifest);
+  const mapped = mapSourceTabular(decoded.table, manifest);
+
+  return c.json({
+    success: true,
+    fileName,
+    format: decoded.format,
+    totalRows: mapped.totalRows,
+    validCount: mapped.validRowCount,
+    invalidCount: mapped.invalidRowCount,
+    isPartial: mapped.isPartial,
+    calculableTotal: mapped.calculableTotal,
+    allRowsPreview: mapped.allRowsPreview,
+    issues: mapped.issues,
+  });
+});
+
+evidenceRoutes.get("/drafts", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const drafts = await runtime.evidence.listDrafts(auth.session.institutionId);
+  return c.json({ success: true, drafts });
+});
+
+evidenceRoutes.post("/drafts", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
+
+  const id = text(body.id) || newId("draft");
+  const label = text(body.label) || "Draf Sumber Laporan";
+  const periodRecord = typeof body.period === "object" && body.period !== null ? (body.period as Record<string, unknown>) : {};
+  const periodKind = text(periodRecord.kind) || "SEMESTER";
+  const periodYear = Number(periodRecord.year) || new Date().getUTCFullYear();
+  const currencyUnit = text(body.currencyUnit) || "IDR";
+  const balanceSheetScope = text(body.balanceSheetScope) || "BOTH";
+  const tolerance =
+    typeof body.tolerance === "object" && body.tolerance !== null
+      ? text((body.tolerance as any).amount)
+      : text(body.tolerance) || "0";
+
+  let sourceData = body.source ?? null;
+  let issues: SourceIssue[] = Array.isArray(body.issues) ? (body.issues as SourceIssue[]) : [];
+
+  if (body.sourceTable && typeof body.sourceTable === "object") {
+    const tab = body.sourceTable as { fileName: string; contentBase64: string };
+    sourceData = { ...(typeof sourceData === "object" && sourceData !== null ? sourceData : {}), tabular: tab };
+    try {
+      const bytes = new Uint8Array(Buffer.from(tab.contentBase64, "base64"));
+      const decoded = decodeTabular(bytes, tab.fileName);
+      if (!decoded.success || !decoded.table) {
+        issues = [
+          ...issues,
+          ...decoded.issues.map((iss) => ({
+            scope: "manifest" as const,
+            rowIndex: iss.rowNumber,
+            field: iss.column ?? "tabular",
+            message: iss.message,
+          })),
+        ];
+      } else {
+        const manifest = defaultPreviewManifest(auth.session.institutionId, {
+          label,
+          currencyUnit: currencyUnit as any,
+          period: { kind: periodKind as any, year: periodYear },
+          balanceSheet: balanceSheetScope as any,
+        });
+        const mapped = mapSourceTabular(decoded.table, manifest);
+        issues = [...issues, ...mapped.issues];
+        sourceData = {
+          ...sourceData,
+          previewSummary: {
+            totalRows: mapped.totalRows,
+            validCount: mapped.validRowCount,
+            invalidCount: mapped.invalidRowCount,
+            isPartial: mapped.isPartial,
+            calculableTotal: mapped.calculableTotal,
+          },
+        };
+      }
+    } catch (e: any) {
+      issues.push({ scope: "manifest", rowIndex: null, field: "tabular", message: e.message });
+    }
+  }
+
+  const draft: StoredDraft = {
+    id,
+    institutionId: auth.session.institutionId,
+    createdBy: auth.session.account,
+    label,
+    periodKind,
+    periodYear,
+    currencyUnit,
+    balanceSheetScope,
+    tolerance,
+    claimData: body.claim ?? null,
+    sourceData,
+    files: Array.isArray(body.files) ? body.files : [],
+    issues,
+    version: 1,
+    createdAt: runtime.now(),
+    updatedAt: runtime.now(),
+  };
+
+  await runtime.evidence.saveDraft(draft);
+  const stored = await runtime.evidence.getDraft(auth.session.institutionId, id);
+
+  return c.json({ success: true, draft: stored ?? draft }, 201);
+});
+
+evidenceRoutes.get("/drafts/:draftId", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const draft = await runtime.evidence.getDraft(auth.session.institutionId, c.req.param("draftId"));
+  if (!draft) return refuse(c, 404, "not-found");
+
+  return c.json({ success: true, draft });
+});
+
+evidenceRoutes.delete("/drafts/:draftId", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
+
+  const deleted = await runtime.evidence.deleteDraft(auth.session.institutionId, c.req.param("draftId"));
+  if (!deleted) return refuse(c, 404, "not-found");
+
+  return c.json({ success: true });
+});
+
+evidenceRoutes.post("/drafts/:draftId/freeze", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
+
+  const draft = await runtime.evidence.getDraft(auth.session.institutionId, c.req.param("draftId"));
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const issues: SourceIssue[] = [];
+
+  const headerIssues: SourceIssue[] = [];
+  const header = readHeader(
+    {
+      label: draft.label,
+      period: { kind: draft.periodKind, year: draft.periodYear },
+      currencyUnit: draft.currencyUnit,
+      balanceSheetScope: draft.balanceSheetScope,
+      tolerance: draft.tolerance ? { amount: draft.tolerance, unit: draft.currencyUnit } : undefined,
+    },
+    headerIssues
+  );
+  issues.push(...headerIssues);
+
+  const claim = normalizeSide(draft.claimData, "CLAIM", auth.session.institutionId);
+  issues.push(...claim.issues.map((i) => ({ ...i, side: "CLAIM" as const })));
+
+  let sourceSide: SubmittedSide | null = null;
+  if (draft.sourceData?.tabular) {
+    const tab = draft.sourceData.tabular as { fileName: string; contentBase64: string };
+    const tabIssues: SourceIssue[] = [];
+    sourceSide = resolveTabularSide(tab, auth.session.institutionId, header, draft.sourceData?.manifest, tabIssues);
+    issues.push(...tabIssues.map((i) => ({ ...i, side: "SOURCE" as const })));
+  } else {
+    const src = normalizeSide(draft.sourceData, "SOURCE", auth.session.institutionId);
+    sourceSide = src.side;
+    issues.push(...src.issues.map((i) => ({ ...i, side: "SOURCE" as const })));
+  }
+
+  if (draft.issues && Array.isArray(draft.issues) && draft.issues.length > 0) {
+    for (const iss of draft.issues) {
+      if (!issues.some((existing) => existing.message === iss.message && existing.rowIndex === iss.rowIndex)) {
+        issues.push(iss);
+      }
+    }
+  }
+
+  if (header && claim.side) checkAgreement(claim.side, header, issues);
+  if (header && sourceSide) checkAgreement(sourceSide, header, issues);
+
+  const files = readFiles(draft.files, issues);
+
+  if (issues.length > 0 || !header || !claim.side || !sourceSide) {
+    return c.json(
+      {
+        success: false,
+        error: `Draf belum dapat dibekukan: terdapat ${issues.length} hal yang perlu diperbaiki. Draf hanya dapat dibekukan jika 0 baris bermasalah.`,
+        issues,
+      },
+      400
+    );
+  }
+
+  return executeFreezeAndStorePreparation(c, runtime, auth, header, claim.side, sourceSide, files, null);
+});
+
+// --------------------------------------------------------------------------
+// Standard Preparation Pipeline (POST /api/evidence)
+// --------------------------------------------------------------------------
+
+evidenceRoutes.post("/", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
+
+  const issues: SourceIssue[] = [];
+  const header = readHeader(body, issues);
+
+  const internalAsked = {
+    CLAIM: readInternalRequest(body.claim, "CLAIM", issues),
+    SOURCE: readInternalRequest(body.source, "SOURCE", issues),
+  };
+  const wantsInternal = internalAsked.CLAIM !== null || internalAsked.SOURCE !== null;
+  if (wantsInternal && header) checkInternalHeader(header, issues);
+  if (wantsInternal && !runtime.internalLedger) {
+    return unconfigured(c, "Ledger internal dan event terindeks deployment ini");
+  }
+
+  let internal: Awaited<ReturnType<typeof readInternalUsdc>> | null = null;
+  if (wantsInternal && header && issues.length === 0) {
+    const institution = await runtime.store.getInstitution(auth.session.institutionId);
+    if (!institution) return refuse(c, 404, "not-found");
+    const window = {
+      fromBlock: internalAsked.CLAIM?.fromBlock ?? internalAsked.SOURCE?.fromBlock ?? null,
+      toBlock: internalAsked.CLAIM?.toBlock ?? internalAsked.SOURCE?.toBlock ?? null,
+    };
+    const base: InternalManifestBase = {
+      institutionId: auth.session.institutionId,
+      scopeUnit: institution.scopeUnit,
+      scopeLevel: institution.scopeLevel,
+      period: header.period,
+      cutOff: new Date(runtime.now() * 1000).toISOString(),
+    };
+    internal = await readInternalUsdc(runtime.internalLedger!, base, window);
+  }
+
+  const claim = internalAsked.CLAIM
+    ? { side: internal?.claim ?? null, issues: [] as SourceIssue[] }
+    : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
+
+  let source: { side: SubmittedSide | null; issues: SourceIssue[] };
+  if (internalAsked.SOURCE) {
+    source = { side: internal?.source ?? null, issues: [] };
+  } else if (body.sourceTable || (body.source && typeof body.source === "object" && (body.source as any).tabular)) {
+    const tab = (body.sourceTable || (body.source as any).tabular) as { fileName: string; contentBase64: string };
+    const tabIssues: SourceIssue[] = [];
+    const side = resolveTabularSide(
+      tab,
+      auth.session.institutionId,
+      header,
+      (body.source && typeof body.source === "object" ? (body.source as any).manifest : null),
+      tabIssues
+    );
+    source = { side, issues: tabIssues };
+  } else {
+    source = normalizeSide(body.source, "SOURCE", auth.session.institutionId);
+  }
+
+  issues.push(
+    ...claim.issues.map((item) => ({ ...item, side: "CLAIM" as const })),
+    ...source.issues.map((item) => ({ ...item, side: "SOURCE" as const }))
+  );
+
+  if (header && claim.side) checkAgreement(claim.side, header, issues);
+  if (header && source.side) checkAgreement(source.side, header, issues);
+
+  const files = readFiles(body.files, issues);
+
+  if (issues.length > 0 || !header || !claim.side || !source.side) {
+    return c.json(
+      {
+        success: false,
+        error: `Masukan ditolak: ${issues.length} hal perlu diperbaiki sebelum sumber dapat dibekukan.`,
+        issues,
+      },
+      400
+    );
+  }
+
+  return executeFreezeAndStorePreparation(c, runtime, auth, header, claim.side, source.side, files, internal);
 });
 
 evidenceRoutes.get("/", async (c) => {
