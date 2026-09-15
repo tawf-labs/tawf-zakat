@@ -5,7 +5,7 @@ import { createWorkspaceAccess, type UnsavedReport } from "./workspaceAccessCont
 import type { PrivateRequests } from "./privateRequests";
 
 type WorkspaceAccess = ReturnType<typeof createWorkspaceAccess>;
-export const AccessContext = createContext<WorkspaceAccess | null>(null);
+const AccessContext = createContext<WorkspaceAccess | null>(null);
 
 export function WorkspaceAccessProvider({ access, children }: { access: WorkspaceAccess; children: ReactNode }) {
   return <AccessContext.Provider value={access}>{children}</AccessContext.Provider>;
@@ -39,12 +39,16 @@ function useOwner() {
   return owner;
 }
 
+const closedSnapshot = { state: "CLOSED" as const, account: null, error: null, generation: 0 };
+const closedState = () => closedSnapshot;
+const noSubscription = () => () => {};
+
 export function useOptionalWorkspaceAccess() {
   const owner = useContext(AccessContext);
   const state = useSyncExternalStore(
-    owner ? owner.subscribe : () => () => {},
-    owner ? owner.getSnapshot : () => ({ state: "CLOSED" as const, account: null, error: null, generation: 0 }),
-    owner ? owner.getSnapshot : () => ({ state: "CLOSED" as const, account: null, error: null, generation: 0 })
+    owner ? owner.subscribe : noSubscription,
+    owner ? owner.getSnapshot : closedState,
+    owner ? owner.getSnapshot : closedState
   );
   return owner ? { ...state, enter: owner.enter, leave: owner.leave } : null;
 }
@@ -52,7 +56,7 @@ export function useOptionalWorkspaceAccess() {
 export function useWorkspaceAccess() {
   const owner = useOwner();
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
-  return { ...state, enter: owner.enter, leave: owner.leave };
+  return { ...state, enter: owner.enter, leave: owner.leave, refresh: owner.refresh };
 }
 
 const emptyReport: UnsavedReport = { reportId: "", version: "1", predecessor: "", reason: "", narrative: "", amounts: {} };

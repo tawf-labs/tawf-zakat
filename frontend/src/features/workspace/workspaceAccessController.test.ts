@@ -14,6 +14,7 @@ function fixture() {
   let time = 1000;
   let scheduled: (() => void) | null = null;
   let logoutUnavailable = false;
+  let workspaceReply: () => Response | Promise<Response> = () => Response.json({ account: "0xaaaa", institution: { id: "institution-a" }, role: "OFFICER" });
   let privateReply = () => Response.json({ value: "private" });
   const ports: Parameters<typeof createWorkspaceAccess>[0] = { origin: "https://api.test", now: () => time,
     storage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); }, removeItem: key => { stored.delete(key); } },
@@ -33,14 +34,14 @@ function fixture() {
       if (url.endsWith("/workspace")) {
         const token = new Headers(init?.headers).get("Authorization")?.slice(7) ?? "";
         if (ended.has(token)) return Response.json({ reason: "unauthenticated", sessionEnd: ended.get(token) }, { status: 401 });
-        return Response.json({ account: "0xaaaa", institution: { id: "institution-a" }, role: "OFFICER" });
+        return workspaceReply();
       }
       return privateReply();
     },
   };
   const access = createWorkspaceAccess(ports);
   access.connect("0xaaaa");
-  return { access, stored, ended, reload: () => createWorkspaceAccess(ports), failLogout: () => { logoutUnavailable = true; },
+  return { access, stored, ended, workspaceReply: (reply: typeof workspaceReply) => { workspaceReply = reply; }, reload: () => createWorkspaceAccess(ports), failLogout: () => { logoutUnavailable = true; },
     advance: (seconds: number) => { time += seconds; scheduled?.(); }, reply: (next: typeof privateReply) => { privateReply = next; } };
 }
 
@@ -177,4 +178,41 @@ it("clears drafts on a legacy 401 whose cause cannot establish expiry", async ()
   await expect(ready.requests.json("/api/evidence")).rejects.toMatchObject({ status: 401 });
   await access.enter("institution-a");
   expect(access.unsavedReport("p")).toMatchObject({ state: "EDITABLE", value: null });
+});
+
+
+it("refreshes the officer name while retaining a draft for the same identity", async () => {
+  const { access, workspaceReply } = fixture();
+  const workspace = { account: "0xaaaa", institution: { id: "institution-a" }, role: "OFFICER", officer: { id: "person-a", displayName: "Before" } };
+  workspaceReply(() => Response.json(workspace));
+  await access.enter("institution-a");
+  const draft = access.unsavedReport("preparation-a");
+  if (draft.state !== "EDITABLE") throw new Error("Draft unavailable");
+  draft.change({ reportId: "report-a", version: "1", predecessor: "", reason: "", narrative: "Private draft", amounts: {} });
+  workspaceReply(() => Response.json({ ...workspace, officer: { ...workspace.officer, displayName: "After" } }));
+  await access.refresh();
+  expect(access.getSnapshot()).toMatchObject({ workspace: { officer: { displayName: "After" } } });
+  expect(access.unsavedReport("preparation-a")).toMatchObject({ value: { narrative: "Private draft" } });
+  const held = deferred<Response>();
+  workspaceReply(() => held.promise);
+  const refreshing = access.refresh();
+  await access.connect("0xbbbb");
+  held.resolve(Response.json(workspace));
+  await expect(refreshing).rejects.toThrow("Konteks akses sudah berubah");
+  expect(access.getSnapshot()).toMatchObject({ state: "CLOSED", account: "0xbbbb" });
+});
+
+it("invalidates old private material when refresh establishes a different officer identity", async () => {
+  const { access, workspaceReply } = fixture();
+  await access.enter("institution-a");
+  const ready = access.getSnapshot();
+  if (ready.state !== "READY") throw new Error("Workspace unavailable");
+  const draft = access.unsavedReport("preparation-a");
+  if (draft.state !== "EDITABLE") throw new Error("Draft unavailable");
+  draft.change({ reportId: "old", version: "1", predecessor: "", reason: "", narrative: "Old identity", amounts: {} });
+  workspaceReply(() => Response.json({ account: "0xaaaa", institution: { id: "institution-a" }, role: "OFFICER", officer: { id: "person-a", displayName: "Verified officer" } }));
+  await access.refresh();
+  expect(access.getSnapshot()).toMatchObject({ state: "READY", workspace: { officer: { id: "person-a" } } });
+  expect(access.unsavedReport("preparation-a")).toMatchObject({ value: null });
+  await expect(ready.requests.json("/api/evidence/private")).rejects.toThrow("Konteks akses sudah berubah");
 });

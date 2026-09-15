@@ -72,7 +72,7 @@ async function main() {
             id: member.officerProfile.id,
             institutionId: institution.id,
             displayName: member.officerProfile.displayName,
-            actor: member.account,
+            actor: institution.members.find(candidate => candidate.role === "ADMIN")!.account,
             now,
           }).catch(() => { /* idempotent if exists */ });
           await store.linkOfficerAccount({
@@ -80,7 +80,7 @@ async function main() {
             institutionId: institution.id,
             account: member.account,
             role: member.role,
-            actor: member.account,
+            actor: institution.members.find(candidate => candidate.role === "ADMIN")!.account,
             now,
           }).catch(() => { /* idempotent */ });
         }

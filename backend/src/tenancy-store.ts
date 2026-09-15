@@ -141,6 +141,7 @@ export const WORKSPACE_SCHEMA_STATEMENTS = [
      actor TEXT NOT NULL, account TEXT NOT NULL, role TEXT NOT NULL, action TEXT NOT NULL,
      occurred_at BIGINT NOT NULL
    );`,
+  `ALTER TABLE workspace_authority_history ADD COLUMN IF NOT EXISTS details JSONB;`,
   `CREATE TABLE IF NOT EXISTS workspace_admin_proposals (
      institution_id TEXT PRIMARY KEY REFERENCES institutions(id),
      administrator TEXT NOT NULL, successor TEXT NOT NULL
@@ -181,8 +182,63 @@ const asRole = (value: unknown): WorkspaceRole => {
   return value;
 };
 
+export class OfficerConflict extends Error {}
+export class OfficerAuthorityChanged extends Error {}
+
 export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(work: (tx: WorkspaceDatabase) => Promise<T>) => Promise<T> }) {
   const one = async (query: any) => rowsOf(await db.execute(query))[0] ?? null;
+
+  async function lockAdministrator(tx: WorkspaceDatabase, institutionId: string, actor: string) {
+    await tx.execute(sql`SELECT id FROM institutions WHERE id = ${institutionId} FOR UPDATE`);
+    const current = rowsOf(await tx.execute(sql`
+      SELECT m.id FROM institution_memberships m LEFT JOIN officer_profiles o ON o.id = m.officer_id
+      WHERE m.institution_id = ${institutionId} AND m.account_address = ${normalizeAccount(actor)}
+        AND m.is_active AND m.role = 'ADMIN' AND (m.officer_id IS NULL OR o.is_active)
+    `))[0];
+    if (!current) throw new OfficerAuthorityChanged("Kewenangan administrator sudah berubah. Periksa kembali akses Anda.");
+  }
+
+  async function linkAccount(tx: WorkspaceDatabase, input: {
+    officerId: string;
+    institutionId: string;
+    account: string;
+    role: WorkspaceRole;
+    actor: string;
+    now: number;
+  }): Promise<boolean> {
+    const actor = normalizeAccount(input.actor);
+    const account = normalizeAccount(input.account);
+
+    const rows = rowsOf(await tx.execute(sql`
+      SELECT id, is_active FROM officer_profiles
+      WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
+    `));
+    const officer = rows[0] ?? null;
+    if (!officer || !officer.is_active) return false;
+    const previous = rowsOf(await tx.execute(sql`
+      SELECT officer_id, role, is_active FROM institution_memberships
+      WHERE institution_id = ${input.institutionId} AND account_address = ${account}
+    `))[0];
+    if (previous?.officer_id && previous.officer_id !== input.officerId) {
+      throw new OfficerConflict("Akun sudah terkait identitas petugas lain. Gunakan akun kerja lain untuk menjaga atribusi historis.");
+    }
+
+    await tx.execute(sql`
+      INSERT INTO institution_memberships (institution_id, account_address, role, officer_id, is_active)
+      VALUES (${input.institutionId}, ${account}, ${input.role}, ${input.officerId}, TRUE)
+      ON CONFLICT (institution_id, account_address) DO UPDATE SET
+        role = CASE WHEN institution_memberships.role = 'ADMIN' THEN 'ADMIN' ELSE EXCLUDED.role END,
+        officer_id = EXCLUDED.officer_id, is_active = TRUE, updated_at = NOW()
+    `);
+
+    await tx.execute(sql`
+      INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at, details)
+      VALUES (${input.institutionId}, ${actor}, ${account}, ${previous?.role === "ADMIN" ? "ADMIN" : input.role}, 'LINK_ACCOUNT', ${input.now},
+        ${JSON.stringify({ officerId: input.officerId, previousOfficerId: previous?.officer_id ?? null })}::jsonb)
+    `);
+
+    return true;
+  }
 
   return {
     async ensureSchema(): Promise<void> {
@@ -235,8 +291,10 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async activeMembershipFor(account: string): Promise<Membership | null> {
       const row = await one(sql`
-        SELECT institution_id, account_address, role, officer_id FROM institution_memberships
-        WHERE account_address = ${normalizeAccount(account)} AND is_active
+        SELECT m.institution_id, m.account_address, m.role, m.officer_id FROM institution_memberships m
+        LEFT JOIN officer_profiles o ON o.id = m.officer_id
+        WHERE m.account_address = ${normalizeAccount(account)} AND m.is_active
+          AND (m.officer_id IS NULL OR o.is_active)
       `);
       if (!row) return null;
       return {
@@ -283,7 +341,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
       });
     },
     async authorityHistory(institutionId: string) {
-      return rowsOf(await db.execute(sql`SELECT id, actor, account, role, action, occurred_at AS "occurredAt"
+      return rowsOf(await db.execute(sql`SELECT id, actor, account, role, action, details, occurred_at AS "occurredAt"
         FROM workspace_authority_history WHERE institution_id = ${institutionId} ORDER BY id`));
     },
     async administratorProposal(institutionId: string) {
@@ -462,6 +520,8 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async createOfficerProfile(input: {
       id?: string;
+      account?: string;
+      role?: WorkspaceRole;
       institutionId: string;
       displayName: string;
       actor: string;
@@ -473,14 +533,30 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
       const actor = normalizeAccount(input.actor);
 
       return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+        const details = { displayName: name, account: input.account ? normalizeAccount(input.account) : null, role: input.role ?? "OFFICER" };
+        const receipt = rowsOf(await tx.execute(sql`
+          SELECT details FROM workspace_authority_history
+          WHERE institution_id = ${input.institutionId} AND account = ${id} AND actor = ${actor} AND action = 'CREATE_OFFICER'
+        `))[0];
+        if (receipt) {
+          if (receipt.details?.displayName !== details.displayName || receipt.details?.account !== details.account || receipt.details?.role !== details.role) {
+            throw new OfficerConflict("Identitas operasi sudah dipakai dengan data berbeda.");
+          }
+          return { id, institutionId: input.institutionId, displayName: name, isActive: true };
+        }
+        if (rowsOf(await tx.execute(sql`SELECT id FROM officer_profiles WHERE id = ${id}`)).length) {
+          throw new OfficerConflict("ID profil sudah digunakan. Gunakan identitas operasi baru.");
+        }
         await tx.execute(sql`
           INSERT INTO officer_profiles (id, institution_id, display_name, is_active)
           VALUES (${id}, ${input.institutionId}, ${name}, TRUE)
         `);
         await tx.execute(sql`
-          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
-          VALUES (${input.institutionId}, ${actor}, ${id}, 'OFFICER', 'CREATE_OFFICER', ${input.now})
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at, details)
+          VALUES (${input.institutionId}, ${actor}, ${id}, 'OFFICER', 'CREATE_OFFICER', ${input.now}, ${JSON.stringify(details)}::jsonb)
         `);
+        if (input.account) await linkAccount(tx, { ...input, officerId: id, account: input.account, role: input.role ?? "OFFICER" });
         return {
           id,
           institutionId: input.institutionId,
@@ -500,6 +576,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
     }): Promise<OfficerProfileRecord | null> {
       const actor = normalizeAccount(input.actor);
       return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
         const rows = rowsOf(await tx.execute(sql`
           SELECT id, institution_id, display_name, is_active FROM officer_profiles
           WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
@@ -518,6 +595,11 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         `);
 
         if (!newActive) {
+          const administrators = rowsOf(await tx.execute(sql`
+            SELECT id FROM institution_memberships WHERE institution_id = ${input.institutionId}
+              AND officer_id = ${input.officerId} AND role = 'ADMIN' AND is_active
+          `));
+          if (administrators.length) throw new OfficerConflict("Alihkan administrator kepada penerus sebelum menonaktifkan profil ini.");
           await tx.execute(sql`
             UPDATE workspace_sessions SET revoked_at = ${input.now}
             WHERE institution_id = ${input.institutionId} AND account_address IN (
@@ -528,8 +610,9 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         }
 
         await tx.execute(sql`
-          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
-          VALUES (${input.institutionId}, ${actor}, ${input.officerId}, 'OFFICER', 'UPDATE_OFFICER', ${input.now})
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at, details)
+          VALUES (${input.institutionId}, ${actor}, ${input.officerId}, 'OFFICER', 'UPDATE_OFFICER', ${input.now},
+            ${JSON.stringify({ before: { displayName: existing.display_name, isActive: Boolean(existing.is_active) }, after: { displayName: newName, isActive: newActive } })}::jsonb)
         `);
 
         return {
@@ -541,38 +624,10 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
       });
     },
 
-    async linkOfficerAccount(input: {
-      officerId: string;
-      institutionId: string;
-      account: string;
-      role: WorkspaceRole;
-      actor: string;
-      now: number;
-    }): Promise<boolean> {
-      const actor = normalizeAccount(input.actor);
-      const account = normalizeAccount(input.account);
-
-      return db.transaction(async (tx) => {
-        const rows = rowsOf(await tx.execute(sql`
-          SELECT id, is_active FROM officer_profiles
-          WHERE id = ${input.officerId} AND institution_id = ${input.institutionId}
-        `));
-        const officer = rows[0] ?? null;
-        if (!officer || !officer.is_active) return false;
-
-        await tx.execute(sql`
-          INSERT INTO institution_memberships (institution_id, account_address, role, officer_id, is_active)
-          VALUES (${input.institutionId}, ${account}, ${input.role}, ${input.officerId}, TRUE)
-          ON CONFLICT (institution_id, account_address) DO UPDATE SET
-            role = EXCLUDED.role, officer_id = EXCLUDED.officer_id, is_active = TRUE, updated_at = NOW()
-        `);
-
-        await tx.execute(sql`
-          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
-          VALUES (${input.institutionId}, ${actor}, ${account}, ${input.role}, 'LINK_ACCOUNT', ${input.now})
-        `);
-
-        return true;
+    async linkOfficerAccount(input: Parameters<typeof linkAccount>[1]): Promise<boolean> {
+      return db.transaction(async tx => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+        return linkAccount(tx, input);
       });
     },
 
@@ -587,6 +642,12 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
       const account = normalizeAccount(input.account);
 
       return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+        const administrators = rowsOf(await tx.execute(sql`
+          SELECT id FROM institution_memberships WHERE institution_id = ${input.institutionId}
+            AND account_address = ${account} AND officer_id = ${input.officerId} AND role = 'ADMIN' AND is_active
+        `));
+        if (administrators.length) throw new OfficerConflict("Alihkan administrator kepada penerus sebelum melepas akun ini.");
         const rows = rowsOf(await tx.execute(sql`
           UPDATE institution_memberships
           SET is_active = FALSE, updated_at = NOW()
@@ -602,8 +663,9 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         `);
 
         await tx.execute(sql`
-          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
-          VALUES (${input.institutionId}, ${actor}, ${account}, 'OFFICER', 'UNLINK_ACCOUNT', ${input.now})
+          INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at, details)
+          VALUES (${input.institutionId}, ${actor}, ${account}, 'OFFICER', 'UNLINK_ACCOUNT', ${input.now},
+            ${JSON.stringify({ officerId: input.officerId })}::jsonb)
         `);
 
         return true;

@@ -29,6 +29,7 @@
  * stored, and no later response, error or log line repeats it.
  */
 
+import { OfficerConflict, OfficerAuthorityChanged } from "../tenancy-store";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { toHex, type Hex } from "viem";
@@ -55,6 +56,13 @@ import {
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 
 const workspaceRoutes = new Hono();
+workspaceRoutes.onError((error, c) => {
+  if (error instanceof OfficerAuthorityChanged) return refuse(c, 403, "forbidden");
+  const cause = (error as Error & { cause?: { code?: string } }).cause;
+  if (cause?.code === "23505") return c.json({ success: false, error: "Akun atau ID sudah digunakan. Periksa daftar petugas sebelum mencoba kembali." }, 409);
+  if (error instanceof OfficerConflict) return c.json({ success: false, error: error.message }, 409);
+  throw error;
+});
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TOKEN_PREFIX = "tawf_ws_";
@@ -294,7 +302,8 @@ workspaceRoutes.post("/members", async (c) => {
   try {
     // The institution written is the session's own, never the payload's.
     if (!await runtime.store.manageMember(auth.session.institutionId, auth.session.account, account, body.role, runtime.now())) return refuse(c, 403, "forbidden");
-  } catch {
+  } catch (error) {
+    if (error instanceof OfficerConflict) throw error;
     return c.json(
       { success: false, error: "Akun tersebut sudah aktif pada lembaga lain. Nonaktifkan keanggotaan lamanya lebih dahulu." },
       409
@@ -352,31 +361,17 @@ workspaceRoutes.post("/officers", async (c) => {
   const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
   if (!displayName) return badRequest(c, "Nama petugas tidak boleh kosong.");
 
+  const account = typeof body.account === "string" ? body.account.trim() : "";
+  if (account && !ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
+  if (body.role !== undefined && (!isWorkspaceRole(body.role) || body.role === "ADMIN")) {
+    return badRequest(c, "Pilih peran Petugas atau Pembaca berwenang. Peran administrator yang sudah ada tetap dipertahankan.");
+  }
   const customId = typeof body.id === "string" && body.id.trim() !== "" ? body.id.trim() : undefined;
   const officer = await runtime.store.createOfficerProfile({
-    id: customId,
-    institutionId: auth.session.institutionId,
-    displayName,
-    actor: auth.session.account,
-    now: runtime.now(),
+    id: customId, institutionId: auth.session.institutionId, displayName,
+    account: account || undefined, role: body.role === "READER" ? "READER" : "OFFICER",
+    actor: auth.session.account, now: runtime.now(),
   });
-
-  const account = typeof body.account === "string" ? body.account.trim() : "";
-  if (account) {
-    if (!ADDRESS.test(account)) return badRequest(c, "Alamat akun tidak sah.");
-    const role = isWorkspaceRole(body.role) ? body.role : "OFFICER";
-    if (role === "ADMIN") {
-      return badRequest(c, "Akun petugas tidak boleh memiliki peran ADMIN.");
-    }
-    await runtime.store.linkOfficerAccount({
-      officerId: officer.id,
-      institutionId: auth.session.institutionId,
-      account,
-      role,
-      actor: auth.session.account,
-      now: runtime.now(),
-    });
-  }
 
   return c.json({ success: true, officer }, 201);
 });
@@ -395,8 +390,8 @@ workspaceRoutes.patch("/officers/:id", async (c) => {
   const displayName = typeof body.displayName === "string" ? body.displayName : undefined;
   const isActive = typeof body.isActive === "boolean" ? body.isActive : undefined;
 
-  try {
-    const updated = await runtime.store.updateOfficerProfile({
+  if (displayName !== undefined && !displayName.trim()) return badRequest(c, "Nama petugas tidak boleh kosong.");
+  const updated = await runtime.store.updateOfficerProfile({
       officerId,
       institutionId: auth.session.institutionId,
       displayName,
@@ -406,9 +401,6 @@ workspaceRoutes.patch("/officers/:id", async (c) => {
     });
     if (!updated) return refuse(c, 404, "not-found");
     return c.json({ success: true, officer: updated });
-  } catch (err: any) {
-    return badRequest(c, err?.message || "Gagal memperbarui profil petugas.");
-  }
 });
 
 workspaceRoutes.post("/officers/:id/accounts", async (c) => {
@@ -430,8 +422,7 @@ workspaceRoutes.post("/officers/:id/accounts", async (c) => {
     return badRequest(c, "Akun petugas tidak boleh memiliki peran ADMIN.");
   }
 
-  try {
-    const linked = await runtime.store.linkOfficerAccount({
+  const linked = await runtime.store.linkOfficerAccount({
       officerId,
       institutionId: auth.session.institutionId,
       account,
@@ -440,13 +431,8 @@ workspaceRoutes.post("/officers/:id/accounts", async (c) => {
       now: runtime.now(),
     });
     if (!linked) return refuse(c, 404, "not-found");
-    return c.json({ success: true, officerId, account: normalizeAccount(account), role }, 201);
-  } catch {
-    return c.json(
-      { success: false, error: "Akun tersebut sudah aktif pada lembaga lain. Nonaktifkan keanggotaan lamanya lebih dahulu." },
-      409
-    );
-  }
+    const member = await runtime.store.activeMembershipFor(account);
+    return c.json({ success: true, officerId, account: normalizeAccount(account), role: member?.role }, 201);
 });
 
 workspaceRoutes.delete("/officers/:id/accounts/:account", async (c) => {

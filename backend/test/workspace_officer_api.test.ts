@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { sql } from "drizzle-orm";
 import { type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/index";
@@ -306,4 +307,170 @@ describe("Akun kerja pribadi dan profil petugas (Tiket #87)", () => {
     expect(actions).toContain("LINK_ACCOUNT");
     expect(actions).toContain("UNLINK_ACCOUNT");
   });
+});
+
+it("inactive officers cannot obtain a new session, and reactivation never revives old tokens", async () => {
+  const adminToken = await tokenFrom(await signIn(admin, SINAR));
+  const { officer } = await (await post("/officers", { displayName: "Petugas sintetis", account: officer1.address }, adminToken)).json();
+  const token = await tokenFrom(await signIn(officer1, SINAR));
+  expect((await patch(`/officers/${officer.id}`, { isActive: false }, adminToken)).status).toBe(200);
+  expect((await get("", token)).status).toBe(401);
+  expect((await signIn(officer1, SINAR)).status).toBe(403);
+  expect((await patch(`/officers/${officer.id}`, { isActive: true }, adminToken)).status).toBe(200);
+  expect((await get("", token)).status).toBe(401);
+  expect((await signIn(officer1, SINAR)).status).toBe(201);
+});
+
+it("linking an administrator preserves authority and cannot bypass successor acceptance", async () => {
+  const token = await tokenFrom(await signIn(admin, SINAR));
+  const { officer } = await (await post("/officers", { displayName: "Administrator sintetis", account: admin.address }, token)).json();
+  const fresh = await tokenFrom(await signIn(admin, SINAR));
+  expect((await (await get("", fresh)).json()).role).toBe("ADMIN");
+  expect((await del(`/officers/${officer.id}/accounts/${admin.address}`, fresh)).status).toBe(409);
+  expect((await patch(`/officers/${officer.id}`, { isActive: false }, fresh)).status).toBe(409);
+  expect((await (await get("", fresh)).json()).capabilities.manageMembers).toBe(true);
+});
+
+it("an account cannot be reassigned to a different personal identity, even after unlinking", async () => {
+  const token = await tokenFrom(await signIn(admin, SINAR));
+  const { officer: first } = await (await post("/officers", { displayName: "Petugas A", account: officer1.address }, token)).json();
+  const { officer: second } = await (await post("/officers", { displayName: "Petugas B" }, token)).json();
+  const old = await tokenFrom(await signIn(officer1, SINAR));
+  expect((await post(`/officers/${second.id}/accounts`, { account: officer1.address }, token)).status).toBe(409);
+  expect((await (await get("", old)).json()).officer.id).toBe(first.id);
+  await del(`/officers/${first.id}/accounts/${officer1.address}`, token);
+  expect((await post(`/officers/${second.id}/accounts`, { account: officer1.address }, token)).status).toBe(409);
+  expect((await post(`/officers/${first.id}/accounts`, { account: officer1.address }, token)).status).toBe(201);
+  expect((await get("", old)).status).toBe(401);
+});
+
+it("failed profile creation leaves no profile, and retry after restart returns one durable result", async () => {
+  const token = await tokenFrom(await signIn(admin, SINAR));
+  expect((await post("/officers", { displayName: "Gagal", account: "invalid" }, token)).status).toBe(400);
+  expect((await (await get("/officers", token)).json()).officers).toHaveLength(0);
+  await store.upsertMembership({ institutionId: BAITUL, account: officer1SecondAccount.address, role: "OFFICER" });
+  expect((await post("/officers", { displayName: "Konflik", account: officer1SecondAccount.address }, token)).status).toBe(409);
+  expect((await (await get("/officers", token)).json()).officers).toHaveLength(0);
+  const payload = { id: "off-retry-synthetic", displayName: "Petugas tahan restart", account: officer1.address };
+  expect((await post("/officers", payload, token)).status).toBe(201);
+  store = createWorkspaceStore(await database.reopen());
+  await store.ensureSchema();
+  configureWorkspace({ store, now: () => clock, challengeTtlSeconds: 300, sessionTtlSeconds: 86400, ethCall });
+  expect((await post("/officers", payload, token)).status).toBe(201);
+  const { officers } = await (await get("/officers", token)).json();
+  expect(officers).toHaveLength(1);
+  expect(officers[0].accounts[0].account).toBe(officer1.address.toLowerCase());
+  expect((await post("/officers", { ...payload, displayName: "Different payload" }, token)).status).toBe(409);
+});
+
+it("history preserves profile values and the account identity after restart", async () => {
+  const token = await tokenFrom(await signIn(admin, SINAR));
+  const { officer } = await (await post("/officers", { displayName: "Nama awal", account: officer1.address }, token)).json();
+  await patch(`/officers/${officer.id}`, { displayName: "Nama diperbaiki", isActive: false }, token);
+  await del(`/officers/${officer.id}/accounts/${officer1.address}`, token);
+  store = createWorkspaceStore(await database.reopen());
+  configureWorkspace({ store, now: () => clock, challengeTtlSeconds: 300, sessionTtlSeconds: 86400, ethCall });
+  const { history } = await (await get("/authority-history", token)).json();
+  expect(history.find((entry: any) => entry.action === "LINK_ACCOUNT").details.officerId).toBe(officer.id);
+  expect(history.find((entry: any) => entry.action === "UNLINK_ACCOUNT").details.officerId).toBe(officer.id);
+  const change = history.find((entry: any) => entry.action === "UPDATE_OFFICER");
+  expect(change.details.before).toEqual({ displayName: "Nama awal", isActive: true });
+  expect(change.details.after).toEqual({ displayName: "Nama diperbaiki", isActive: false });
+  expect(change.actor).toBe(admin.address.toLowerCase());
+});
+
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: one owner drives header, keyboard profile forms, logout and delayed account changes", async () => {
+  const token = await tokenFrom(await signIn(admin, SINAR));
+  await post("/officers", { displayName: "Administrator sintetis", account: admin.address }, token);
+  const built = await Bun.build({ entrypoints: [new URL("../../frontend/test/officer-smoke.tsx", import.meta.url).pathname], target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) } });
+  if (!built.success) throw new Error(built.logs.join("\n"));
+  const bundle = await built.outputs[0]!.text();
+  let wallet = admin;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 18579, async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+    if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+    if (path === "/switch-wallet") { wallet = officer1; return Response.json([wallet.address]); }
+    if (path === "/wallet-rpc") {
+      const { method, params } = await req.json();
+      if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([wallet.address]);
+      if (method === "eth_chainId") return Response.json("0x7a69");
+      if (method === "eth_signTypedData_v4") return Response.json(await wallet.signTypedData(JSON.parse(params[1])));
+      return Response.json(null);
+    }
+    return app.fetch(req);
+  } });
+  const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+  const browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (error: Error) => console.error("Officer browser:", error.message));
+    await page.goto("http://127.0.0.1:18579");
+    await page.getByRole("button", { name: /^0x/ }).waitFor();
+    await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+    const identity = page.getByRole("button", { name: "Detail identitas petugas dan ruang kerja lembaga" });
+    await identity.waitFor({ timeout: 5000 }).catch(async (error: Error) => { console.error(await page.locator("body").innerText()); throw error; });
+    expect(await identity.innerText()).toContain("Administrator sintetis");
+    await identity.focus(); await page.keyboard.press("Enter");
+    await page.getByRole("dialog").waitFor();
+    await page.keyboard.press("Escape");
+    expect(await page.getByRole("dialog").count()).toBe(0);
+    const ownProfile = page.getByRole("article", { name: "Profil Administrator sintetis", exact: true });
+    await ownProfile.getByRole("button", { name: "Ubah nama", exact: true }).click();
+    await ownProfile.getByLabel("Nama petugas", { exact: true }).fill("Administrator diperbarui");
+    await ownProfile.getByRole("button", { name: "Simpan nama", exact: true }).click();
+    await identity.getByText("Administrator diperbarui", { exact: true }).waitFor({ timeout: 5000 });
+    await page.getByRole("button", { name: "Tambah Petugas", exact: true }).click();
+    await page.getByLabel("Nama petugas", { exact: true }).fill("Petugas browser sintetis");
+    await page.getByRole("button", { name: "Simpan Petugas", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("heading", { name: "Petugas browser sintetis", exact: true }).waitFor();
+    await identity.click();
+    await page.getByRole("button", { name: "Keluar Sesi", exact: true }).click();
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).waitFor();
+    expect(await page.getByRole("heading", { name: "Petugas browser sintetis", exact: true }).count()).toBe(0);
+    expect(await identity.count()).toBe(0);
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+    await identity.waitFor();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void;
+    const pending = new Promise<void>(resolve => { started = resolve; });
+    await page.route("**/api/workspace/officers", async (route: any) => { const response = await route.fetch(); started(); await held; await route.fulfill({ response }); });
+    await page.getByRole("button", { name: "Muat ulang petugas", exact: true }).click();
+    await pending;
+    await page.getByRole("button", { name: "Ganti akun sintetis" }).click();
+    release();
+    await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).waitFor();
+    expect(await identity.count()).toBe(0);
+    expect(await page.getByRole("heading", { name: "Petugas browser sintetis", exact: true }).count()).toBe(0);
+  } finally { await browser.close(); await server.stop(true); }
+}, 60000);
+
+
+it("adds officer profiles to a populated old schema without inventing legacy identities", async () => {
+  const legacy = await createTestWorkspaceDatabase();
+  try {
+    const schema = await Bun.file(new URL("./fixtures/workspace-before-officers.sql", import.meta.url)).text();
+    for (const statement of schema.split(";").filter(part => part.trim())) await legacy.handle().execute(sql.raw(statement));
+    const upgraded = createWorkspaceStore(legacy.handle());
+    await upgraded.upsertInstitution(institutionRecordOf(SYNTHETIC_INSTITUTIONS.find(item => item.id === SINAR)!));
+    await upgraded.upsertMembership({ institutionId: SINAR, account: admin.address, role: "ADMIN" });
+    await legacy.handle().execute(sql`INSERT INTO workspace_authority_history (institution_id, actor, account, role, action, occurred_at)
+      VALUES (${SINAR}, ${admin.address.toLowerCase()}, ${admin.address.toLowerCase()}, 'ADMIN', 'LEGACY', ${NOW})`);
+    await upgraded.ensureSchema();
+    await upgraded.ensureSchema();
+    configureWorkspace({ store: upgraded, now: () => clock, challengeTtlSeconds: 300, sessionTtlSeconds: 86400, ethCall });
+    const token = await tokenFrom(await signIn(admin, SINAR));
+    expect((await (await get("", token)).json()).officer).toBeNull();
+    const { history } = await (await get("/authority-history", token)).json();
+    expect(history[0].action).toBe("LEGACY");
+    expect(history[0].details).toBeNull();
+    expect((await post("/officers", { displayName: "Petugas setelah migrasi", account: officer1.address }, token)).status).toBe(201);
+    expect(await legacy.rowCount("donations")).toBe(1);
+  } finally {
+    await legacy.close();
+    configureWorkspace({ store, now: () => clock, challengeTtlSeconds: 300, sessionTtlSeconds: 86400, ethCall });
+  }
 });

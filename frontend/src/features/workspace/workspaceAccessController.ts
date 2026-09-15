@@ -103,6 +103,9 @@ export function createWorkspaceAccess(ports: AccessPorts) {
     if (ports.now() > session.expiresAt) { lockExpired(session); return; }
     retained = null;
     try { ports.storage.setItem(sessionStorageKey(ports.origin, account), JSON.stringify(session)); } catch { /* Tab storage is optional. */ }
+    installWorkspace(workspace, session, account, started);
+  }
+  function installWorkspace(workspace: Workspace, session: StoredSession, account: string, started: number) {
     const requests = createPrivateRequests({ origin: ports.origin, token: session.token, contextId: `${ports.origin}:${account}:${generation}`,
       fetch: ports.fetch, assertCurrent: () => current(started), denied: error => {
         if (error.status !== 401 && !["no-membership", "membership-inactive"].includes(error.reason ?? "")) return;
@@ -152,6 +155,19 @@ export function createWorkspaceAccess(ports: AccessPorts) {
           closeSession(restored, error.message, error.sessionEnd === "EXPIRED");
         } else publish({ state: "CLOSED", account, generation, error: error instanceof Error ? error.message : "Sesi belum dapat diperiksa." });
       }
+    },
+    async refresh() {
+      if (state.state !== "READY" || !active) return;
+      const previous = state;
+      const workspace = await previous.requests.json<Workspace>("/api/workspace");
+      previous.requests.assertCurrent();
+      if (workspace.account.toLowerCase() !== previous.account?.toLowerCase()
+        || workspace.institution.id !== previous.workspace.institution.id) throw new AccessContextChanged();
+      if (workspace.officer?.id !== previous.workspace.officer?.id || workspace.role !== previous.workspace.role) {
+        generation++;
+        drafts.clear();
+        installWorkspace(workspace, active, workspace.account, generation);
+      } else publish({ ...previous, workspace });
     },
     async leave() {
       const session = active ?? retained;

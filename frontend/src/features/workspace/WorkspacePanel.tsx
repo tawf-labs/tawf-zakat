@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Building2, DoorOpen, KeyRound, LogOut, ShieldAlert, Users, UserCheck } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
-import { useWorkspaceAccess, useWalletWorkspaceAccess, WorkspaceAccessProvider } from "./useWorkspaceAccess";
+import { useWorkspaceAccess } from "./useWorkspaceAccess";
 import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
@@ -21,8 +21,7 @@ import { OfficerManagementSection } from "./OfficerManagementSection";
  * tests that prove it call the API directly rather than through this page.
  */
 export function WorkspacePanel() {
-  const access = useWalletWorkspaceAccess();
-  return <WorkspaceAccessProvider access={access}><WorkspaceContents /></WorkspaceAccessProvider>;
+  return <WorkspaceContents />;
 }
 
 function WorkspaceContents() {
@@ -160,7 +159,6 @@ function WorkspaceContents() {
         <OfficerManagementSection
           key={`officers:${requests.contextId}`}
           requests={requests}
-          institutionId={institution.id}
         />
       )}
 
