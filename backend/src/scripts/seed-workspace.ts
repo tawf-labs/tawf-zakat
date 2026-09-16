@@ -83,9 +83,48 @@ async function main() {
             actor: institution.members.find(candidate => candidate.role === "ADMIN")!.account,
             now,
           }).catch(() => { /* idempotent */ });
+
+          if (member.officerProfile.mandates) {
+            const adminAcc = institution.members.find(candidate => candidate.role === "ADMIN")!.account;
+            for (const m of member.officerProfile.mandates) {
+              await store.grantMandate({
+                institutionId: institution.id,
+                actor: adminAcc,
+                now,
+                mandate: {
+                  officerId: member.officerProfile.id,
+                  function: m.function,
+                  scopeType: m.scopeType,
+                  validFrom: now - 3600,
+                  validUntil: now + 86400 * 365,
+                  assignmentRef: m.assignmentRef,
+                  nominalLimit: m.nominalLimit,
+                },
+              }).catch(() => { /* idempotent */ });
+            }
+          }
         }
         console.log(`  ${institution.id}  ${member.role.padEnd(7)} ${member.account}  (${member.describes})`);
       }
+
+      if (institution.endorsementAccounts) {
+        const adminAcc = institution.members.find(candidate => candidate.role === "ADMIN")!.account;
+        const now = Math.floor(Date.now() / 1000);
+        for (const ea of institution.endorsementAccounts) {
+          await store.registerEndorsementAccount({
+            id: ea.id,
+            institutionId: institution.id,
+            actor: adminAcc,
+            now,
+            data: {
+              accountAddress: ea.accountAddress,
+              label: ea.label,
+              authorizedOfficerIds: ea.authorizedOfficerIds,
+            },
+          }).catch(() => { /* idempotent */ });
+        }
+      }
+
       console.log(`✓ ${institution.legalName}`);
     }
 

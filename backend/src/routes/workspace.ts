@@ -35,6 +35,11 @@ import type { Context } from "hono";
 import { toHex, type Hex } from "viem";
 import { verifyAccountSignature } from "../account-signature";
 import {
+  validateMandateInput,
+  validateEndorsementAccountInput,
+  isOperationalFunction,
+} from "../operational-mandate";
+import {
   accessChallenge,
   authorize,
   bindsWorkspacePurpose,
@@ -240,6 +245,14 @@ workspaceRoutes.get("/", async (c) => {
   if (!institution) return refuse(c, 403, "no-membership");
 
   const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  const mandates = officer
+    ? await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now())
+    : [];
+  const endorsementAccounts = officer
+    ? await runtime.store.activeEndorsementAccountsForOfficer(auth.session.institutionId, officer.id)
+    : (authorize(auth.session.role, "manageMembers")
+      ? await runtime.store.listEndorsementAccounts(auth.session.institutionId, true)
+      : []);
 
   return c.json({
     success: true,
@@ -253,6 +266,8 @@ workspaceRoutes.get("/", async (c) => {
           isActive: officer.isActive,
         }
       : null,
+    mandates,
+    endorsementAccounts,
     capabilities: capabilitiesFor(auth.session.role),
     members: authorize(auth.session.role, "manageMembers")
       ? await runtime.store.membersOf(auth.session.institutionId)
@@ -456,6 +471,273 @@ workspaceRoutes.delete("/officers/:id/accounts/:account", async (c) => {
   if (!unlinked) return refuse(c, 404, "not-found");
 
   return c.json({ success: true, officerId, account: normalizeAccount(account) });
+});
+
+// ---------------------------------------------------------------------------
+// Operational Mandates (Ticket #90)
+// ---------------------------------------------------------------------------
+
+workspaceRoutes.get("/mandates", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  if (auth.session.role === "READER") return refuse(c, 403, "forbidden");
+
+  const filterOfficerId = c.req.query("officerId");
+  if (!authorize(auth.session.role, "manageMembers")) {
+    const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+    if (!officer) return c.json({ success: true, mandates: [] });
+    if (filterOfficerId && filterOfficerId !== officer.id) {
+      return refuse(c, 403, "forbidden");
+    }
+    const mandates = await runtime.store.listMandates(auth.session.institutionId, {
+      officerId: officer.id,
+      activeOnly: c.req.query("activeOnly") === "true",
+    });
+    return c.json({ success: true, mandates });
+  }
+
+  const mandates = await runtime.store.listMandates(auth.session.institutionId, {
+    officerId: filterOfficerId ?? undefined,
+    activeOnly: c.req.query("activeOnly") === "true",
+  });
+  return c.json({ success: true, mandates });
+});
+
+workspaceRoutes.post("/mandates", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const validated = validateMandateInput(body);
+  if (!validated.ok) return badRequest(c, validated.error);
+
+  const customId = typeof body.id === "string" && body.id.trim() !== "" ? body.id.trim() : undefined;
+  const mandate = await runtime.store.grantMandate({
+    id: customId,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+    mandate: validated.value,
+  });
+
+  return c.json({ success: true, mandate }, 201);
+});
+
+workspaceRoutes.patch("/mandates/:id", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const mandateId = c.req.param("id");
+  const patch: Parameters<typeof runtime.store.updateMandate>[0]["patch"] = {};
+
+  if (body.scopeType !== undefined) {
+    if (body.scopeType !== "ALL_PROGRAMS" && body.scopeType !== "SPECIFIC_PROGRAM") {
+      return badRequest(c, "Cakupan mandat harus 'ALL_PROGRAMS' atau 'SPECIFIC_PROGRAM'.");
+    }
+    patch.scopeType = body.scopeType;
+    if (body.scopeType === "SPECIFIC_PROGRAM") {
+      if (typeof body.programId !== "string" || !body.programId.trim()) {
+        return badRequest(c, "Cakupan program khusus mewajibkan pemilihan program.");
+      }
+      patch.programId = body.programId.trim();
+    } else {
+      patch.programId = null;
+    }
+  }
+
+  if (body.validFrom !== undefined) {
+    if (typeof body.validFrom !== "number" || !Number.isSafeInteger(body.validFrom)) {
+      return badRequest(c, "validFrom tidak sah.");
+    }
+    patch.validFrom = Math.floor(body.validFrom);
+  }
+
+  if (body.validUntil !== undefined) {
+    if (typeof body.validUntil !== "number" || !Number.isSafeInteger(body.validUntil)) {
+      return badRequest(c, "validUntil tidak sah.");
+    }
+    patch.validUntil = Math.floor(body.validUntil);
+  }
+
+  if (body.assignmentRef !== undefined) {
+    if (typeof body.assignmentRef !== "string" || !body.assignmentRef.trim()) {
+      return badRequest(c, "Rujukan penugasan tidak boleh kosong.");
+    }
+    patch.assignmentRef = body.assignmentRef.trim();
+  }
+
+  if (body.nominalLimit !== undefined) {
+    if (body.nominalLimit === null || body.nominalLimit === "") {
+      patch.nominalLimit = null;
+    } else {
+      const limStr = String(body.nominalLimit).trim();
+      if (!/^\d+$/.test(limStr)) {
+        return badRequest(c, "Batas nominal mandat harus berupa angka positif dalam satuan rupiah.");
+      }
+      patch.nominalLimit = limStr;
+    }
+  }
+
+  if (body.isActive !== undefined) {
+    if (typeof body.isActive !== "boolean") return badRequest(c, "isActive harus berupa boolean.");
+    patch.isActive = body.isActive;
+  }
+
+  const updated = await runtime.store.updateMandate({
+    id: mandateId,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+    patch,
+  });
+
+  if (!updated) return refuse(c, 404, "not-found");
+  return c.json({ success: true, mandate: updated });
+});
+
+workspaceRoutes.delete("/mandates/:id", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const mandateId = c.req.param("id");
+  const revoked = await runtime.store.revokeMandate({
+    id: mandateId,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+  });
+
+  if (!revoked) return refuse(c, 404, "not-found");
+  return c.json({ success: true, id: mandateId, revoked: true });
+});
+
+// ---------------------------------------------------------------------------
+// Institutional Endorsement Accounts (Ticket #90)
+// ---------------------------------------------------------------------------
+
+workspaceRoutes.get("/endorsement-accounts", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  if (auth.session.role === "READER") return refuse(c, 403, "forbidden");
+
+  if (!authorize(auth.session.role, "manageMembers")) {
+    const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+    if (!officer) return c.json({ success: true, endorsementAccounts: [] });
+    const accounts = await runtime.store.activeEndorsementAccountsForOfficer(auth.session.institutionId, officer.id);
+    return c.json({ success: true, endorsementAccounts: accounts });
+  }
+
+  const includeInactive = c.req.query("includeInactive") === "true";
+  const accounts = await runtime.store.listEndorsementAccounts(auth.session.institutionId, !includeInactive);
+  return c.json({ success: true, endorsementAccounts: accounts });
+});
+
+workspaceRoutes.post("/endorsement-accounts", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const validated = validateEndorsementAccountInput(body);
+  if (!validated.ok) return badRequest(c, validated.error);
+
+  const customId = typeof body.id === "string" && body.id.trim() !== "" ? body.id.trim() : undefined;
+  const created = await runtime.store.registerEndorsementAccount({
+    id: customId,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+    data: validated.value,
+  });
+
+  return c.json({ success: true, endorsementAccount: created }, 201);
+});
+
+workspaceRoutes.patch("/endorsement-accounts/:id", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticate(c, runtime, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const id = c.req.param("id");
+  const patch: Parameters<typeof runtime.store.updateEndorsementAccount>[0]["patch"] = {};
+
+  if (body.label !== undefined) {
+    if (typeof body.label !== "string" || !body.label.trim()) {
+      return badRequest(c, "Label akun pengesahan tidak boleh kosong.");
+    }
+    patch.label = body.label.trim();
+  }
+
+  if (body.authorizedOfficerIds !== undefined) {
+    if (!Array.isArray(body.authorizedOfficerIds)) {
+      return badRequest(c, "authorizedOfficerIds harus berupa array string.");
+    }
+    patch.authorizedOfficerIds = body.authorizedOfficerIds.filter(
+      (item) => typeof item === "string" && item.trim() !== ""
+    );
+  }
+
+  if (body.isActive !== undefined) {
+    if (typeof body.isActive !== "boolean") return badRequest(c, "isActive harus berupa boolean.");
+    patch.isActive = body.isActive;
+  }
+
+  const updated = await runtime.store.updateEndorsementAccount({
+    id,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+    patch,
+  });
+
+  if (!updated) return refuse(c, 404, "not-found");
+  return c.json({ success: true, endorsementAccount: updated });
+});
+
+workspaceRoutes.delete("/endorsement-accounts/:id", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticate(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+
+  const id = c.req.param("id");
+  const revoked = await runtime.store.revokeEndorsementAccount({
+    id,
+    institutionId: auth.session.institutionId,
+    actor: auth.session.account,
+    now: runtime.now(),
+  });
+
+  if (!revoked) return refuse(c, 404, "not-found");
+  return c.json({ success: true, id, revoked: true });
 });
 
 /**

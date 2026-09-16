@@ -30,6 +30,15 @@
 import { sql } from "drizzle-orm";
 import type { AccessChallenge, Membership, WorkspaceRole } from "./tenancy";
 import { isWorkspaceRole, normalizeAccount } from "./tenancy";
+import type {
+  EndorsementAccountInput,
+  InstitutionalEndorsementAccount,
+  MandateInput,
+  MandateScopeType,
+  OperationalFunction,
+  OperationalMandate,
+} from "./operational-mandate";
+import { isOperationalFunction } from "./operational-mandate";
 
 /** Any Drizzle PostgreSQL handle: `postgres-js` in production, PGlite in tests. */
 export type WorkspaceDatabase = {
@@ -146,6 +155,35 @@ export const WORKSPACE_SCHEMA_STATEMENTS = [
      institution_id TEXT PRIMARY KEY REFERENCES institutions(id),
      administrator TEXT NOT NULL, successor TEXT NOT NULL
    );`,
+  `CREATE TABLE IF NOT EXISTS operational_mandates (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     account_address TEXT,
+     function TEXT NOT NULL,
+     scope_type TEXT NOT NULL,
+     program_id TEXT,
+     valid_from BIGINT NOT NULL,
+     valid_until BIGINT NOT NULL,
+     assignment_ref TEXT NOT NULL,
+     nominal_limit TEXT,
+     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL,
+     created_by TEXT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS institutional_endorsement_accounts (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     account_address TEXT NOT NULL,
+     label TEXT NOT NULL,
+     authorized_officer_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL,
+     created_by TEXT NOT NULL,
+     CONSTRAINT institutional_endorsement_unique UNIQUE (institution_id, account_address)
+   );`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
@@ -180,6 +218,48 @@ const challengeFrom = (row: any): StoredChallenge => ({
 const asRole = (value: unknown): WorkspaceRole => {
   if (!isWorkspaceRole(value)) throw new Error(`Peran ruang kerja tidak dikenal: ${String(value)}`);
   return value;
+};
+
+const mandateFromRow = (row: any): OperationalMandate => ({
+  id: row.id,
+  institutionId: row.institution_id,
+  officerId: row.officer_id,
+  accountAddress: row.account_address ?? null,
+  function: row.function as OperationalFunction,
+  scopeType: row.scope_type as MandateScopeType,
+  programId: row.program_id ?? null,
+  validFrom: asSeconds(row.valid_from),
+  validUntil: asSeconds(row.valid_until),
+  assignmentRef: row.assignment_ref,
+  nominalLimit: row.nominal_limit ?? null,
+  isActive: Boolean(row.is_active),
+  createdAt: asSeconds(row.created_at),
+  updatedAt: asSeconds(row.updated_at),
+  createdBy: row.created_by,
+});
+
+const endorsementAccountFromRow = (row: any): InstitutionalEndorsementAccount => {
+  let authorized: string[] = [];
+  try {
+    if (typeof row.authorized_officer_ids === "string") {
+      authorized = JSON.parse(row.authorized_officer_ids);
+    } else if (Array.isArray(row.authorized_officer_ids)) {
+      authorized = row.authorized_officer_ids;
+    }
+  } catch {
+    authorized = [];
+  }
+  return {
+    id: row.id,
+    institutionId: row.institution_id,
+    accountAddress: row.account_address,
+    label: row.label,
+    authorizedOfficerIds: authorized,
+    isActive: Boolean(row.is_active),
+    createdAt: asSeconds(row.created_at),
+    updatedAt: asSeconds(row.updated_at),
+    createdBy: row.created_by,
+  };
 };
 
 export class OfficerConflict extends Error {}
@@ -723,7 +803,506 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
       });
     },
 
+    async listMandates(
+      institutionId: string,
+      filter?: { officerId?: string; activeOnly?: boolean }
+    ): Promise<OperationalMandate[]> {
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM operational_mandates
+          WHERE institution_id = ${institutionId}
+            ${filter?.officerId ? sql`AND officer_id = ${filter.officerId}` : sql``}
+            ${filter?.activeOnly ? sql`AND is_active = TRUE` : sql``}
+          ORDER BY created_at DESC, id ASC
+        `)
+      );
+      return rows.map(mandateFromRow);
+    },
 
+    async getMandate(institutionId: string, id: string): Promise<OperationalMandate | null> {
+      const row = await one(
+        sql`SELECT * FROM operational_mandates WHERE institution_id = ${institutionId} AND id = ${id}`
+      );
+      return row ? mandateFromRow(row) : null;
+    },
+
+    async grantMandate(input: {
+      id?: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+      mandate: MandateInput;
+    }): Promise<OperationalMandate> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const officerRows = rowsOf(
+          await tx.execute(sql`
+            SELECT id, is_active FROM officer_profiles
+            WHERE id = ${input.mandate.officerId} AND institution_id = ${input.institutionId}
+          `)
+        );
+        const officer = officerRows[0] ?? null;
+        if (!officer) throw new OfficerConflict("Petugas tidak ditemukan pada lembaga ini.");
+        if (!officer.is_active) throw new OfficerConflict("Tidak dapat memberikan mandat kepada petugas nonaktif.");
+
+        const id = input.id || crypto.randomUUID();
+
+        if (input.id) {
+          const existing = rowsOf(
+            await tx.execute(
+              sql`SELECT * FROM operational_mandates WHERE id = ${input.id} AND institution_id = ${input.institutionId}`
+            )
+          )[0];
+          if (existing) {
+            const m = mandateFromRow(existing);
+            if (
+              m.officerId === input.mandate.officerId &&
+              m.function === input.mandate.function &&
+              m.assignmentRef === input.mandate.assignmentRef
+            ) {
+              return m;
+            }
+            throw new OfficerConflict("ID mandat sudah digunakan dengan konfigurasi berbeda.");
+          }
+        }
+
+        const acc = input.mandate.accountAddress ? normalizeAccount(input.mandate.accountAddress) : null;
+        await tx.execute(sql`
+          INSERT INTO operational_mandates (
+            id, institution_id, officer_id, account_address, function, scope_type,
+            program_id, valid_from, valid_until, assignment_ref, nominal_limit,
+            is_active, created_at, updated_at, created_by
+          ) VALUES (
+            ${id}, ${input.institutionId}, ${input.mandate.officerId}, ${acc},
+            ${input.mandate.function}, ${input.mandate.scopeType}, ${input.mandate.programId ?? null},
+            ${input.mandate.validFrom}, ${input.mandate.validUntil}, ${input.mandate.assignmentRef},
+            ${input.mandate.nominalLimit ?? null}, TRUE, ${input.now}, ${input.now},
+            ${normalizeAccount(input.actor)}
+          )
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${normalizeAccount(input.actor)},
+            'ADMIN', 'GRANT_MANDATE', ${input.now},
+            ${JSON.stringify({
+              mandateId: id,
+              officerId: input.mandate.officerId,
+              function: input.mandate.function,
+              scopeType: input.mandate.scopeType,
+              programId: input.mandate.programId ?? null,
+              validFrom: input.mandate.validFrom,
+              validUntil: input.mandate.validUntil,
+              assignmentRef: input.mandate.assignmentRef,
+              nominalLimit: input.mandate.nominalLimit ?? null,
+            })}::jsonb
+          )
+        `);
+
+        const created = rowsOf(
+          await tx.execute(sql`SELECT * FROM operational_mandates WHERE id = ${id}`)
+        )[0];
+        return mandateFromRow(created);
+      });
+    },
+
+    async updateMandate(input: {
+      id: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+      patch: {
+        scopeType?: MandateScopeType;
+        programId?: string | null;
+        validFrom?: number;
+        validUntil?: number;
+        assignmentRef?: string;
+        nominalLimit?: string | null;
+        isActive?: boolean;
+      };
+    }): Promise<OperationalMandate | null> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const current = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM operational_mandates WHERE id = ${input.id} AND institution_id = ${input.institutionId}`
+          )
+        )[0];
+        if (!current) return null;
+
+        const before = mandateFromRow(current);
+        const scopeType = input.patch.scopeType ?? before.scopeType;
+        const programId =
+          input.patch.scopeType === "ALL_PROGRAMS"
+            ? null
+            : input.patch.programId !== undefined
+            ? input.patch.programId
+            : before.programId;
+        const validFrom = input.patch.validFrom ?? before.validFrom;
+        const validUntil = input.patch.validUntil ?? before.validUntil;
+        const assignmentRef = input.patch.assignmentRef ?? before.assignmentRef;
+        const nominalLimit =
+          input.patch.nominalLimit !== undefined ? input.patch.nominalLimit : before.nominalLimit;
+        const isActive = input.patch.isActive !== undefined ? input.patch.isActive : before.isActive;
+
+        await tx.execute(sql`
+          UPDATE operational_mandates SET
+            scope_type = ${scopeType},
+            program_id = ${programId},
+            valid_from = ${validFrom},
+            valid_until = ${validUntil},
+            assignment_ref = ${assignmentRef},
+            nominal_limit = ${nominalLimit},
+            is_active = ${isActive},
+            updated_at = ${input.now}
+          WHERE id = ${input.id} AND institution_id = ${input.institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${normalizeAccount(input.actor)},
+            'ADMIN', 'UPDATE_MANDATE', ${input.now},
+            ${JSON.stringify({
+              mandateId: input.id,
+              before: {
+                scopeType: before.scopeType,
+                programId: before.programId,
+                validFrom: before.validFrom,
+                validUntil: before.validUntil,
+                assignmentRef: before.assignmentRef,
+                nominalLimit: before.nominalLimit,
+                isActive: before.isActive,
+              },
+              after: {
+                scopeType,
+                programId,
+                validFrom,
+                validUntil,
+                assignmentRef,
+                nominalLimit,
+                isActive,
+              },
+            })}::jsonb
+          )
+        `);
+
+        const updated = rowsOf(
+          await tx.execute(sql`SELECT * FROM operational_mandates WHERE id = ${input.id}`)
+        )[0];
+        return mandateFromRow(updated);
+      });
+    },
+
+    async revokeMandate(input: {
+      id: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+    }): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const current = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM operational_mandates WHERE id = ${input.id} AND institution_id = ${input.institutionId}`
+          )
+        )[0];
+        if (!current) return false;
+
+        await tx.execute(sql`
+          UPDATE operational_mandates SET
+            is_active = FALSE,
+            updated_at = ${input.now}
+          WHERE id = ${input.id} AND institution_id = ${input.institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${normalizeAccount(input.actor)},
+            'ADMIN', 'REVOKE_MANDATE', ${input.now},
+            ${JSON.stringify({ mandateId: input.id })}::jsonb
+          )
+        `);
+
+        return true;
+      });
+    },
+
+    async activeMandatesForOfficer(
+      institutionId: string,
+      officerId: string,
+      now: number
+    ): Promise<OperationalMandate[]> {
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT m.* FROM operational_mandates m
+          JOIN officer_profiles o ON o.id = m.officer_id
+          WHERE m.institution_id = ${institutionId}
+            AND m.officer_id = ${officerId}
+            AND m.is_active = TRUE
+            AND o.is_active = TRUE
+            AND m.valid_from <= ${now}
+            AND m.valid_until >= ${now}
+          ORDER BY m.created_at ASC
+        `)
+      );
+      return rows.map(mandateFromRow);
+    },
+
+    async activeMandatesForAccount(
+      institutionId: string,
+      account: string,
+      now: number
+    ): Promise<OperationalMandate[]> {
+      const normalized = normalizeAccount(account);
+      const member = rowsOf(
+        await db.execute(sql`
+          SELECT officer_id FROM institution_memberships
+          WHERE institution_id = ${institutionId}
+            AND account_address = ${normalized}
+            AND is_active = TRUE
+        `)
+      )[0];
+      if (!member?.officer_id) return [];
+
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT m.* FROM operational_mandates m
+          JOIN officer_profiles o ON o.id = m.officer_id
+          WHERE m.institution_id = ${institutionId}
+            AND m.officer_id = ${member.officer_id}
+            AND m.is_active = TRUE
+            AND o.is_active = TRUE
+            AND m.valid_from <= ${now}
+            AND m.valid_until >= ${now}
+            AND (m.account_address IS NULL OR m.account_address = ${normalized})
+          ORDER BY m.created_at ASC
+        `)
+      );
+      return rows.map(mandateFromRow);
+    },
+
+    async listEndorsementAccounts(
+      institutionId: string,
+      activeOnly?: boolean
+    ): Promise<InstitutionalEndorsementAccount[]> {
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM institutional_endorsement_accounts
+          WHERE institution_id = ${institutionId}
+            ${activeOnly ? sql`AND is_active = TRUE` : sql``}
+          ORDER BY created_at ASC
+        `)
+      );
+      return rows.map(endorsementAccountFromRow);
+    },
+
+    async getEndorsementAccount(
+      institutionId: string,
+      id: string
+    ): Promise<InstitutionalEndorsementAccount | null> {
+      const row = await one(
+        sql`SELECT * FROM institutional_endorsement_accounts WHERE institution_id = ${institutionId} AND id = ${id}`
+      );
+      return row ? endorsementAccountFromRow(row) : null;
+    },
+
+    async registerEndorsementAccount(input: {
+      id?: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+      data: EndorsementAccountInput;
+    }): Promise<InstitutionalEndorsementAccount> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const acc = normalizeAccount(input.data.accountAddress);
+        const existing = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM institutional_endorsement_accounts WHERE institution_id = ${input.institutionId} AND account_address = ${acc}`
+          )
+        )[0];
+
+        const id = input.id || crypto.randomUUID();
+        const authorizedJson = JSON.stringify(input.data.authorizedOfficerIds || []);
+
+        if (existing) {
+          if (existing.is_active) {
+            if (existing.label === input.data.label) {
+              return endorsementAccountFromRow(existing);
+            }
+            throw new OfficerConflict("Akun pengesahan ini sudah terdaftar pada lembaga ini.");
+          }
+          await tx.execute(sql`
+            UPDATE institutional_endorsement_accounts SET
+              label = ${input.data.label},
+              authorized_officer_ids = ${authorizedJson}::jsonb,
+              is_active = TRUE,
+              updated_at = ${input.now}
+            WHERE id = ${existing.id}
+          `);
+          await tx.execute(sql`
+            INSERT INTO workspace_authority_history (
+              institution_id, actor, account, role, action, occurred_at, details
+            ) VALUES (
+              ${input.institutionId}, ${normalizeAccount(input.actor)}, ${acc},
+              'ADMIN', 'REGISTER_ENDORSEMENT_ACCOUNT', ${input.now},
+              ${JSON.stringify({ id: existing.id, account: acc, reactivated: true })}::jsonb
+            )
+          `);
+          const row = rowsOf(
+            await tx.execute(
+              sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${existing.id}`
+            )
+          )[0];
+          return endorsementAccountFromRow(row);
+        }
+
+        await tx.execute(sql`
+          INSERT INTO institutional_endorsement_accounts (
+            id, institution_id, account_address, label, authorized_officer_ids,
+            is_active, created_at, updated_at, created_by
+          ) VALUES (
+            ${id}, ${input.institutionId}, ${acc}, ${input.data.label},
+            ${authorizedJson}::jsonb, TRUE, ${input.now}, ${input.now},
+            ${normalizeAccount(input.actor)}
+          )
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${acc},
+            'ADMIN', 'REGISTER_ENDORSEMENT_ACCOUNT', ${input.now},
+            ${JSON.stringify({ id, account: acc, label: input.data.label })}::jsonb
+          )
+        `);
+
+        const created = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${id}`
+          )
+        )[0];
+        return endorsementAccountFromRow(created);
+      });
+    },
+
+    async updateEndorsementAccount(input: {
+      id: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+      patch: {
+        label?: string;
+        authorizedOfficerIds?: string[];
+        isActive?: boolean;
+      };
+    }): Promise<InstitutionalEndorsementAccount | null> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const current = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${input.id} AND institution_id = ${input.institutionId}`
+          )
+        )[0];
+        if (!current) return null;
+
+        const before = endorsementAccountFromRow(current);
+        const label = input.patch.label ?? before.label;
+        const authorized = input.patch.authorizedOfficerIds ?? before.authorizedOfficerIds;
+        const isActive = input.patch.isActive !== undefined ? input.patch.isActive : before.isActive;
+
+        await tx.execute(sql`
+          UPDATE institutional_endorsement_accounts SET
+            label = ${label},
+            authorized_officer_ids = ${JSON.stringify(authorized)}::jsonb,
+            is_active = ${isActive},
+            updated_at = ${input.now}
+          WHERE id = ${input.id} AND institution_id = ${input.institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${before.accountAddress},
+            'ADMIN', 'UPDATE_ENDORSEMENT_ACCOUNT', ${input.now},
+            ${JSON.stringify({
+              id: input.id,
+              before: { label: before.label, authorized: before.authorizedOfficerIds, isActive: before.isActive },
+              after: { label, authorized, isActive },
+            })}::jsonb
+          )
+        `);
+
+        const updated = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${input.id}`
+          )
+        )[0];
+        return endorsementAccountFromRow(updated);
+      });
+    },
+
+    async revokeEndorsementAccount(input: {
+      id: string;
+      institutionId: string;
+      actor: string;
+      now: number;
+    }): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        await lockAdministrator(tx, input.institutionId, input.actor);
+
+        const current = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${input.id} AND institution_id = ${input.institutionId}`
+          )
+        )[0];
+        if (!current) return false;
+
+        await tx.execute(sql`
+          UPDATE institutional_endorsement_accounts SET
+            is_active = FALSE,
+            updated_at = ${input.now}
+          WHERE id = ${input.id} AND institution_id = ${input.institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO workspace_authority_history (
+            institution_id, actor, account, role, action, occurred_at, details
+          ) VALUES (
+            ${input.institutionId}, ${normalizeAccount(input.actor)}, ${current.account_address},
+            'ADMIN', 'REVOKE_ENDORSEMENT_ACCOUNT', ${input.now},
+            ${JSON.stringify({ id: input.id, account: current.account_address })}::jsonb
+          )
+        `);
+
+        return true;
+      });
+    },
+
+    async activeEndorsementAccountsForOfficer(
+      institutionId: string,
+      officerId: string
+    ): Promise<InstitutionalEndorsementAccount[]> {
+      const all = await this.listEndorsementAccounts(institutionId, true);
+      return all.filter(
+        (ea) =>
+          ea.authorizedOfficerIds.length === 0 ||
+          ea.authorizedOfficerIds.includes(officerId)
+      );
+    },
   };
 }
 

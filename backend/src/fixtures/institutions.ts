@@ -19,9 +19,24 @@
 
 import type { InstitutionRecord } from "../tenancy-store";
 import type { WorkspaceRole } from "../tenancy";
+import type { OperationalFunction, MandateScopeType } from "../operational-mandate";
 
 const SYNTHETIC_MANDATE =
   "Lembaga sintetis untuk pengujian isolasi; bukan mandat atau identitas mitra sungguhan.";
+
+export type SyntheticMandate = {
+  function: OperationalFunction;
+  scopeType: MandateScopeType;
+  assignmentRef: string;
+  nominalLimit?: string;
+};
+
+export type SyntheticEndorsementAccount = {
+  id: string;
+  accountAddress: string;
+  label: string;
+  authorizedOfficerIds: string[];
+};
 
 export type SyntheticMember = {
   account: string;
@@ -31,10 +46,14 @@ export type SyntheticMember = {
   officerProfile?: {
     id: string;
     displayName: string;
+    mandates?: SyntheticMandate[];
   };
 };
 
-export type SyntheticInstitution = InstitutionRecord & { members: SyntheticMember[] };
+export type SyntheticInstitution = InstitutionRecord & {
+  members: SyntheticMember[];
+  endorsementAccounts?: SyntheticEndorsementAccount[];
+};
 
 export const SYNTHETIC_INSTITUTIONS: readonly SyntheticInstitution[] = [
   {
@@ -57,12 +76,37 @@ export const SYNTHETIC_INSTITUTIONS: readonly SyntheticInstitution[] = [
         officerProfile: {
           id: "off-sinar-fauzi",
           displayName: "Ahmad Fauzi (Amil)",
+          mandates: [
+            {
+              function: "MANAGE_PROGRAMS",
+              scopeType: "ALL_PROGRAMS",
+              assignmentRef: "SK-2026/01/AMIL-FAUZI",
+            },
+            {
+              function: "PREPARE_PROPOSALS",
+              scopeType: "ALL_PROGRAMS",
+              assignmentRef: "SK-2026/01/AMIL-FAUZI",
+            },
+            {
+              function: "RECORD_REALIZATION",
+              scopeType: "ALL_PROGRAMS",
+              assignmentRef: "SK-2026/01/AMIL-FAUZI",
+            },
+          ],
         },
       },
       {
         account: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
         role: "READER",
         describes: "Pembaca berwenang",
+      },
+    ],
+    endorsementAccounts: [
+      {
+        id: "endorse-sinar-01",
+        accountAddress: "0x2546bcd3279d0014a660cc9604107984a00e4086",
+        label: "Akun Pengesahan Lembaga LPZ Sinar Amanah",
+        authorizedOfficerIds: ["off-sinar-fauzi"],
       },
     ],
   },

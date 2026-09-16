@@ -109,9 +109,86 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
     for (const item of SYNTHETIC_INSTITUTIONS) {
       await store.upsertInstitution(institutionRecordOf(item));
     }
+    const adminSinar = SYNTHETIC_INSTITUTIONS.find(i => i.id === SINAR)!.members.find(m => m.role === "ADMIN")!.account;
+    const adminBaitul = SYNTHETIC_INSTITUTIONS.find(i => i.id === BAITUL)!.members.find(m => m.role === "ADMIN")!.account;
+    await store.upsertMembership({ institutionId: SINAR, account: adminSinar, role: "ADMIN" });
+    await store.upsertMembership({ institutionId: BAITUL, account: adminBaitul, role: "ADMIN" });
+
     await store.upsertMembership({ institutionId: SINAR, account: officer.address, role: "OFFICER" });
     await store.upsertMembership({ institutionId: BAITUL, account: rivalOfficer.address, role: "OFFICER" });
     await store.upsertMembership({ institutionId: SINAR, account: reader.address, role: "READER" });
+
+    const off1 = await store.createOfficerProfile({
+      id: "off-sinar-officer",
+      institutionId: SINAR,
+      displayName: "Petugas Sinar",
+      account: officer.address,
+      role: "OFFICER",
+      actor: adminSinar,
+      now: clock,
+    });
+    await store.grantMandate({
+      institutionId: SINAR,
+      actor: adminSinar,
+      now: clock,
+      mandate: {
+        officerId: off1.id,
+        function: "MANAGE_PROGRAMS",
+        scopeType: "ALL_PROGRAMS",
+        validFrom: clock - 3600,
+        validUntil: clock + 86400 * 365,
+        assignmentRef: "SK-PROGRAM-01",
+      },
+    });
+    await store.grantMandate({
+      institutionId: SINAR,
+      actor: adminSinar,
+      now: clock,
+      mandate: {
+        officerId: off1.id,
+        function: "PREPARE_PROPOSALS",
+        scopeType: "ALL_PROGRAMS",
+        validFrom: clock - 3600,
+        validUntil: clock + 86400 * 365,
+        assignmentRef: "SK-DRAFT-01",
+      },
+    });
+
+    const off2 = await store.createOfficerProfile({
+      id: "off-baitul-officer",
+      institutionId: BAITUL,
+      displayName: "Petugas Baitul",
+      account: rivalOfficer.address,
+      role: "OFFICER",
+      actor: adminBaitul,
+      now: clock,
+    });
+    await store.grantMandate({
+      institutionId: BAITUL,
+      actor: adminBaitul,
+      now: clock,
+      mandate: {
+        officerId: off2.id,
+        function: "MANAGE_PROGRAMS",
+        scopeType: "ALL_PROGRAMS",
+        validFrom: clock - 3600,
+        validUntil: clock + 86400 * 365,
+        assignmentRef: "SK-BAITUL-01",
+      },
+    });
+    await store.grantMandate({
+      institutionId: BAITUL,
+      actor: adminBaitul,
+      now: clock,
+      mandate: {
+        officerId: off2.id,
+        function: "PREPARE_PROPOSALS",
+        scopeType: "ALL_PROGRAMS",
+        validFrom: clock - 3600,
+        validUntil: clock + 86400 * 365,
+        assignmentRef: "SK-BAITUL-02",
+      },
+    });
 
     configureWorkspace({
       store,

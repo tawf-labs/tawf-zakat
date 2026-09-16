@@ -363,3 +363,41 @@ export const proposalDraftOperations = pgTable("proposal_draft_operations", {
   requestHash: text("request_hash").notNull(),
   resultJson: text("result_json"),
 }, table => [primaryKey({ columns: [table.institutionId, table.account, table.operationId] })]);
+
+// 11. Operational Mandates and Institutional Endorsement Accounts (Spec #86, ticket #90)
+export const operationalMandates = pgTable("operational_mandates", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  officerId: text("officer_id").notNull().references(() => officerProfiles.id),
+  accountAddress: text("account_address"),
+  function: text("function").notNull(),
+  scopeType: text("scope_type").notNull(),
+  programId: text("program_id").references(() => programs.id),
+  validFrom: bigint("valid_from", { mode: "number" }).notNull(),
+  validUntil: bigint("valid_until", { mode: "number" }).notNull(),
+  assignmentRef: text("assignment_ref").notNull(),
+  nominalLimit: text("nominal_limit"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  createdBy: text("created_by").notNull(),
+});
+
+export const institutionalEndorsementAccounts = pgTable("institutional_endorsement_accounts", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  accountAddress: text("account_address").notNull(),
+  label: text("label").notNull(),
+  authorizedOfficerIds: text("authorized_officer_ids").notNull().default("[]"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  createdBy: text("created_by").notNull(),
+});
+
+export type OperationalMandateRow = typeof operationalMandates.$inferSelect;
+export type NewOperationalMandateRow = typeof operationalMandates.$inferInsert;
+
+export type InstitutionalEndorsementAccountRow = typeof institutionalEndorsementAccounts.$inferSelect;
+export type NewInstitutionalEndorsementAccountRow = typeof institutionalEndorsementAccounts.$inferInsert;
+

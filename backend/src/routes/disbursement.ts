@@ -33,6 +33,10 @@ import { DraftOperationConflictError, ProposalDraftConflictError } from "../disb
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
 import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
+import {
+  checkOperationalMandate,
+  assertCanApproveProposal,
+} from "../operational-mandate";
 // Shared with `evidence-preparation.ts` rather than redefined: identical shape,
 // no domain-specific wording, so a second copy here would just be a second
 // place for it to drift.
@@ -64,7 +68,21 @@ const unconfigured = (c: Context) =>
     503
   );
 
+const isDisbursementPath = (path: string) => {
+  const p = path.replace(/^\/api\/workspace/, "");
+  return (
+    p === "/programs" ||
+    p.startsWith("/programs/") ||
+    p === "/proposals" ||
+    p.startsWith("/proposals/") ||
+    p === "/fund-types"
+  );
+};
+
 disbursementRoutes.use("*", async (c, next) => {
+  if (!isDisbursementPath(c.req.path)) {
+    return next();
+  }
   const runtime = workspaceRuntime();
   if (!runtime || !runtime.disbursement) return unconfigured(c);
   return next();
@@ -98,6 +116,20 @@ disbursementRoutes.post("/programs", async (c) => {
   );
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  if (!officer || !officer.isActive) {
+    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
+  }
+  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
+  const mandateCheck = checkOperationalMandate(mandates, {
+    fn: "MANAGE_PROGRAMS",
+    now: runtime.now(),
+    account: auth.session.account,
+  });
+  if (!mandateCheck.allowed) {
+    return c.json({ success: false, error: mandateCheck.reason }, 403);
+  }
 
   const input = {
     name: text(body.name),
@@ -152,6 +184,20 @@ disbursementRoutes.post("/programs/:id/archive", async (c) => {
   );
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  if (!officer || !officer.isActive) {
+    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
+  }
+  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
+  const mandateCheck = checkOperationalMandate(mandates, {
+    fn: "MANAGE_PROGRAMS",
+    now: runtime.now(),
+    account: auth.session.account,
+  });
+  if (!mandateCheck.allowed) {
+    return c.json({ success: false, error: mandateCheck.reason }, 403);
+  }
 
   const program = await runtime.disbursement.setProgramStatus(
     auth.session.institutionId,
@@ -291,6 +337,30 @@ disbursementRoutes.post("/proposals", async (c) => {
   const withIds = withStableIds(draftInput, () => crypto.randomUUID());
   const issues = validateProposalDraft(withIds);
 
+  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  if (!officer || !officer.isActive) {
+    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
+  }
+  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
+
+  let totalRequestedIdr = 0n;
+  for (const line of withIds.aidLines) {
+    if (line.value.kind === "MONEY" && /^\d+$/.test(line.value.amountRequestedIdr)) {
+      totalRequestedIdr += BigInt(line.value.amountRequestedIdr);
+    }
+  }
+
+  const mandateCheck = checkOperationalMandate(mandates, {
+    fn: "PREPARE_PROPOSALS",
+    programId: withIds.programId,
+    nominalAmount: totalRequestedIdr > 0n ? totalRequestedIdr : null,
+    now: runtime.now(),
+    account: auth.session.account,
+  });
+  if (!mandateCheck.allowed) {
+    return c.json({ success: false, error: mandateCheck.reason }, 403);
+  }
+
   const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : crypto.randomUUID();
   const now = runtime.now();
 
@@ -350,6 +420,20 @@ disbursementRoutes.delete("/proposals/:id", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
+  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  if (!officer || !officer.isActive) {
+    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
+  }
+  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
+  const mandateCheck = checkOperationalMandate(mandates, {
+    fn: "PREPARE_PROPOSALS",
+    now: runtime.now(),
+    account: auth.session.account,
+  });
+  if (!mandateCheck.allowed) {
+    return c.json({ success: false, error: mandateCheck.reason }, 403);
+  }
+
   const body = await readJson(c);
   const expectedVersion = body ? mutationVersion(body, 1) : null;
   if (!body || expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan identitas penghapusan wajib diisi.");
@@ -358,6 +442,74 @@ disbursementRoutes.delete("/proposals/:id", async (c) => {
     { id: text(body.operationId), account: auth.session.account, requestHash: requestHash(["delete", id, expectedVersion]) });
   if (!deleted) return refuse(c, 404, "not-found");
   return c.body(null, 204);
+});
+
+disbursementRoutes.post("/proposals/:id/verify-approval", async (c) => {
+  const runtime = runtimeOf();
+  const body = (await readJson(c)) ?? {};
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const approverOfficer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
+  if (!approverOfficer || !approverOfficer.isActive) {
+    return c.json({ success: false, error: "Profil pengesah belum lengkap atau nonaktif." }, 403);
+  }
+
+  const creatorOfficer = await runtime.store.getOfficerForAccount(draft.createdBy, auth.session.institutionId);
+  const selfApprovalCheck = assertCanApproveProposal({
+    creatorOfficerId: creatorOfficer?.id ?? null,
+    creatorAccount: draft.createdBy,
+    approverOfficerId: approverOfficer.id,
+    approverAccount: auth.session.account,
+  });
+  if (!selfApprovalCheck.allowed) {
+    return c.json({ success: false, error: selfApprovalCheck.reason }, 403);
+  }
+
+  let totalRequestedIdr = 0n;
+  for (const line of draft.aidLines) {
+    if (line.value.kind === "MONEY" && /^\d+$/.test(line.value.amountRequestedIdr)) {
+      totalRequestedIdr += BigInt(line.value.amountRequestedIdr);
+    }
+  }
+
+  const mandates = await runtime.store.activeMandatesForOfficer(
+    auth.session.institutionId,
+    approverOfficer.id,
+    runtime.now()
+  );
+  const mandateCheck = checkOperationalMandate(mandates, {
+    fn: "APPROVE_DECISIONS",
+    programId: draft.programId,
+    nominalAmount: totalRequestedIdr > 0n ? totalRequestedIdr : null,
+    now: runtime.now(),
+    account: auth.session.account,
+  });
+  if (!mandateCheck.allowed) {
+    return c.json({ success: false, error: mandateCheck.reason }, 403);
+  }
+
+  if (body.endorsementAccount && typeof body.endorsementAccount === "string") {
+    const endorsementAcc = body.endorsementAccount.trim().toLowerCase();
+    const activeEndorsements = await runtime.store.activeEndorsementAccountsForOfficer(
+      auth.session.institutionId,
+      approverOfficer.id
+    );
+    const matched = activeEndorsements.find((ea) => ea.accountAddress.toLowerCase() === endorsementAcc);
+    if (!matched) {
+      return c.json({ success: false, error: "Akun pengesahan institusi tidak sah atau tidak diizinkan untuk petugas ini." }, 403);
+    }
+  }
+
+  return c.json({ success: true, allowed: true, mandate: mandateCheck.mandate });
 });
 
 disbursementRoutes.get("/fund-types", async (c) => c.json({ success: true, fundTypes: FUND_TYPES }));

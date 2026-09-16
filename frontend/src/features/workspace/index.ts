@@ -3,3 +3,8 @@ export { useWorkspaceAccess } from "./useWorkspaceAccess";
 export * from "./workspaceSession";
 export * from "./workspaceClient";
 export * from "./workspaceAccess";
+export { OfficerMandatesCard } from "./OfficerMandatesCard";
+export { EndorsementSignerSelector } from "./EndorsementSignerSelector";
+export { MandateManagementSection } from "./MandateManagementSection";
+export { EndorsementAccountSection } from "./EndorsementAccountSection";
+export * from "./mandateLabels";

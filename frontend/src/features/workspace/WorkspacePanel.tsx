@@ -7,6 +7,10 @@ import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
 import { OfficerManagementSection } from "./OfficerManagementSection";
+import { OfficerMandatesCard } from "./OfficerMandatesCard";
+import { EndorsementSignerSelector } from "./EndorsementSignerSelector";
+import { MandateManagementSection } from "./MandateManagementSection";
+import { EndorsementAccountSection } from "./EndorsementAccountSection";
 import { DisbursementPanel } from "../disbursement";
 
 /**
@@ -31,6 +35,7 @@ function WorkspaceContents() {
   const busy = access.state === "OPENING";
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
+  const [selectedEndorsement, setSelectedEndorsement] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOnboardingFixtures()
@@ -157,9 +162,38 @@ function WorkspaceContents() {
         </p>
       </div>
 
+      {/* Officer Mandates (Ticket #90) */}
+      <OfficerMandatesCard
+        mandates={workspace.mandates}
+        officerName={workspace.officer?.displayName}
+      />
+
+      {/* Institutional Endorsement Signer Context Selector (Ticket #90) */}
+      <EndorsementSignerSelector
+        operatorAccount={workspace.account}
+        officerProfile={workspace.officer}
+        endorsementAccounts={workspace.endorsementAccounts}
+        selectedEndorsementAddress={selectedEndorsement}
+        onSelectEndorsement={setSelectedEndorsement}
+      />
+
       {capabilities.manageMembers && (
         <OfficerManagementSection
           key={`officers:${requests.contextId}`}
+          requests={requests}
+        />
+      )}
+
+      {capabilities.manageMembers && (
+        <MandateManagementSection
+          key={`mandates:${requests.contextId}`}
+          requests={requests}
+        />
+      )}
+
+      {capabilities.manageMembers && (
+        <EndorsementAccountSection
+          key={`endorsements:${requests.contextId}`}
           requests={requests}
         />
       )}

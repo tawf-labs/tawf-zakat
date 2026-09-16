@@ -43,11 +43,53 @@ export type OfficerWithAccounts = OfficerProfile & {
   accounts: { account: string; role: WorkspaceRole; isActive: boolean }[];
 };
 
+export type OperationalFunction =
+  | "MANAGE_PROGRAMS"
+  | "PREPARE_PROPOSALS"
+  | "EXAMINE_PROPOSALS"
+  | "APPROVE_DECISIONS"
+  | "RECORD_REALIZATION"
+  | "HANDLE_REPORT_EXAMINATION";
+
+export type MandateScopeType = "ALL_PROGRAMS" | "SPECIFIC_PROGRAM";
+
+export type OperationalMandate = {
+  id: string;
+  institutionId: string;
+  officerId: string;
+  accountAddress: string | null;
+  function: OperationalFunction;
+  scopeType: MandateScopeType;
+  programId: string | null;
+  validFrom: number;
+  validUntil: number;
+  assignmentRef: string;
+  nominalLimit: string | null;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+};
+
+export type InstitutionalEndorsementAccount = {
+  id: string;
+  institutionId: string;
+  accountAddress: string;
+  label: string;
+  authorizedOfficerIds: string[];
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+};
+
 export type Workspace = {
   institution: Institution;
   account: string;
   role: WorkspaceRole;
   officer: OfficerProfile | null;
+  mandates?: OperationalMandate[];
+  endorsementAccounts?: InstitutionalEndorsementAccount[];
   capabilities: Capabilities;
   members?: { account: string; role: WorkspaceRole; officerId?: string | null; displayName?: string | null }[];
   evidencePackages: EvidenceSummary[];
@@ -147,4 +189,111 @@ export async function unlinkOfficerAccount(
     { method: "DELETE" }
   );
 }
+
+export async function fetchMandates(
+  requests: PrivateRequests,
+  params?: { officerId?: string; activeOnly?: boolean }
+): Promise<OperationalMandate[]> {
+  const query = new URLSearchParams();
+  if (params?.officerId) query.set("officerId", params.officerId);
+  if (params?.activeOnly) query.set("activeOnly", "true");
+  const qs = query.toString();
+  const result = await requests.json(`/api/workspace/mandates${qs ? `?${qs}` : ""}`);
+  return result.mandates ?? [];
+}
+
+export async function grantMandate(
+  requests: PrivateRequests,
+  input: {
+    officerId: string;
+    accountAddress?: string | null;
+    function: OperationalFunction;
+    scopeType: MandateScopeType;
+    programId?: string | null;
+    validFrom?: number;
+    validUntil?: number;
+    assignmentRef: string;
+    nominalLimit?: string | null;
+  }
+): Promise<OperationalMandate> {
+  const result = await requests.json("/api/workspace/mandates", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return result.mandate;
+}
+
+export async function updateMandate(
+  requests: PrivateRequests,
+  id: string,
+  patch: {
+    scopeType?: MandateScopeType;
+    programId?: string | null;
+    validFrom?: number;
+    validUntil?: number;
+    assignmentRef?: string;
+    nominalLimit?: string | null;
+    isActive?: boolean;
+  }
+): Promise<OperationalMandate> {
+  const result = await requests.json(`/api/workspace/mandates/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return result.mandate;
+}
+
+export async function revokeMandate(requests: PrivateRequests, id: string): Promise<void> {
+  await requests.json(`/api/workspace/mandates/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchEndorsementAccounts(
+  requests: PrivateRequests,
+  includeInactive = false
+): Promise<InstitutionalEndorsementAccount[]> {
+  const result = await requests.json(
+    `/api/workspace/endorsement-accounts${includeInactive ? "?includeInactive=true" : ""}`
+  );
+  return result.endorsementAccounts ?? [];
+}
+
+export async function registerEndorsementAccount(
+  requests: PrivateRequests,
+  input: {
+    accountAddress: string;
+    label: string;
+    authorizedOfficerIds?: string[];
+  }
+): Promise<InstitutionalEndorsementAccount> {
+  const result = await requests.json("/api/workspace/endorsement-accounts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return result.endorsementAccount;
+}
+
+export async function updateEndorsementAccount(
+  requests: PrivateRequests,
+  id: string,
+  patch: {
+    label?: string;
+    authorizedOfficerIds?: string[];
+    isActive?: boolean;
+  }
+): Promise<InstitutionalEndorsementAccount> {
+  const result = await requests.json(`/api/workspace/endorsement-accounts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return result.endorsementAccount;
+}
+
+export async function revokeEndorsementAccount(requests: PrivateRequests, id: string): Promise<void> {
+  await requests.json(`/api/workspace/endorsement-accounts/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 

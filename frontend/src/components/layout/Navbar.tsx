@@ -230,6 +230,31 @@ export function Navbar() {
                           )}
                           Kelola Anggota
                         </span>
+                        <span className="flex items-center gap-1">
+                          {access.workspace.capabilities.manageDisbursement ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <span className="text-stone-400 font-bold text-[10px]">✕</span>
+                          )}
+                          Kelola Penyaluran
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Operational Mandates & Signer Context (Ticket #90) */}
+                    <div className="pt-2 border-t border-[#dbe7dd]/60 text-xs">
+                      <span className="text-stone-500 block font-medium">Mandat & Akun Pengesahan</span>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                        <span className="inline-flex items-center gap-1 rounded bg-[#1b765e]/10 px-2 py-0.5 text-[#17332c] font-medium">
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          {(access.workspace.mandates?.filter((m) => m.isActive) ?? []).length} Mandat Aktif
+                        </span>
+                        {access.workspace.endorsementAccounts && access.workspace.endorsementAccounts.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded bg-stone-100 px-2 py-0.5 text-stone-700 font-medium">
+                            <Building2 className="w-3 h-3 text-stone-500" />
+                            {access.workspace.endorsementAccounts.filter((a) => a.isActive).length} Akun Pengesahan
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
