@@ -15,6 +15,7 @@
  * status "DRAFT".
  */
 
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import {
@@ -28,7 +29,7 @@ import {
   type Beneficiary,
   type ProposalDraftInput,
 } from "../disbursement";
-import { ProposalDraftConflictError } from "../disbursement-store";
+import { DraftOperationConflictError, ProposalDraftConflictError } from "../disbursement-store";
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
 import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
@@ -40,7 +41,7 @@ import { readJson, text } from "./evidence-preparation";
 const disbursementRoutes = new Hono();
 
 disbursementRoutes.onError((error, c) => {
-  if (error instanceof ProposalDraftConflictError) {
+  if (error instanceof ProposalDraftConflictError || error instanceof DraftOperationConflictError) {
     return c.json({ success: false, error: error.message }, 409);
   }
   throw error;
@@ -252,6 +253,14 @@ disbursementRoutes.get("/proposals", async (c) => {
   return c.json({ success: true, drafts });
 });
 
+const mutationVersion = (body: Record<string, unknown>, minimum: number): number | null =>
+  typeof body.expectedVersion === "number" && Number.isInteger(body.expectedVersion) &&
+  body.expectedVersion >= minimum && body.expectedVersion < 2147483647 &&
+  typeof body.operationId === "string" && body.operationId.trim().length > 0 && body.operationId.length <= 128
+    ? body.expectedVersion : null;
+
+const requestHash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
 disbursementRoutes.post("/proposals", async (c) => {
   const runtime = runtimeOf();
   const body = await readJson(c);
@@ -265,6 +274,10 @@ disbursementRoutes.post("/proposals", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
+  const expectedVersion = mutationVersion(body, 0);
+  if (expectedVersion === null || (expectedVersion > 0 && !text(body.id))) {
+    return badRequest(c, "Versi yang diharapkan, identitas penyimpanan, dan ID draf untuk perubahan wajib diisi dengan benar.");
+  }
   const draftInput = draftInputFrom(body);
   if (!draftInput) return badRequest(c, "Bentuk penerima atau rincian bantuan tidak sah.");
 
@@ -279,22 +292,14 @@ disbursementRoutes.post("/proposals", async (c) => {
   const issues = validateProposalDraft(withIds);
 
   const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : crypto.randomUUID();
-  const expectedVersion =
-    typeof body.expectedVersion === "number" && Number.isInteger(body.expectedVersion) ? body.expectedVersion : null;
   const now = runtime.now();
-
-  // Retaining the original author across edits matters: "identitas penyusun
-  // dari akun kerja pribadi" must not be overwritten by whoever saves next.
-  const existing = await runtime.disbursement.getProposalDraft(auth.session.institutionId, id);
-  const createdBy = existing?.createdBy ?? auth.session.account;
-  const createdAt = existing?.createdAt ?? now;
 
   const draft = await runtime.disbursement.saveProposalDraft(
     {
       id,
       institutionId: auth.session.institutionId,
       programId: withIds.programId,
-      createdBy,
+      createdBy: auth.session.account,
       originOfRequest: withIds.originOfRequest,
       purpose: withIds.purpose,
       aidPeriod: withIds.aidPeriod,
@@ -302,15 +307,17 @@ disbursementRoutes.post("/proposals", async (c) => {
       beneficiaries: withIds.beneficiaries,
       aidLines: withIds.aidLines,
       issues,
-      createdAt,
+      createdAt: now,
       updatedAt: now,
     },
-    existing ? expectedVersion : null
+    expectedVersion,
+    { id: text(body.operationId), account: auth.session.account,
+      requestHash: requestHash(["save", text(body.id), expectedVersion, draftInput]) }
   );
 
   return c.json(
-    { success: true, draft, summary: summarizeProposalDraft(withIds) },
-    existing ? 200 : 201
+    { success: true, draft, summary: summarizeProposalDraft(draft) },
+    expectedVersion === 0 ? 201 : 200
   );
 });
 
@@ -343,7 +350,12 @@ disbursementRoutes.delete("/proposals/:id", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
-  const deleted = await runtime.disbursement.deleteProposalDraft(auth.session.institutionId, c.req.param("id"));
+  const body = await readJson(c);
+  const expectedVersion = body ? mutationVersion(body, 1) : null;
+  if (!body || expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan identitas penghapusan wajib diisi.");
+  const id = c.req.param("id");
+  const deleted = await runtime.disbursement.deleteProposalDraft(auth.session.institutionId, id, expectedVersion,
+    { id: text(body.operationId), account: auth.session.account, requestHash: requestHash(["delete", id, expectedVersion]) });
   if (!deleted) return refuse(c, 404, "not-found");
   return c.body(null, 204);
 });

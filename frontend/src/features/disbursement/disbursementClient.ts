@@ -118,7 +118,8 @@ export const getProposalDraft = (requests: PrivateRequests, id: string) =>
 
 export type ProposalDraftInput = {
   id?: string;
-  expectedVersion?: number;
+  expectedVersion: number;
+  operationId: string;
   programId: string | null;
   originOfRequest: string;
   purpose: string;
@@ -134,11 +135,13 @@ export const saveProposalDraft = (requests: PrivateRequests, input: ProposalDraf
     body: JSON.stringify(input),
   });
 
-export const deleteProposalDraft = (requests: PrivateRequests, id: string) =>
-  requests.json<null>(`/api/workspace/proposals/${id}`, { method: "DELETE" });
+export const deleteProposalDraft = (requests: PrivateRequests, id: string, expectedVersion: number, operationId: string) =>
+  requests.json<null>(`/api/workspace/proposals/${id}`, {
+    method: "DELETE", body: JSON.stringify({ expectedVersion, operationId }),
+  });
 
 export const newBeneficiary = (): Beneficiary => ({
-  id: "",
+  id: crypto.randomUUID(),
   name: "",
   identityBasis: { kind: "NIK", value: "" },
   asnaf: "",
@@ -148,7 +151,7 @@ export const newBeneficiary = (): Beneficiary => ({
 });
 
 export const newAidLine = (beneficiaryId: string): AidLine => ({
-  id: "",
+  id: crypto.randomUUID(),
   beneficiaryId,
   aidType: "",
   period: "",
@@ -157,7 +160,7 @@ export const newAidLine = (beneficiaryId: string): AidLine => ({
 
 /** An unsaved draft: `version: 0` is what the form uses to know it has never been saved. */
 export const emptyProposalDraft = (program: Program): ProposalDraft => ({
-  id: "",
+  id: crypto.randomUUID(),
   institutionId: program.institutionId,
   programId: program.id,
   createdBy: "",

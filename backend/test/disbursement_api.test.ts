@@ -43,14 +43,14 @@ const post = (url: string, body: unknown, token?: string) =>
   request(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body),
+    body: JSON.stringify(url === `${WORKSPACE}/proposals` ? { operationId: crypto.randomUUID(), expectedVersion: 0, ...(body as object) } : body),
   });
 
 const get = (url: string, token?: string) =>
   request(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
 
 const del = (url: string, token?: string) =>
-  request(url, { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  request(url, { method: "DELETE", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ operationId: crypto.randomUUID(), expectedVersion: 1 }) });
 
 async function signIn(account: typeof officer, institutionId: string): Promise<string> {
   const minted = await post(`${WORKSPACE}/challenge`, { institutionId, account: account.address });
@@ -192,6 +192,56 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
   });
 
   describe("Proposal drafts", () => {
+    it("requires a valid version and retry identity, including deletes", async () => {
+      const token = await signIn(officer, SINAR);
+      const { draft } = await (await post(`${WORKSPACE}/proposals`, { purpose: "Original", beneficiaries: [], aidLines: [] }, token)).json();
+      const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+      for (const expectedVersion of [undefined, null, "1", -1, 1.5]) {
+        const response = await request(`${WORKSPACE}/proposals`, { method: "POST", headers,
+          body: JSON.stringify({ id: draft.id, operationId: crypto.randomUUID(), expectedVersion, purpose: "Overwrite", beneficiaries: [], aidLines: [] }) });
+        expect(response.status).toBe(400);
+      }
+      expect((await post(`${WORKSPACE}/proposals`, { id: draft.id, expectedVersion: 1, operationId: "", beneficiaries: [], aidLines: [] }, token)).status).toBe(400);
+      expect((await request(`${WORKSPACE}/proposals/${draft.id}`, { method: "DELETE", headers })).status).toBe(400);
+      expect((await (await get(`${WORKSPACE}/proposals/${draft.id}`, token)).json()).draft.purpose).toBe("Original");
+    });
+
+    it("replays saves durably, rejects reused operation IDs with changed contents, and never resurrects deleted drafts", async () => {
+      const token = await signIn(officer, SINAR);
+      const input = { operationId: crypto.randomUUID(), expectedVersion: 0, purpose: "Original", beneficiaries: [], aidLines: [] };
+      const first = await (await post(`${WORKSPACE}/proposals`, input, token)).json();
+      const retry = await (await post(`${WORKSPACE}/proposals`, input, token)).json();
+      expect(retry).toEqual(first);
+      const edit = { ...input, id: first.draft.id, expectedVersion: 1, operationId: crypto.randomUUID(), purpose: "Edited" };
+      const results = await Promise.all([post(`${WORKSPACE}/proposals`, edit, token), post(`${WORKSPACE}/proposals`, edit, token)]);
+      expect(results.map(r => r.status)).toEqual([200, 200]);
+      expect(await results[0]!.json()).toEqual(await results[1]!.json());
+      expect((await post(`${WORKSPACE}/proposals`, { ...edit, purpose: "Different" }, token)).status).toBe(409);
+      await database.reopen();
+      store = createWorkspaceStore(database.handle());
+      disbursement = createDisbursementStore(database.handle());
+      configureWorkspace({ store, disbursement, now: () => clock, ethCall: async () => "0x", challengeTtlSeconds: 300, sessionTtlSeconds: 3600 });
+      expect(await (await post(`${WORKSPACE}/proposals`, input, token)).json()).toEqual(first);
+      expect((await (await get(`${WORKSPACE}/proposals`, token)).json()).drafts).toHaveLength(1);
+      const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+      const url = `${WORKSPACE}/proposals/${first.draft.id}`;
+      expect((await del(url, token)).status).toBe(409); // stale version 1
+      const deletion = { method: "DELETE", headers, body: JSON.stringify({ expectedVersion: 2, operationId: crypto.randomUUID() }) };
+      expect((await request(url, deletion)).status).toBe(204);
+      expect((await request(url, deletion)).status).toBe(204);
+      expect((await post(`${WORKSPACE}/proposals`, { ...edit, expectedVersion: 2, operationId: crypto.randomUUID() }, token)).status).toBe(409);
+      expect((await get(url, token)).status).toBe(404);
+    });
+
+    it("allows only one of two concurrent edits and rejects create collisions", async () => {
+      const token = await signIn(officer, SINAR);
+      const input = { id: crypto.randomUUID(), purpose: "Original", beneficiaries: [], aidLines: [] };
+      await post(`${WORKSPACE}/proposals`, input, token);
+      expect((await post(`${WORKSPACE}/proposals`, input, token)).status).toBe(409);
+      const responses = await Promise.all(["A", "B"].map(purpose => post(`${WORKSPACE}/proposals`, { ...input, expectedVersion: 1, purpose }, token)));
+      expect(responses.map(r => r.status).sort()).toEqual([200, 409]);
+    });
+
     async function createProgram(token: string) {
       const res = await post(
         `${WORKSPACE}/programs`,
@@ -528,7 +578,7 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
       const wallet = officer;
       const server = Bun.serve({
         hostname: "127.0.0.1",
-        port: 18580,
+        port: 0,
         async fetch(req) {
           const path = new URL(req.url).pathname;
           if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
@@ -545,11 +595,13 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
         },
       });
       const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
-      const browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+      let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
       try {
+        browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
         const page = await browser.newPage();
         page.on("pageerror", (error: Error) => console.error("Disbursement browser:", error.message));
-        await page.goto("http://127.0.0.1:18580");
+        await page.goto(server.url.toString());
+        page.setDefaultTimeout(10000);
         await page.getByRole("button", { name: /^0x/ }).waitFor();
         await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
         await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
@@ -567,7 +619,7 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
 
         // Navigasi: the newly created program is selected automatically, so its
         // own detail card (never the select's option text) is what proves it saved.
-        await page.getByText("Program Ramadhan Sintetis", { exact: true }).waitFor({ timeout: 5000 });
+        await page.locator("p").filter({ hasText: /^Program Ramadhan Sintetis$/ }).waitFor({ timeout: 5000 });
 
         // Draf belum lengkap: start a Pengajuan, add one beneficiary without a
         // valid NIK, save anyway, and see the issue rather than a refusal.
@@ -581,8 +633,81 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
         await page.getByRole("button", { name: "Simpan draf", exact: true }).click();
         await page.getByText(/NIK harus 16 digit/).waitFor({ timeout: 5000 });
         await page.getByText(/Draf server · versi 1/).waitFor({ timeout: 5000 });
+
+        // Existing drafts become dirty after editing; aid references work before any save.
+        await page.getByLabel("Tujuan pengajuan", { exact: true }).fill("Draf A");
+        await page.getByText("Belum tersimpan · berdasarkan versi 1", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Tambah penerima", exact: true }).click();
+        await page.getByLabel("Nama", { exact: true }).nth(1).fill("Penerima kedua");
+        for (const index of [1, 2]) {
+          await page.getByRole("button", { name: "Tambah rincian", exact: true }).click();
+          await page.getByLabel(`Penerima rincian ${index}`, { exact: true }).selectOption({ label: index === 1 ? "Mustahik Sintetis" : "Penerima kedua" });
+          await page.getByLabel(`Jenis bantuan ${index}`, { exact: true }).fill("Tunai");
+          await page.getByLabel(`Periode rincian ${index}`, { exact: true }).fill("2026-Q1");
+          await page.getByLabel(`Jumlah rupiah ${index}`, { exact: true }).fill("9007199254740993");
+        }
+        const save = async () => {
+          const response = page.waitForResponse((r: any) => new URL(r.url()).pathname === "/api/workspace/proposals" && r.request().method() === "POST");
+          await page.getByRole("button", { name: "Simpan draf", exact: true }).click();
+          const result = await (await response).json();
+          await page.getByText(`Draf server · versi ${result.draft.version}`, { exact: true }).waitFor();
+          return result.draft;
+        };
+        const draftA = await save();
+        expect(draftA.aidLines.map((line: any) => line.beneficiaryId)).toEqual(draftA.beneficiaries.map((b: any) => b.id));
+        expect(draftA.issues.some((issue: any) => issue.field === "beneficiaryId")).toBe(false);
+
+        // New / existing selection mounts the selected draft, never the previous editor.
+        await page.getByRole("button", { name: "Pengajuan baru", exact: true }).click();
+        expect(await page.getByLabel("Tujuan pengajuan", { exact: true }).inputValue()).toBe("");
+        await page.getByLabel("Tujuan pengajuan", { exact: true }).fill("Draf B");
+        const draftB = await save();
+        expect(draftB.id).not.toBe(draftA.id);
+        await page.getByRole("button", { name: /Draf A ·/ }).click();
+        await page.waitForFunction(() => Array.from((globalThis as any).document.querySelectorAll("input")).some((input: any) => input.value === "Draf A"));
+        expect(await page.getByLabel("Tujuan pengajuan", { exact: true }).inputValue()).toBe("Draf A");
+        await page.getByLabel("Tujuan pengajuan", { exact: true }).fill("Perubahan belum disimpan");
+        page.once("dialog", (dialog: any) => dialog.dismiss());
+        await page.getByRole("button", { name: /Draf B ·/ }).click();
+        expect(await page.getByLabel("Tujuan pengajuan", { exact: true }).inputValue()).toBe("Perubahan belum disimpan");
+        page.once("dialog", (dialog: any) => dialog.accept());
+        await page.getByRole("button", { name: /Draf B ·/ }).click();
+        await page.waitForFunction(() => Array.from((globalThis as any).document.querySelectorAll("input")).some((input: any) => input.value === "Draf B"));
+
+        // A program change closes the old editor; the old draft's program is unchanged.
+        await page.getByRole("button", { name: "Program baru", exact: true }).click();
+        await page.getByLabel("Nama program", { exact: true }).fill("Program kedua");
+        await page.getByLabel("Tujuan", { exact: true }).fill("Tujuan kedua");
+        await page.getByLabel("Cakupan/periode", { exact: true }).fill("2027");
+        const programResponse = page.waitForResponse((r: any) => new URL(r.url()).pathname === "/api/workspace/programs" && r.request().method() === "POST");
+        await page.getByRole("button", { name: "Simpan program", exact: true }).click();
+        const secondProgram = (await (await programResponse).json()).program;
+        await page.getByLabel("Tujuan pengajuan", { exact: true }).waitFor({ state: "detached" });
+        expect((await disbursement.getProposalDraft(SINAR, draftA.id))?.programId).toBe(draftA.programId);
+
+        // Drop the response AFTER the real backend commits. Retry must recover that operation.
+        await page.getByRole("button", { name: "Pengajuan baru", exact: true }).click();
+        await page.getByLabel("Tujuan pengajuan", { exact: true }).fill("Respons hilang");
+        let lost = false;
+        await page.route("**/api/workspace/proposals", async (route: any) => {
+          if (route.request().method() !== "POST" || lost) return route.continue();
+          lost = true;
+          await route.fetch();
+          await route.abort("failed");
+        });
+        await page.getByRole("button", { name: "Simpan draf", exact: true }).click();
+        await page.getByRole("status").filter({ hasText: "Hasil penyimpanan belum diketahui" }).waitFor();
+        expect(await page.getByLabel("Tujuan pengajuan", { exact: true }).isDisabled()).toBe(true);
+        await page.getByRole("button", { name: "Pengajuan baru", exact: true }).click();
+        await page.getByText("Selesaikan pemeriksaan penyimpanan draf sebelum berpindah.", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Periksa penyimpanan", exact: true }).click();
+        await page.getByText("Draf server · versi 1", { exact: true }).waitFor();
+        const recovered = await disbursement.listProposalDrafts(SINAR, secondProgram.id);
+        expect(recovered).toHaveLength(1);
+        expect(recovered[0]?.purpose).toBe("Respons hilang");
+
       } finally {
-        await browser.close();
+        await browser?.close();
         await server.stop(true);
       }
     },

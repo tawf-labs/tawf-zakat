@@ -1,24 +1,6 @@
-/**
- * Where Program bantuan and Pengajuan drafts are kept (Spec #86, ticket #89).
- *
- * Follows `evidence-store.ts`'s draft pattern deliberately, not by accident:
- *
- * - Every row belongs to an institution that exists, scoped by `institution_id`
- *   in the query itself, so a caller who swaps an id in a URL finds nothing.
- * - A program is written durably the moment it is created - it is never a
- *   draft, and archiving it never deletes it, so its history stays readable.
- * - A proposal draft saves with optimistic concurrency: `ON CONFLICT ... DO
- *   UPDATE ... version = version + 1 WHERE institution_id = EXCLUDED.institution_id
- *   RETURNING *`. Zero rows back means either a stale `version` lost the race,
- *   or the id already belongs to another institution - both are conflicts, and
- *   neither is silently overwritten. This is a deliberate difference from
- *   `evidence-store.ts`'s `saveDraft`, which guards only the cross-institution
- *   case and always accepts a save regardless of the version it was read at
- *   (last-write-wins): a Pengajuan draft's mutations must "membawa versi yang
- *   diharapkan" (spec #86), so this store also checks `expectedVersion`.
- *
- * Schema is additive: its own tables, `IF NOT EXISTS`, no `ALTER` against
- * anything that already exists.
+/** Durable institution-scoped programs and versioned proposal drafts.
+ * Save/delete and their retry result commit together. A retry returns the original
+ * result, even after later edits; a new operation must use the current version.
  */
 
 import { sql } from "drizzle-orm";
@@ -33,6 +15,7 @@ import type {
 
 export type DisbursementDatabase = {
   execute: (query: any) => Promise<any>;
+  transaction: <T>(run: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>) => Promise<T>;
 };
 
 export type StoredProposalDraft = {
@@ -76,6 +59,40 @@ export class ProposalDraftConflictError extends Error {
     );
     this.name = "ProposalDraftConflictError";
   }
+}
+
+export type DraftOperation = { id: string; account: string; requestHash: string };
+
+export class DraftOperationConflictError extends Error {
+  constructor() {
+    super("Identitas penyimpanan sudah digunakan untuk isi berbeda. Muat ulang draf sebelum melanjutkan.");
+  }
+}
+
+/** The unique insert waits for an in-flight retry before reading its committed result. */
+async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, operation: DraftOperation,
+  mutate: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>): Promise<T> {
+  return db.transaction(async tx => {
+    const inserted = rowsOf(await tx.execute(sql`
+      INSERT INTO proposal_draft_operations (institution_id, account, operation_id, request_hash)
+      VALUES (${institutionId}, ${operation.account}, ${operation.id}, ${operation.requestHash})
+      ON CONFLICT DO NOTHING RETURNING operation_id
+    `));
+    if (!inserted.length) {
+      const previous = rowsOf(await tx.execute(sql`
+        SELECT request_hash, result_json FROM proposal_draft_operations
+        WHERE institution_id = ${institutionId} AND account = ${operation.account} AND operation_id = ${operation.id}
+      `))[0];
+      if (!previous || previous.request_hash !== operation.requestHash) throw new DraftOperationConflictError();
+      return JSON.parse(previous.result_json) as T;
+    }
+    const result = await mutate(tx);
+    await tx.execute(sql`
+      UPDATE proposal_draft_operations SET result_json = ${JSON.stringify(result)}
+      WHERE institution_id = ${institutionId} AND account = ${operation.account} AND operation_id = ${operation.id}
+    `);
+    return result;
+  });
 }
 
 const rowsOf = (result: any): any[] =>
@@ -148,6 +165,14 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      updated_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS proposal_drafts_by_institution ON proposal_drafts (institution_id, updated_at DESC);`,
+  `CREATE TABLE IF NOT EXISTS proposal_draft_operations (
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     account TEXT NOT NULL,
+     operation_id TEXT NOT NULL,
+     request_hash TEXT NOT NULL,
+     result_json TEXT,
+     PRIMARY KEY (institution_id, account, operation_id)
+   );`,
 ] as const;
 
 export function createDisbursementStore(db: DisbursementDatabase) {
@@ -219,10 +244,11 @@ export function createDisbursementStore(db: DisbursementDatabase) {
 
     async saveProposalDraft(
       draft: Omit<StoredProposalDraft, "version" | "updatedAt"> & { updatedAt: number },
-      expectedVersion: number | null
+      expectedVersion: number,
+      operation: DraftOperation
     ): Promise<StoredProposalDraft> {
-      const written = rowsOf(
-        await db.execute(sql`
+      return mutateOnce(db, draft.institutionId, operation, async tx => {
+        const written = rowsOf(await tx.execute(expectedVersion === 0 ? sql`
           INSERT INTO proposal_drafts (
             id, institution_id, program_id, created_by, origin_of_request, purpose,
             aid_period_json, person_in_charge, beneficiaries_json, aid_lines_json,
@@ -232,25 +258,20 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             ${draft.originOfRequest}, ${draft.purpose}, ${draft.aidPeriod ? JSON.stringify(draft.aidPeriod) : null},
             ${draft.personInCharge}, ${JSON.stringify(draft.beneficiaries)}, ${JSON.stringify(draft.aidLines)},
             ${JSON.stringify(draft.issues)}, 1, ${draft.createdAt}, ${draft.updatedAt}
-          )
-          ON CONFLICT (id) DO UPDATE SET
-            program_id = EXCLUDED.program_id,
-            origin_of_request = EXCLUDED.origin_of_request,
-            purpose = EXCLUDED.purpose,
-            aid_period_json = EXCLUDED.aid_period_json,
-            person_in_charge = EXCLUDED.person_in_charge,
-            beneficiaries_json = EXCLUDED.beneficiaries_json,
-            aid_lines_json = EXCLUDED.aid_lines_json,
-            issues_json = EXCLUDED.issues_json,
-            version = proposal_drafts.version + 1,
-            updated_at = EXCLUDED.updated_at
-          WHERE proposal_drafts.institution_id = EXCLUDED.institution_id
-            AND (${expectedVersion}::int IS NULL OR proposal_drafts.version = ${expectedVersion}::int)
+          ) ON CONFLICT (id) DO NOTHING RETURNING *
+        ` : sql`
+          UPDATE proposal_drafts SET
+            program_id = ${draft.programId}, origin_of_request = ${draft.originOfRequest},
+            purpose = ${draft.purpose}, aid_period_json = ${draft.aidPeriod ? JSON.stringify(draft.aidPeriod) : null},
+            person_in_charge = ${draft.personInCharge}, beneficiaries_json = ${JSON.stringify(draft.beneficiaries)},
+            aid_lines_json = ${JSON.stringify(draft.aidLines)}, issues_json = ${JSON.stringify(draft.issues)},
+            version = version + 1, updated_at = ${draft.updatedAt}
+          WHERE id = ${draft.id} AND institution_id = ${draft.institutionId} AND version = ${expectedVersion}
           RETURNING *
-        `)
-      );
-      if (written.length === 0) throw new ProposalDraftConflictError(draft.id);
-      return draftFrom(written[0]);
+        `));
+        if (!written.length) throw new ProposalDraftConflictError(draft.id);
+        return draftFrom(written[0]);
+      });
     },
 
     async getProposalDraft(institutionId: string, id: string): Promise<StoredProposalDraft | null> {
@@ -286,13 +307,18 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       }));
     },
 
-    async deleteProposalDraft(institutionId: string, id: string): Promise<boolean> {
-      const written = rowsOf(
-        await db.execute(
-          sql`DELETE FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} RETURNING id`
-        )
-      );
-      return written.length > 0;
+    async deleteProposalDraft(institutionId: string, id: string, expectedVersion: number,
+      operation: DraftOperation): Promise<boolean> {
+      return mutateOnce(db, institutionId, operation, async tx => {
+        // Lock before checking the version so an edit/delete race cannot silently win.
+        const existing = rowsOf(await tx.execute(sql`
+          SELECT version FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} FOR UPDATE
+        `))[0];
+        if (!existing) return false;
+        if (Number(existing.version) !== expectedVersion) throw new ProposalDraftConflictError(id);
+        await tx.execute(sql`DELETE FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} AND version = ${expectedVersion}`);
+        return true;
+      });
     },
   };
 }

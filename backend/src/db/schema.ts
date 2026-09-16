@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, primaryKey, serial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
 
 // 1. Merkle Batches Table
 export const merkleBatches = pgTable("merkle_batches", {
@@ -355,3 +355,11 @@ export type NewProgramRow = typeof programs.$inferInsert;
 export type ProposalDraftRow = typeof proposalDrafts.$inferSelect;
 export type NewProposalDraftRow = typeof proposalDrafts.$inferInsert;
 
+
+export const proposalDraftOperations = pgTable("proposal_draft_operations", {
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  account: text("account").notNull(),
+  operationId: text("operation_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resultJson: text("result_json"),
+}, table => [primaryKey({ columns: [table.institutionId, table.account, table.operationId] })]);
