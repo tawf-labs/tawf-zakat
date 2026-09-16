@@ -6,8 +6,13 @@
  */
 
 import * as XLSX from "xlsx";
+import { sanitizeForExport } from "./tabular-reader";
 
 export const SOURCE_TEMPLATE_VERSION = "tawf.source.template.v1";
+
+/** The name both the download header and the browser's save dialog use. */
+export const sourceTemplateFileName = (format: "xlsx" | "csv"): string =>
+  `${SOURCE_TEMPLATE_VERSION}.${format}`;
 
 const TEMPLATE_HEADERS = [
   "identitas_entri",
@@ -143,17 +148,22 @@ export function generateSourceXlsxTemplate(): Uint8Array {
   return new Uint8Array(buf);
 }
 
-/** Generates CSV template string UTF-8 encoded */
+/**
+ * Generates the CSV template as UTF-8 text.
+ *
+ * Every cell passes through `sanitizeForExport` first (reader rule 6). The sample
+ * rows are ours and carry no formula today, but a template is a file people open in
+ * a spreadsheet, and an export path that only sanitizes when it remembers to is an
+ * export path that eventually does not.
+ */
 export function generateSourceCsvTemplate(): string {
   const rows = [TEMPLATE_HEADERS, ...SYNTHETIC_SAMPLE_ROWS];
   return rows
     .map((row) =>
       row
         .map((cell) => {
-          if (/[",\n\r]/.test(cell)) {
-            return `"${cell.replace(/"/g, '""')}"`;
-          }
-          return cell;
+          const safe = sanitizeForExport(cell);
+          return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
         })
         .join(",")
     )

@@ -1,7 +1,7 @@
 /**
  * Source Tabular Schema Mapper (Spec #86, Ticket #88).
  *
- * Maps a decoded TabularTable (from shared/tabular-reader) into normalized
+ * Maps a decoded TabularTable (from `tabular-reader`) into normalized
  * evidence source rows according to the source manifest.
  *
  * Rules:
@@ -10,6 +10,8 @@
  * 3. Marks calculated totals as partial when invalid rows are present.
  * 4. Rejects unsupported columns with explicit Indonesian messages.
  * 5. Preserves text identifiers and high-precision integer rupiah.
+ * 6. Every row message names the row AND the column it is about, using the header as
+ *    the officer wrote it, so a correction needs no guessing about which cell to open.
  */
 
 import {
@@ -19,7 +21,7 @@ import {
   type CurrencyUnit,
 } from "./reconciliation";
 import type { NormalizedRow, SourceIssue, SourceManifest } from "./evidence-source";
-import type { TabularTable, TabularRow } from "../../shared/tabular-reader";
+import type { TabularTable, TabularRow } from "./tabular-reader";
 
 /** Supported column aliases mapped to canonical names */
 const COLUMN_ALIASES: Record<string, string> = {
@@ -103,6 +105,10 @@ export type TabularSourceMappingResult = {
   invalidRowCount: number;
   calculableTotal: string; // BigInt sum of valid non-total rows
   isPartial: boolean; // True if there are invalid rows
+  /** The fund types this file actually carries, in the order they were first seen. */
+  observedFundTypes: string[];
+  /** True when at least one row carries a per-entry reference. */
+  hasTransactionDetail: boolean;
 };
 
 /**
@@ -157,7 +163,8 @@ export function mapSourceTabular(
   const fileIssues: SourceIssue[] = [];
 
   // Map normalized headers to canonical column keys
-  const colMap = new Map<string, string>(); // canonical -> raw header
+  const colMap = new Map<string, string>(); // canonical -> normalized header
+  const headerOf = new Map<string, string>(); // canonical -> header as written
   const unrecognizedCols: string[] = [];
 
   for (let i = 0; i < table.headers.length; i++) {
@@ -168,11 +175,16 @@ export function mapSourceTabular(
     if (canonical) {
       if (!colMap.has(canonical)) {
         colMap.set(canonical, norm);
+        headerOf.set(canonical, rawHeader);
       }
     } else {
       unrecognizedCols.push(rawHeader);
     }
   }
+
+  /** "Baris 12 kolom "nilai"" - the coordinates a correction is made at. */
+  const at = (rowNumber: number, canonical: string): string =>
+    `Baris ${rowNumber} kolom "${headerOf.get(canonical) ?? canonical}"`;
 
   if (unrecognizedCols.length > 0) {
     fileIssues.push({
@@ -215,6 +227,8 @@ export function mapSourceTabular(
   const declaredTotals: NormalizedRow[] = [];
   const invalidRows: InvalidRowRecord[] = [];
   const allRowsPreview: TabularSourceMappingResult["allRowsPreview"] = [];
+  const observedFundTypes: string[] = [];
+  let hasTransactionDetail = false;
   let calculableTotalBigInt = 0n;
 
   const keyCol = colMap.get("key");
@@ -224,6 +238,7 @@ export function mapSourceTabular(
   const unitCol = colMap.get("unit");
   const amilCol = colMap.get("amil_amount");
   const labelCol = colMap.get("label");
+  const referenceCol = colMap.get("reference");
   const isTotalCol = colMap.get("is_total");
 
   for (let idx = 0; idx < table.rows.length; idx++) {
@@ -238,7 +253,7 @@ export function mapSourceTabular(
         scope: "row",
         rowIndex: idx,
         field: "key",
-        message: `Baris ${rowNumber}: identitas entri (key) tidak boleh kosong.`,
+        message: `${at(rowNumber, "key")}: identitas entri tidak boleh kosong.`,
       });
     }
 
@@ -262,21 +277,21 @@ export function mapSourceTabular(
           scope: "row",
           rowIndex: idx,
           field: "bucket",
-          message: `Baris ${rowNumber}: jenis dana wajib diisi.`,
+          message: `${at(rowNumber, "bucket")}: jenis dana wajib diisi.`,
         });
       } else if (!(JENIS_DANA as readonly string[]).includes(rawBucket)) {
         rowIssues.push({
           scope: "row",
           rowIndex: idx,
           field: "bucket",
-          message: `Baris ${rowNumber}: jenis dana "${rawBucket}" tidak dikenal. Gunakan salah satu dari: ${JENIS_DANA.join(", ")}.`,
+          message: `${at(rowNumber, "bucket")}: jenis dana "${rawBucket}" tidak dikenal. Gunakan salah satu dari: ${JENIS_DANA.join(", ")}.`,
         });
       } else if (!manifest.fundTypes.includes(rawBucket)) {
         rowIssues.push({
           scope: "row",
           rowIndex: idx,
           field: "bucket",
-          message: `Baris ${rowNumber}: jenis dana "${rawBucket}" berada di luar cakupan manifest (${manifest.fundTypes.join(", ")}).`,
+          message: `${at(rowNumber, "bucket")}: jenis dana "${rawBucket}" berada di luar cakupan manifest (${manifest.fundTypes.join(", ")}).`,
         });
       }
     }
@@ -290,7 +305,7 @@ export function mapSourceTabular(
           scope: "row",
           rowIndex: idx,
           field: "balanceSheet",
-          message: `Baris ${rowNumber}: posisi neraca "${rawPos}" tidak dikenal. Gunakan "ON" atau "OFF".`,
+          message: `${at(rowNumber, "balance_sheet")}: posisi neraca "${rawPos}" tidak dikenal. Gunakan "ON" atau "OFF".`,
         });
         balanceSheet = "ON";
       } else if (manifest.balanceSheet !== "BOTH" && rawPos !== manifest.balanceSheet) {
@@ -298,7 +313,7 @@ export function mapSourceTabular(
           scope: "row",
           rowIndex: idx,
           field: "balanceSheet",
-          message: `Baris ${rowNumber}: posisi neraca "${rawPos}" tidak cocok dengan cakupan manifest "${manifest.balanceSheet}".`,
+          message: `${at(rowNumber, "balance_sheet")}: posisi neraca "${rawPos}" tidak cocok dengan cakupan manifest "${manifest.balanceSheet}".`,
         });
         balanceSheet = rawPos as BalanceSheetPosition;
       } else {
@@ -310,7 +325,7 @@ export function mapSourceTabular(
           scope: "row",
           rowIndex: idx,
           field: "balanceSheet",
-          message: `Baris ${rowNumber}: posisi neraca ("ON" atau "OFF") wajib diisi karena cakupan manifest adalah "BOTH".`,
+          message: `${at(rowNumber, "balance_sheet")}: posisi neraca ("ON" atau "OFF") wajib diisi karena cakupan manifest adalah "BOTH".`,
         });
         balanceSheet = "ON";
       } else {
@@ -326,7 +341,7 @@ export function mapSourceTabular(
         scope: "row",
         rowIndex: idx,
         field: "amount",
-        message: `Baris ${rowNumber}: nilai jumlah tidak boleh kosong.`,
+        message: `${at(rowNumber, "amount")}: nilai jumlah tidak boleh kosong.`,
       });
     } else {
       const parsedAmount = parseIntegerAmount(rawAmount);
@@ -335,7 +350,7 @@ export function mapSourceTabular(
           scope: "row",
           rowIndex: idx,
           field: "amount",
-          message: `Baris ${rowNumber}: ${parsedAmount.error}`,
+          message: `${at(rowNumber, "amount")}: ${parsedAmount.error}`,
         });
       } else {
         amountStr = parsedAmount.amount;
@@ -352,7 +367,7 @@ export function mapSourceTabular(
         scope: "row",
         rowIndex: idx,
         field: "unit",
-        message: `Baris ${rowNumber}: unit mata uang "${rawUnit}" berbeda dari manifest ("${manifest.currencyUnit}").`,
+        message: `${at(rowNumber, "unit")}: unit mata uang "${rawUnit}" berbeda dari manifest ("${manifest.currencyUnit}").`,
       });
     }
 
@@ -365,7 +380,7 @@ export function mapSourceTabular(
           scope: "total",
           rowIndex: idx,
           field: "amilAmount",
-          message: `Baris ${rowNumber}: hak amil tidak boleh dideklarasikan pada baris total.`,
+          message: `${at(rowNumber, "amil_amount")}: hak amil tidak boleh dideklarasikan pada baris total.`,
         });
       } else {
         const parsedAmil = parseIntegerAmount(rawAmil);
@@ -374,7 +389,7 @@ export function mapSourceTabular(
             scope: "row",
             rowIndex: idx,
             field: "amilAmount",
-            message: `Baris ${rowNumber}: hak amil tidak sah: ${parsedAmil.error}`,
+            message: `${at(rowNumber, "amil_amount")}: hak amil tidak sah: ${parsedAmil.error}`,
           });
         } else {
           amilAmountStr = parsedAmil.amount;
@@ -383,6 +398,16 @@ export function mapSourceTabular(
     }
 
     const label = labelCol ? (rawCells[labelCol] ?? "").trim() || null : null;
+
+    // Coverage is read off the file, never assumed: a fund type belongs to this
+    // source's scope because a row carries it, and transaction detail is "present"
+    // because an entry actually names its reference.
+    if (!isDeclaredTotal && rawBucket && !observedFundTypes.includes(rawBucket)) {
+      observedFundTypes.push(rawBucket);
+    }
+    if (referenceCol && (rawCells[referenceCol] ?? "").trim() !== "") {
+      hasTransactionDetail = true;
+    }
 
     const isValid = rowIssues.length === 0;
 
@@ -435,5 +460,7 @@ export function mapSourceTabular(
     invalidRowCount: invalidRows.length,
     calculableTotal: calculableTotalBigInt.toString(),
     isPartial: invalidRows.length > 0,
+    observedFundTypes,
+    hasTransactionDetail,
   };
 }

@@ -5,7 +5,7 @@ import {
   parseCsv,
   sanitizeForExport,
   MAX_TABULAR_FILE_BYTES,
-} from "../../shared/tabular-reader";
+} from "../src/tabular-reader";
 import {
   mapSourceTabular,
   parseIntegerAmount,
@@ -54,8 +54,8 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       const csvString = rows.map((r) => r.join(",")).join("\n");
 
       // Decode both
-      const xlsxResult = decodeTabular(xlsxBytes, { fileName: "test.xlsx" });
-      const csvResult = decodeTabular(csvString, { fileName: "test.csv" });
+      const xlsxResult = decodeTabular(xlsxBytes, "test.xlsx");
+      const csvResult = decodeTabular(csvString, "test.csv");
 
       expect(xlsxResult.success).toBe(true);
       expect(csvResult.success).toBe(true);
@@ -101,7 +101,7 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
       const xlsxBytes = new Uint8Array(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
 
-      const result = decodeTabular(xlsxBytes, { fileName: "formula.xlsx" });
+      const result = decodeTabular(xlsxBytes, "formula.xlsx");
       expect(result.success).toBe(false);
       expect(result.issues.length).toBeGreaterThan(0);
       expect(result.issues[0].code).toBe("FORMULA_FORBIDDEN");
@@ -114,21 +114,21 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
       const bytes = new Uint8Array(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
 
-      const result = decodeTabular(bytes, { fileName: "malicious.xlsm" });
+      const result = decodeTabular(bytes, "malicious.xlsm");
       expect(result.success).toBe(false);
       expect(result.issues.some((i) => i.code === "MACRO_DETECTED")).toBe(true);
     });
 
     it("menolak berkas melebihi batas 5 MiB", () => {
       const hugeBytes = new Uint8Array(MAX_TABULAR_FILE_BYTES + 10);
-      const result = decodeTabular(hugeBytes, { fileName: "huge.xlsx" });
+      const result = decodeTabular(hugeBytes, "huge.xlsx");
       expect(result.success).toBe(false);
       expect(result.issues[0].code).toBe("FILE_TOO_LARGE");
     });
 
     it("menolak kolom yang tidak didukung", () => {
       const csv = "key,bucket,amount,kolom_rahasia_ilegal\n001,ZAKAT,1000,rahasia";
-      const decoded = decodeTabular(csv, { fileName: "test.csv" });
+      const decoded = decodeTabular(csv, "test.csv");
       expect(decoded.success).toBe(true);
 
       const mapped = mapSourceTabular(decoded.table!, mockManifest);
@@ -162,7 +162,7 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       rows.push(["PZ-ERR7", "ZAKAT", "ON", "-50000"]); // 7. Negative amount
 
       const csvString = rows.map((r) => r.join(",")).join("\n");
-      const decoded = decodeTabular(csvString, { fileName: "100_rows.csv" });
+      const decoded = decodeTabular(csvString, "100_rows.csv");
       expect(decoded.success).toBe(true);
 
       const mapped = mapSourceTabular(decoded.table!, mockManifest);
@@ -204,7 +204,7 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       expect(wb.SheetNames).toContain("Sumber_Laporan");
 
       // Verify decoded template passes validation
-      const decoded = decodeTabular(xlsxBytes, { fileName: "template.xlsx" });
+      const decoded = decodeTabular(xlsxBytes, "template.xlsx");
       expect(decoded.success).toBe(true);
 
       const mapped = mapSourceTabular(decoded.table!, mockManifest);
@@ -217,7 +217,7 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       expect(csvString).toContain("identitas_entri");
       expect(csvString).toContain("ZAKAT");
 
-      const decoded = decodeTabular(csvString, { fileName: "template.csv" });
+      const decoded = decodeTabular(csvString, "template.csv");
       expect(decoded.success).toBe(true);
 
       const mapped = mapSourceTabular(decoded.table!, mockManifest);
@@ -225,4 +225,99 @@ describe("Tabular Reader & Schema Mapper (Spec #86, Ticket #88)", () => {
       expect(mapped.issues.length).toBe(0);
     });
   });
+
+  describe("XLSX and CSV describe the same table", () => {
+    const sheetOf = (rows: (string | number)[][]): Uint8Array => {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Sumber_Laporan");
+      return new Uint8Array(XLSX.write(wb, { bookType: "xlsx", type: "buffer" }));
+    };
+
+    it("refuses a fractional amount in XLSX exactly as it refuses one in CSV", () => {
+      // The workbook displays 1.500.000,5; reading the display and stripping its
+      // separators would turn it into 15000005 - a tenfold claim nobody typed.
+      const xlsx = decodeTabular(sheetOf([["key", "nilai"], ["TX01", 1500000.5]]), "angka.xlsx");
+      expect(xlsx.success).toBe(true);
+      expect(xlsx.table!.rows[0].cells.nilai).toBe("1500000.5");
+
+      const csv = decodeTabular("key,nilai\nTX01,1500000.5", "angka.csv");
+      expect(csv.table!.rows[0].cells.nilai).toBe("1500000.5");
+
+      // Both sides then fail the same way at the schema layer.
+      expect(parseIntegerAmount(xlsx.table!.rows[0].cells.nilai)).toHaveProperty("error");
+      expect(parseIntegerAmount(csv.table!.rows[0].cells.nilai)).toHaveProperty("error");
+    });
+
+    it("refuses a numeric cell beyond exact integer precision, naming row and column", () => {
+      const decoded = decodeTabular(
+        sheetOf([["key", "nilai"], ["TX01", 12345678901234567]]),
+        "besar.xlsx"
+      );
+      expect(decoded.success).toBe(false);
+      expect(decoded.format).toBe("xlsx");
+      const [found] = decoded.issues;
+      expect(found.code).toBe("AMBIGUOUS_VALUE");
+      expect(found.rowNumber).toBe(2);
+      expect(found.column).toBe("nilai");
+      expect(found.message).toContain("teks");
+    });
+
+    it("keeps a large rupiah figure exact when it is written as text", () => {
+      const decoded = decodeTabular(
+        sheetOf([["key", "nilai"], ["TX01", "12345678901234567"]]),
+        "besar_teks.xlsx"
+      );
+      expect(decoded.table!.rows[0].cells.nilai).toBe("12345678901234567");
+      expect(parseIntegerAmount("12345678901234567")).toEqual({ amount: "12345678901234567" });
+    });
+
+    it("refuses a date-typed cell rather than reading it one way and meaning another", () => {
+      const wb = XLSX.utils.book_new();
+      const ws: XLSX.WorkSheet = {
+        "!ref": "A1:B2",
+        A1: { t: "s", v: "key" },
+        B1: { t: "s", v: "tanggal" },
+        A2: { t: "s", v: "TX01" },
+        B2: { t: "d", v: new Date("2024-03-04T00:00:00.000Z") },
+      };
+      XLSX.utils.book_append_sheet(wb, ws, "Sumber_Laporan");
+      const decoded = decodeTabular(
+        new Uint8Array(XLSX.write(wb, { bookType: "xlsx", type: "buffer" })),
+        "tanggal.xlsx"
+      );
+      expect(decoded.success).toBe(false);
+      expect(decoded.issues[0].code).toBe("AMBIGUOUS_VALUE");
+      expect(decoded.issues[0].column).toBe("tanggal");
+    });
+
+    it("names the format it was reading even when it refuses the file", () => {
+      const tooLarge = new Uint8Array(MAX_TABULAR_FILE_BYTES + 1);
+      expect(decodeTabular(tooLarge, "besar.csv").format).toBe("csv");
+    });
+  });
+
+  describe("Formula injection in CSV", () => {
+    it("catches every active prefix, not only the equals sign", () => {
+      for (const payload of ["=cmd()", "+cmd()", "-1+cmd()", "@SUM(A1)"]) {
+        const decoded = decodeTabular(`key,uraian\nTX01,${payload}`, "injeksi.csv");
+        expect(decoded.success).toBe(false);
+        expect(decoded.issues[0].code).toBe("FORMULA_FORBIDDEN");
+        expect(decoded.issues[0].column).toBe("uraian");
+      }
+    });
+
+    it("leaves a plain negative number alone", () => {
+      const decoded = decodeTabular("key,nilai\nTX01,-500", "negatif.csv");
+      expect(decoded.success).toBe(true);
+      expect(decoded.table!.rows[0].cells.nilai).toBe("-500");
+    });
+
+    it("sanitizes the CSV template it hands out", () => {
+      // Rule 6 is enforced by the export path itself, not by remembering to call it.
+      for (const cell of generateSourceCsvTemplate().split(/[\n,]/)) {
+        expect(/^[=+\-@\t\r]/.test(cell)).toBe(false);
+      }
+    });
+  });
+
 });

@@ -166,12 +166,23 @@ export type SourceIssue = {
 
 export type NormalizedSubmission = { side: SubmittedSide | null; issues: SourceIssue[] };
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
+/** An object, or nothing. A JSON array is not a record, however it is spelled. */
+export const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+/** A trimmed string, or "". Anything that is not a string never became one here. */
+export const text = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+/** One thing wrong with a submission as a whole, rather than with a single row. */
+export const manifestIssue = (field: string, message: string): SourceIssue => ({
+  scope: "manifest",
+  rowIndex: null,
+  field,
+  message,
+});
 
 /** ISO 8601 with a real instant behind it, not merely a string that parses. */
 const isInstant = (value: string): boolean =>

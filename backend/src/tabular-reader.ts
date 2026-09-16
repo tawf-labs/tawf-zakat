@@ -4,6 +4,10 @@
  * Separates generic tabular decoding (XLSX and CSV UTF-8) from domain schemas.
  * Reusable for Report Source imports and future Beneficiary imports (Ticket #92).
  *
+ * It lives here rather than in `shared/` because it decodes workbooks with `xlsx`,
+ * and `shared/` is the code both sides compile without third-party dependencies.
+ * Both readers of this module are server-side; the browser never decodes a workbook.
+ *
  * Security & Integrity Rules:
  * 1. Formulas and external references are NEVER executed. Cells containing formulas
  *    are detected and rejected with sheet, row, and column coordinates.
@@ -12,7 +16,15 @@
  *    to prevent expansion / zip bomb attacks.
  * 4. Text identifiers preserve leading zeros (e.g. "0123" does not become 123).
  * 5. Large rupiah numbers maintain exact decimal integer strings without floating point loss.
+ *    A numeric cell whose exact value JavaScript cannot hold (beyond 2^53) is refused as
+ *    ambiguous rather than rounded: a silently rounded rupiah is worse than a rejected one.
  * 6. Exported text sanitizes active formula prefixes (=, +, -, @).
+ *
+ * XLSX and CSV must describe the same table. A cell's text therefore comes from the
+ * cell's own value, never from the workbook's display formatting (`cell.w`): the
+ * displayed text is locale-dependent, so stripping its separators turns 1500000.5 into
+ * 15000005 in XLSX while CSV rejects the same value. Decoding reads `cell.v` and leaves
+ * every domain judgement - what is an amount, what is a date - to the schema layer.
  */
 
 import * as XLSX from "xlsx";
@@ -110,6 +122,34 @@ function containsVbaMacro(bytes: Uint8Array, fileName?: string): boolean {
 }
 
 /**
+ * Whether a numeric cell is really a date.
+ *
+ * A workbook stores 2024-03-04 as the number 45355 plus a date format. Read as a
+ * number it becomes a plausible rupiah figure, so the format is what tells them
+ * apart - and a cell that means a date is refused rather than read as an amount.
+ */
+function isDateFormatted(cell: XLSX.CellObject): boolean {
+  const format = cell.z;
+  if (typeof format === "number") return XLSX.SSF.is_date(XLSX.SSF.get_table()[format] ?? "");
+  return typeof format === "string" && XLSX.SSF.is_date(format);
+}
+
+/** One cell this reader will not guess at, located precisely enough to fix. */
+const ambiguous = (
+  sheetName: string,
+  rowNumber: number,
+  column: string,
+  reason: string
+): TabularIssue => ({
+  scope: "cell",
+  sheetName,
+  rowNumber,
+  column,
+  code: "AMBIGUOUS_VALUE",
+  message: `Baris ${rowNumber} kolom "${column}": ${reason}`,
+});
+
+/**
  * Sanitizes cell text for CSV export to prevent spreadsheet formula injection.
  * Prepends a single quote if the cell begins with =, +, -, @, tab, or carriage return.
  */
@@ -195,19 +235,21 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
 /**
  * Decodes tabular data from raw bytes or string into a structured TabularTable.
  */
-export function decodeTabular(
-  data: Uint8Array | string,
-  options?: { fileName?: string; mimeType?: string } | string
-): TabularDecodeResult {
+export function decodeTabular(data: Uint8Array | string, fileName = ""): TabularDecodeResult {
   const issues: TabularIssue[] = [];
-  const opts = typeof options === "string" ? { fileName: options } : options;
-  const fileName = opts?.fileName || "";
   const isBytes = typeof data !== "string";
   const bytes = isBytes ? data : new TextEncoder().encode(data);
+
+  const isXlsxFile = /\.xlsx$/i.test(fileName) || /\.xlsm$/i.test(fileName) || isZip(bytes);
+  const isCsvFile = /\.csv$/i.test(fileName) || (!isXlsxFile && !isOle2(bytes));
+  // Every refusal names the format it was reading, so a caller never has to guess
+  // which decoder produced the message.
+  const format: "xlsx" | "csv" = isXlsxFile ? "xlsx" : "csv";
 
   if (bytes.byteLength > MAX_TABULAR_FILE_BYTES) {
     return {
       success: false,
+      format,
       table: null,
       issues: [
         {
@@ -221,21 +263,11 @@ export function decodeTabular(
     };
   }
 
-  const isXlsxFile =
-    /\.xlsx$/i.test(fileName) ||
-    /\.xlsm$/i.test(fileName) ||
-    opts?.mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-    isZip(bytes);
-
-  const isCsvFile =
-    /\.csv$/i.test(fileName) ||
-    opts?.mimeType === "text/csv" ||
-    (!isXlsxFile && !isZip(bytes) && !isOle2(bytes));
-
   if (!isXlsxFile && !isCsvFile) {
     if (isOle2(bytes)) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -251,6 +283,7 @@ export function decodeTabular(
     }
     return {
       success: false,
+      format,
       table: null,
       issues: [
         {
@@ -270,6 +303,7 @@ export function decodeTabular(
     if (containsVbaMacro(bytes, fileName)) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -290,12 +324,15 @@ export function decodeTabular(
         type: "buffer",
         cellFormula: true,
         cellHTML: false,
-        cellNF: false,
+        // The number format is read - not to display the cell, but to tell a date
+        // serial apart from a plain number. A workbook writes 2024-03-04 as 45355.
+        cellNF: true,
         cellText: true,
       });
     } catch (err: any) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -313,6 +350,7 @@ export function decodeTabular(
     if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -341,6 +379,7 @@ export function decodeTabular(
     if (!worksheet) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -363,6 +402,7 @@ export function decodeTabular(
     if (totalSheetRows > MAX_TABULAR_ROWS || totalSheetCols > MAX_TABULAR_COLS) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -398,7 +438,7 @@ export function decodeTabular(
     }
 
     if (issues.length > 0) {
-      return { success: false, table: null, issues };
+      return { success: false, format, table: null, issues };
     }
 
     // Convert sheet to row array with raw preserving
@@ -411,6 +451,7 @@ export function decodeTabular(
     if (rawRows.length === 0) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -440,6 +481,7 @@ export function decodeTabular(
     if (headers.length === 0) {
       return {
         success: false,
+        format,
         table: null,
         issues: [
           {
@@ -477,15 +519,32 @@ export function decodeTabular(
           if (cell.t === "s") {
             // Text cell: preserve exact string including leading zeros
             cellStr = String(cell.v);
+          } else if (cell.t === "n" && isDateFormatted(cell)) {
+            issues.push(ambiguous(targetSheetName, rIdx + 1, headers[cIdx],
+              `sel bertipe tanggal tidak dapat dibaca tanpa ambiguitas hari/bulan. Ubah sel ` +
+                `menjadi teks dengan format YYYY-MM-DD sebelum mengunggah ulang.`));
           } else if (cell.t === "n") {
-            // Number cell: avoid floating point formatting if it is an integer
-            if (typeof cell.v === "number" && Number.isSafeInteger(cell.v)) {
-              cellStr = String(BigInt(cell.v));
-            } else if (cell.w) {
-              cellStr = cell.w.replace(/[,.]/g, "");
+            const value = cell.v as number;
+            if (Number.isSafeInteger(value)) {
+              cellStr = String(BigInt(value));
+            } else if (Number.isFinite(value) && !Number.isInteger(value)) {
+              // A fraction, written exactly as the workbook holds it. The schema layer
+              // refuses it for the same reason it refuses "1500000,5" from a CSV.
+              cellStr = String(value);
             } else {
-              cellStr = String(cell.v);
+              // Beyond 2^53 the workbook's own value is already rounded; there is no
+              // exact figure left to read, so the cell is refused rather than guessed.
+              issues.push(ambiguous(targetSheetName, rIdx + 1, headers[cIdx],
+                `angka ${String(value)} melampaui presisi bilangan bulat yang dapat dibaca ` +
+                  `secara pasti. Tulis nilai tersebut sebagai teks agar angkanya tidak dibulatkan.`));
             }
+          } else if (cell.t === "d") {
+            issues.push(ambiguous(targetSheetName, rIdx + 1, headers[cIdx],
+              `sel bertipe tanggal tidak dapat dibaca tanpa ambiguitas hari/bulan. Ubah sel ` +
+                `menjadi teks dengan format YYYY-MM-DD sebelum mengunggah ulang.`));
+          } else if (cell.t === "e") {
+            issues.push(ambiguous(targetSheetName, rIdx + 1, headers[cIdx],
+              `sel memuat nilai kesalahan spreadsheet. Masukkan nilai pasti sebelum mengunggah ulang.`));
           } else {
             cellStr = String(cell.v ?? "");
           }
@@ -504,9 +563,13 @@ export function decodeTabular(
       });
     }
 
+    if (issues.length > 0) {
+      return { success: false, format, table: null, issues };
+    }
+
     return {
       success: true,
-      format: "xlsx",
+      format,
       table: {
         sheetName: targetSheetName,
         headers,
@@ -524,6 +587,7 @@ export function decodeTabular(
   if (csvHeaders.length === 0) {
     return {
       success: false,
+      format,
       table: null,
       issues: [
         {
@@ -540,6 +604,7 @@ export function decodeTabular(
   if (csvDataRows.length > MAX_TABULAR_ROWS || csvHeaders.length > MAX_TABULAR_COLS) {
     return {
       success: false,
+      format,
       table: null,
       issues: [
         {
@@ -567,8 +632,9 @@ export function decodeTabular(
       const normKey = normalizedHeaders[cIdx];
       const val = rowValues[cIdx] !== undefined ? String(rowValues[cIdx]) : "";
 
-      // Check for formula injection in CSV cells
-      if (/^[=+\-@].+/.test(val) && val.startsWith("=")) {
+      // Formula injection in CSV cells. A plain number may legitimately open with a
+      // sign, so "-500" passes while "-1+cmd|'/c calc'!A0" does not.
+      if (/^[=+\-@\t\r]/.test(val) && !/^[+-]?\d+([.,]\d+)?$/.test(val)) {
         issues.push({
           scope: "cell",
           rowNumber,
@@ -590,12 +656,12 @@ export function decodeTabular(
   }
 
   if (issues.length > 0) {
-    return { success: false, table: null, issues };
+    return { success: false, format, table: null, issues };
   }
 
   return {
     success: true,
-    format: "csv",
+    format,
     table: {
       sheetName: "CSV",
       headers: csvHeaders,

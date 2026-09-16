@@ -193,6 +193,14 @@ _Avoid_: Data terbaru, untuk sumber yang sudah terikat pada laporan tertentu.
 Satu identitas yang mengikat [[Manifest sumber]], baris normalisasi kedua sisi, hasil rekonsiliasi, dan temuannya. Disimpan dan dibaca sebagai satu kesatuan; separuh persiapan bukan persiapan yang lebih kecil.
 _Avoid_: Paket bukti laporan, sebelum ada versi laporan, pengesahan, dan registry yang mengikatnya.
 
+**Draf sumber**:
+Persiapan yang belum dibekukan, disimpan privat dalam ruang kerja satu lembaga beserta seluruh kesalahannya. Berkas asal dan lampirannya disimpan sebagai [[Dokumen terbatas]]; barisnya dibaca ulang dari berkas itu setiap kali draf dibuka. Kesalahan menghalangi pembekuan, bukan penyimpanan.
+_Avoid_: [[Snapshot sumber]], untuk draf yang belum dibekukan; menyebut draf bermasalah sebagai siap diperiksa.
+
+**Template sumber laporan**:
+Berkas contoh terversi (XLSX utama, CSV UTF-8 alternatif) berisi kolom resmi, petunjuk pengisian, dan contoh sintetis. Versinya ikut tercatat pada [[Manifest sumber]] sebagai versi pemetaan.
+_Avoid_: Menjanjikan dukungan seluruh ekspor SiMBA atau format uang baru tanpa adapter yang sah.
+
 **Manifest sumber**:
 Keterangan yang menyertai satu sisi ledger: asal, lembaga/unit dan tingkat cakupannya, jenis dana, posisi neraca, unit mata uang, periode, cut-off, format, versi pemetaan, serta apakah rincian transaksinya tersedia.
 _Avoid_: Judul berkas, untuk keterangan asal dan cakupan sumber.

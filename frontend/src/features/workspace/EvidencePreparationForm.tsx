@@ -11,10 +11,14 @@ import {
   getEvidenceDraft,
   saveEvidenceDraft,
   deleteEvidenceDraft,
+  freezeEvidenceDraft,
   type EvidenceIssue,
   type InternalSourceStream,
   type TabularPreviewResult,
+  sourceTemplateFileName,
   type EvidenceDraftSummary,
+  type SourceScope,
+  type TabularUpload,
 } from "./evidenceClient";
 import { describeChainScope, describeSourceStatus, roleLabel } from "./evidenceText";
 
@@ -132,7 +136,7 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
 
   // Tabular Source Import & Drafts State (Spec #86, Ticket #88)
   const [sourceImportMode, setSourceImportMode] = useState<"TABULAR" | "MANUAL_JSON">("TABULAR");
-  const [tabularFile, setTabularFile] = useState<{ fileName: string; contentBase64: string } | null>(null);
+  const [tabularFile, setTabularFile] = useState<TabularUpload | null>(null);
   const [tabularPreview, setTabularPreview] = useState<TabularPreviewResult | null>(null);
   const [tabularLoading, setTabularLoading] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState<string | null>(null);
@@ -177,15 +181,22 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     };
   }, [requests, periodKind, year]);
 
+  /** The preparation a preview is checked against; never guessed by the server. */
+  const sourceScope = (): SourceScope => ({
+    period: { kind: periodKind, year: Number(year) },
+    currencyUnit: unit,
+    balanceSheetScope: position,
+  });
+
   const handleDownloadTemplate = async (format: "xlsx" | "csv") => {
     setDownloadingTemplate(format);
     setError(null);
     try {
-      const blob = await downloadSourceTemplate(format);
+      const blob = await downloadSourceTemplate(requests, format);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `tawf.source.template.v1.${format}`;
+      a.download = sourceTemplateFileName(format);
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -214,7 +225,7 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
         reader.readAsDataURL(file);
       });
 
-      const preview = await previewTabularSource(requests, file.name, contentBase64);
+      const preview = await previewTabularSource(requests, file.name, contentBase64, sourceScope());
       setTabularFile({ fileName: file.name, contentBase64 });
       setTabularPreview(preview);
       setSourceImportMode("TABULAR");
@@ -304,23 +315,18 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
       }
 
       if (draft.sourceData?.tabular) {
+        // The workbook stays on the server; what comes back is the rows read from it.
+        // Freezing this draft needs no re-upload, so `tabularFile` stays empty and the
+        // draft's own source is used instead.
         setSourceImportMode("TABULAR");
-        setTabularFile(draft.sourceData.tabular);
-        try {
-          const preview = await previewTabularSource(
-            requests,
-            draft.sourceData.tabular.fileName,
-            draft.sourceData.tabular.contentBase64
-          );
-          setTabularPreview(preview);
-        } catch {
-          // Preview generation on draft reload
-        }
-      } else if (draft.sourceData) {
+        setTabularFile(null);
+        setTabularPreview(res.sourcePreview);
+        if (res.previewUnavailable) setError(res.previewUnavailable);
+      } else if (draft.sourceData?.side) {
         setSourceImportMode("MANUAL_JSON");
         setEditors((prev) => ({
           ...prev,
-          SOURCE: typeof draft.sourceData === "string" ? draft.sourceData : JSON.stringify(draft.sourceData, null, 2),
+          SOURCE: JSON.stringify(draft.sourceData!.side, null, 2),
         }));
       }
       setDraftFeedback(`Draf "${draft.label}" berhasil dimuat.`);
@@ -363,6 +369,13 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     }
   };
 
+  /**
+   * True when the source of record is the workbook the server holds for this draft,
+   * rather than a file picked in this session. Freezing then goes through the draft,
+   * which reads that workbook back and freezes it with the rows it produced.
+   */
+  const freezesStoredDraft = sourceImportMode === "TABULAR" && !tabularFile && selectedDraftId !== "";
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -370,7 +383,7 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     setIssues([]);
 
     // Validation for Tabular Import Mode
-    if (sourceImportMode === "TABULAR") {
+    if (sourceImportMode === "TABULAR" && !freezesStoredDraft) {
       if (!tabularFile) {
         setError("Sisi sumber: Unggah berkas spreadsheet XLSX atau CSV terlebih dahulu.");
         setBusy(false);
@@ -386,6 +399,12 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     }
 
     try {
+      if (freezesStoredDraft) {
+        const { preparation } = await freezeEvidenceDraft(selectedDraftId, requests);
+        onSaved(preparation.id);
+        return;
+      }
+
       const parsed = {} as Record<Side, unknown>;
 
       // Claim side resolution
@@ -443,7 +462,8 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
 
   const isFreezeBlocked =
     sourceImportMode === "TABULAR" &&
-    (!tabularFile || (tabularPreview !== null && tabularPreview.invalidCount > 0));
+    ((!tabularFile && !freezesStoredDraft) ||
+      (tabularPreview !== null && tabularPreview.invalidCount > 0));
 
   return (
     <form onSubmit={submit} className="mt-5 rounded-xl border border-stone-200 bg-stone-50 p-4">

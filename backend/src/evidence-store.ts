@@ -28,7 +28,7 @@
 import { sql } from "drizzle-orm";
 import type { DiscrepancyKind } from "./reconciliation";
 import type { PublicSummary } from "./evidence-snapshot";
-import type { SourceManifest, NormalizedRow } from "./evidence-source";
+import type { SourceManifest, NormalizedRow, SourceIssue } from "./evidence-source";
 
 /** Any Drizzle PostgreSQL handle that can also open a transaction. */
 export type EvidenceDatabase = {
@@ -105,6 +105,41 @@ export type PreparationSummary = {
   findingCount: number;
 };
 
+/**
+ * A document a draft holds, kept where restricted documents are kept.
+ *
+ * The row records where the ciphertext is and what it should hash to - never the
+ * bytes. A draft is working material, but the workbook behind it carries the same
+ * names and bank details as a frozen one, so it lives in the same encrypted store
+ * (`evidence-files.ts`) and this table keeps only the locator.
+ */
+export type DraftDocument = {
+  role: "CLAIM" | "SOURCE";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+  /** Opaque locator into the encrypted store. Never returned to a reader. */
+  storageRef: string;
+};
+
+/** What a draft knows about its source side before anything is frozen. */
+export type DraftSourceData = {
+  /** The uploaded workbook, when the source came from XLSX/CSV rather than JSON. */
+  tabular?: DraftDocument;
+  /** Declared scope for the source, as far as the officer has filled it in. */
+  manifest?: Record<string, unknown>;
+  previewSummary?: {
+    totalRows: number;
+    validCount: number;
+    invalidCount: number;
+    isPartial: boolean;
+    calculableTotal: string;
+  };
+  /** A ledger side pasted as JSON by a caller still using that path. */
+  side?: Record<string, unknown>;
+};
+
 export type StoredDraft = {
   id: string;
   institutionId: string;
@@ -114,15 +149,33 @@ export type StoredDraft = {
   periodYear: number;
   currencyUnit: string;
   balanceSheetScope: string;
+  /** Tolerance amount as a decimal integer string, in the draft's own unit. */
   tolerance: string | null;
-  claimData: any;
-  sourceData: any;
-  files: any[];
-  issues: any[];
+  claimData: Record<string, unknown> | null;
+  sourceData: DraftSourceData | null;
+  files: DraftDocument[];
+  issues: SourceIssue[];
   version: number;
   createdAt: number;
   updatedAt: number;
 };
+
+/**
+ * Thrown when a draft id already belongs to another institution.
+ *
+ * The insert is scoped by institution, so a colliding id writes nothing. Saying so
+ * is the point: a save that silently wrote nowhere and answered "saved" is exactly
+ * the failure the file store refuses to make.
+ */
+export class DraftConflictError extends Error {
+  constructor(readonly draftId: string) {
+    super(
+      `Draf "${draftId}" sudah dipakai oleh lembaga lain, sehingga tidak disimpan. ` +
+        `Simpan ulang tanpa menyebut id agar draf baru dibuatkan.`
+    );
+    this.name = "DraftConflictError";
+  }
+}
 
 export type DraftSummary = {
   id: string;
@@ -236,7 +289,7 @@ export const EVIDENCE_SCHEMA_STATEMENTS = [
      tolerance TEXT,
      claim_data_json TEXT NOT NULL,
      source_data_json TEXT NOT NULL,
-     files_json TEXT NOT NULL DEFAULT '[]',
+     files_json TEXT NOT NULL DEFAULT '[]', -- locators into the encrypted store, never bytes
      issues_json TEXT NOT NULL DEFAULT '[]',
      version INTEGER NOT NULL DEFAULT 1,
      created_at BIGINT NOT NULL,
@@ -516,8 +569,9 @@ export function createEvidenceStore(db: EvidenceDatabase) {
      * Private drafts: saves or updates an unverified preparation with its errors and attached files.
      * Isolated by institution, with safe retry and incrementing version.
      */
-    async saveDraft(draft: StoredDraft): Promise<void> {
-      await db.execute(sql`
+    async saveDraft(draft: StoredDraft): Promise<StoredDraft> {
+      const written = rowsOf(
+        await db.execute(sql`
         INSERT INTO evidence_drafts (
           id, institution_id, created_by, label, period_kind, period_year, currency_unit,
           balance_sheet_scope, tolerance, claim_data_json, source_data_json, files_json,
@@ -543,7 +597,13 @@ export function createEvidenceStore(db: EvidenceDatabase) {
           version = evidence_drafts.version + 1,
           updated_at = EXCLUDED.updated_at
         WHERE evidence_drafts.institution_id = EXCLUDED.institution_id
-      `);
+        RETURNING *
+      `)
+      );
+      // No row back means the id exists under a different institution and the
+      // `WHERE` refused the update. Nothing was written, so nothing is reported saved.
+      if (written.length === 0) throw new DraftConflictError(draft.id);
+      return draftFrom(written[0]);
     },
 
     async getDraft(institutionId: string, id: string): Promise<StoredDraft | null> {
@@ -580,11 +640,16 @@ export function createEvidenceStore(db: EvidenceDatabase) {
     },
 
     async deleteDraft(institutionId: string, id: string): Promise<boolean> {
-      const result = await db.execute(sql`
-        DELETE FROM evidence_drafts
-        WHERE id = ${id} AND institution_id = ${institutionId}
-      `);
-      return (result?.rowCount ?? 1) > 0;
+      // `RETURNING` rather than `rowCount`: a driver that does not report a count
+      // must not be read as "one row deleted".
+      const deleted = rowsOf(
+        await db.execute(sql`
+          DELETE FROM evidence_drafts
+          WHERE id = ${id} AND institution_id = ${institutionId}
+          RETURNING id
+        `)
+      );
+      return deleted.length > 0;
     },
   };
 }

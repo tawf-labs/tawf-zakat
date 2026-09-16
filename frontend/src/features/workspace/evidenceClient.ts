@@ -300,6 +300,33 @@ export type EvidenceDraftSummary = {
   updatedAt: number;
 };
 
+/**
+ * A document a draft holds, as a reader may have it.
+ *
+ * Name, size and hash - never the bytes and never the locator. The workbook itself
+ * stays in the restricted store on the server, exactly like a frozen package's files.
+ */
+export type EvidenceDraftDocument = {
+  role: "CLAIM" | "SOURCE";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+};
+
+export type EvidenceDraftSource = {
+  tabular?: EvidenceDraftDocument;
+  manifest?: EvidenceManifest;
+  previewSummary?: {
+    totalRows: number;
+    validCount: number;
+    invalidCount: number;
+    isPartial: boolean;
+    calculableTotal: string;
+  };
+  side?: Record<string, unknown>;
+};
+
 export type StoredEvidenceDraft = {
   id: string;
   institutionId: string;
@@ -310,27 +337,61 @@ export type StoredEvidenceDraft = {
   currencyUnit: string;
   balanceSheetScope: string;
   tolerance: string | null;
-  claimData: any;
-  sourceData: any;
-  files: any[];
-  issues: any[];
+  claimData: Record<string, unknown> | null;
+  sourceData: EvidenceDraftSource | null;
+  files: EvidenceDraftDocument[];
+  issues: EvidenceIssue[];
   version: number;
   createdAt: number;
   updatedAt: number;
 };
 
-export async function downloadSourceTemplate(format: "xlsx" | "csv"): Promise<Blob> {
-  const res = await fetch(`/api/evidence/template?format=${format}`);
-  if (!res.ok) throw new Error("Gagal mengunduh template sumber laporan.");
-  return res.blob();
+/** What the preparation the draft belongs to says about itself. */
+export type SourceScope = {
+  period: { kind: string; year: number };
+  currencyUnit: string;
+  balanceSheetScope: string;
+};
+
+/** The name the browser saves the template under, and the version it belongs to. */
+export const SOURCE_TEMPLATE_VERSION = "tawf.source.template.v1";
+export const sourceTemplateFileName = (format: "xlsx" | "csv") =>
+  `${SOURCE_TEMPLATE_VERSION}.${format}`;
+
+/**
+ * Downloads the versioned template through the authorized request.
+ *
+ * Not a bare `fetch`: a plain URL carries no `Authorization` header, and this client
+ * has no unauthenticated path - the workspace accounts for who took the template
+ * just as it accounts for every other call here.
+ */
+export async function downloadSourceTemplate(
+  requests: PrivateRequests,
+  format: "xlsx" | "csv"
+): Promise<Blob> {
+  return requests.blob(`/api/evidence/template?format=${format}`);
 }
 
+/**
+ * Reads an uploaded workbook without keeping anything.
+ *
+ * The scope travels with the file because the preview checks the rows against the
+ * preparation they are meant for; a preview against a period nobody chose would
+ * answer about a different preparation.
+ */
 export async function previewTabularSource(
   requests: PrivateRequests,
   fileName: string,
-  contentBase64: string
+  contentBase64: string,
+  scope: SourceScope
 ): Promise<TabularPreviewResult> {
-  return call("/preview", requests, { fileName, contentBase64 });
+  return call("/preview", requests, {
+    fileName,
+    contentBase64,
+    period: scope.period,
+    currencyUnit: scope.currencyUnit,
+    balanceSheetScope: scope.balanceSheetScope,
+  });
 }
 
 export async function listEvidenceDrafts(
@@ -339,16 +400,43 @@ export async function listEvidenceDrafts(
   return call("/drafts", requests);
 }
 
+/**
+ * Reopens a draft, with its rows recomputed from the workbook the server holds.
+ *
+ * `sourcePreview` is absent when the draft has no tabular source; when it has one
+ * and could not be read back, `previewUnavailable` says why rather than showing an
+ * empty table as though the file were empty.
+ */
 export async function getEvidenceDraft(
   id: string,
   requests: PrivateRequests
-): Promise<{ draft: StoredEvidenceDraft }> {
+): Promise<{
+  draft: StoredEvidenceDraft;
+  sourcePreview: TabularPreviewResult | null;
+  previewUnavailable: string | null;
+}> {
   return call(`/drafts/${id}`, requests);
 }
 
+/** A workbook as it leaves the browser, before the server has read anything from it. */
+export type TabularUpload = { fileName: string; contentBase64: string };
+
+/** What a save sends: the form as filled in, plus the workbook if one was picked. */
+export type EvidenceDraftInput = {
+  id?: string;
+  label: string;
+  period: { kind: string; year: number };
+  currencyUnit: string;
+  balanceSheetScope: string;
+  claim?: Record<string, unknown> | null;
+  source?: Record<string, unknown>;
+  sourceTable?: TabularUpload;
+  issues?: EvidenceIssue[];
+};
+
 export async function saveEvidenceDraft(
   requests: PrivateRequests,
-  draft: Partial<StoredEvidenceDraft> & { sourceTable?: { fileName: string; contentBase64: string } }
+  draft: EvidenceDraftInput
 ): Promise<{ draft: StoredEvidenceDraft }> {
   return call("/drafts", requests, draft);
 }

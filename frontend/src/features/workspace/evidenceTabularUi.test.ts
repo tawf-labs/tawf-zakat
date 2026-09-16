@@ -7,11 +7,13 @@ import {
   saveEvidenceDraft,
   deleteEvidenceDraft,
   freezeEvidenceDraft,
+  sourceTemplateFileName,
   type TabularPreviewResult,
 } from "./evidenceClient";
 import type { PrivateRequests } from "./privateRequests";
 
 describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
+  const blobCalls: string[] = [];
   const fakeRequests: PrivateRequests = {
     json: mock(async (url: string, init?: RequestInit) => {
       if (url === "/api/evidence/preview") {
@@ -83,13 +85,23 @@ describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
             balanceSheetScope: "ON",
             tolerance: "0",
             claimData: { status: "READ", rows: [] },
-            sourceData: { tabular: { fileName: "audit.xlsx", contentBase64: "dGVzdA==" } },
+            sourceData: {
+              tabular: {
+                role: "SOURCE",
+                fileName: "audit.xlsx",
+                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                sizeBytes: 4,
+                contentSha256: `0x${"ab".repeat(32)}`,
+              },
+            },
             files: [],
             issues: [],
             version: 1,
             createdAt: 1800000000,
             updatedAt: 1800000000,
           },
+          sourcePreview: { totalRows: 2, invalidCount: 1 },
+          previewUnavailable: null,
         };
       }
       if (url === "/api/evidence/drafts/draft-1" && init?.method === "DELETE") {
@@ -107,12 +119,21 @@ describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
       }
       throw new Error(`Unhandled mock request: ${url}`);
     }),
-    blob: mock(async () => new Blob(["test"])),
+    blob: mock(async (url: string) => {
+      blobCalls.push(url);
+      return new Blob(["test"]);
+    }),
     text: mock(async () => "test"),
   };
 
-  it("calls previewTabularSource with fileName and contentBase64 and handles partial totals", async () => {
-    const result = await previewTabularSource(fakeRequests, "audit.xlsx", "dGVzdA==");
+  const scope = {
+    period: { kind: "SEMESTER", year: 2024 },
+    currencyUnit: "IDR",
+    balanceSheetScope: "ON",
+  };
+
+  it("sends the preparation's own scope with the file, and handles partial totals", async () => {
+    const result = await previewTabularSource(fakeRequests, "audit.xlsx", "dGVzdA==", scope);
     expect(result.success).toBe(true);
     expect(result.totalRows).toBe(100);
     expect(result.validCount).toBe(93);
@@ -120,6 +141,14 @@ describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
     expect(result.isPartial).toBe(true);
     expect(result.allRowsPreview).toHaveLength(2);
     expect(result.allRowsPreview[1].isValid).toBe(false);
+
+    // The server is never left to guess the period a preview is checked against.
+    const sent = JSON.parse(
+      String((fakeRequests.json as any).mock.calls.at(-1)[1].body)
+    );
+    expect(sent.period).toEqual(scope.period);
+    expect(sent.currencyUnit).toBe("IDR");
+    expect(sent.balanceSheetScope).toBe("ON");
   });
 
   it("lists, gets, saves, and deletes evidence drafts", async () => {
@@ -130,15 +159,19 @@ describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
     expect(drafts[0].issueCount).toBe(7);
 
     // Get
-    const { draft } = await getEvidenceDraft("draft-1", fakeRequests);
+    const { draft, sourcePreview } = await getEvidenceDraft("draft-1", fakeRequests);
     expect(draft.id).toBe("draft-1");
-    expect(draft.sourceData.tabular.fileName).toBe("audit.xlsx");
+    expect(draft.sourceData!.tabular!.fileName).toBe("audit.xlsx");
+    // Name and hash reach the browser; the workbook's bytes do not.
+    expect(draft.sourceData!.tabular).not.toHaveProperty("contentBase64");
+    expect(sourcePreview!.totalRows).toBe(2);
 
     // Save
     const saved = await saveEvidenceDraft(fakeRequests, {
       label: "Draf Baru",
-      periodKind: "AKHIR_TAHUN",
-      periodYear: 2024,
+      period: { kind: "AKHIR_TAHUN", year: 2024 },
+      currencyUnit: "IDR",
+      balanceSheetScope: "ON",
     });
     expect(saved.draft.label).toBe("Draf Baru");
 
@@ -152,27 +185,20 @@ describe("Tabular Source Import & Drafts Client (Ticket #88)", () => {
     expect(frozen.preparation.outcome).toBe("RECONCILED");
   });
 
-  it("downloads source templates for XLSX and CSV", async () => {
-    const originalFetch = globalThis.fetch;
-    const fetchCalls: string[] = [];
-    globalThis.fetch = mock(async (input: any) => {
-      fetchCalls.push(String(input));
-      return new Response(new Uint8Array([1, 2, 3]), {
-        status: 200,
-        headers: { "Content-Type": "application/octet-stream" },
-      });
-    }) as any;
+  it("downloads source templates through the authorized request, not a bare URL", async () => {
+    // A plain `fetch` carries no Authorization header, so a template fetched that way
+    // would either be refused or, worse, prove the route needs no session at all.
+    const xlsxBlob = await downloadSourceTemplate(fakeRequests, "xlsx");
+    expect(xlsxBlob.size).toBe(4);
+    expect(blobCalls[0]).toContain("/api/evidence/template?format=xlsx");
 
-    try {
-      const xlsxBlob = await downloadSourceTemplate("xlsx");
-      expect(xlsxBlob.size).toBe(3);
-      expect(fetchCalls[0]).toContain("/api/evidence/template?format=xlsx");
+    const csvBlob = await downloadSourceTemplate(fakeRequests, "csv");
+    expect(csvBlob.size).toBe(4);
+    expect(blobCalls[1]).toContain("/api/evidence/template?format=csv");
+  });
 
-      const csvBlob = await downloadSourceTemplate("csv");
-      expect(csvBlob.size).toBe(3);
-      expect(fetchCalls[1]).toContain("/api/evidence/template?format=csv");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  it("names the template file after the template version", () => {
+    expect(sourceTemplateFileName("xlsx")).toBe("tawf.source.template.v1.xlsx");
+    expect(sourceTemplateFileName("csv")).toBe("tawf.source.template.v1.csv");
   });
 });

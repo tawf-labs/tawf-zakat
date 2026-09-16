@@ -14,7 +14,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as XLSX from "xlsx";
@@ -28,6 +28,7 @@ import { createEncryptedFileStore, type PrivateFileStore } from "../src/evidence
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
 import { verifyCommitment } from "../src/evidence-snapshot";
+import { sql } from "drizzle-orm";
 
 const WORKSPACE = "http://localhost:3001/api/workspace";
 const EVIDENCE = "http://localhost:3001/api/evidence";
@@ -37,6 +38,7 @@ const BAITUL = "lpz-baitul-maal";
 
 const officer = privateKeyToAccount(`0x${"11".repeat(32)}` as Hex);
 const rivalOfficer = privateKeyToAccount(`0x${"44".repeat(32)}` as Hex);
+const reader = privateKeyToAccount(`0x${"77".repeat(32)}` as Hex);
 
 const NOW = 1_800_000_000;
 const KEY = Buffer.alloc(32, 3);
@@ -49,6 +51,13 @@ let fileStore: PrivateFileStore;
 let clock = NOW;
 
 const request = (url: string, init: RequestInit = {}) => app.fetch(new Request(url, init));
+
+/** The preparation a preview is read against. Stated, never guessed from the file. */
+const SCOPE = {
+  period: { kind: "SEMESTER", year: 2024 },
+  currencyUnit: "IDR",
+  balanceSheetScope: "ON",
+};
 
 const post = (url: string, body: unknown, token?: string) =>
   request(url, {
@@ -125,8 +134,14 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
   });
 
   describe("Template Generation (GET /api/evidence/template)", () => {
-    it("downloads primary XLSX template with instruction sheet and columns", async () => {
+    it("refuses the template to a caller with no workspace session", async () => {
       const res = await get(`${EVIDENCE}/template`);
+      expect(res.status).toBe(401);
+    });
+
+    it("downloads primary XLSX template with instruction sheet and columns", async () => {
+      const token = await signIn(officer, SINAR);
+      const res = await get(`${EVIDENCE}/template`, token);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("spreadsheetml.sheet");
       expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v1.xlsx");
@@ -138,7 +153,8 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
     });
 
     it("downloads alternative CSV template", async () => {
-      const res = await get(`${EVIDENCE}/template?format=csv`);
+      const token = await signIn(officer, SINAR);
+      const res = await get(`${EVIDENCE}/template?format=csv`, token);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("text/csv");
       expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v1.csv");
@@ -199,7 +215,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
 
       const res = await post(
         `${EVIDENCE}/preview`,
-        { fileName: "laporan_100_baris.xlsx", contentBase64: base64Content },
+        { fileName: "laporan_100_baris.xlsx", contentBase64: base64Content, ...SCOPE },
         token
       );
       expect(res.status).toBe(200);
@@ -240,7 +256,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
 
       const res = await post(
         `${EVIDENCE}/preview`,
-        { fileName: "formula_injection.xlsx", contentBase64: base64Content },
+        { fileName: "formula_injection.xlsx", contentBase64: base64Content, ...SCOPE },
         token
       );
       expect(res.status).toBe(400);
@@ -255,7 +271,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
 
       const res = await post(
         `${EVIDENCE}/preview`,
-        { fileName: "bahaya.xlsm", contentBase64: Buffer.from("dummy").toString("base64") },
+        { fileName: "bahaya.xlsm", contentBase64: Buffer.from("dummy").toString("base64"), ...SCOPE },
         token
       );
       expect(res.status).toBe(400);
@@ -269,7 +285,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       const csv = "key,jenis_dana,nilai,kolom_rahasia_aneh\nTX01,ZAKAT,100000,rahasia";
       const res = await post(
         `${EVIDENCE}/preview`,
-        { fileName: "unsupported.csv", contentBase64: Buffer.from(csv).toString("base64") },
+        { fileName: "unsupported.csv", contentBase64: Buffer.from(csv).toString("base64"), ...SCOPE },
         token
       );
       expect(res.status).toBe(200); // Decoded successfully, but mapping produces issues
@@ -402,7 +418,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       expect(freezeRes.status).toBe(400);
       const freezeBody = await freezeRes.json();
       expect(freezeBody.success).toBe(false);
-      expect(freezeBody.error).toContain("Draf hanya dapat dibekukan jika 0 baris bermasalah");
+      expect(freezeBody.error).toContain("Draf hanya dapat dibekukan jika tidak ada baris bermasalah");
     });
 
     it("freezes snapshot when 0 broken rows exist, preserving high-precision rupiah and leading zeros (Scenarios 4, 15, 19)", async () => {
@@ -540,4 +556,218 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       expect(reopenSource1.rows[0].amount).toBe("1500000000000"); // Untouched!
     });
   });
+
+  describe("Restricted documents, honest storage, and declared coverage", () => {
+    const VALID_CSV = "key,jenis_dana,nilai,posisi_neraca,referensi\nTX01,ZAKAT,500000,ON,REF-1";
+
+    const claimSide = (rows: { key: string; amount: string }[]) => ({
+      manifest: {
+        role: "CLAIM",
+        label: "Klaim",
+        origin: "PASTE",
+        scopeUnit: "Pusat",
+        scopeLevel: "NASIONAL",
+        fundTypes: ["ZAKAT"],
+        balanceSheet: "ON",
+        currencyUnit: "IDR",
+        period: { kind: "SEMESTER", year: 2024 },
+        cutOff: "2024-06-30T00:00:00.000Z",
+        format: "baris-ledger",
+        mappingVersion: "1",
+        transactionDetail: "PRESENT",
+      },
+      status: "READ",
+      rows: rows.map((row) => ({
+        key: row.key,
+        bucket: "ZAKAT",
+        balanceSheet: "ON",
+        value: { amount: row.amount, unit: "IDR" },
+      })),
+    });
+
+    const saveDraft = (token: string, body: Record<string, unknown> = {}) =>
+      post(
+        `${EVIDENCE}/drafts`,
+        {
+          label: "Draf Sumber",
+          period: { kind: "SEMESTER", year: 2024 },
+          currencyUnit: "IDR",
+          balanceSheetScope: "ON",
+          tolerance: { amount: "0", unit: "IDR" },
+          sourceTable: {
+            fileName: "sumber.csv",
+            contentBase64: Buffer.from(VALID_CSV).toString("base64"),
+          },
+          ...body,
+        },
+        token
+      );
+
+    it("keeps the uploaded workbook encrypted, and never returns its bytes or locator", async () => {
+      const token = await signIn(officer, SINAR);
+      const saved = await (await saveDraft(token)).json();
+      const document = saved.draft.sourceData.tabular;
+
+      // What a reader gets: the name, size and hash. Not the bytes, not the locator.
+      expect(document.fileName).toBe("sumber.csv");
+      expect(document.contentSha256).toMatch(/^0x[0-9a-f]{64}$/);
+      expect(document).not.toHaveProperty("contentBase64");
+      expect(document).not.toHaveProperty("storageRef");
+      expect(JSON.stringify(saved)).not.toContain("TX01");
+
+      // What the database holds: no plaintext of the source anywhere in the row.
+      const rows = await database.handle().execute(
+        sql`SELECT source_data_json, files_json FROM evidence_drafts WHERE id = ${saved.draft.id}`
+      );
+      const stored = JSON.stringify(Array.isArray(rows) ? rows : rows.rows);
+      expect(stored).not.toContain("TX01");
+      expect(stored).not.toContain(Buffer.from(VALID_CSV).toString("base64"));
+
+      // And the file on disk is ciphertext, not the CSV.
+      const onDisk = await readdir(fileDirectory, { recursive: true, withFileTypes: true });
+      const written = onDisk.filter((entry) => entry.isFile());
+      expect(written.length).toBeGreaterThan(0);
+      for (const entry of written) {
+        const bytes = await readFile(join(entry.parentPath ?? entry.path, entry.name));
+        expect(bytes.toString("utf8")).not.toContain("TX01");
+      }
+    });
+
+    it("reopens a draft with its rows read back from the stored workbook", async () => {
+      const token = await signIn(officer, SINAR);
+      const saved = await (await saveDraft(token)).json();
+
+      const reopened = await (await get(`${EVIDENCE}/drafts/${saved.draft.id}`, token)).json();
+      expect(reopened.previewUnavailable).toBeNull();
+      expect(reopened.sourcePreview.totalRows).toBe(1);
+      expect(reopened.sourcePreview.allRowsPreview[0].rawCells.key).toBe("TX01");
+      expect(reopened.sourcePreview.calculableTotal).toBe("500000");
+    });
+
+    it("refuses a draft id that belongs to another institution instead of reporting success", async () => {
+      const tokenA = await signIn(officer, SINAR);
+      const tokenB = await signIn(rivalOfficer, BAITUL);
+
+      const mine = await (await saveDraft(tokenA)).json();
+      const collision = await saveDraft(tokenB, { id: mine.draft.id });
+
+      expect(collision.status).toBe(409);
+      expect((await collision.json()).success).toBe(false);
+
+      // The first institution's draft is untouched, and the second has nothing.
+      const stillMine = await get(`${EVIDENCE}/drafts/${mine.draft.id}`, tokenA);
+      expect(stillMine.status).toBe(200);
+      const theirs = await (await get(`${EVIDENCE}/drafts`, tokenB)).json();
+      expect(theirs.drafts.some((draft: any) => draft.id === mine.draft.id)).toBe(false);
+    });
+
+    it("reports a draft that was never there as not found rather than deleted", async () => {
+      const token = await signIn(officer, SINAR);
+      expect((await del(`${EVIDENCE}/drafts/draft-tidak-ada`, token)).status).toBe(404);
+
+      const saved = await (await saveDraft(token)).json();
+      expect((await del(`${EVIDENCE}/drafts/${saved.draft.id}`, token)).status).toBe(200);
+      expect((await del(`${EVIDENCE}/drafts/${saved.draft.id}`, token)).status).toBe(404);
+    });
+
+    it("declares the coverage the file carries, not the coverage nobody stated", async () => {
+      const token = await signIn(officer, SINAR);
+      const preview = await (
+        await post(
+          `${EVIDENCE}/preview`,
+          {
+            fileName: "sumber.csv",
+            contentBase64: Buffer.from(VALID_CSV).toString("base64"),
+            ...SCOPE,
+          },
+          token
+        )
+      ).json();
+
+      // One ZAKAT row: the manifest says ZAKAT, not all five fund types.
+      expect(preview.manifest.fundTypes).toEqual(["ZAKAT"]);
+      expect(preview.manifest.period).toEqual(SCOPE.period);
+      expect(preview.manifest.mappingVersion).toBe("tawf.source.template.v1");
+      expect(preview.manifest.transactionDetail).toBe("PRESENT");
+    });
+
+    it("says NOT_AVAILABLE when the rows carry no transaction reference", async () => {
+      const token = await signIn(officer, SINAR);
+      const recap = "key,jenis_dana,nilai,posisi_neraca\nREKAP-1,ZAKAT,500000,ON";
+      const preview = await (
+        await post(
+          `${EVIDENCE}/preview`,
+          { fileName: "rekap.csv", contentBase64: Buffer.from(recap).toString("base64"), ...SCOPE },
+          token
+        )
+      ).json();
+
+      // A recap does not evidence individual payments, and does not claim to.
+      expect(preview.manifest.transactionDetail).toBe("NOT_AVAILABLE");
+    });
+
+    it("freezes the workbook alongside the rows it produced", async () => {
+      const token = await signIn(officer, SINAR);
+      const saved = await (await saveDraft(token, { claim: claimSide([{ key: "TX01", amount: "500000" }]) })).json();
+
+      const frozen = await post(`${EVIDENCE}/drafts/${saved.draft.id}/freeze`, {}, token);
+      expect(frozen.status).toBe(201);
+      const preparation = (await frozen.json()).preparation;
+
+      const workbook = preparation.files.find((file: any) => file.fileName === "sumber.csv");
+      expect(workbook).toBeDefined();
+      expect(workbook.role).toBe("SOURCE");
+      expect(workbook.storageStatus).toBe("STORED");
+      expect(workbook.sizeBytes).toBe(Buffer.byteLength(VALID_CSV));
+
+      // And it reads back byte for byte through the authorized route.
+      const download = await get(`${EVIDENCE}/${preparation.id}/files/${workbook.id}`, token);
+      expect(download.status).toBe(200);
+      expect(await download.text()).toBe(VALID_CSV);
+    });
+
+    it("carries a declared grand total from the workbook into the snapshot", async () => {
+      const token = await signIn(officer, SINAR);
+      const withTotal =
+        "key,jenis_dana,nilai,posisi_neraca,apakah_total\n" +
+        "TX01,ZAKAT,500000,ON,\n" +
+        "TOTAL,ZAKAT,500000,ON,YA";
+      const saved = await (
+        await saveDraft(token, {
+          claim: claimSide([{ key: "TX01", amount: "500000" }]),
+          sourceTable: {
+            fileName: "dengan_total.csv",
+            contentBase64: Buffer.from(withTotal).toString("base64"),
+          },
+        })
+      ).json();
+
+      const frozen = await post(`${EVIDENCE}/drafts/${saved.draft.id}/freeze`, {}, token);
+      expect(frozen.status).toBe(201);
+      const preparation = (await frozen.json()).preparation;
+      const source = preparation.sources.find((side: any) => side.role === "SOURCE");
+
+      // The declared total is a row of the side, flagged - not a figure dropped on the way in.
+      expect(source.rows.some((row: any) => row.isDeclaredTotal)).toBe(true);
+    });
+
+    it("refuses a reader the preview and the template", async () => {
+      await store.upsertMembership({ institutionId: SINAR, account: reader.address, role: "READER" });
+      const token = await signIn(reader, SINAR);
+
+      const preview = await post(
+        `${EVIDENCE}/preview`,
+        { fileName: "sumber.csv", contentBase64: Buffer.from(VALID_CSV).toString("base64"), ...SCOPE },
+        token
+      );
+      expect(preview.status).toBe(403);
+
+      const draft = await saveDraft(token);
+      expect(draft.status).toBe(403);
+
+      // A reader may still take the template; they simply cannot feed files in.
+      expect((await get(`${EVIDENCE}/template`, token)).status).toBe(200);
+    });
+  });
+
 });
