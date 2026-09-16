@@ -345,6 +345,15 @@ export const proposalDrafts = pgTable("proposal_drafts", {
   aidLinesJson: text("aid_lines_json").notNull().default("[]"),
   issuesJson: text("issues_json").notNull().default("[]"),
   version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("DRAFT"),
+  submittedAt: bigint("submitted_at", { mode: "number" }),
+  submittedBy: text("submitted_by"),
+  examinedAt: bigint("examined_at", { mode: "number" }),
+  examinedBy: text("examined_by"),
+  examinationNotes: text("examination_notes"),
+  examinationChecklistJson: text("examination_checklist_json"),
+  revisionReason: text("revision_reason"),
+  withdrawalReason: text("withdrawal_reason"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
@@ -410,3 +419,67 @@ export const proposalDraftContributors = pgTable("proposal_draft_contributors", 
   account: text("account").notNull(),
   officerId: text("officer_id").references(() => officerProfiles.id),
 }, table => [primaryKey({ columns: [table.draftId, table.version, table.account] })]);
+
+// 12. Proposal Documents, Versions, and History (Spec #86, ticket #91)
+export const proposalDocuments = pgTable("proposal_documents", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  beneficiaryId: text("beneficiary_id"),
+  category: text("category").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageStatus: text("storage_status").notNull(),
+  storageRef: text("storage_ref"),
+  version: integer("version").notNull().default(1),
+  createdBy: text("created_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const proposalVersions = pgTable("proposal_versions", {
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  status: text("status").notNull(),
+  dataJson: text("data_json").notNull(),
+  documentsJson: text("documents_json").notNull().default("[]"),
+  recurringWarningsJson: text("recurring_warnings_json").notNull().default("[]"),
+  submittedBy: text("submitted_by"),
+  submittedAt: bigint("submitted_at", { mode: "number" }),
+  examinationJson: text("examination_json"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+}, table => [primaryKey({ columns: [table.proposalId, table.version] })]);
+
+export const proposalHistory = pgTable("proposal_history", {
+  id: serial("id").primaryKey(),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  version: integer("version").notNull(),
+  fromStatus: text("from_status").notNull(),
+  toStatus: text("to_status").notNull(),
+  action: text("action").notNull(),
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").references(() => officerProfiles.id),
+  reason: text("reason"),
+  notes: text("notes"),
+  occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
+});
+
+export const institutionDisbursementPolicies = pgTable("institution_disbursement_policies", {
+  institutionId: text("institution_id").primaryKey().references(() => institutions.id),
+  requireProposalLetter: boolean("require_proposal_letter").notNull().default(true),
+  requireIdentityDoc: boolean("require_identity_doc").notNull().default(true),
+  requireAlternativeIdProof: boolean("require_alternative_id_proof").notNull().default(true),
+  requireGuardianProof: boolean("require_guardian_proof").notNull().default(true),
+  warnRecurringAid: boolean("warn_recurring_aid").notNull().default(true),
+  version: integer("version").notNull().default(1),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  updatedBy: text("updated_by").notNull(),
+});
+
+export type ProposalDocumentRow = typeof proposalDocuments.$inferSelect;
+export type ProposalVersionRow = typeof proposalVersions.$inferSelect;
+export type ProposalHistoryRow = typeof proposalHistory.$inferSelect;
+export type InstitutionDisbursementPolicyRow = typeof institutionDisbursementPolicies.$inferSelect;

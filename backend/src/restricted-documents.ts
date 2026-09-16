@@ -1,11 +1,14 @@
-/** Verified restricted bytes. Callers own action-specific authorization. */
 import type { EvidenceStore } from "./evidence-store";
 import { EvidenceReadError, type PrivateFileStore } from "./evidence-files";
 import { canonicalJson, parseSnapshot, sha256Hex, verifyCommitment, type FileReference } from "./evidence-snapshot";
 import type { FileAvailability } from "../../shared/registry-recovery";
 import type { RegistryStore } from "./registry-store";
+import type { DisbursementStore } from "./disbursement-store";
 
-export type DocumentSubject = { institutionId: string; preparationId: string; intentId?: string };
+export type DocumentSubject =
+  | { institutionId: string; preparationId: string; intentId?: string }
+  | { institutionId: string; proposalId: string; version?: number };
+
 type DocumentFile = Pick<FileReference, "id" | "fileName" | "mimeType" | "sizeBytes" | "contentSha256" | "storageStatus">;
 type BoundDocument = { file: DocumentFile; storageRef: string | null; missingLocatorRow: boolean };
 export class DocumentError extends Error {
@@ -13,8 +16,39 @@ export class DocumentError extends Error {
     readonly storageStatus?: "STORED" | "FAILED", readonly missingLocatorRow = false) { super(message); }
 }
 
-export function createRestrictedDocuments(evidence: EvidenceStore, files?: PrivateFileStore, registry?: RegistryStore) {
-  async function inventory(subject: DocumentSubject) {
+export function createRestrictedDocuments(
+  evidence?: EvidenceStore | null,
+  files?: PrivateFileStore,
+  registry?: RegistryStore,
+  disbursement?: DisbursementStore
+) {
+  async function inventory(subject: DocumentSubject): Promise<BoundDocument[]> {
+    if ("proposalId" in subject) {
+      if (!disbursement) throw new DocumentError("Layanan penyaluran belum tersedia.", "UNAVAILABLE");
+      const proposal = await disbursement.getProposalDraft(subject.institutionId, subject.proposalId);
+      if (!proposal) throw new DocumentError("Pengajuan tidak ditemukan.", "NOT_FOUND");
+      let docs = await disbursement.listProposalDocuments(subject.institutionId, subject.proposalId, subject.version);
+      if (subject.version !== undefined) {
+        const versionRecord = await disbursement.getProposalVersion(subject.institutionId, subject.proposalId, subject.version);
+        if (versionRecord && Array.isArray(versionRecord.documents)) {
+          docs = versionRecord.documents;
+        }
+      }
+      return docs.map(doc => ({
+        file: {
+          id: doc.id,
+          fileName: doc.fileName,
+          mimeType: doc.mimeType,
+          sizeBytes: doc.sizeBytes,
+          contentSha256: doc.contentSha256,
+          storageStatus: doc.storageStatus,
+        },
+        storageRef: doc.storageRef,
+        missingLocatorRow: !doc.storageRef,
+      }));
+    }
+
+    if (!evidence) throw new DocumentError("Layanan bukti belum tersedia.", "UNAVAILABLE");
     const record = await evidence.getPreparation(subject.institutionId, subject.preparationId);
     if (!record) throw new DocumentError("Persiapan tidak ditemukan.", "NOT_FOUND");
     if (!verifyCommitment(new TextEncoder().encode(record.canonicalSnapshot), record.commitmentSalt, record.commitment)) {

@@ -10,9 +10,7 @@
  *   GET    /api/workspace/proposals/:id               reopen one, with a computed summary
  *   DELETE /api/workspace/proposals/:id               discard a draft
  *
- * Submitting a proposal for pemeriksaan is the next slice (#86's later
- * tickets) and does not exist here: every draft this router returns stays in
- * status "DRAFT".
+ * Submission, examination and restricted documents share this authenticated API.
  */
 
 import { createHash } from "node:crypto";
@@ -21,21 +19,32 @@ import type { Context } from "hono";
 import {
   FUND_TYPES,
   isFundType,
+  isProposalDocumentCategory,
   summarizeProposalDraft,
   validateProgramInput,
   validateProposalDraft,
   withStableIds,
   type AidLine,
   type Beneficiary,
+  type ExaminationChecklist,
+  type ProposalDocumentCategory,
+  type ProposalDocumentRecord,
   type ProposalDraftInput,
 } from "../disbursement";
-import { DraftOperationConflictError, ProposalDraftConflictError } from "../disbursement-store";
+import {
+  DraftOperationConflictError,
+  ProposalDraftConflictError,
+  ProposalStateConflictError,
+  ProposalSubmissionIncompleteError,
+} from "../disbursement-store";
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
 import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 import {
   assertCanApproveProposal,
 } from "../operational-mandate";
+import { MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
+import { createRestrictedDocuments, DocumentError } from "../restricted-documents";
 // Shared with `evidence-preparation.ts` rather than redefined: identical shape,
 // no domain-specific wording, so a second copy here would just be a second
 // place for it to drift.
@@ -46,8 +55,24 @@ const disbursementRoutes = new Hono();
 
 disbursementRoutes.onError((error, c) => {
   if (error instanceof OperationalAccessDenied) return c.json({ success: false, error: error.message }, 403);
-  if (error instanceof ProposalDraftConflictError || error instanceof DraftOperationConflictError) {
+  if (
+    error instanceof ProposalDraftConflictError ||
+    error instanceof DraftOperationConflictError ||
+    error instanceof ProposalStateConflictError
+  ) {
     return c.json({ success: false, error: error.message }, 409);
+  }
+  if (error instanceof ProposalSubmissionIncompleteError) {
+    return c.json({ success: false, error: error.message, issues: error.issues }, 400);
+  }
+  if (error instanceof DocumentError) {
+    const status =
+      error.reason === "NOT_FOUND" || error.reason === "MISSING"
+        ? 404
+        : error.reason === "CORRUPT" || error.reason === "BINDING"
+        ? 409
+        : 503;
+    return c.json({ success: false, error: error.message, reason: error.reason }, status);
   }
   throw error;
 });
@@ -76,6 +101,8 @@ const isDisbursementPath = (path: string) => {
     p.startsWith("/programs/") ||
     p === "/proposals" ||
     p.startsWith("/proposals/") ||
+    p === "/policy" ||
+    p.startsWith("/policy/") ||
     p === "/fund-types"
   );
 };
@@ -358,6 +385,89 @@ disbursementRoutes.post("/proposals", async (c) => {
   );
 });
 
+const docView = (doc: ProposalDocumentRecord) => ({
+  id: doc.id,
+  proposalId: doc.proposalId,
+  beneficiaryId: doc.beneficiaryId,
+  category: doc.category,
+  fileName: doc.fileName,
+  mimeType: doc.mimeType,
+  sizeBytes: doc.sizeBytes,
+  contentSha256: doc.contentSha256,
+  storageStatus: doc.storageStatus,
+  version: doc.version,
+  createdBy: doc.createdBy,
+  createdAt: doc.createdAt,
+});
+
+// ---------------------------------------------------------------------------
+// Queues and Policy
+// ---------------------------------------------------------------------------
+
+disbursementRoutes.get("/policy", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const policy = await runtime.disbursement.getInstitutionPolicy(auth.session.institutionId);
+  return c.json({ success: true, policy });
+});
+
+disbursementRoutes.post("/policy", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (auth.session.role !== "ADMIN") return refuse(c, 403, "forbidden");
+
+  const expectedVersion = typeof body.expectedVersion === "number" ? body.expectedVersion : 1;
+  const policy = await runtime.disbursement.saveInstitutionPolicy(
+    {
+      institutionId: auth.session.institutionId,
+      requireProposalLetter: body.requireProposalLetter !== undefined ? Boolean(body.requireProposalLetter) : true,
+      requireIdentityDoc: body.requireIdentityDoc !== undefined ? Boolean(body.requireIdentityDoc) : true,
+      requireAlternativeIdProof: body.requireAlternativeIdProof !== undefined ? Boolean(body.requireAlternativeIdProof) : true,
+      requireGuardianProof: body.requireGuardianProof !== undefined ? Boolean(body.requireGuardianProof) : true,
+      warnRecurringAid: body.warnRecurringAid !== undefined ? Boolean(body.warnRecurringAid) : true,
+      version: expectedVersion,
+      updatedAt: runtime.now(),
+      updatedBy: auth.session.account,
+    },
+    expectedVersion
+  );
+
+  return c.json({ success: true, policy });
+});
+
+disbursementRoutes.get("/proposals/queue/examiner", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const actor = await operationalActor(runtime, auth.session);
+  const programId = c.req.query("programId") ?? undefined;
+  const queue = await runtime.disbursement.listExaminerQueue(auth.session.institutionId, programId,
+    draft => actor.allows("EXAMINE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) }));
+  return c.json({ success: true, queue });
+});
+
+disbursementRoutes.get("/proposals/queue/revision", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const actor = await operationalActor(runtime, auth.session);
+  const queue = await runtime.disbursement.listRevisionQueue(auth.session.institutionId, auth.session.account,
+    draft => actor.allows("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) }));
+  return c.json({ success: true, queue });
+});
+
 disbursementRoutes.get("/proposals/:id", async (c) => {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
@@ -401,6 +511,491 @@ disbursementRoutes.delete("/proposals/:id", async (c) => {
     { id: text(body.operationId), account: auth.session.account, requestHash: requestHash(["delete", id, expectedVersion]) }, requirePreparation);
   if (!deleted) return refuse(c, 404, "not-found");
   return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Proposal Documents
+// ---------------------------------------------------------------------------
+
+disbursementRoutes.post("/proposals/:id/documents", async (c) => {
+  const runtime = runtimeOf();
+  const proposalId = c.req.param("id");
+  const contentType = c.req.header("content-type") || "";
+
+  let categoryRaw: unknown;
+  let beneficiaryIdRaw: unknown;
+  let fileNameRaw: unknown;
+  let mimeTypeRaw: unknown;
+  let bytes: Uint8Array;
+  let institutionIdQuery: string | undefined;
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.formData();
+    categoryRaw = form.get("category");
+    beneficiaryIdRaw = form.get("beneficiaryId");
+    fileNameRaw = form.get("fileName");
+    mimeTypeRaw = form.get("mimeType");
+    institutionIdQuery = (form.get("institutionId") as string) || undefined;
+    const file = form.get("file");
+    if (!file || typeof (file as any).arrayBuffer !== "function") {
+      return badRequest(c, "Berkas wajib diunggah.");
+    }
+    const buf = await (file as Blob).arrayBuffer();
+    bytes = new Uint8Array(buf);
+    if (!fileNameRaw && (file as File).name) fileNameRaw = (file as File).name;
+    if (!mimeTypeRaw && (file as Blob).type) mimeTypeRaw = (file as Blob).type;
+  } else {
+    const body = await readJson(c);
+    if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+    categoryRaw = body.category;
+    beneficiaryIdRaw = body.beneficiaryId;
+    fileNameRaw = body.fileName;
+    mimeTypeRaw = body.mimeType;
+    institutionIdQuery = typeof body.institutionId === "string" ? body.institutionId : undefined;
+    if (typeof body.contentBase64 !== "string" || !body.contentBase64.trim()) {
+      return badRequest(c, "Isi berkas (base64) wajib diisi.");
+    }
+    try {
+      bytes = new Uint8Array(Buffer.from(body.contentBase64.trim(), "base64"));
+    } catch {
+      return badRequest(c, "Isi berkas harus base64 yang sah.");
+    }
+  }
+
+  const auth = await authenticateWorkspace(c, runtime, institutionIdQuery);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const actor = await operationalActor(runtime, auth.session);
+  const requirePreparation = (draft: { programId: string | null; aidLines: AidLine[] }) =>
+    actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+  requirePreparation(draft);
+  if (draft.status !== "DRAFT" && draft.status !== "REVISION_REQUIRED") {
+    throw new ProposalStateConflictError(`Dokumen tidak dapat diunggah pada pengajuan berstatus "${draft.status}".`);
+  }
+
+  if (!isProposalDocumentCategory(categoryRaw)) {
+    return badRequest(c, "Kategori dokumen tidak sah.");
+  }
+  const category = categoryRaw as ProposalDocumentCategory;
+
+  const fileName = text(fileNameRaw);
+  if (!fileName || fileName.length > 255) {
+    return badRequest(c, "Nama berkas tidak sah.");
+  }
+  const mimeType = text(mimeTypeRaw) || "application/octet-stream";
+
+  const beneficiaryId = text(beneficiaryIdRaw) || null;
+  if (beneficiaryId && !draft.beneficiaries.some((b) => b.id === beneficiaryId)) {
+    return badRequest(c, "ID penerima manfaat tidak ditemukan pada pengajuan ini.");
+  }
+
+  if (bytes.byteLength === 0) {
+    return badRequest(c, "Berkas kosong tidak dapat disimpan.");
+  }
+  if (bytes.byteLength > MAX_EVIDENCE_FILE_BYTES) {
+    return badRequest(c, `Berkas melebihi batas ukuran ${MAX_EVIDENCE_FILE_BYTES} byte.`);
+  }
+
+  const docId = crypto.randomUUID();
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  let stored;
+  try {
+    stored = await runtime.files.put({
+      institutionId: auth.session.institutionId, preparationId: proposalId, fileId: docId, bytes,
+    });
+  } catch {
+    throw new DocumentError("Dokumen gagal disimpan. Coba lagi setelah penyimpanan tersedia.", "UNAVAILABLE");
+  }
+
+  const doc = await runtime.disbursement.saveProposalDocument({
+    id: docId,
+    proposalId,
+    institutionId: auth.session.institutionId,
+    beneficiaryId,
+    category,
+    fileName,
+    mimeType,
+    sizeBytes: stored.sizeBytes,
+    contentSha256: stored.contentSha256,
+    storageStatus: "STORED",
+    storageRef: stored.storageRef,
+    version: draft.version,
+    createdBy: auth.session.account,
+    createdAt: runtime.now(),
+  }, requirePreparation);
+
+  return c.json({ success: true, document: docView(doc) }, 201);
+});
+
+disbursementRoutes.get("/proposals/:id/documents", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const verParam = c.req.query("version");
+  const version = verParam ? parseInt(verParam, 10) : undefined;
+
+  const docs = await runtime.disbursement.listProposalDocuments(auth.session.institutionId, proposalId, version);
+  return c.json({ success: true, documents: docs.map(docView) });
+});
+
+disbursementRoutes.delete("/proposals/:id/documents/:docId", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const actor = await operationalActor(runtime, auth.session);
+  const requirePreparation = (draft: { programId: string | null; aidLines: AidLine[] }) =>
+    actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+  requirePreparation(draft);
+  if (draft.status !== "DRAFT" && draft.status !== "REVISION_REQUIRED") {
+    throw new ProposalStateConflictError(`Dokumen tidak dapat dihapus pada pengajuan berstatus "${draft.status}".`);
+  }
+
+  const deleted = await runtime.disbursement.deleteProposalDocument(
+    auth.session.institutionId,
+    proposalId,
+    c.req.param("docId"), draft.version, requirePreparation
+  );
+  if (!deleted) return refuse(c, 404, "not-found");
+  return c.body(null, 204);
+});
+
+disbursementRoutes.get("/proposals/:id/files/:fileId", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  let allowed = false;
+  for (const fn of ["PREPARE_PROPOSALS", "EXAMINE_PROPOSALS", "APPROVE_DECISIONS"] as const) {
+    try {
+      actor.require(fn, { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+      allowed = true;
+      break;
+    } catch {
+      // try next mandate
+    }
+  }
+  if (!allowed) {
+    throw new OperationalAccessDenied("Akses berkas pengajuan memerlukan mandat amil, pemeriksa, atau pemutus.");
+  }
+
+  const fileId = c.req.param("fileId");
+  const verParam = c.req.query("version");
+  const version = verParam ? parseInt(verParam, 10) : undefined;
+
+  const restricted = createRestrictedDocuments(
+    runtime.evidence,
+    runtime.files,
+    runtime.registry?.store,
+    runtime.disbursement
+  );
+  const { file, bytes } = await restricted.read(
+    { institutionId: auth.session.institutionId, proposalId, version },
+    fileId
+  );
+
+  c.header("Content-Type", file.mimeType);
+  c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(file.fileName)}"`);
+  c.header("Content-Length", String(bytes.byteLength));
+  return c.body(new Uint8Array(bytes).buffer);
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle Transitions
+// ---------------------------------------------------------------------------
+
+disbursementRoutes.post("/proposals/:id/submit", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const result = await runtime.disbursement.submitProposalDraft(
+    auth.session.institutionId,
+    proposalId,
+    expectedVersion,
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["submit", proposalId, expectedVersion]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: result.draft, warnings: result.warnings });
+});
+
+disbursementRoutes.post("/proposals/:id/withdraw", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+
+  const reason = text(body.reason);
+  if (!reason) return badRequest(c, "Alasan penarikan pengajuan wajib diisi.");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const updated = await runtime.disbursement.withdrawProposal(
+    auth.session.institutionId,
+    proposalId,
+    reason,
+    expectedVersion,
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["withdraw", proposalId, expectedVersion, reason]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: updated });
+});
+
+disbursementRoutes.post("/proposals/:id/start-examination", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("EXAMINE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const updated = await runtime.disbursement.startProposalExamination(
+    auth.session.institutionId,
+    proposalId,
+    expectedVersion,
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["start-examination", proposalId, expectedVersion]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: updated });
+});
+
+disbursementRoutes.post("/proposals/:id/return", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+
+  const reason = text(body.reason);
+  if (!reason) return badRequest(c, "Alasan pengembalian revisi wajib diisi secara jelas.");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("EXAMINE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const updated = await runtime.disbursement.returnProposalForRevision(
+    auth.session.institutionId,
+    proposalId,
+    reason,
+    expectedVersion,
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["return", proposalId, expectedVersion, reason]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: updated });
+});
+
+disbursementRoutes.post("/proposals/:id/ready", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+
+  const checklistRaw = body.checklist as Record<string, unknown> | undefined;
+  if (!checklistRaw || typeof checklistRaw !== "object") {
+    return badRequest(c, "Checklist pemeriksaan kelayakan wajib diisi.");
+  }
+  if (checklistRaw.administrativeChecksOk !== true) {
+    return badRequest(c, "Pemeriksaan administrasi harus dinyatakan lengkap dan sesuai sebelum pengajuan siap diputus.");
+  }
+  if (checklistRaw.eligibilityChecksOk !== true) {
+    return badRequest(c, "Pemeriksaan kelayakan asnaf dan kebutuhan harus dinyatakan memenuhi syarat sebelum pengajuan siap diputus.");
+  }
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("EXAMINE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const checklist: ExaminationChecklist = {
+    administrativeChecksOk: true,
+    eligibilityChecksOk: true,
+    alternativeIdReviewed: checklistRaw.alternativeIdReviewed === true,
+    recurringAidExceptions: Array.isArray(checklistRaw.recurringAidExceptions)
+      ? checklistRaw.recurringAidExceptions.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [],
+    notes: text(checklistRaw.notes),
+  };
+
+  const updated = await runtime.disbursement.markProposalReady(
+    auth.session.institutionId,
+    proposalId,
+    checklist,
+    expectedVersion,
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["ready", proposalId, expectedVersion, checklist]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: updated });
+});
+
+// ---------------------------------------------------------------------------
+// Proposal History & Version Snapshots
+// ---------------------------------------------------------------------------
+
+disbursementRoutes.get("/proposals/:id/history", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const history = await runtime.disbursement.listProposalHistory(auth.session.institutionId, proposalId);
+  return c.json({ success: true, history });
+});
+
+disbursementRoutes.get("/proposals/:id/versions/:ver", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const ver = parseInt(c.req.param("ver"), 10);
+  if (isNaN(ver) || ver < 1) return badRequest(c, "Nomor versi tidak sah.");
+
+  const versionRecord = await runtime.disbursement.getProposalVersion(auth.session.institutionId, proposalId, ver);
+  if (!versionRecord) return refuse(c, 404, "not-found");
+
+  return c.json({ success: true, version: versionRecord });
 });
 
 disbursementRoutes.post("/proposals/:id/verify-approval", async (c) => {

@@ -291,3 +291,302 @@ export function withStableIds(input: ProposalDraftInput, newId: () => string): P
     aidLines: input.aidLines.map((row) => (row.id.trim() ? row : { ...row, id: newId() })),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Ticket #91: Documents, Lifecycle, and Examination Types
+// ---------------------------------------------------------------------------
+
+export type ProposalStatus =
+  | "DRAFT"
+  | "SUBMITTED"
+  | "UNDER_EXAMINATION"
+  | "REVISION_REQUIRED"
+  | "READY_FOR_DECISION"
+  | "WITHDRAWN"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export const PROPOSAL_STATUSES: ProposalStatus[] = [
+  "DRAFT",
+  "SUBMITTED",
+  "UNDER_EXAMINATION",
+  "REVISION_REQUIRED",
+  "READY_FOR_DECISION",
+  "WITHDRAWN",
+  "APPROVED",
+  "REJECTED",
+  "CANCELLED",
+];
+
+export const isProposalStatus = (value: unknown): value is ProposalStatus =>
+  typeof value === "string" && (PROPOSAL_STATUSES as string[]).includes(value);
+
+export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
+  DRAFT: "Draf",
+  SUBMITTED: "Diajukan",
+  UNDER_EXAMINATION: "Dalam pemeriksaan",
+  REVISION_REQUIRED: "Perlu revisi",
+  READY_FOR_DECISION: "Siap keputusan",
+  WITHDRAWN: "Ditarik",
+  APPROVED: "Disetujui",
+  REJECTED: "Ditolak",
+  CANCELLED: "Dibatalkan",
+};
+
+export type ProposalDocumentCategory =
+  | "PROPOSAL_LETTER"
+  | "BENEFICIARY_IDENTITY"
+  | "ALTERNATIVE_IDENTITY_PROOF"
+  | "REPRESENTATION_PROOF"
+  | "PAYMENT_RECIPIENT_PROOF"
+  | "OTHER";
+
+export const PROPOSAL_DOCUMENT_CATEGORIES: ProposalDocumentCategory[] = [
+  "PROPOSAL_LETTER",
+  "BENEFICIARY_IDENTITY",
+  "ALTERNATIVE_IDENTITY_PROOF",
+  "REPRESENTATION_PROOF",
+  "PAYMENT_RECIPIENT_PROOF",
+  "OTHER",
+];
+
+export const isProposalDocumentCategory = (value: unknown): value is ProposalDocumentCategory =>
+  typeof value === "string" && (PROPOSAL_DOCUMENT_CATEGORIES as string[]).includes(value);
+
+export const PROPOSAL_DOCUMENT_CATEGORY_LABELS: Record<ProposalDocumentCategory, string> = {
+  PROPOSAL_LETTER: "Surat Permohonan / Proposal",
+  BENEFICIARY_IDENTITY: "KTP / Kartu Keluarga",
+  ALTERNATIVE_IDENTITY_PROOF: "Surat Keterangan Identitas Alternatif",
+  REPRESENTATION_PROOF: "Surat Kuasa / Dokumen Perwakilan",
+  PAYMENT_RECIPIENT_PROOF: "Dokumen Rekening / Penerima Pembayaran",
+  OTHER: "Dokumen Pendukung Lainnya",
+};
+
+export type ProposalDocumentRecord = {
+  id: string;
+  proposalId: string;
+  institutionId: string;
+  beneficiaryId: string | null;
+  category: ProposalDocumentCategory;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+  storageStatus: "STORED" | "FAILED";
+  storageRef: string | null;
+  version: number;
+  createdBy: string;
+  createdAt: number;
+};
+
+export type DisbursementPolicy = {
+  institutionId: string;
+  requireProposalLetter: boolean;
+  requireIdentityDoc: boolean;
+  requireAlternativeIdProof: boolean;
+  requireGuardianProof: boolean;
+  warnRecurringAid: boolean;
+  version: number;
+  updatedAt: number;
+  updatedBy: string;
+};
+
+export const DEFAULT_DISBURSEMENT_POLICY = (institutionId: string): DisbursementPolicy => ({
+  institutionId,
+  requireProposalLetter: true,
+  requireIdentityDoc: true,
+  requireAlternativeIdProof: true,
+  requireGuardianProof: true,
+  warnRecurringAid: true,
+  version: 1,
+  updatedAt: 0,
+  updatedBy: "system",
+});
+
+export type ProposalCompletenessIssue = {
+  scope: "proposal" | "recipient" | "aidLine" | "document";
+  rowIndex: number | null;
+  beneficiaryId?: string | null;
+  field: string;
+  message: string;
+};
+
+export function validateProposalForSubmission(
+  input: ProposalDraftInput,
+  documents: Pick<ProposalDocumentRecord, "category" | "beneficiaryId" | "storageStatus">[],
+  policy: Pick<
+    DisbursementPolicy,
+    "requireProposalLetter" | "requireIdentityDoc" | "requireAlternativeIdProof" | "requireGuardianProof"
+  >
+): ProposalCompletenessIssue[] {
+  const issues: ProposalCompletenessIssue[] = [];
+
+  // 1. Proposal-level checks
+  const baseIssues = validateProposalDraft(input);
+  for (const bi of baseIssues) {
+    issues.push({
+      scope: bi.scope,
+      rowIndex: bi.rowIndex,
+      field: bi.field,
+      message: bi.message,
+    });
+  }
+
+  // 2. Document completeness checks according to policy
+  const storedDocs = documents.filter((d) => d.storageStatus === "STORED");
+
+  if (policy.requireProposalLetter) {
+    const hasLetter = storedDocs.some((d) => d.category === "PROPOSAL_LETTER");
+    if (!hasLetter) {
+      issues.push({
+        scope: "document",
+        rowIndex: null,
+        field: "documents.proposalLetter",
+        message: "Dokumen proposal / surat permohonan wajib diunggah sebelum pengajuan diajukan.",
+      });
+    }
+  }
+
+  // Beneficiary document checks
+  input.beneficiaries.forEach((b, idx) => {
+    const bDocs = storedDocs.filter((d) => d.beneficiaryId === b.id);
+
+    if (policy.requireIdentityDoc && b.identityBasis.kind === "NIK") {
+      const hasIdDoc = bDocs.some(
+        (d) => d.category === "BENEFICIARY_IDENTITY" || d.category === "PROPOSAL_LETTER"
+      );
+      if (!hasIdDoc) {
+        issues.push({
+          scope: "document",
+          rowIndex: idx,
+          beneficiaryId: b.id,
+          field: "documents.identity",
+          message: `Dokumen KTP/KK wajib diunggah untuk penerima "${b.name || `Penerima ${idx + 1}`}".`,
+        });
+      }
+    }
+
+    if (policy.requireAlternativeIdProof && b.identityBasis.kind === "ALTERNATIVE") {
+      const hasAltDoc = bDocs.some((d) => d.category === "ALTERNATIVE_IDENTITY_PROOF");
+      if (!hasAltDoc) {
+        issues.push({
+          scope: "document",
+          rowIndex: idx,
+          beneficiaryId: b.id,
+          field: "documents.alternativeProof",
+          message: `Dokumen surat keterangan / bukti identitas alternatif wajib diunggah untuk "${b.name || `Penerima ${idx + 1}`}".`,
+        });
+      }
+    }
+
+    if (policy.requireGuardianProof && b.guardian) {
+      const hasGuardianDoc = bDocs.some((d) => d.category === "REPRESENTATION_PROOF");
+      if (!hasGuardianDoc) {
+        issues.push({
+          scope: "document",
+          rowIndex: idx,
+          beneficiaryId: b.id,
+          field: "documents.guardianProof",
+          message: `Dokumen perwakilan / surat kuasa wali wajib diunggah untuk "${b.name || `Penerima ${idx + 1}`}".`,
+        });
+      }
+    }
+  });
+
+  return issues;
+}
+
+export type RecurringAidMatch = {
+  proposalId: string;
+  programId: string | null;
+  programName: string;
+  aidPeriod: { start: string; end: string } | null;
+  status: ProposalStatus;
+  beneficiaryId: string;
+  beneficiaryName: string;
+  nik: string | null;
+  alternativeDesc: string | null;
+};
+
+export type RecurringAidWarning = {
+  beneficiaryId: string;
+  beneficiaryName: string;
+  matchedProposalId: string;
+  matchedProgramName: string;
+  matchedPeriod: string;
+  matchedStatus: ProposalStatus;
+  message: string;
+};
+
+export function evaluateRecurringAidWarnings(
+  beneficiaries: Beneficiary[],
+  matches: RecurringAidMatch[]
+): RecurringAidWarning[] {
+  const warnings: RecurringAidWarning[] = [];
+
+  for (const b of beneficiaries) {
+    const matched = matches.filter((m) => {
+      if (b.identityBasis.kind === "NIK" && m.nik) {
+        return b.identityBasis.value === m.nik;
+      }
+      if (b.identityBasis.kind === "ALTERNATIVE" && m.alternativeDesc) {
+        return (
+          b.name.trim().toLowerCase() === m.beneficiaryName.trim().toLowerCase() &&
+          b.identityBasis.description.trim().toLowerCase() === m.alternativeDesc.trim().toLowerCase()
+        );
+      }
+      return false;
+    });
+
+    for (const match of matched) {
+      const periodStr = match.aidPeriod
+        ? `${match.aidPeriod.start} s/d ${match.aidPeriod.end}`
+        : "Periode tidak tercatat";
+      warnings.push({
+        beneficiaryId: b.id,
+        beneficiaryName: b.name,
+        matchedProposalId: match.proposalId,
+        matchedProgramName: match.programName || "Program tanpa judul",
+        matchedPeriod: periodStr,
+        matchedStatus: match.status,
+        message:
+          `Penerima "${b.name}" tercatat menerima bantuan pada program "${match.programName}" ` +
+          `(periode: ${periodStr}, status: ${PROPOSAL_STATUS_LABELS[match.status] ?? match.status}). ` +
+          `Periksa kesesuaian kebijakan bantuan berulang sebelum menyetujui.`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
+export type ExaminationChecklist = {
+  administrativeChecksOk: boolean;
+  eligibilityChecksOk: boolean;
+  alternativeIdReviewed: boolean;
+  recurringAidExceptions: string[];
+  notes: string;
+};
+
+export type ProposalHistoryAction =
+  | "SUBMIT"
+  | "WITHDRAW"
+  | "START_EXAMINATION"
+  | "RETURN_FOR_REVISION"
+  | "MARK_READY";
+
+export type ProposalHistoryRecord = {
+  id: number;
+  proposalId: string;
+  institutionId: string;
+  version: number;
+  fromStatus: ProposalStatus;
+  toStatus: ProposalStatus;
+  action: ProposalHistoryAction;
+  actorAccount: string;
+  actorOfficerId: string | null;
+  reason: string | null;
+  notes: string | null;
+  occurredAt: number;
+};
