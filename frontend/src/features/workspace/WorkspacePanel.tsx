@@ -7,6 +7,7 @@ import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
 import { OfficerManagementSection } from "./OfficerManagementSection";
+import { DisbursementPanel } from "../disbursement";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -148,6 +149,7 @@ function WorkspaceContents() {
           <li>{capabilities.viewWorkspace ? "✓" : "✕"} Membuka ruang kerja dan membaca data lembaga</li>
           <li>{capabilities.prepareEvidence ? "✓" : "✕"} Menyiapkan dan mengubah bukti lembaga</li>
           <li>{capabilities.manageMembers ? "✓" : "✕"} Mengelola anggota lembaga</li>
+          <li>{capabilities.manageDisbursement ? "✓" : "✕"} Membuat program dan draf pengajuan penyaluran</li>
         </ul>
         <p className="mt-4 border-t border-stone-100 pt-4 text-xs text-stone-500">
           Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan
@@ -186,6 +188,8 @@ function WorkspaceContents() {
       )}
 
       <AuthorityPanel key={`authority:${requests.contextId}`} requests={requests} workspace={workspace} />
+
+      <DisbursementPanel key={`disbursement:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
 
       <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
 

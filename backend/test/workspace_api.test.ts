@@ -211,6 +211,7 @@ describe("opening a session", () => {
       viewWorkspace: true,
       prepareEvidence: true,
       manageMembers: false,
+      manageDisbursement: true,
     });
   });
 
@@ -455,6 +456,7 @@ describe("what a reader may not do", () => {
       viewWorkspace: true,
       prepareEvidence: false,
       manageMembers: false,
+      manageDisbursement: false,
     });
   });
 

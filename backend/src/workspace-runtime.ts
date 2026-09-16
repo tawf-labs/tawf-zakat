@@ -21,6 +21,7 @@ import type { EthCall } from "./account-signature";
 import type { WorkspaceStore } from "./tenancy-store";
 import type { EvidenceStore } from "./evidence-store";
 import type { PrivateFileStore } from "./evidence-files";
+import type { DisbursementStore } from "./disbursement-store";
 
 export type WorkspaceRuntime = {
   registry?: import("./registry-recording").RegistryRuntime;
@@ -49,6 +50,12 @@ export type WorkspaceRuntime = {
    * is unavailable rather than building a side out of nothing.
    */
   internalLedger?: import("./internal-usdc-source").InternalLedgerReader;
+  /**
+   * Program bantuan and Pengajuan drafts (Spec #86, ticket #89). Optional,
+   * and absent means absent: the disbursement routes answer 503 rather than
+   * keeping a program somewhere it will not survive a restart.
+   */
+  disbursement?: DisbursementStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;

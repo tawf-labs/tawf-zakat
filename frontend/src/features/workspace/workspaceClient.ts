@@ -30,6 +30,7 @@ export type Capabilities = {
   viewWorkspace: boolean;
   prepareEvidence: boolean;
   manageMembers: boolean;
+  manageDisbursement: boolean;
 };
 
 export type OfficerProfile = {

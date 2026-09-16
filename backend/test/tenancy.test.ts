@@ -157,6 +157,7 @@ describe("capabilities", () => {
       viewWorkspace: true,
       prepareEvidence: false,
       manageMembers: false,
+      manageDisbursement: false,
     });
   });
 
@@ -165,6 +166,7 @@ describe("capabilities", () => {
       viewWorkspace: true,
       prepareEvidence: true,
       manageMembers: false,
+      manageDisbursement: true,
     });
   });
 
@@ -173,6 +175,7 @@ describe("capabilities", () => {
       viewWorkspace: true,
       prepareEvidence: true,
       manageMembers: true,
+      manageDisbursement: true,
     });
   });
 
@@ -191,6 +194,7 @@ describe("capabilities", () => {
         "viewWorkspace",
         "prepareEvidence",
         "manageMembers",
+        "manageDisbursement",
       ]);
     }
   });

@@ -85,14 +85,21 @@ export type Capabilities = {
   prepareEvidence: boolean;
   /** Add, change or deactivate the institution's members. */
   manageMembers: boolean;
+  /**
+   * Create/manage Program bantuan and Pengajuan penyaluran drafts (Spec #86,
+   * ticket #89). Separate from `prepareEvidence`: preparing a report source
+   * and drafting a disbursement proposal are different institutional
+   * functions, even though today both happen to be granted to the same roles.
+   */
+  manageDisbursement: boolean;
 };
 
 export type Capability = keyof Capabilities;
 
 const CAPABILITIES: Record<WorkspaceRole, Capabilities> = {
-  ADMIN: { viewWorkspace: true, prepareEvidence: true, manageMembers: true },
-  OFFICER: { viewWorkspace: true, prepareEvidence: true, manageMembers: false },
-  READER: { viewWorkspace: true, prepareEvidence: false, manageMembers: false },
+  ADMIN: { viewWorkspace: true, prepareEvidence: true, manageMembers: true, manageDisbursement: true },
+  OFFICER: { viewWorkspace: true, prepareEvidence: true, manageMembers: false, manageDisbursement: true },
+  READER: { viewWorkspace: true, prepareEvidence: false, manageMembers: false, manageDisbursement: false },
 };
 
 export const WORKSPACE_ROLES = Object.keys(CAPABILITIES) as WorkspaceRole[];

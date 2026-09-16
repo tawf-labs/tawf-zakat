@@ -314,3 +314,44 @@ export type NewInstitution = typeof institutions.$inferInsert;
 export type InstitutionMembership = typeof institutionMemberships.$inferSelect;
 export type NewInstitutionMembership = typeof institutionMemberships.$inferInsert;
 
+// 10. Program bantuan and Pengajuan drafts (Spec #86, ticket #89)
+// Declared here so `drizzle-kit` knows these tables are managed. The runtime
+// creates them from `DISBURSEMENT_SCHEMA_STATEMENTS` in `../disbursement-store.ts`,
+// which stays the source of truth.
+export const programs = pgTable("programs", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  name: text("name").notNull(),
+  purpose: text("purpose").notNull(),
+  fundType: text("fund_type").notNull(),
+  scope: text("scope").notNull(),
+  referenceCeiling: text("reference_ceiling"),
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE' | 'ARCHIVED'
+  createdBy: text("created_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const proposalDrafts = pgTable("proposal_drafts", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  programId: text("program_id").references(() => programs.id),
+  createdBy: text("created_by").notNull(),
+  originOfRequest: text("origin_of_request").notNull().default(""),
+  purpose: text("purpose").notNull().default(""),
+  aidPeriodJson: text("aid_period_json"),
+  personInCharge: text("person_in_charge").notNull().default(""),
+  beneficiariesJson: text("beneficiaries_json").notNull().default("[]"),
+  aidLinesJson: text("aid_lines_json").notNull().default("[]"),
+  issuesJson: text("issues_json").notNull().default("[]"),
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export type ProgramRow = typeof programs.$inferSelect;
+export type NewProgramRow = typeof programs.$inferInsert;
+
+export type ProposalDraftRow = typeof proposalDrafts.$inferSelect;
+export type NewProposalDraftRow = typeof proposalDrafts.$inferInsert;
+
