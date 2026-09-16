@@ -23,6 +23,10 @@ Penerima zakat yang memenuhi kriteria asnaf.
 Petugas lembaga yang menyiapkan pengajuan, catatan, dan bukti pengelolaan atau penyaluran dana.
 _Avoid_: Auditor, DPS, untuk peran pelaksana operasional.
 
+**Penyelenggara kegiatan (panitia/organizer)**:
+Petugas atau unit yang menjalankan kegiatan bantuan di bawah penugasan satu [[Pengelola Zakat]]. Dalam pilot ZKT, penyelenggara berada dalam lingkup BAZNAS/LAZ yang bertanggung jawab atas kegiatan tersebut.
+_Avoid_: Vendor teknologi; penyelenggara independen di luar penugasan lembaga, untuk cakupan pilot ini.
+
 **Dewan Pengawas Syariah (DPS)**:
 Pihak pengawas syariah lembaga yang menelaah kelayakan syariah sesuai penugasan dan SOP lembaganya.
 _Avoid_: Pemberi persetujuan wajib untuk setiap pengajuan di semua lembaga.
@@ -70,6 +74,22 @@ _Avoid_: Menyebutnya login atau password.
 
 ### Dana dan penyaluran
 
+**Kontribusi donatur**:
+Pemberian dana dari donatur yang dicatat lembaga beserta jenis dana, peruntukan, dan hubungan pendanaannya dengan kegiatan bantuan sejauh tersedia.
+_Avoid_: Bukti penyerahan bantuan; alokasi kepada penerima tertentu tanpa dasar tercatat.
+
+**Referensi penelusuran kontribusi**:
+Rujukan bagi donatur untuk menelusuri [[Kontribusi donatur]] dan perkembangan kegiatan yang didanainya; menjadi makna voucher pada pilot penyerahan langsung ini.
+_Avoid_: Hak penerima untuk mengambil bantuan; saldo yang dapat dicairkan; bukti bantuan telah diterima.
+
+**Alokasi kontribusi**:
+Bagian nominal [[Kontribusi donatur]] yang dicatat untuk mendanai kegiatan tertentu dengan jenis dana dan peruntukannya tetap dipertahankan. Alokasi baru dibatasi kontribusi tercatat; koreksi kontribusi dapat menimbulkan selisih terhadap alokasi terdahulu yang harus terlihat dan diselesaikan. Bagian belum dialokasikan tetap dibedakan.
+_Avoid_: Transfer bank; saldo bank terverifikasi; bukti bantuan sudah diterima.
+
+**Pengembalian kontribusi**:
+Pengiriman kembali dana oleh lembaga kepada pengirim berdasarkan keputusan lembaga, dengan keputusan dan realisasi pengembalian dicatat terpisah.
+_Avoid_: Koreksi data tanpa arus uang balik; sisa alokasi yang belum digunakan; hak otomatis membatalkan zakat.
+
 **Jenis dana**:
 Kategori dana yang dibedakan dalam pencatatan dan pelaporan: Zakat, Fitrah, Infak/Sedekah, Kurban, dan Dana Sosial Keagamaan Lainnya (DSKL).
 _Avoid_: Mata uang, asnaf, untuk dimensi jenis dana.
@@ -84,6 +104,10 @@ _Avoid_: Pendapatan ZKT, biaya langganan vendor.
 **Program bantuan**:
 Wadah kegiatan bantuan lembaga dengan tujuan tertentu yang dapat menaungi banyak [[Pengajuan penyaluran]].
 _Avoid_: Pengajuan penyaluran, untuk keseluruhan program yang berjalan melalui beberapa pengajuan.
+
+**Kegiatan penyaluran**:
+Cakupan pelaksanaan bantuan yang progresnya ditelusuri donatur; pada pilot pertama mengikuti satu [[Pengajuan penyaluran]] dalam satu [[Program bantuan]].
+_Avoid_: Seluruh program; proses persetujuan tambahan yang berjalan terpisah dari pengajuan.
 
 **Pagu referensi program**:
 Nilai anggaran program yang menjadi acuan dan peringatan saat menelaah pengajuan; ketersediaan dananya dipastikan lembaga.
@@ -132,6 +156,14 @@ Pemberian dana atau bantuan kepada penerima yang dituju.
 Catatan pemberian bantuan yang benar-benar dilakukan, beserta penerima, jumlah uang atau barang, dan bukti yang mendukungnya.
 _Avoid_: Nilai yang disetujui, sebagai bukti nilai yang sudah disalurkan.
 
+**Konfirmasi penerimaan**:
+Pernyataan penerima bantuan atau perwakilannya mengenai bantuan yang diterima pada kejadian penyerahan tertentu, beserta bukti pendukung pernyataan tersebut.
+_Avoid_: Catatan sepihak petugas; keberhasilan penerbitan bukti digital, sebagai pengganti konfirmasi penerima.
+
+**Penerimaan diperselisihkan**:
+Keadaan ketika ada pertentangan konkret atas klaim penerimaan bantuan atau jumlahnya yang memerlukan pemeriksaan lembaga, dengan catatan dan bukti terdahulu tetap dipertahankan.
+_Avoid_: Kekurangan dokumen saja; kesimpulan bahwa kecurangan sudah terbukti.
+
 **Penyaluran sebagian**:
 Keadaan ketika sebagian bantuan yang disetujui telah disalurkan, sedangkan sisanya masih belum tersalurkan.
 _Avoid_: Selesai, hanya karena sudah ada satu realisasi.
@@ -144,6 +176,26 @@ _Avoid_: Periode pelaporan, jika yang dimaksud adalah cakupan bantuan atau klaim
 
 **Lapisan bukti**:
 Bagian layanan ZKT yang mengikat catatan lembaga dengan bukti pendukungnya agar dapat ditelusuri dan diperiksa.
+
+**Sertifikat distribusi**:
+Pernyataan lembaga atas cakupan tahap penyaluran tertentu, merujuk realisasi dan konfirmasi penerima serta memiliki pengesahan, versi dan status yang dapat ditelusuri.
+_Avoid_: Bukti keanggotaan kontribusi; pengesahan laporan periode; bukti bahwa blockchain mengamati penyerahan fisik.
+
+**NFT distribusi**:
+Representasi token satu versi [[Sertifikat distribusi]], dipegang akun lembaga dan menjadi bagian wajib pilot. Tidak diperdagangkan atau dipindahkan bebas. Merujuk sumber penyaluran yang sama, tanpa menciptakan realisasi atau hak bantuan tambahan; koreksi menghasilkan versi pengganti dengan riwayat lama dipertahankan.
+_Avoid_: Hak mengambil bantuan; bukti pembayaran donatur; pembukaan akses dokumen penerima karena memiliki token.
+
+**Bukti keanggotaan kontribusi privat**:
+Bukti zero-knowledge bahwa suatu catatan kontribusi termasuk dalam kumpulan catatan yang disahkan lembaga, tanpa membuka identitas dan nominal kontribusi kepada publik.
+_Avoid_: Bukti pembayaran bank; bukti bantuan diterima; pembuktian kelayakan mustahik; sekadar pencatatan hash proof.
+
+**Batch kontribusi**:
+Kumpulan tetap catatan kontribusi yang penerimaannya telah dicocokkan dengan sumber lembaga dan disahkan pihak berwenang, sebagai acuan [[Bukti keanggotaan kontribusi privat]].
+_Avoid_: Hasil impor yang belum diperiksa; bukti seluruh penerimaan lembaga telah tercakup.
+
+**Versi bukti kontribusi**:
+Bentuk [[Bukti keanggotaan kontribusi privat]] yang merujuk catatan dan versi batch tertentu, dengan status keberlakuan yang dapat ditelusuri. Koreksi menghasilkan versi pengganti dan mempertahankan versi lama sebagai riwayat.
+_Avoid_: Kontribusi baru; menganggap proof yang valid secara matematis pasti mewakili catatan terkini.
 
 **Paket bukti laporan**:
 Laporan periode beserta snapshot sumber dan hasil rekonsiliasi yang mendasarinya, sebagai satu cakupan pemeriksaan.

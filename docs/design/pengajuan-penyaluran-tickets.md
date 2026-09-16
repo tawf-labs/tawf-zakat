@@ -4,6 +4,12 @@ Tanggal publikasi dan verifikasi: 2026-09-15. Sumber: [spec #86](https://github.
 
 Pengguna menyetujui penggabungan usulan 15 menjadi 13 tiket melalui jawaban **“ya saya setuju”**. Semua tiket diterbitkan melalui `to-tickets`, berlabel `ready-for-agent`, dengan relasi sub-issue serta dependensi native GitHub. Status di sini adalah snapshot publikasi; gunakan tracker untuk status pekerjaan terkini.
 
+## Sinkronisasi pilot — 2026-09-16
+
+[Spec #100](https://github.com/tawf-labs/tawf-zakat/issues/100) diterbitkan sebagai kelanjutan pilot distribusi, penelusuran, ZK dan NFT. #86 serta #92–#99 mendapat amandemen; #87–#91 tetap CLOSED tanpa perubahan. Relasi sub-issue dan dependensi native dipertahankan. Referensi US/skenario pada tabel di bawah tetap penomoran baseline #86, sedangkan spec #100 mempunyai penomoran tersendiri.
+
+#82–#85 dan parent #81 sudah ditutup berdasarkan implementasi tersimpan. Pernyataan tentang status OPEN di bagian publikasi awal di bawah merupakan riwayat 2026-09-15. [Catatan sinkronisasi](../verification/0100-pilot-spec-tracker.md) memuat penutupan issue lama, perubahan tiap tiket dan hasil pembacaan ulang GitHub.
+
 ## Peta pekerjaan
 
 | Tiket | Hasil | Terblokir oleh |
