@@ -377,6 +377,7 @@ export const operationalMandates = pgTable("operational_mandates", {
   validUntil: bigint("valid_until", { mode: "number" }).notNull(),
   assignmentRef: text("assignment_ref").notNull(),
   nominalLimit: text("nominal_limit"),
+  version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
@@ -389,6 +390,7 @@ export const institutionalEndorsementAccounts = pgTable("institutional_endorseme
   accountAddress: text("account_address").notNull(),
   label: text("label").notNull(),
   authorizedOfficerIds: text("authorized_officer_ids").notNull().default("[]"),
+  version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
@@ -401,3 +403,10 @@ export type NewOperationalMandateRow = typeof operationalMandates.$inferInsert;
 export type InstitutionalEndorsementAccountRow = typeof institutionalEndorsementAccounts.$inferSelect;
 export type NewInstitutionalEndorsementAccountRow = typeof institutionalEndorsementAccounts.$inferInsert;
 
+
+export const proposalDraftContributors = pgTable("proposal_draft_contributors", {
+  draftId: text("draft_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  account: text("account").notNull(),
+  officerId: text("officer_id").references(() => officerProfiles.id),
+}, table => [primaryKey({ columns: [table.draftId, table.version, table.account] })]);

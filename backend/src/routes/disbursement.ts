@@ -34,17 +34,18 @@ import { authenticateWorkspace, badRequest, refuse } from "../workspace-session"
 import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 import {
-  checkOperationalMandate,
   assertCanApproveProposal,
 } from "../operational-mandate";
 // Shared with `evidence-preparation.ts` rather than redefined: identical shape,
 // no domain-specific wording, so a second copy here would just be a second
 // place for it to drift.
+import { operationalActor, OperationalAccessDenied, requestedIdr } from "../operational-access";
 import { readJson, text } from "./evidence-preparation";
 
 const disbursementRoutes = new Hono();
 
 disbursementRoutes.onError((error, c) => {
+  if (error instanceof OperationalAccessDenied) return c.json({ success: false, error: error.message }, 403);
   if (error instanceof ProposalDraftConflictError || error instanceof DraftOperationConflictError) {
     return c.json({ success: false, error: error.message }, 409);
   }
@@ -117,19 +118,9 @@ disbursementRoutes.post("/programs", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
-  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
-  if (!officer || !officer.isActive) {
-    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
-  }
-  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
-  const mandateCheck = checkOperationalMandate(mandates, {
-    fn: "MANAGE_PROGRAMS",
-    now: runtime.now(),
-    account: auth.session.account,
-  });
-  if (!mandateCheck.allowed) {
-    return c.json({ success: false, error: mandateCheck.reason }, 403);
-  }
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("MANAGE_PROGRAMS");
+
 
   const input = {
     name: text(body.name),
@@ -185,19 +176,11 @@ disbursementRoutes.post("/programs/:id/archive", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
-  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
-  if (!officer || !officer.isActive) {
-    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
-  }
-  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
-  const mandateCheck = checkOperationalMandate(mandates, {
-    fn: "MANAGE_PROGRAMS",
-    now: runtime.now(),
-    account: auth.session.account,
-  });
-  if (!mandateCheck.allowed) {
-    return c.json({ success: false, error: mandateCheck.reason }, 403);
-  }
+  const target = await runtime.disbursement.getProgram(auth.session.institutionId, c.req.param("id"));
+  if (!target) return refuse(c, 404, "not-found");
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("MANAGE_PROGRAMS", { programId: target.id });
+
 
   const program = await runtime.disbursement.setProgramStatus(
     auth.session.institutionId,
@@ -337,29 +320,12 @@ disbursementRoutes.post("/proposals", async (c) => {
   const withIds = withStableIds(draftInput, () => crypto.randomUUID());
   const issues = validateProposalDraft(withIds);
 
-  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
-  if (!officer || !officer.isActive) {
-    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
-  }
-  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
+  const actor = await operationalActor(runtime, auth.session);
+  const requirePreparation = (draft: { programId: string | null; aidLines: AidLine[] }) => {
+    actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+  };
+  requirePreparation(withIds);
 
-  let totalRequestedIdr = 0n;
-  for (const line of withIds.aidLines) {
-    if (line.value.kind === "MONEY" && /^\d+$/.test(line.value.amountRequestedIdr)) {
-      totalRequestedIdr += BigInt(line.value.amountRequestedIdr);
-    }
-  }
-
-  const mandateCheck = checkOperationalMandate(mandates, {
-    fn: "PREPARE_PROPOSALS",
-    programId: withIds.programId,
-    nominalAmount: totalRequestedIdr > 0n ? totalRequestedIdr : null,
-    now: runtime.now(),
-    account: auth.session.account,
-  });
-  if (!mandateCheck.allowed) {
-    return c.json({ success: false, error: mandateCheck.reason }, 403);
-  }
 
   const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : crypto.randomUUID();
   const now = runtime.now();
@@ -382,7 +348,8 @@ disbursementRoutes.post("/proposals", async (c) => {
     },
     expectedVersion,
     { id: text(body.operationId), account: auth.session.account,
-      requestHash: requestHash(["save", text(body.id), expectedVersion, draftInput]) }
+      requestHash: requestHash(["save", text(body.id), expectedVersion, draftInput]) },
+    requirePreparation
   );
 
   return c.json(
@@ -420,26 +387,18 @@ disbursementRoutes.delete("/proposals/:id", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
-  const officer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
-  if (!officer || !officer.isActive) {
-    return c.json({ success: false, error: "Profil petugas belum lengkap atau nonaktif. Tindakan yang memerlukan mandat ditahan." }, 403);
-  }
-  const mandates = await runtime.store.activeMandatesForOfficer(auth.session.institutionId, officer.id, runtime.now());
-  const mandateCheck = checkOperationalMandate(mandates, {
-    fn: "PREPARE_PROPOSALS",
-    now: runtime.now(),
-    account: auth.session.account,
-  });
-  if (!mandateCheck.allowed) {
-    return c.json({ success: false, error: mandateCheck.reason }, 403);
-  }
+  const actor = await operationalActor(runtime, auth.session);
+  const requirePreparation = (draft: { programId: string | null; aidLines: AidLine[] }) => {
+    actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+  };
+
 
   const body = await readJson(c);
   const expectedVersion = body ? mutationVersion(body, 1) : null;
   if (!body || expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan identitas penghapusan wajib diisi.");
   const id = c.req.param("id");
   const deleted = await runtime.disbursement.deleteProposalDraft(auth.session.institutionId, id, expectedVersion,
-    { id: text(body.operationId), account: auth.session.account, requestHash: requestHash(["delete", id, expectedVersion]) });
+    { id: text(body.operationId), account: auth.session.account, requestHash: requestHash(["delete", id, expectedVersion]) }, requirePreparation);
   if (!deleted) return refuse(c, 404, "not-found");
   return c.body(null, 204);
 });
@@ -458,50 +417,27 @@ disbursementRoutes.post("/proposals/:id/verify-approval", async (c) => {
   const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
   if (!draft) return refuse(c, 404, "not-found");
 
-  const approverOfficer = await runtime.store.getOfficerForAccount(auth.session.account, auth.session.institutionId);
-  if (!approverOfficer || !approverOfficer.isActive) {
-    return c.json({ success: false, error: "Profil pengesah belum lengkap atau nonaktif." }, 403);
+  const actor = await operationalActor(runtime, auth.session);
+  const contributors = await runtime.disbursement.proposalContributors(auth.session.institutionId, draft.id);
+  if (new Set(contributors.map(c => c.version)).size !== draft.version || contributors.some(c => !c.officerId)) {
+    throw new OperationalAccessDenied("Identitas seluruh penyusun versi pengajuan belum dapat diverifikasi. Lengkapi atribusi melalui onboarding lembaga.");
   }
-
-  const creatorOfficer = await runtime.store.getOfficerForAccount(draft.createdBy, auth.session.institutionId);
-  const selfApprovalCheck = assertCanApproveProposal({
-    creatorOfficerId: creatorOfficer?.id ?? null,
-    creatorAccount: draft.createdBy,
-    approverOfficerId: approverOfficer.id,
-    approverAccount: auth.session.account,
+  for (const contributor of contributors) {
+    const check = assertCanApproveProposal({
+      creatorOfficerId: contributor.officerId, creatorAccount: contributor.account,
+      approverOfficerId: actor.officer.id, approverAccount: auth.session.account,
+    });
+    if (!check.allowed) throw new OperationalAccessDenied(check.reason);
+  }
+  const mandate = actor.require("APPROVE_DECISIONS", {
+    programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines),
   });
-  if (!selfApprovalCheck.allowed) {
-    return c.json({ success: false, error: selfApprovalCheck.reason }, 403);
-  }
-
-  let totalRequestedIdr = 0n;
-  for (const line of draft.aidLines) {
-    if (line.value.kind === "MONEY" && /^\d+$/.test(line.value.amountRequestedIdr)) {
-      totalRequestedIdr += BigInt(line.value.amountRequestedIdr);
-    }
-  }
-
-  const mandates = await runtime.store.activeMandatesForOfficer(
-    auth.session.institutionId,
-    approverOfficer.id,
-    runtime.now()
-  );
-  const mandateCheck = checkOperationalMandate(mandates, {
-    fn: "APPROVE_DECISIONS",
-    programId: draft.programId,
-    nominalAmount: totalRequestedIdr > 0n ? totalRequestedIdr : null,
-    now: runtime.now(),
-    account: auth.session.account,
-  });
-  if (!mandateCheck.allowed) {
-    return c.json({ success: false, error: mandateCheck.reason }, 403);
-  }
 
   if (body.endorsementAccount && typeof body.endorsementAccount === "string") {
     const endorsementAcc = body.endorsementAccount.trim().toLowerCase();
     const activeEndorsements = await runtime.store.activeEndorsementAccountsForOfficer(
       auth.session.institutionId,
-      approverOfficer.id
+      actor.officer.id
     );
     const matched = activeEndorsements.find((ea) => ea.accountAddress.toLowerCase() === endorsementAcc);
     if (!matched) {
@@ -509,7 +445,7 @@ disbursementRoutes.post("/proposals/:id/verify-approval", async (c) => {
     }
   }
 
-  return c.json({ success: true, allowed: true, mandate: mandateCheck.mandate });
+  return c.json({ success: true, allowed: true, mandate });
 });
 
 disbursementRoutes.get("/fund-types", async (c) => c.json({ success: true, fundTypes: FUND_TYPES }));

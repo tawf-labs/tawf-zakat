@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { authorityKey } from "./useAuthorityManagement";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccessContextChanged, WorkspaceRequestError, type PrivateRequests } from "./privateRequests";
 import { useWorkspaceAccess } from "./useWorkspaceAccess";
@@ -6,6 +8,7 @@ import { fetchOfficers, type OfficerWithAccounts } from "./workspaceClient";
 /** One list owner; every result still passes the workspace owner's context gate. */
 export function useOfficerManagement(requests: PrivateRequests) {
   const { refresh } = useWorkspaceAccess();
+  const client = useQueryClient();
   const [officers, setOfficers] = useState<OfficerWithAccounts[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -32,6 +35,7 @@ export function useOfficerManagement(requests: PrivateRequests) {
       requests.assertCurrent();
       setMessage(success);
       await load();
+      await client.invalidateQueries({ queryKey: authorityKey(requests) });
       try { await refresh(); }
       catch (cause) {
         if (cause instanceof AccessContextChanged) return false;

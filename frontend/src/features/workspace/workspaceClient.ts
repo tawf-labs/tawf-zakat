@@ -65,6 +65,7 @@ export type OperationalMandate = {
   validUntil: number;
   assignmentRef: string;
   nominalLimit: string | null;
+  version: number;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -77,6 +78,7 @@ export type InstitutionalEndorsementAccount = {
   accountAddress: string;
   label: string;
   authorizedOfficerIds: string[];
+  version: number;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -205,6 +207,7 @@ export async function fetchMandates(
 export async function grantMandate(
   requests: PrivateRequests,
   input: {
+    id: string;
     officerId: string;
     accountAddress?: string | null;
     function: OperationalFunction;
@@ -227,6 +230,7 @@ export async function updateMandate(
   requests: PrivateRequests,
   id: string,
   patch: {
+    expectedVersion: number;
     scopeType?: MandateScopeType;
     programId?: string | null;
     validFrom?: number;
@@ -243,9 +247,10 @@ export async function updateMandate(
   return result.mandate;
 }
 
-export async function revokeMandate(requests: PrivateRequests, id: string): Promise<void> {
+export async function revokeMandate(requests: PrivateRequests, id: string, expectedVersion: number): Promise<void> {
   await requests.json(`/api/workspace/mandates/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    body: JSON.stringify({ expectedVersion }),
   });
 }
 
@@ -262,6 +267,7 @@ export async function fetchEndorsementAccounts(
 export async function registerEndorsementAccount(
   requests: PrivateRequests,
   input: {
+    id: string;
     accountAddress: string;
     label: string;
     authorizedOfficerIds?: string[];
@@ -278,6 +284,7 @@ export async function updateEndorsementAccount(
   requests: PrivateRequests,
   id: string,
   patch: {
+    expectedVersion: number;
     label?: string;
     authorizedOfficerIds?: string[];
     isActive?: boolean;
@@ -290,9 +297,10 @@ export async function updateEndorsementAccount(
   return result.endorsementAccount;
 }
 
-export async function revokeEndorsementAccount(requests: PrivateRequests, id: string): Promise<void> {
+export async function revokeEndorsementAccount(requests: PrivateRequests, id: string, expectedVersion: number): Promise<void> {
   await requests.json(`/api/workspace/endorsement-accounts/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    body: JSON.stringify({ expectedVersion }),
   });
 }
 

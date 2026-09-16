@@ -216,3 +216,18 @@ it("invalidates old private material when refresh establishes a different office
   expect(access.unsavedReport("preparation-a")).toMatchObject({ value: null });
   await expect(ready.requests.json("/api/evidence/private")).rejects.toThrow("Konteks akses sudah berubah");
 });
+
+it("does not restore an old authority snapshot when refresh responses arrive out of order", async () => {
+  const { access, workspaceReply } = fixture();
+  const workspace = { account: "0xaaaa", institution: { id: "institution-a" }, role: "OFFICER", officer: null };
+  workspaceReply(() => Response.json(workspace));
+  await access.enter("institution-a");
+  const older = deferred<Response>();
+  workspaceReply(() => older.promise);
+  const pending = access.refresh();
+  workspaceReply(() => Response.json({ ...workspace, endorsementAccounts: [] }));
+  await access.refresh();
+  older.resolve(Response.json({ ...workspace, endorsementAccounts: [{ id: "revoked", version: 1, isActive: true }] }));
+  await pending;
+  expect(access.getSnapshot()).toMatchObject({ workspace: { endorsementAccounts: [] } });
+});

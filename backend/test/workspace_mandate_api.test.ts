@@ -162,6 +162,141 @@ beforeEach(async () => {
 });
 
 describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
+  async function proposalFixture() {
+    const adminToken = await tokenFrom(await signIn(admin, SINAR));
+    const creatorToken = await tokenFrom(await signIn(officer1, SINAR));
+    const approverToken = await tokenFrom(await signIn(officer2Approver, SINAR));
+    for (const id of ["program-a", "program-b"]) {
+      await disbursement.createProgram({ id, institutionId: SINAR, name: id, purpose: "Bantuan",
+        fundType: "ZAKAT", scope: "Bandung", referenceCeiling: null, createdBy: admin.address, now: NOW });
+    }
+    for (const officerId of ["officer-creator-1", "officer-approver-2"]) {
+      for (const fn of ["PREPARE_PROPOSALS", "APPROVE_DECISIONS"] as const) {
+        await store.grantMandate({ institutionId: SINAR, actor: admin.address, now: NOW,
+          mandate: { officerId, function: fn, scopeType: "ALL_PROGRAMS", assignmentRef: "SK/regression",
+            validFrom: NOW - 1, validUntil: NOW + 1000 } });
+      }
+    }
+    const payload = { programId: "program-b", purpose: "Awal", beneficiaries: [], aidLines: [],
+      expectedVersion: 0, operationId: "regression-create" };
+    const response = await post("/proposals", payload, creatorToken);
+    expect(response.status).toBe(201);
+    return { adminToken, creatorToken, approverToken, draft: (await response.json()).draft, payload };
+  }
+
+  it("retains attribution after unlinking the creator account and reopening storage", async () => {
+    const { draft } = await proposalFixture();
+    await store.unlinkOfficerAccount({ officerId: "officer-creator-1", institutionId: SINAR,
+      account: officer1.address, actor: admin.address, now: NOW });
+    store = createWorkspaceStore(await database.reopen());
+    disbursement = createDisbursementStore(database.handle());
+    await disbursement.ensureSchema();
+    configureWorkspace({ store, disbursement, ethCall, now: () => clock, sessionTtlSeconds: 3600, challengeTtlSeconds: 300 });
+    const alternateToken = await tokenFrom(await signIn(officer1SecondAccount, SINAR));
+    const response = await post(`/proposals/${draft.id}/verify-approval`, {}, alternateToken);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toContain("sendiri");
+  });
+
+  it("refuses approval by a material editor as well as the original creator", async () => {
+    const { draft, payload, approverToken } = await proposalFixture();
+    const edited = await post("/proposals", { ...payload, id: draft.id, expectedVersion: draft.version,
+      purpose: "Tujuan diubah pemeriksa", operationId: "material-edit" }, approverToken);
+    expect(edited.status).toBe(200);
+    const response = await post(`/proposals/${draft.id}/verify-approval`, {}, approverToken);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toContain("sendiri");
+  });
+
+  it("recovers legacy contributor identities from save receipts without treating no-op saves as authorship", async () => {
+    const { draft, payload, approverToken } = await proposalFixture();
+    const unchanged = await post("/proposals", { ...draft, expectedVersion: draft.version,
+      operationId: "unchanged-save" }, approverToken);
+    expect(unchanged.status).toBe(200);
+    expect((await post(`/proposals/${draft.id}/verify-approval`, {}, approverToken)).status).toBe(200);
+    const changed = await post("/proposals", { ...payload, id: draft.id, purpose: "Perubahan material",
+      expectedVersion: 2, operationId: "legacy-edit" }, approverToken);
+    expect(changed.status).toBe(200);
+    // Simulate upgrading a database that predates persistent contributor rows.
+    await database.handle().execute(sql`DELETE FROM proposal_draft_contributors`);
+    await disbursement.ensureSchema();
+    await disbursement.ensureSchema();
+    const contributors = await disbursement.proposalContributors(SINAR, draft.id);
+    expect(contributors.some(c => c.officerId === "officer-approver-2" && c.version === 3)).toBe(true);
+    expect((await post(`/proposals/${draft.id}/verify-approval`, {}, approverToken)).status).toBe(403);
+    // Missing historical versions cannot be guessed as safe for approval.
+    await database.handle().execute(sql`DELETE FROM proposal_draft_contributors WHERE version = 2`);
+    const incomplete = await post(`/proposals/${draft.id}/verify-approval`, {}, approverToken);
+    expect(incomplete.status).toBe(403);
+    expect((await incomplete.json()).error).toContain("belum dapat diverifikasi");
+  });
+
+  it("requires versions and rejects competing mandate edits and changed creation retries", async () => {
+    const token = await tokenFrom(await signIn(admin, SINAR));
+    const input = { id: "retry-mandate", officerId: "officer-creator-1", function: "PREPARE_PROPOSALS",
+      scopeType: "ALL_PROGRAMS", assignmentRef: "SK/retry", nominalLimit: "1000" };
+    expect((await post("/mandates", input, token)).status).toBe(201);
+    expect((await post("/mandates", input, token)).status).toBe(201);
+    expect((await store.listMandates(SINAR)).length).toBe(1);
+    expect((await post("/mandates", { ...input, nominalLimit: "2000" }, token)).status).toBe(409);
+    expect((await patch("/mandates/retry-mandate", { assignmentRef: "SK/no-version" }, token)).status).toBe(400);
+    expect((await del("/mandates/retry-mandate", token)).status).toBe(400);
+    const edits = await Promise.all(["A", "B"].map(ref => patch("/mandates/retry-mandate",
+      { expectedVersion: 1, assignmentRef: `SK/${ref}` }, token)));
+    expect(edits.map(r => r.status).sort()).toEqual([200, 409]);
+    expect((await store.getMandate(SINAR, "retry-mandate"))?.version).toBe(2);
+  });
+
+  it("checks the source program when moving an existing draft", async () => {
+    const { draft, payload, creatorToken } = await proposalFixture();
+    const mandates = await store.listMandates(SINAR, { officerId: "officer-creator-1" });
+    for (const m of mandates) await patch(`/mandates/${m.id}`, {
+      expectedVersion: m.version, scopeType: "SPECIFIC_PROGRAM", programId: "program-a",
+    }, await tokenFrom(await signIn(admin, SINAR)));
+    const response = await post("/proposals", { ...payload, id: draft.id, expectedVersion: draft.version,
+      programId: "program-a", operationId: "move-outside-scope" }, creatorToken);
+    expect(response.status).toBe(403);
+    expect((await disbursement.getProposalDraft(SINAR, draft.id))?.programId).toBe("program-b");
+  });
+
+  it("allows scoped archive/delete only for their target program", async () => {
+    const { draft, adminToken, creatorToken } = await proposalFixture();
+    const mandates = await store.listMandates(SINAR, { officerId: "officer-creator-1" });
+    for (const m of mandates) await patch(`/mandates/${m.id}`, {
+      expectedVersion: m.version, scopeType: "SPECIFIC_PROGRAM", programId: "program-b",
+    }, adminToken);
+    await store.grantMandate({ institutionId: SINAR, actor: admin.address, now: NOW,
+      mandate: { officerId: "officer-creator-1", function: "MANAGE_PROGRAMS", scopeType: "SPECIFIC_PROGRAM",
+        programId: "program-b", assignmentRef: "SK/archive", validFrom: NOW-1, validUntil: NOW+100 } });
+    expect((await post("/programs/program-a/archive", {}, creatorToken)).status).toBe(403);
+    expect((await post("/programs/program-b/archive", {}, creatorToken)).status).toBe(200);
+    expect((await del(`/proposals/${draft.id}`, creatorToken,
+      { expectedVersion: draft.version, operationId: "scoped-delete" })).status).toBe(204);
+  });
+
+  it("rejects stale mandate edits instead of undoing revocation", async () => {
+    const { adminToken } = await proposalFixture();
+    const [mandate] = await store.listMandates(SINAR);
+    expect((await del(`/mandates/${mandate!.id}`, adminToken, { expectedVersion: mandate!.version })).status).toBe(200);
+    const stale = await patch(`/mandates/${mandate!.id}`, { expectedVersion: mandate!.version,
+      assignmentRef: "SK/stale", isActive: true }, adminToken);
+    expect(stale.status).toBe(409);
+    expect((await store.getMandate(SINAR, mandate!.id))?.isActive).toBe(false);
+  });
+
+  it("rejects stale endorsement edits and registration retries after revocation", async () => {
+    const adminToken = await tokenFrom(await signIn(admin, SINAR));
+    const data = { id: "endorsement-retry", accountAddress: endorsementAccount1.address,
+      label: "Lembaga", authorizedOfficerIds: ["officer-creator-1"] };
+    const created = await post("/endorsement-accounts", data, adminToken);
+    const account = (await created.json()).endorsementAccount;
+    expect((await del(`/endorsement-accounts/${account.id}`, adminToken, { expectedVersion: account.version })).status).toBe(200);
+    expect((await patch(`/endorsement-accounts/${account.id}`, { expectedVersion: account.version,
+      label: "Edit usang", isActive: true }, adminToken)).status).toBe(409);
+    expect((await post("/endorsement-accounts", data, adminToken)).status).toBe(409);
+    expect((await store.getEndorsementAccount(SINAR, account.id))?.isActive).toBe(false);
+  });
+
   it("allows admin to grant, list, update, and revoke operational mandates with audit history", async () => {
     const adminToken = await tokenFrom(await signIn(admin, SINAR));
 
@@ -195,6 +330,7 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
     const patchRes = await patch(
       `/mandates/${mandate.id}`,
       {
+        expectedVersion: mandate.version,
         assignmentRef: "SK/2026/PROG/001-REV1",
         nominalLimit: "100000000",
       },
@@ -206,7 +342,7 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
     expect(patchedMandate.nominalLimit).toBe("100000000");
 
     // Admin revokes mandate
-    const deleteRes = await del(`/mandates/${mandate.id}`, adminToken);
+    const deleteRes = await del(`/mandates/${mandate.id}`, adminToken, { expectedVersion: patchedMandate.version });
     expect(deleteRes.status).toBe(200);
 
     // Verify activeOnly list is empty
@@ -307,7 +443,7 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
     const updateRes = await patch(
       `/endorsement-accounts/${endorsementAccount.id}`,
       {
-        authorizedOfficerIds: [],
+        expectedVersion: endorsementAccount.version, authorizedOfficerIds: [],
       },
       adminToken
     );
@@ -318,7 +454,7 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
     expect((await off1AccountsUpdated.json()).endorsementAccounts.length).toBe(1);
 
     // Revoke endorsement account
-    const delRes = await del(`/endorsement-accounts/${endorsementAccount.id}`, adminToken);
+    const delRes = await del(`/endorsement-accounts/${endorsementAccount.id}`, adminToken, { expectedVersion: (await updateRes.json()).endorsementAccount.version });
     expect(delRes.status).toBe(200);
 
     // Officer 2 should no longer see it
@@ -674,12 +810,12 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
 
     const baitulPatch = await patch(
       `/mandates/${sinarMandateId}`,
-      { assignmentRef: "SK/HACKED" },
+      { expectedVersion: 1, assignmentRef: "SK/HACKED" },
       adminBaitulToken
     );
     expect(baitulPatch.status).toBe(404);
 
-    const baitulDel = await del(`/mandates/${sinarMandateId}`, adminBaitulToken);
+    const baitulDel = await del(`/mandates/${sinarMandateId}`, adminBaitulToken, { expectedVersion: 1 });
     expect(baitulDel.status).toBe(404);
   });
 
@@ -745,6 +881,40 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
         await page.getByRole("button", { name: "Daftarkan Akun Pengesahan", exact: true }).click();
         await page.getByText("Akun pengesahan lembaga berhasil didaftarkan.", { exact: true }).waitFor();
 
+        // Registration refreshes the signing context without logging in again.
+        const context = page.getByRole("region", { name: "Konteks pengesahan", exact: true });
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).waitFor();
+
+        // Revoking/reactivating a signer invalidates the old choice in the same session.
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).click();
+        await context.getByRole("button", { name: /Rekening Pengesahan Smoke Test/ }).click();
+        await context.getByText("Terpilih", { exact: true }).waitFor();
+        const accountPanel = page.getByRole("region", { name: "Manajemen Akun Pengesahan Lembaga" });
+        page.once("dialog", (dialog: { accept(): Promise<void> }) => dialog.accept());
+        await accountPanel.getByRole("button", { name: "Nonaktifkan", exact: true }).click();
+        await context.getByText(/Belum ada akun pengesahan/).waitFor();
+        page.once("dialog", (dialog: { accept(): Promise<void> }) => dialog.accept());
+        await accountPanel.getByRole("button", { name: "Aktifkan kembali", exact: true }).click();
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).waitFor();
+        expect(await context.getByText("Terpilih", { exact: true }).count()).toBe(0);
+
+        // Revoke while this browser still edits an old version.
+        const mandatePanel = page.getByRole("region", { name: "Manajemen Mandat Operasional" });
+        await mandatePanel.getByRole("button", { name: "Ubah", exact: true }).click();
+        await mandatePanel.getByLabel("Nomor SK / Surat Tugas *", { exact: true }).fill("SK/BROWSER/STALE");
+        const [browserMandate] = await store.listMandates(SINAR);
+        await store.revokeMandate({ id: browserMandate!.id, expectedVersion: browserMandate!.version,
+          institutionId: SINAR, actor: admin.address, now: NOW });
+        await mandatePanel.getByRole("button", { name: "Simpan", exact: true }).click();
+        await mandatePanel.getByRole("alert").getByText(/Kewenangan sudah berubah/).waitFor();
+        expect((await store.getMandate(SINAR, browserMandate!.id))?.isActive).toBe(false);
+        await mandatePanel.getByRole("button", { name: "Batal", exact: true }).click();
+        await mandatePanel.getByRole("button", { name: "Muat ulang", exact: true }).click();
+        await mandatePanel.getByText("Dicabut · Versi 2", { exact: true }).waitFor();
+        page.once("dialog", (dialog: { accept(): Promise<void> }) => dialog.accept());
+        await mandatePanel.getByRole("button", { name: "Aktifkan kembali", exact: true }).click();
+        await mandatePanel.getByText("Mandat diaktifkan kembali.", { exact: true }).waitFor();
+
         // 2. Sign out as admin and switch to officer1
         await page.getByRole("button", { name: "Keluar", exact: true }).click();
         currentWallet = officer1;
@@ -767,13 +937,31 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
         // Endorsement signer context is now selected
         await page.getByText("Terpilih").waitFor();
         // Verify operator account did not change
-        expect(await page.locator(`text=${officer1.address}`).count()).toBeGreaterThanOrEqual(1);
+        expect(await page.locator(`text=${officer1.address.toLowerCase()}`).count()).toBeGreaterThanOrEqual(1);
+
+        // Logout and reopening the same account discard the signing choice.
+        await page.getByRole("button", { name: "Keluar", exact: true }).click();
+        await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).waitFor();
+        expect(await context.getByText("Terpilih", { exact: true }).count()).toBe(0);
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).click();
+        await context.getByRole("button", { name: /Rekening Pengesahan Smoke Test/ }).click();
+        await context.getByText("Terpilih", { exact: true }).waitFor();
+
+        // Another account of the same officer is a new authenticated session too.
+        currentWallet = officer1SecondAccount;
+        await page.getByRole("button", { name: "Ganti akun sintetis", exact: true }).click();
+        await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+        await context.getByRole("button", { name: "Pilih Penanda Tangan", exact: true }).waitFor();
+        expect(await context.getByText("Terpilih", { exact: true }).count()).toBe(0);
+        expect(await context.getByText(officer1SecondAccount.address.toLowerCase(), { exact: true }).count()).toBe(1);
 
       } finally {
         await browser?.close();
         await server.stop(true);
       }
-    }
+    },
+    45_000
   );
 });
 

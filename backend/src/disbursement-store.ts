@@ -62,6 +62,13 @@ export class ProposalDraftConflictError extends Error {
 }
 
 export type DraftOperation = { id: string; account: string; requestHash: string };
+export type ProposalContributor = { account: string; officerId: string | null; version: number };
+
+type DraftGuard = (draft: StoredProposalDraft) => void;
+const materialContents = (draft: Omit<StoredProposalDraft, "version">) => JSON.stringify([
+  draft.programId, draft.originOfRequest, draft.purpose, draft.aidPeriod,
+  draft.personInCharge, draft.beneficiaries, draft.aidLines,
+]);
 
 export class DraftOperationConflictError extends Error {
   constructor() {
@@ -131,7 +138,7 @@ const draftFrom = (row: any): StoredProposalDraft => ({
   updatedAt: asSeconds(row.updated_at),
 });
 
-/** The dev migration. Every statement is `IF NOT EXISTS`; running it twice is a no-op. */
+/** Idempotent schema evolution and historical attribution backfill from durable save receipts. */
 export const DISBURSEMENT_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS programs (
      id TEXT PRIMARY KEY,
@@ -173,6 +180,30 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      result_json TEXT,
      PRIMARY KEY (institution_id, account, operation_id)
    );`,
+  `CREATE TABLE IF NOT EXISTS proposal_draft_contributors (
+     draft_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
+     version INTEGER NOT NULL,
+     account TEXT NOT NULL,
+     officer_id TEXT REFERENCES officer_profiles(id),
+     PRIMARY KEY (draft_id, version, account)
+   );`,
+  // Recover existing attribution from durable save receipts, including inactive memberships.
+  // Account-to-person bindings cannot be reassigned by the membership store.
+  `INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+   SELECT d.id, 1, LOWER(d.created_by), m.officer_id
+   FROM proposal_drafts d LEFT JOIN institution_memberships m
+     ON m.institution_id = d.institution_id AND m.account_address = LOWER(d.created_by)
+   ON CONFLICT DO NOTHING;`,
+  `INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+   SELECT d.id, (o.result_json::jsonb->>'version')::integer, LOWER(o.account), m.officer_id
+   FROM proposal_draft_operations o
+   JOIN proposal_drafts d ON d.institution_id = o.institution_id AND d.id = o.result_json::jsonb->>'id'
+   LEFT JOIN institution_memberships m ON m.institution_id = o.institution_id AND m.account_address = LOWER(o.account)
+   WHERE jsonb_typeof(o.result_json::jsonb) = 'object'
+     AND (o.result_json::jsonb->>'version')::integer <= d.version
+     AND NOT EXISTS (SELECT 1 FROM proposal_draft_contributors c WHERE c.draft_id = d.id
+       AND c.version = (o.result_json::jsonb->>'version')::integer)
+   ON CONFLICT DO NOTHING;`,
 ] as const;
 
 export function createDisbursementStore(db: DisbursementDatabase) {
@@ -245,9 +276,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
     async saveProposalDraft(
       draft: Omit<StoredProposalDraft, "version" | "updatedAt"> & { updatedAt: number },
       expectedVersion: number,
-      operation: DraftOperation
+      operation: DraftOperation,
+      authorizeExisting: DraftGuard
     ): Promise<StoredProposalDraft> {
       return mutateOnce(db, draft.institutionId, operation, async tx => {
+        const current = rowsOf(await tx.execute(sql`
+          SELECT * FROM proposal_drafts WHERE id = ${draft.id} AND institution_id = ${draft.institutionId} FOR UPDATE
+        `))[0];
+        if (current) authorizeExisting(draftFrom(current));
         const written = rowsOf(await tx.execute(expectedVersion === 0 ? sql`
           INSERT INTO proposal_drafts (
             id, institution_id, program_id, created_by, origin_of_request, purpose,
@@ -270,7 +306,23 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           RETURNING *
         `));
         if (!written.length) throw new ProposalDraftConflictError(draft.id);
-        return draftFrom(written[0]);
+        const saved = draftFrom(written[0]);
+        if (current && materialContents(draftFrom(current)) === materialContents(draft)) {
+          await tx.execute(sql`
+            INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+            SELECT draft_id, ${saved.version}, account, officer_id FROM proposal_draft_contributors
+            WHERE draft_id = ${saved.id} AND version = ${expectedVersion}
+          `);
+        } else {
+          // Attribution is committed with the actual version; it never depends on an active membership later.
+          await tx.execute(sql`
+            INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+            VALUES (${saved.id}, ${saved.version}, ${operation.account.toLowerCase()},
+              (SELECT officer_id FROM institution_memberships WHERE institution_id = ${draft.institutionId}
+                AND account_address = ${operation.account.toLowerCase()}))
+          `);
+        }
+        return saved;
       });
     },
 
@@ -279,6 +331,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         await db.execute(sql`SELECT * FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId}`)
       )[0];
       return row ? draftFrom(row) : null;
+    },
+
+    async proposalContributors(institutionId: string, id: string): Promise<ProposalContributor[]> {
+      return rowsOf(await db.execute(sql`
+        SELECT c.account, c.officer_id, c.version FROM proposal_draft_contributors c
+        JOIN proposal_drafts d ON d.id = c.draft_id
+        WHERE d.id = ${id} AND d.institution_id = ${institutionId} AND c.version <= d.version
+      `)).map(row => ({ account: row.account, officerId: row.officer_id ?? null, version: Number(row.version) }));
     },
 
     async listProposalDrafts(institutionId: string, programId?: string): Promise<ProposalDraftSummary[]> {
@@ -308,13 +368,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
     },
 
     async deleteProposalDraft(institutionId: string, id: string, expectedVersion: number,
-      operation: DraftOperation): Promise<boolean> {
+      operation: DraftOperation, authorizeExisting: DraftGuard): Promise<boolean> {
       return mutateOnce(db, institutionId, operation, async tx => {
         // Lock before checking the version so an edit/delete race cannot silently win.
         const existing = rowsOf(await tx.execute(sql`
-          SELECT version FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} FOR UPDATE
+          SELECT * FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} FOR UPDATE
         `))[0];
         if (!existing) return false;
+        authorizeExisting(draftFrom(existing));
         if (Number(existing.version) !== expectedVersion) throw new ProposalDraftConflictError(id);
         await tx.execute(sql`DELETE FROM proposal_drafts WHERE id = ${id} AND institution_id = ${institutionId} AND version = ${expectedVersion}`);
         return true;

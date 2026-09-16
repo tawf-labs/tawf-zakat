@@ -55,6 +55,7 @@ export type OperationalMandate = {
   validUntil: number;
   assignmentRef: string;
   nominalLimit: string | null; // Minor unit / integer string or null for unlimited
+  version: number;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -67,6 +68,7 @@ export type InstitutionalEndorsementAccount = {
   accountAddress: string;
   label: string;
   authorizedOfficerIds: string[];
+  version: number;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;

@@ -539,6 +539,10 @@ workspaceRoutes.patch("/mandates/:id", async (c) => {
   if (!auth.ok) return auth.response;
 
   if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+  if (!body || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) {
+    return badRequest(c, "Versi kewenangan yang dimuat wajib disertakan.");
+  }
+
 
   const mandateId = c.req.param("id");
   const patch: Parameters<typeof runtime.store.updateMandate>[0]["patch"] = {};
@@ -601,6 +605,7 @@ workspaceRoutes.patch("/mandates/:id", async (c) => {
     institutionId: auth.session.institutionId,
     actor: auth.session.account,
     now: runtime.now(),
+    expectedVersion: body.expectedVersion as number,
     patch,
   });
 
@@ -610,10 +615,15 @@ workspaceRoutes.patch("/mandates/:id", async (c) => {
 
 workspaceRoutes.delete("/mandates/:id", async (c) => {
   const runtime = runtimeOf();
+  const body = await readJson(c);
   const auth = await authenticate(c, runtime, c.req.query("institutionId"));
   if (!auth.ok) return auth.response;
 
   if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+  if (!body || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) {
+    return badRequest(c, "Versi kewenangan yang dimuat wajib disertakan.");
+  }
+
 
   const mandateId = c.req.param("id");
   const revoked = await runtime.store.revokeMandate({
@@ -621,6 +631,7 @@ workspaceRoutes.delete("/mandates/:id", async (c) => {
     institutionId: auth.session.institutionId,
     actor: auth.session.account,
     now: runtime.now(),
+    expectedVersion: body.expectedVersion as number,
   });
 
   if (!revoked) return refuse(c, 404, "not-found");
@@ -684,6 +695,10 @@ workspaceRoutes.patch("/endorsement-accounts/:id", async (c) => {
   if (!auth.ok) return auth.response;
 
   if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+  if (!body || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) {
+    return badRequest(c, "Versi kewenangan yang dimuat wajib disertakan.");
+  }
+
 
   const id = c.req.param("id");
   const patch: Parameters<typeof runtime.store.updateEndorsementAccount>[0]["patch"] = {};
@@ -714,6 +729,7 @@ workspaceRoutes.patch("/endorsement-accounts/:id", async (c) => {
     institutionId: auth.session.institutionId,
     actor: auth.session.account,
     now: runtime.now(),
+    expectedVersion: body.expectedVersion as number,
     patch,
   });
 
@@ -723,10 +739,15 @@ workspaceRoutes.patch("/endorsement-accounts/:id", async (c) => {
 
 workspaceRoutes.delete("/endorsement-accounts/:id", async (c) => {
   const runtime = runtimeOf();
+  const body = await readJson(c);
   const auth = await authenticate(c, runtime, c.req.query("institutionId"));
   if (!auth.ok) return auth.response;
 
   if (!authorize(auth.session.role, "manageMembers")) return refuse(c, 403, "forbidden");
+  if (!body || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) {
+    return badRequest(c, "Versi kewenangan yang dimuat wajib disertakan.");
+  }
+
 
   const id = c.req.param("id");
   const revoked = await runtime.store.revokeEndorsementAccount({
@@ -734,6 +755,7 @@ workspaceRoutes.delete("/endorsement-accounts/:id", async (c) => {
     institutionId: auth.session.institutionId,
     actor: auth.session.account,
     now: runtime.now(),
+    expectedVersion: body.expectedVersion as number,
   });
 
   if (!revoked) return refuse(c, 404, "not-found");

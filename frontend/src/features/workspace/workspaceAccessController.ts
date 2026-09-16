@@ -22,6 +22,7 @@ type AccessState = { account: string | null; error: string | null; generation: n
 /** Owns one tab's access. Async results belong to the generation that started them. */
 export function createWorkspaceAccess(ports: AccessPorts) {
   let generation = 0;
+  let refreshRevision = 0;
   let state: AccessState = { state: "CLOSED", account: null, error: null, generation };
   let retained: StoredSession | null = null;
   let active: StoredSession | null = null;
@@ -158,9 +159,11 @@ export function createWorkspaceAccess(ports: AccessPorts) {
     },
     async refresh() {
       if (state.state !== "READY" || !active) return;
+      const revision = ++refreshRevision;
       const previous = state;
       const workspace = await previous.requests.json<Workspace>("/api/workspace");
       previous.requests.assertCurrent();
+      if (revision !== refreshRevision) return;
       if (workspace.account.toLowerCase() !== previous.account?.toLowerCase()
         || workspace.institution.id !== previous.workspace.institution.id) throw new AccessContextChanged();
       if (workspace.officer?.id !== previous.workspace.officer?.id || workspace.role !== previous.workspace.role) {

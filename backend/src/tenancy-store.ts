@@ -85,9 +85,8 @@ export type OfficerWithAccounts = OfficerProfileRecord & {
 };
 
 /**
- * The dev migration, as one ordered list. Every statement is `IF NOT EXISTS`,
- * so running it twice is a no-op and running it against a deployment that
- * already has these tables changes nothing.
+ * Idempotent schema evolution, as one ordered list. Existing records are
+ * retained when new fields are added; repeating the migration is a no-op.
  */
 export const WORKSPACE_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS institutions (
@@ -184,6 +183,8 @@ export const WORKSPACE_SCHEMA_STATEMENTS = [
      created_by TEXT NOT NULL,
      CONSTRAINT institutional_endorsement_unique UNIQUE (institution_id, account_address)
    );`,
+  `ALTER TABLE operational_mandates ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;`,
+  `ALTER TABLE institutional_endorsement_accounts ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
@@ -232,6 +233,7 @@ const mandateFromRow = (row: any): OperationalMandate => ({
   validUntil: asSeconds(row.valid_until),
   assignmentRef: row.assignment_ref,
   nominalLimit: row.nominal_limit ?? null,
+  version: Number(row.version),
   isActive: Boolean(row.is_active),
   createdAt: asSeconds(row.created_at),
   updatedAt: asSeconds(row.updated_at),
@@ -255,6 +257,7 @@ const endorsementAccountFromRow = (row: any): InstitutionalEndorsementAccount =>
     accountAddress: row.account_address,
     label: row.label,
     authorizedOfficerIds: authorized,
+    version: Number(row.version),
     isActive: Boolean(row.is_active),
     createdAt: asSeconds(row.created_at),
     updatedAt: asSeconds(row.updated_at),
@@ -264,6 +267,12 @@ const endorsementAccountFromRow = (row: any): InstitutionalEndorsementAccount =>
 
 export class OfficerConflict extends Error {}
 export class OfficerAuthorityChanged extends Error {}
+
+function assertAuthorityVersion(current: unknown, expected: number) {
+  if (!Number.isSafeInteger(expected) || Number(current) !== expected) {
+    throw new OfficerConflict("Kewenangan sudah berubah. Muat ulang sebelum mengubah atau mencabutnya.");
+  }
+}
 
 export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(work: (tx: WorkspaceDatabase) => Promise<T>) => Promise<T> }) {
   const one = async (query: any) => rowsOf(await db.execute(query))[0] ?? null;
@@ -857,6 +866,11 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           if (existing) {
             const m = mandateFromRow(existing);
             if (
+              m.version === 1 && m.isActive &&
+              m.accountAddress === (input.mandate.accountAddress ?? null) &&
+              m.scopeType === input.mandate.scopeType && m.programId === (input.mandate.programId ?? null) &&
+              m.validFrom === input.mandate.validFrom && m.validUntil === input.mandate.validUntil &&
+              m.nominalLimit === (input.mandate.nominalLimit ?? null) &&
               m.officerId === input.mandate.officerId &&
               m.function === input.mandate.function &&
               m.assignmentRef === input.mandate.assignmentRef
@@ -911,6 +925,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async updateMandate(input: {
       id: string;
+      expectedVersion: number;
       institutionId: string;
       actor: string;
       now: number;
@@ -933,6 +948,8 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           )
         )[0];
         if (!current) return null;
+        assertAuthorityVersion(current.version, input.expectedVersion);
+
 
         const before = mandateFromRow(current);
         const scopeType = input.patch.scopeType ?? before.scopeType;
@@ -948,6 +965,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         const nominalLimit =
           input.patch.nominalLimit !== undefined ? input.patch.nominalLimit : before.nominalLimit;
         const isActive = input.patch.isActive !== undefined ? input.patch.isActive : before.isActive;
+        if (validUntil <= validFrom) throw new OfficerConflict("Akhir masa berlaku harus setelah awal masa berlaku.");
 
         await tx.execute(sql`
           UPDATE operational_mandates SET
@@ -958,7 +976,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
             assignment_ref = ${assignmentRef},
             nominal_limit = ${nominalLimit},
             is_active = ${isActive},
-            updated_at = ${input.now}
+            version = version + 1, updated_at = ${input.now}
           WHERE id = ${input.id} AND institution_id = ${input.institutionId}
         `);
 
@@ -969,7 +987,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
             ${input.institutionId}, ${normalizeAccount(input.actor)}, ${normalizeAccount(input.actor)},
             'ADMIN', 'UPDATE_MANDATE', ${input.now},
             ${JSON.stringify({
-              mandateId: input.id,
+              mandateId: input.id, version: input.expectedVersion + 1,
               before: {
                 scopeType: before.scopeType,
                 programId: before.programId,
@@ -1001,6 +1019,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async revokeMandate(input: {
       id: string;
+      expectedVersion: number;
       institutionId: string;
       actor: string;
       now: number;
@@ -1014,11 +1033,13 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           )
         )[0];
         if (!current) return false;
+        assertAuthorityVersion(current.version, input.expectedVersion);
+
 
         await tx.execute(sql`
           UPDATE operational_mandates SET
             is_active = FALSE,
-            updated_at = ${input.now}
+            version = version + 1, updated_at = ${input.now}
           WHERE id = ${input.id} AND institution_id = ${input.institutionId}
         `);
 
@@ -1028,7 +1049,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           ) VALUES (
             ${input.institutionId}, ${normalizeAccount(input.actor)}, ${normalizeAccount(input.actor)},
             'ADMIN', 'REVOKE_MANDATE', ${input.now},
-            ${JSON.stringify({ mandateId: input.id })}::jsonb
+            ${JSON.stringify({ mandateId: input.id, version: input.expectedVersion + 1 })}::jsonb
           )
         `);
 
@@ -1136,35 +1157,13 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
         const authorizedJson = JSON.stringify(input.data.authorizedOfficerIds || []);
 
         if (existing) {
-          if (existing.is_active) {
-            if (existing.label === input.data.label) {
-              return endorsementAccountFromRow(existing);
-            }
-            throw new OfficerConflict("Akun pengesahan ini sudah terdaftar pada lembaga ini.");
+          const account = endorsementAccountFromRow(existing);
+          if (account.version === 1 && account.isActive && account.label === input.data.label &&
+              JSON.stringify([...account.authorizedOfficerIds].sort()) ===
+                JSON.stringify([...(input.data.authorizedOfficerIds ?? [])].sort())) {
+            return account;
           }
-          await tx.execute(sql`
-            UPDATE institutional_endorsement_accounts SET
-              label = ${input.data.label},
-              authorized_officer_ids = ${authorizedJson}::jsonb,
-              is_active = TRUE,
-              updated_at = ${input.now}
-            WHERE id = ${existing.id}
-          `);
-          await tx.execute(sql`
-            INSERT INTO workspace_authority_history (
-              institution_id, actor, account, role, action, occurred_at, details
-            ) VALUES (
-              ${input.institutionId}, ${normalizeAccount(input.actor)}, ${acc},
-              'ADMIN', 'REGISTER_ENDORSEMENT_ACCOUNT', ${input.now},
-              ${JSON.stringify({ id: existing.id, account: acc, reactivated: true })}::jsonb
-            )
-          `);
-          const row = rowsOf(
-            await tx.execute(
-              sql`SELECT * FROM institutional_endorsement_accounts WHERE id = ${existing.id}`
-            )
-          )[0];
-          return endorsementAccountFromRow(row);
+          throw new OfficerConflict("Akun pengesahan sudah terdaftar atau berubah. Muat ulang dan gunakan perubahan berversi.");
         }
 
         await tx.execute(sql`
@@ -1199,6 +1198,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async updateEndorsementAccount(input: {
       id: string;
+      expectedVersion: number;
       institutionId: string;
       actor: string;
       now: number;
@@ -1217,6 +1217,8 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           )
         )[0];
         if (!current) return null;
+        assertAuthorityVersion(current.version, input.expectedVersion);
+
 
         const before = endorsementAccountFromRow(current);
         const label = input.patch.label ?? before.label;
@@ -1228,7 +1230,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
             label = ${label},
             authorized_officer_ids = ${JSON.stringify(authorized)}::jsonb,
             is_active = ${isActive},
-            updated_at = ${input.now}
+            version = version + 1, updated_at = ${input.now}
           WHERE id = ${input.id} AND institution_id = ${input.institutionId}
         `);
 
@@ -1239,7 +1241,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
             ${input.institutionId}, ${normalizeAccount(input.actor)}, ${before.accountAddress},
             'ADMIN', 'UPDATE_ENDORSEMENT_ACCOUNT', ${input.now},
             ${JSON.stringify({
-              id: input.id,
+              id: input.id, version: input.expectedVersion + 1,
               before: { label: before.label, authorized: before.authorizedOfficerIds, isActive: before.isActive },
               after: { label, authorized, isActive },
             })}::jsonb
@@ -1257,6 +1259,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
 
     async revokeEndorsementAccount(input: {
       id: string;
+      expectedVersion: number;
       institutionId: string;
       actor: string;
       now: number;
@@ -1270,11 +1273,13 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           )
         )[0];
         if (!current) return false;
+        assertAuthorityVersion(current.version, input.expectedVersion);
+
 
         await tx.execute(sql`
           UPDATE institutional_endorsement_accounts SET
             is_active = FALSE,
-            updated_at = ${input.now}
+            version = version + 1, updated_at = ${input.now}
           WHERE id = ${input.id} AND institution_id = ${input.institutionId}
         `);
 
@@ -1284,7 +1289,7 @@ export function createWorkspaceStore(db: WorkspaceDatabase & { transaction: <T>(
           ) VALUES (
             ${input.institutionId}, ${normalizeAccount(input.actor)}, ${current.account_address},
             'ADMIN', 'REVOKE_ENDORSEMENT_ACCOUNT', ${input.now},
-            ${JSON.stringify({ id: input.id, account: current.account_address })}::jsonb
+            ${JSON.stringify({ id: input.id, version: input.expectedVersion + 1, account: current.account_address })}::jsonb
           )
         `);
 

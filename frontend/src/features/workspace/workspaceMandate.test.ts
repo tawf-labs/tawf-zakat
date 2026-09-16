@@ -63,6 +63,7 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
     });
 
     const input = {
+      id: "mandate-retry-id",
       officerId: "off-1",
       function: "PREPARE_PROPOSALS" as const,
       scopeType: "ALL_PROGRAMS" as const,
@@ -75,7 +76,7 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
     const created = await grantMandate(requests, input);
     expect(capturedBody.officerId).toBe("off-1");
     expect(capturedBody.function).toBe("PREPARE_PROPOSALS");
-    expect(created.id).toBe("man-new");
+    expect(created.id).toBe("mandate-retry-id");
   });
 
   it("updates operational mandate via PATCH /api/workspace/mandates/:id", async () => {
@@ -94,9 +95,11 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
     });
 
     const updated = await updateMandate(requests, "man-123", {
+      expectedVersion: 7,
       assignmentRef: "SK/2026/REV2",
       nominalLimit: "100000000",
     });
+    expect(capturedBody.expectedVersion).toBe(7);
     expect(capturedBody.assignmentRef).toBe("SK/2026/REV2");
     expect(updated.assignmentRef).toBe("SK/2026/REV2");
   });
@@ -109,7 +112,7 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
       return { success: true, revoked: true };
     });
 
-    await revokeMandate(requests, "man-123");
+    await revokeMandate(requests, "man-123", 8);
     expect(deletedPath).toBe("/api/workspace/mandates/man-123");
   });
 
@@ -149,11 +152,12 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
     });
 
     const created = await registerEndorsementAccount(regRequests, {
+      id: "endorsement-retry-id",
       accountAddress: "0x9876543210987654321098765432109876543210",
       label: "Rekening Pengesahan",
       authorizedOfficerIds: [],
     });
-    expect(created.id).toBe("ea-2");
+    expect(created.id).toBe("endorsement-retry-id");
     expect(created.label).toBe("Rekening Pengesahan");
 
     const updateRequests = mockRequests(async (path, init) => {
@@ -162,7 +166,7 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
       return { success: true, endorsementAccount: { id: "ea-2", label: "Rekening Baru" } };
     });
 
-    const updated = await updateEndorsementAccount(updateRequests, "ea-2", { label: "Rekening Baru" });
+    const updated = await updateEndorsementAccount(updateRequests, "ea-2", { expectedVersion: 1, label: "Rekening Baru" });
     expect(updated.label).toBe("Rekening Baru");
 
     const revokeRequests = mockRequests(async (path, init) => {
@@ -171,6 +175,6 @@ describe("workspaceClient operational mandate & endorsement account methods (Tic
       return { success: true, revoked: true };
     });
 
-    await revokeEndorsementAccount(revokeRequests, "ea-2");
+    await revokeEndorsementAccount(revokeRequests, "ea-2", 2);
   });
 });
