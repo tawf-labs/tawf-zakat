@@ -9,6 +9,7 @@ import { EvidencePackagePanel } from "./EvidencePackagePanel";
 import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
+import { ActivityPanel } from "../activities";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -188,6 +189,8 @@ function WorkspaceContents() {
       <ContributionPanel key={`contribution:${requests.contextId}`} requests={requests} canManage={capabilities.prepareEvidence} />
 
       <DisbursementPanel key={`disbursement:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
+
+      <ActivityPanel key={`activity:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
 
       <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
 

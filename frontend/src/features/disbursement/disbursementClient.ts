@@ -62,6 +62,7 @@ export type ProposalStatus =
   | "UNDER_EXAMINATION"
   | "REVISION_REQUIRED"
   | "READY_FOR_DECISION"
+  | "APPROVED"
   | "WITHDRAWN";
 
 export type ProposalDocumentCategory =

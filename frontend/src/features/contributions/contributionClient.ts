@@ -70,6 +70,12 @@ export type ContributionRecord = {
   endorsementNotes: string | null;
   /** Why the record is not yet batch-eligible; null once endorsed. */
   unqualifiedReason: string | null;
+  /** Allocated to distribution activities (#103); absent where allocation is not configured. */
+  allocatedAmount?: string;
+  /** Still allocatable; zero while there is a shortfall. */
+  unallocatedAmount?: string;
+  /** Allocations above the recorded amount after a correction; shown, never hidden as zero. */
+  shortfallAmount?: string;
   version: number;
   createdAt: number;
   updatedAt: number;

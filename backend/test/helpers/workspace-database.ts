@@ -36,6 +36,10 @@ const LEGACY_SCHEMA = `
 
 /** The tables these tickets add, newest first, for truncation between tests. */
 const WORKSPACE_TABLES = [
+  "allocation_history",
+  "contribution_allocations",
+  "activity_operations",
+  "distribution_activities",
   "contribution_documents",
   "contribution_history",
   "contribution_operations",

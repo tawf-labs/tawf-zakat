@@ -62,6 +62,12 @@ export type WorkspaceRuntime = {
    * than keeping a contribution somewhere it will not survive a restart.
    */
   contributions?: import("./contribution-store").ContributionStore;
+  /**
+   * Distribution activities and contribution allocations (Spec #100, ticket #103).
+   * Optional, and absent means absent: the activity routes answer 503 rather
+   * than keeping an activity somewhere it will not survive a restart.
+   */
+  activities?: import("./activity-store").ActivityStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;

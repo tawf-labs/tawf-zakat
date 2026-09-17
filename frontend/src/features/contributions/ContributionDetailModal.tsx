@@ -14,6 +14,7 @@ import {
   type ContributionRecord,
 } from "./contributionClient";
 import { ContributionStatusBadge } from "./ContributionStatusBadge";
+import { ContributionAllocations } from "./ContributionAllocations";
 import { errorMessage, fileToBase64 } from "./contributionUi";
 
 export type ContributionDetail = {
@@ -206,6 +207,8 @@ export function ContributionDetailModal({
             )}
           </div>
         )}
+
+        <ContributionAllocations requests={requests} record={record} />
 
         <DocumentSection requests={requests} detail={detail} canManage={canManage} onChanged={onReload} onError={onError} />
 

@@ -87,21 +87,21 @@ const unconfigured = (c: Context) =>
 
 const runtimeOf = (): WorkspaceRuntime => workspaceRuntime()!;
 
-const expectedVersionOf = (body: Record<string, unknown>): number | null =>
+export const expectedVersionOf = (body: Record<string, unknown>): number | null =>
   typeof body.expectedVersion === "number" && Number.isSafeInteger(body.expectedVersion) && body.expectedVersion >= 1
     ? body.expectedVersion
     : null;
 
-const operationIdOf = (body: Record<string, unknown>): string | null => {
+export const operationIdOf = (body: Record<string, unknown>): string | null => {
   const id = text(body.operationId);
   return id && id.length <= 128 ? id : null;
 };
 
-const requestHash = (components: unknown[]): string =>
+export const requestHash = (components: unknown[]): string =>
   createHash("sha256").update(JSON.stringify(components)).digest("hex");
 
-const MISSING_OPERATION = "operationId wajib disertakan agar pengulangan permintaan tidak mencatat ganda.";
-const MISSING_VERSION = "expectedVersion wajib disertakan dan berupa bilangan bulat positif.";
+export const MISSING_OPERATION = "operationId wajib disertakan agar pengulangan permintaan tidak mencatat ganda.";
+export const MISSING_VERSION = "expectedVersion wajib disertakan dan berupa bilangan bulat positif.";
 
 /** Stored locators stay server-side; a client only needs to know the file exists and what it is. */
 const documentView = ({ storageRef: _storageRef, ...doc }: StoredContributionDocument) => doc;
@@ -127,7 +127,7 @@ type ContributionFunction = "RECORD_CONTRIBUTIONS" | "ENDORSE_CONTRIBUTIONS";
  * named contribution mandates. Returns the resolved mandate so writes record the
  * one the server found, never one the client named.
  */
-async function contributionActor(
+export async function contributionActor(
   c: Context,
   institutionId: string | undefined,
   functions: readonly ContributionFunction[]
@@ -152,8 +152,8 @@ async function contributionActor(
 const bodyInstitution = (body: Record<string, unknown>) =>
   typeof body.institutionId === "string" ? body.institutionId : undefined;
 
-const READERS = ["RECORD_CONTRIBUTIONS", "ENDORSE_CONTRIBUTIONS"] as const;
-const RECORDERS = ["RECORD_CONTRIBUTIONS"] as const;
+export const READERS = ["RECORD_CONTRIBUTIONS", "ENDORSE_CONTRIBUTIONS"] as const;
+export const RECORDERS = ["RECORD_CONTRIBUTIONS"] as const;
 const ENDORSERS = ["ENDORSE_CONTRIBUTIONS"] as const;
 
 /** Decodes an uploaded import through the shared tabular reader; used by preview and draft save alike. */
@@ -208,7 +208,13 @@ contributionRoutes.get("/contributions", async (c) => {
   }
 
   const list = await who.runtime.contributions!.listContributions(who.session.institutionId, filters);
-  return c.json({ success: true, contributions: list });
+  if (!who.runtime.activities) return c.json({ success: true, contributions: list });
+
+  const balances = await who.runtime.activities.contributionBalances(who.session.institutionId, list);
+  return c.json({
+    success: true,
+    contributions: list.map((item) => ({ ...item, ...balances.get(item.id) })),
+  });
 });
 
 // 2. Record manual contribution
@@ -363,7 +369,17 @@ contributionRoutes.get("/contributions/:id", async (c) => {
   const history = await store.getHistory(who.session.institutionId, id);
   const documents = await store.listDocuments(who.session.institutionId, id);
 
-  return c.json({ success: true, contribution, history, documents: documents.map(documentView) });
+  const activities = who.runtime.activities;
+  const balance = activities
+    ? (await activities.contributionBalances(who.session.institutionId, [contribution])).get(contribution.id)
+    : undefined;
+
+  return c.json({
+    success: true,
+    contribution: { ...contribution, ...balance },
+    history,
+    documents: documents.map(documentView),
+  });
 });
 
 // 5. Reconcile contribution against source proof

@@ -580,3 +580,78 @@ export type NewContributionImportDraftRow = typeof contributionImportDrafts.$inf
 export type ContributionDocumentRow = typeof contributionDocuments.$inferSelect;
 export type NewContributionDocumentRow = typeof contributionDocuments.$inferInsert;
 
+// 14. Distribution Activities and Allocations (Spec #100, Ticket #103)
+// Mirrors ACTIVITY_SCHEMA_STATEMENTS in activity-store.ts, which is what creates them.
+export const distributionActivities = pgTable("distribution_activities", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  proposalVersion: integer("proposal_version").notNull(),
+  programId: text("program_id").notNull().references(() => programs.id),
+  programFundType: text("program_fund_type").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  targetAmount: text("target_amount").notNull(),
+  targetIsPartial: boolean("target_is_partial").notNull(),
+  currencyUnit: text("currency_unit").notNull().default("IDR"),
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE'
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  createdBy: text("created_by").notNull(),
+});
+
+export const contributionAllocations = pgTable("contribution_allocations", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  activityId: text("activity_id").notNull().references(() => distributionActivities.id),
+  currencyUnit: text("currency_unit").notNull(),
+  amountExact: text("amount_exact").notNull(),
+  fundType: text("fund_type").notNull(),
+  purpose: text("purpose").notNull().default(""),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE'
+  allocatedAt: bigint("allocated_at", { mode: "number" }).notNull(),
+  allocatedBy: text("allocated_by").notNull(),
+  allocatedByOfficerId: text("allocated_by_officer_id").references(() => officerProfiles.id),
+  contributionVersion: integer("contribution_version").notNull(),
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const allocationHistory = pgTable("allocation_history", {
+  id: serial("id").primaryKey(),
+  allocationId: text("allocation_id").notNull().references(() => contributionAllocations.id),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  activityId: text("activity_id").notNull().references(() => distributionActivities.id),
+  version: integer("version").notNull(),
+  contributionVersion: integer("contribution_version").notNull(),
+  action: text("action").notNull(), // 'ALLOCATE'
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").references(() => officerProfiles.id),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status").notNull(),
+  amountExact: text("amount_exact").notNull(),
+  reason: text("reason").notNull(),
+  occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
+});
+
+export const activityOperations = pgTable("activity_operations", {
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  account: text("account").notNull(),
+  operationId: text("operation_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resultJson: text("result_json"),
+}, table => [primaryKey({ columns: [table.institutionId, table.account, table.operationId] })]);
+
+export type DistributionActivityRow = typeof distributionActivities.$inferSelect;
+export type NewDistributionActivityRow = typeof distributionActivities.$inferInsert;
+
+export type ContributionAllocationRow = typeof contributionAllocations.$inferSelect;
+export type NewContributionAllocationRow = typeof contributionAllocations.$inferInsert;
+
+export type AllocationHistoryRow = typeof allocationHistory.$inferSelect;
+export type NewAllocationHistoryRow = typeof allocationHistory.$inferInsert;

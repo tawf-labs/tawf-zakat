@@ -19,6 +19,7 @@ import { TabularImportPanel } from "./TabularImportPanel";
 import { ImportDraftList, ImportDraftModal, type OpenedDraft } from "./ImportDrafts";
 import { ContributionDetailModal, type ContributionDetail } from "./ContributionDetailModal";
 import { EndorseModal, ReconcileModal } from "./ContributionDecisionModals";
+import { AllocationModal } from "./AllocationModal";
 
 type Tab = "list" | "create" | "import" | "drafts";
 
@@ -47,6 +48,7 @@ export function ContributionPanel({ requests, canManage }: { requests: PrivateRe
   const [detail, setDetail] = useState<ContributionDetail | null>(null);
   const [reconcileTarget, setReconcileTarget] = useState<ContributionRecord | null>(null);
   const [endorseTarget, setEndorseTarget] = useState<ContributionRecord | null>(null);
+  const [allocatingContribution, setAllocatingContribution] = useState<ContributionRecord | null>(null);
   const [openedDraft, setOpenedDraft] = useState<OpenedDraft | null>(null);
   const operations = useOperationIds();
 
@@ -207,6 +209,7 @@ export function ContributionPanel({ requests, canManage }: { requests: PrivateRe
           onOpen={openDetail}
           onReconcile={setReconcileTarget}
           onEndorse={setEndorseTarget}
+          onAllocate={setAllocatingContribution}
         />
       )}
 
@@ -265,6 +268,19 @@ export function ContributionPanel({ requests, canManage }: { requests: PrivateRe
           onError={setError}
           onClose={() => setEndorseTarget(null)}
           onDone={decisionDone("Kontribusi {id} berhasil disahkan oleh pejabat.", () => setEndorseTarget(null))}
+        />
+      )}
+
+      {allocatingContribution && (
+        <AllocationModal
+          requests={requests}
+          contribution={allocatingContribution}
+          onClose={() => setAllocatingContribution(null)}
+          onAllocated={async () => {
+            setSuccessMessage(`Kontribusi ${allocatingContribution.id} berhasil dialokasikan.`);
+            setAllocatingContribution(null);
+            await refresh();
+          }}
         />
       )}
 

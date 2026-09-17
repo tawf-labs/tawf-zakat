@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Eye, Receipt, Search, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Eye, Layers, Receipt, Search, ShieldCheck } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import {
   channelLabel,
@@ -76,6 +76,7 @@ export function ContributionList({
   onOpen,
   onReconcile,
   onEndorse,
+  onAllocate,
 }: {
   contributions: ContributionRecord[];
   filters: ContributionFilters;
@@ -84,6 +85,7 @@ export function ContributionList({
   onOpen: (id: string) => void;
   onReconcile: (record: ContributionRecord) => void;
   onEndorse: (record: ContributionRecord) => void;
+  onAllocate?: (record: ContributionRecord) => void;
 }) {
   const [search, setSearch] = useState("");
   const q = search.trim().toLowerCase();
@@ -149,7 +151,7 @@ export function ContributionList({
               <tr>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Sumber & Referensi</th>
-                <th className="px-4 py-3">Nominal Pasti</th>
+                <th className="px-4 py-3">Nominal & Alokasi</th>
                 <th className="px-4 py-3">Jenis Dana</th>
                 <th className="px-4 py-3">Donor</th>
                 <th className="px-4 py-3">Waktu Terima</th>
@@ -172,7 +174,18 @@ export function ContributionList({
                     <div className="text-xs text-stone-500">{channelLabel(c.sourceChannel)}</div>
                   </td>
                   <td className="px-4 py-3.5 whitespace-nowrap">
-                    <span className="font-semibold text-stone-900">{formatNominal(c.amountExact, c.currencyUnit)}</span>
+                    <div className="font-semibold text-stone-900">{formatNominal(c.amountExact, c.currencyUnit)}</div>
+                    {c.allocatedAmount !== undefined && c.allocatedAmount !== "0" ? (
+                      <div className="text-[11px] mt-0.5 space-y-0.5">
+                        <div className="text-emerald-700 font-medium">Teralokasi: {formatNominal(c.allocatedAmount, c.currencyUnit)}</div>
+                        <div className="text-amber-700 font-medium">Sisa: {formatNominal(c.unallocatedAmount ?? "0", c.currencyUnit)}</div>
+                        {c.shortfallAmount && c.shortfallAmount !== "0" && (
+                          <div className="text-red-700 font-semibold">Selisih: {formatNominal(c.shortfallAmount, c.currencyUnit)}</div>
+                        )}
+                      </div>
+                    ) : c.allocatedAmount !== undefined ? (
+                      <div className="text-[11px] text-stone-400 mt-0.5">Belum dialokasikan</div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3.5">
                     <span className="inline-block text-xs bg-stone-100 text-stone-800 px-2 py-0.5 rounded">
@@ -216,6 +229,19 @@ export function ContributionList({
                         >
                           <ShieldCheck className="w-3.5 h-3.5 mr-1" />
                           Sahkan
+                        </Button>
+                      )}
+
+                      {canManage && c.status === "ENDORSED" && onAllocate && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAllocate(c)}
+                          className="text-xs px-2.5 py-1 border-purple-300 text-purple-700 hover:bg-purple-50"
+                          title="Alokasikan ke kegiatan penyaluran"
+                        >
+                          <Layers className="w-3.5 h-3.5 mr-1" />
+                          Alokasikan
                         </Button>
                       )}
                     </div>
