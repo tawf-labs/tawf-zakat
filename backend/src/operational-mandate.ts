@@ -25,6 +25,8 @@ export const OPERATIONAL_FUNCTIONS = [
   "APPROVE_DECISIONS",
   "RECORD_REALIZATION",
   "HANDLE_REPORT_EXAMINATION",
+  "RECORD_CONTRIBUTIONS",
+  "ENDORSE_CONTRIBUTIONS",
 ] as const;
 
 export type OperationalFunction = (typeof OPERATIONAL_FUNCTIONS)[number];
@@ -39,6 +41,8 @@ export const OPERATIONAL_FUNCTION_LABELS: Record<OperationalFunction, string> = 
   APPROVE_DECISIONS: "Mengesahkan keputusan penyaluran",
   RECORD_REALIZATION: "Mencatat realisasi penyaluran",
   HANDLE_REPORT_EXAMINATION: "Menangani pemeriksaan laporan",
+  RECORD_CONTRIBUTIONS: "Mencatat dan merekonsiliasi penerimaan kontribusi",
+  ENDORSE_CONTRIBUTIONS: "Mengesahkan kontribusi untuk batch",
 };
 
 export type MandateScopeType = "ALL_PROGRAMS" | "SPECIFIC_PROGRAM";

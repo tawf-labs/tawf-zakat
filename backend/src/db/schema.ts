@@ -483,3 +483,100 @@ export type ProposalDocumentRow = typeof proposalDocuments.$inferSelect;
 export type ProposalVersionRow = typeof proposalVersions.$inferSelect;
 export type ProposalHistoryRow = typeof proposalHistory.$inferSelect;
 export type InstitutionDisbursementPolicyRow = typeof institutionDisbursementPolicies.$inferSelect;
+
+// 13. Contributions and Tabular Imports (Spec #100, Ticket #102)
+export const contributions = pgTable("contributions", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  sourceChannel: text("source_channel").notNull(), // 'BANK_TRANSFER' | 'QRIS' | 'CASH' | 'CRYPTO_USDC' | 'DIRECT' | 'OTHER'
+  sourceReference: text("source_reference").notNull(),
+  currencyUnit: text("currency_unit").notNull(), // 'IDR' | 'USDC_6DP'
+  amountExact: text("amount_exact").notNull(), // exact integer string
+  fundType: text("fund_type").notNull(), // JENIS_DANA: 'ZAKAT' | 'FITRAH' | 'INFAK_SEDEKAH' | 'KURBAN' | 'DSKL'
+  purpose: text("purpose").notNull().default(""),
+  receivedAt: bigint("received_at", { mode: "number" }).notNull(),
+  donorName: text("donor_name"),
+  donorContact: text("donor_contact"),
+  status: text("status").notNull().default("RECEIVED"), // 'RECEIVED' | 'RECONCILED' | 'ENDORSED' | 'REJECTED'
+  reconciledAt: bigint("reconciled_at", { mode: "number" }),
+  reconciledBy: text("reconciled_by"),
+  reconciliationProofRef: text("reconciliation_proof_ref"),
+  reconciliationNotes: text("reconciliation_notes"),
+  endorsedAt: bigint("endorsed_at", { mode: "number" }),
+  endorsedBy: text("endorsed_by"),
+  endorsementMandateId: text("endorsement_mandate_id"),
+  endorsementNotes: text("endorsement_notes"),
+  unqualifiedReason: text("unqualified_reason"),
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  createdBy: text("created_by").notNull(),
+});
+
+export const contributionHistory = pgTable("contribution_history", {
+  id: serial("id").primaryKey(),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  version: integer("version").notNull(),
+  fromStatus: text("from_status").notNull(),
+  toStatus: text("to_status").notNull(),
+  action: text("action").notNull(),
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").references(() => officerProfiles.id),
+  reason: text("reason"),
+  notes: text("notes"),
+  occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
+});
+
+export const contributionOperations = pgTable("contribution_operations", {
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  account: text("account").notNull(),
+  operationId: text("operation_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resultJson: text("result_json"),
+}, table => [primaryKey({ columns: [table.institutionId, table.account, table.operationId] })]);
+
+export const contributionImportDrafts = pgTable("contribution_import_drafts", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  createdBy: text("created_by").notNull(),
+  fileName: text("file_name").notNull(),
+  currencyUnit: text("currency_unit").notNull(),
+  rawRowsCount: integer("raw_rows_count").notNull(),
+  validRowsCount: integer("valid_rows_count").notNull(),
+  invalidRowsCount: integer("invalid_rows_count").notNull(),
+  totalValidAmount: text("total_valid_amount").notNull(),
+  rowsJson: text("rows_json").notNull().default("[]"),
+  issuesJson: text("issues_json").notNull().default("[]"),
+  status: text("status").notNull().default("DRAFT"), // 'DRAFT' | 'COMMITTED' | 'DISCARDED'
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const contributionDocuments = pgTable("contribution_documents", {
+  id: text("id").primaryKey(),
+  contributionId: text("contribution_id").references(() => contributions.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  category: text("category").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageStatus: text("storage_status").notNull(),
+  storageRef: text("storage_ref"),
+  createdBy: text("created_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export type ContributionRow = typeof contributions.$inferSelect;
+export type NewContributionRow = typeof contributions.$inferInsert;
+
+export type ContributionHistoryRow = typeof contributionHistory.$inferSelect;
+export type NewContributionHistoryRow = typeof contributionHistory.$inferInsert;
+
+export type ContributionImportDraftRow = typeof contributionImportDrafts.$inferSelect;
+export type NewContributionImportDraftRow = typeof contributionImportDrafts.$inferInsert;
+
+export type ContributionDocumentRow = typeof contributionDocuments.$inferSelect;
+export type NewContributionDocumentRow = typeof contributionDocuments.$inferInsert;
+

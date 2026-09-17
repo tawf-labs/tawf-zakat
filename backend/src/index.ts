@@ -36,6 +36,7 @@ import periodReportRoutes from "./routes/period-report";
 import reportAuthorityRoutes from "./routes/report-authority";
 import workspaceRoutes from "./routes/workspace";
 import disbursementRoutes from "./routes/disbursement";
+import contributionRoutes from "./routes/contribution";
 import evidenceRoutes from "./routes/evidence";
 import reportPackageRoutes from "./routes/report-package";
 import registryRecoveryRoutes from "./routes/registry-recovery";
@@ -229,6 +230,7 @@ installWorkspaceRuntime();
 app.route("/api/workspace/authority", reportAuthorityRoutes);
 app.route("/api/workspace", workspaceRoutes);
 app.route("/api/workspace", disbursementRoutes);
+app.route("/api/workspace", contributionRoutes);
 app.use("/api/evidence/*", async (c, next) => {
   c.header("Cache-Control", "private, no-store");
   c.header("Vary", "Authorization");

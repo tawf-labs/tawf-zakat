@@ -56,6 +56,12 @@ export type WorkspaceRuntime = {
    * keeping a program somewhere it will not survive a restart.
    */
   disbursement?: DisbursementStore;
+  /**
+   * Institutional contributions and tabular import drafts (Spec #100, ticket #102).
+   * Optional, and absent means absent: the contribution routes answer 503 rather
+   * than keeping a contribution somewhere it will not survive a restart.
+   */
+  contributions?: import("./contribution-store").ContributionStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;
