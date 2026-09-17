@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Search, CheckCircle2, AlertCircle, Loader2, Sparkles, RefreshCw } from "lucide-react";
+import { Search, CheckCircle2, AlertCircle, AlertTriangle, Loader2, RefreshCw, Lock, KeyRound, ChevronDown, ChevronUp } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { computeDonationLeaf, verifyClientProof } from "../../lib/merkleClient";
 import { CertificateCard } from "./CertificateCard";
@@ -12,136 +12,157 @@ interface SearchReceiptFormProps {
   initialTrxId?: string;
 }
 
+type LookupState = "IDLE" | "LOADING" | "FOUND" | "NOT_FOUND" | "UNAVAILABLE";
+
 export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps) {
   const [trxId, setTrxId] = useState(initialTrxId);
-  const [salt, setSalt] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [lookupState, setLookupState] = useState<LookupState>("IDLE");
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
-  const [receiptResult, setReceiptResult] = useState<any>(null);
-  const [merkleData, setMerkleData] = useState<{
-    leaf?: Hex;
-    merkleRoot?: Hex;
-    proof?: Hex[];
-    batchId?: number;
+  // Public contribution record from server
+  const [contributionData, setContributionData] = useState<any>(null);
+
+  // Self-verification inputs (for donors holding personal receipts)
+  const [showSelfVerify, setShowSelfVerify] = useState(false);
+  const [personalSalt, setPersonalSalt] = useState("");
+  const [personalAmount, setPersonalAmount] = useState("");
+  const [selfVerifyResult, setSelfVerifyResult] = useState<{
+    attempted: boolean;
     isValid: boolean;
+    leaf?: Hex;
   } | null>(null);
 
   // Auto search if initialTrxId provided
   useEffect(() => {
     if (initialTrxId) {
       setTrxId(initialTrxId);
-      handleSearchWithId(initialTrxId);
+      handleSearch(initialTrxId);
     }
   }, [initialTrxId]);
 
-  const handleSampleFill = () => {
-    const sampleId = "TRX-20260824-001";
-    setTrxId(sampleId);
-    setSalt("salt_budi_123");
-    handleSearchWithId(sampleId, "salt_budi_123");
-  };
-
-  const handleSearchWithId = async (searchId: string, searchSalt?: string) => {
-    if (!searchId.trim()) {
-      toast.error("Masukkan ID Transaksi terlebih dahulu.");
+  const handleSearch = async (searchId: string) => {
+    const cleanId = searchId.trim();
+    if (!cleanId) {
+      toast.error("Masukkan Nomor Transaksi terlebih dahulu.");
       return;
     }
 
-    setLoading(true);
-    setReceiptResult(null);
-    setMerkleData(null);
+    setLookupState("LOADING");
+    setErrorMessage("");
+    setContributionData(null);
+    setSelfVerifyResult(null);
 
     try {
-      // 1. Fetch donation details from backend
-      const res = await fetch(`${getApiBaseUrl()}/api/donations/${encodeURIComponent(searchId.trim())}`);
-      
-      if (res.ok) {
-        const data = await res.json();
-        const donation = data.donation || data;
-        setReceiptResult({
-          trxId: donation.trxId,
-          donorName: donation.donorName || "Muzakki",
-          isAnonymous: donation.isAnonymous || false,
-          amountIDR: donation.amountIDR || 1000000,
-          zakatType: donation.zakatType || "Zakat Maal",
-          paidAt: donation.paidAt || donation.timestamp,
-          batchId: donation.batchId,
-          salt: donation.salt || searchSalt,
-        });
-
-        // 2. Perform Merkle Leaf calculation
-        const activeSalt = donation.salt || searchSalt || "default_salt";
-        const clientLeaf = computeDonationLeaf(donation.trxId, activeSalt, Number(donation.amountIDR) || 1000000);
-        
-        // Merkle Root for Arbitrum Sepolia L1 batch
-        const realRoot: Hex = (donation.merkleRoot as Hex) || "0x8b926f1457b19b6b56ae010d1fefa7012ee61e25170b2e56f92e0cc22684a593";
-        const realProof: Hex[] = (donation.proof && donation.proof.length > 0)
-          ? (donation.proof as Hex[])
-          : [
-              "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-              "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-            ];
-        
-        setMerkleData({
-          leaf: clientLeaf,
-          merkleRoot: realRoot,
-          proof: realProof,
-          batchId: donation.batchId || 1,
-          isValid: true,
-        });
-
-        toast.success("Data donasi berhasil ditemukan!");
-      } else {
-        // Fallback demo for sample ID
-        if (searchId.includes("TRX-") || searchId.includes("USDC-")) {
-          const mockReceipt = {
-            trxId: searchId,
-            donorName: "Abdullah Ahmad",
-            isAnonymous: false,
-            amountIDR: 2500000,
-            zakatType: "Zakat Penghasilan",
-            paidAt: new Date().toISOString(),
-            batchId: 4,
-          };
-          setReceiptResult(mockReceipt);
-          const clientLeaf = computeDonationLeaf(searchId, "sample_salt", 2500000);
-          setMerkleData({
-            leaf: clientLeaf,
-            merkleRoot: "0xf7d294258e3c6ddaf70a36eade232485b366584e76532e0a360d75d20dae061c",
-            proof: [
-              "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-            ] as Hex[],
-            batchId: 4,
-            isValid: true,
-          });
-          toast.success("Data donasi berhasil diverifikasi!");
-        } else {
-          toast.error("Transaksi tidak ditemukan. Periksa kembali ID Transaksi Anda.");
+      // 1. Fetch public contribution record
+      let res: Response;
+      try {
+        res = await fetch(`${getApiBaseUrl()}/api/public/contributions/${encodeURIComponent(cleanId)}`);
+        if (res.status === 404) {
+          // Try fallback donation endpoint
+          res = await fetch(`${getApiBaseUrl()}/api/donations/${encodeURIComponent(cleanId)}`);
         }
+      } catch (networkErr) {
+        setLookupState("UNAVAILABLE");
+        setErrorMessage("Koneksi ke server verifikasi terputus atau server sedang tidak tersedia. Status belum dapat dipastikan.");
+        toast.error("Layanan verifikasi tidak tersedia.");
+        return;
       }
-    } catch (err) {
-      console.error("Verification error:", err);
-      toast.error("Gagal menghubungkan ke server verifikasi.");
-    } finally {
-      setLoading(false);
+
+      if (res.status === 404) {
+        setLookupState("NOT_FOUND");
+        setErrorMessage("Transaksi tidak ditemukan. Periksa kembali Nomor Transaksi yang Anda masukkan.");
+        toast.error("Transaksi tidak ditemukan.");
+        return;
+      }
+
+      if (!res.ok) {
+        setLookupState("UNAVAILABLE");
+        setErrorMessage(`Server mengembalikan respon (${res.status}). Status verifikasi belum dapat dipastikan.`);
+        toast.error("Gagal memeriksa transaksi.");
+        return;
+      }
+
+      const json = await res.json();
+      const c = json.contribution || json.donation;
+
+      if (!c) {
+        setLookupState("NOT_FOUND");
+        setErrorMessage("Data transaksi tidak ditemukan pada buku besar.");
+        return;
+      }
+
+      setContributionData(c);
+      setLookupState("FOUND");
+      toast.success("Catatan transaksi ditemukan!");
+    } catch (err: any) {
+      console.error("Verification lookup error:", err);
+      setLookupState("UNAVAILABLE");
+      setErrorMessage("Terjadi kesalahan teknis saat menghubungi server verifikasi.");
+      toast.error("Gagal memeriksa catatan donasi.");
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSelfVerify = (e: React.FormEvent) => {
     e.preventDefault();
-    handleSearchWithId(trxId, salt);
+    if (!personalSalt.trim() || !personalAmount.trim()) {
+      toast.error("Masukkan Salt dan Nominal donasi dari kuitansi pribadi Anda.");
+      return;
+    }
+
+    const numAmount = Number(personalAmount.replace(/[^0-9]/g, ""));
+    if (!numAmount || numAmount <= 0) {
+      toast.error("Masukkan nominal yang sah.");
+      return;
+    }
+
+    if (!contributionData) {
+      toast.error("Cari transaksi terlebih dahulu.");
+      return;
+    }
+
+    // Compute leaf hash using canonical Keccak256
+    const leaf = computeDonationLeaf(contributionData.trxId, personalSalt.trim(), numAmount);
+
+    // Verify against real root & proof if batch is available
+    if (contributionData.merkleRoot && contributionData.proof && contributionData.proof.length > 0) {
+      const isValid = verifyClientProof(leaf, contributionData.proof as Hex[], contributionData.merkleRoot as Hex);
+      setSelfVerifyResult({
+        attempted: true,
+        isValid,
+        leaf,
+      });
+
+      if (isValid) {
+        toast.success("Kuitansi Anda cocok persis dengan State Root Merkle Batch L1!");
+      } else {
+        toast.error("Bukti kuitansi tidak cocok dengan State Root Batch. Periksa salt dan nominal.");
+      }
+    } else {
+      // Batch not settled yet
+      setSelfVerifyResult({
+        attempted: true,
+        isValid: false,
+        leaf,
+      });
+      toast.info("Catatan donasi belum masuk dalam batch ter-settle di smart contract.");
+    }
+  };
+
+  const handleSubmitSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSearch(trxId);
   };
 
   return (
     <div className="space-y-8 max-w-3xl mx-auto">
       {/* Search Input Card */}
-      <form onSubmit={handleSubmit} className="rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-sm space-y-6">
+      <form onSubmit={handleSubmitSearch} className="rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-sm space-y-6">
         <div>
           <h3 className="font-serif text-xl font-bold text-[#17332c]">
-            Pencarian Bukti Penunaian Zakat
+            Pencarian Bukti & Status Penunaian Zakat
           </h3>
           <p className="text-xs text-[#5e7a70] mt-1">
-            Masukkan Nomor Transaksi yang Anda terima saat melakukan pembayaran zakat.
+            Masukkan Nomor Transaksi resmi untuk memeriksa status pencatatan pada buku besar.
           </p>
         </div>
 
@@ -156,41 +177,169 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
           </div>
           <button
             type="submit"
-            disabled={loading}
+            disabled={lookupState === "LOADING"}
             className="w-full sm:w-auto px-7 py-3 rounded-xl bg-[#17332c] hover:bg-[#1b765e] disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            {lookupState === "LOADING" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             <span>Cek Status</span>
           </button>
         </div>
 
-        <div className="flex items-center justify-between pt-1 text-xs">
-          <button
-            type="button"
-            onClick={handleSampleFill}
-            className="inline-flex items-center gap-1.5 text-[#1b765e] font-semibold hover:underline cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Muat Contoh Transaksi Terverifikasi</span>
-          </button>
-          <span className="text-[11px] text-[#5e7a70]">
+        <div className="flex items-center justify-between pt-1 text-xs text-[#5e7a70]">
+          <span className="flex items-center gap-1.5 text-[11px]">
+            <Lock className="w-3.5 h-3.5 text-[#1b765e]" />
+            <span>Pencarian Publik Terlindungi (Kerahasiaan Nama & Nominal UU PDP)</span>
+          </span>
+          <span className="text-[11px]">
             Pencatatan 100% Bebas Biaya Gas
           </span>
         </div>
       </form>
 
-      {/* Verification Result Display */}
-      {receiptResult && (
+      {/* State: Not Found Alert */}
+      {lookupState === "NOT_FOUND" && (
+        <div role="alert" className="rounded-3xl border border-rose-200 bg-rose-50/70 p-6 sm:p-8 space-y-2 animate-in fade-in duration-300">
+          <div className="flex items-center gap-2.5 text-rose-800 font-bold">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <h4 className="font-serif text-lg">Transaksi Tidak Ditemukan</h4>
+          </div>
+          <p className="text-xs text-rose-700 leading-relaxed">
+            {errorMessage || "Nomor transaksi tersebut tidak ditemukan dalam buku besar. Periksa kembali ID Transaksi yang Anda masukkan."}
+          </p>
+          <p className="text-[11px] text-rose-600/80 pt-1">
+            Catatan: Sistem tidak membuat sertifikat atau bukti baru untuk referensi transaksi yang tidak terdaftar.
+          </p>
+        </div>
+      )}
+
+      {/* State: Service Unavailable Alert */}
+      {lookupState === "UNAVAILABLE" && (
+        <div role="alert" className="rounded-3xl border border-amber-200 bg-amber-50/70 p-6 sm:p-8 space-y-2 animate-in fade-in duration-300">
+          <div className="flex items-center gap-2.5 text-amber-900 font-bold">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+            <h4 className="font-serif text-lg">Layanan Verifikasi Belum Tersedia</h4>
+          </div>
+          <p className="text-xs text-amber-800 leading-relaxed">
+            {errorMessage || "Layanan verifikasi atau koneksi server sedang tidak dapat dijangkau. Status transaksi belum dapat dipastikan."}
+          </p>
+          <p className="text-[11px] text-amber-700/90 pt-1">
+            Pencatatan penerimaan dana tidak dibatalkan. Silakan segarkan halaman atau coba beberapa saat lagi.
+          </p>
+        </div>
+      )}
+
+      {/* State: Found Result */}
+      {lookupState === "FOUND" && contributionData && (
         <div className="space-y-6 animate-in fade-in duration-300">
-          <CertificateCard receipt={receiptResult} />
-          {merkleData && (
-            <MerkleProofDetails
-              leaf={merkleData.leaf}
-              merkleRoot={merkleData.merkleRoot}
-              proof={merkleData.proof}
-              batchId={merkleData.batchId}
-            />
-          )}
+          {/* Certificate Card */}
+          <CertificateCard
+            receipt={{
+              trxId: contributionData.trxId,
+              donorName: selfVerifyResult?.isValid ? "Muzakki (Terverifikasi)" : null,
+              isAnonymous: !selfVerifyResult?.isValid,
+              amountIDR: selfVerifyResult?.isValid ? Number(personalAmount.replace(/[^0-9]/g, "")) : null,
+              zakatType: contributionData.zakatType || "Zakat Maal & Harta",
+              paidAt: contributionData.paidAt || contributionData.timestamp,
+              batchId: contributionData.batchId,
+              status: contributionData.status,
+              isSelfVerified: selfVerifyResult?.isValid,
+              limitations: contributionData.limitations,
+            }}
+          />
+
+          {/* Merkle Proof Details Accordion */}
+          <MerkleProofDetails
+            leaf={selfVerifyResult?.leaf || null}
+            merkleRoot={contributionData.merkleRoot}
+            proof={contributionData.proof}
+            batchId={contributionData.batchId}
+            isVerified={selfVerifyResult ? selfVerifyResult.isValid : null}
+            proofType={contributionData.proofType || "MERKLE_TREE"}
+            zkStatus={contributionData.zkStatus || "PENDING"}
+          />
+
+          {/* Optional Interactive Self-Verification Panel for Donor */}
+          <div className="rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowSelfVerify(!showSelfVerify)}>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-[#1b765e]" />
+                  <h4 className="font-serif text-base font-bold text-[#17332c]">
+                    Verifikasi Matematis Kuitansi Mandiri (Khusus Pemilik Donasi)
+                  </h4>
+                </div>
+                <p className="text-xs text-[#5e7a70]">
+                  Punya Salt dan Nominal dari kuitansi pembayaran? Masukkan untuk membuktikan keaslian kuitansi Anda secara lokal tanpa membuka data ke publik.
+                </p>
+              </div>
+              <button type="button" className="p-2 text-[#5e7a70] hover:text-[#17332c]">
+                {showSelfVerify ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+              </button>
+            </div>
+
+            {showSelfVerify && (
+              <form onSubmit={handleSelfVerify} className="space-y-4 pt-2 border-t border-[#dbe7dd]/60">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-[#17332c] block mb-1">
+                      Salt Kuitansi Pribadi
+                    </label>
+                    <Input
+                      placeholder="Contoh: salt_budi_123"
+                      value={personalSalt}
+                      onChange={(e) => setPersonalSalt(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-[#17332c] block mb-1">
+                      Nominal Donasi (IDR)
+                    </label>
+                    <Input
+                      placeholder="Contoh: 2500000"
+                      value={personalAmount}
+                      onChange={(e) => setPersonalAmount(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-[#5e7a70]">
+                    Pemeriksaan dihitung langsung di browser Anda menggunakan formula Keccak256
+                  </span>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-[#1b765e] hover:bg-[#17332c] text-white text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Cocokkan Kuitansi</span>
+                  </button>
+                </div>
+
+                {selfVerifyResult && (
+                  <div className={`p-3.5 rounded-xl border text-xs ${selfVerifyResult.isValid ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-red-50 border-red-200 text-red-900"}`}>
+                    <p className="font-bold flex items-center gap-1.5">
+                      {selfVerifyResult.isValid ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>Kuitansi Terbukti Sah (100% Cocok dengan State Root L1)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>Kuitansi Tidak Cocok dengan State Root Batch</span>
+                        </>
+                      )}
+                    </p>
+                    <p className="text-[11px] mt-1">
+                      {selfVerifyResult.isValid
+                        ? "Salt dan nominal yang Anda masukkan menghasilkan Leaf Hash yang terbukti secara matematis ada dalam Batch Root L1."
+                        : "Leaf hash yang dihasilkan berbeda dari pohon Merkle batch ini. Pastikan salt dan nominal sesuai dengan saat akad pembayaran."}
+                    </p>
+                  </div>
+                )}
+              </form>
+            )}
+          </div>
         </div>
       )}
     </div>

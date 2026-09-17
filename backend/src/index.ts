@@ -395,15 +395,16 @@ app.post("/api/donations", handleFiatDonation);
 app.post("/api/donations/fiat", handleFiatDonation);
 
 // 1b. Inflow: Query Donation Status (with live Midtrans sync)
+// 1b. Inflow: Query Donation Status (with live Midtrans sync)
 const handleGetDonationStatus = async (c: any) => {
   const trxId = c.req.param("trxId");
   if (!trxId) {
-    return c.json({ error: "Missing trxId parameter" }, 400);
+    return c.json({ error: "Missing trxId parameter", success: false, lookupStatus: "NOT_FOUND" }, 400);
   }
 
   let donation = await dbService.getDonationByTrxId(trxId);
   if (!donation) {
-    return c.json({ error: "Donation not found", success: false }, 404);
+    return c.json({ error: "Donation not found", success: false, lookupStatus: "NOT_FOUND" }, 404);
   }
 
   // If still PENDING, query Midtrans API live to check if paid via external Midtrans Simulator
@@ -428,30 +429,124 @@ const handleGetDonationStatus = async (c: any) => {
     }
   }
 
+  const isStatusEndpoint = typeof c.req.path === "string" && c.req.path.includes("/status/");
+
   return c.json({
     success: true,
+    lookupStatus: "FOUND",
     donation: {
       trxId: donation.trxId,
-      donorName: donation.donorName,
+      donorName: isStatusEndpoint ? (donation.isAnonymous ? "Hamba Allah" : donation.donorName) : null,
       isAnonymous: donation.isAnonymous,
-      salt: donation.salt,
-      amountIDR: donation.amountIDR,
+      salt: null,
+      amountIDR: isStatusEndpoint ? donation.amountIDR : null,
       status: donation.status || "PENDING",
       paymentMethod: donation.paymentMethod || "QRIS",
-      qrString: donation.qrString,
-      qrUrl: donation.qrUrl,
+      qrString: isStatusEndpoint ? donation.qrString : undefined,
+      qrUrl: isStatusEndpoint ? donation.qrUrl : undefined,
       timestamp: donation.timestamp,
       paidAt: donation.paidAt,
       batchId: batchIdNum,
-      merkleRoot: batchInfo?.merkleRoot,
-      batchTxHash: batchInfo?.txHash,
+      merkleRoot: batchInfo?.merkleRoot || null,
+      batchTxHash: batchInfo?.txHash || null,
       proof: proof.length > 0 ? proof : undefined,
+      proofType: "MERKLE_TREE",
+      zkStatus: "PENDING",
+      limitations: [
+        "DONOR_NAME_RESTRICTED",
+        "AMOUNT_RESTRICTED",
+        "SALT_RESTRICTED",
+        "NO_DOCUMENT_ACCESS",
+      ],
+    },
+    contribution: {
+      trxId: donation.trxId,
+      status: donation.status || "PENDING",
+      paidAt: donation.paidAt || null,
+      timestamp: donation.timestamp,
+      batchId: batchIdNum,
+      merkleRoot: batchInfo?.merkleRoot || null,
+      batchTxHash: batchInfo?.txHash || null,
+      proof: proof.length > 0 ? proof : null,
+      proofType: "MERKLE_TREE",
+      zkStatus: "PENDING",
+      paymentMethod: donation.paymentMethod || "QRIS",
+      zakatType: "Zakat",
+      donorName: null,
+      isAnonymous: true,
+      salt: null,
+      amountIDR: null,
+      limitations: [
+        "DONOR_NAME_RESTRICTED",
+        "AMOUNT_RESTRICTED",
+        "SALT_RESTRICTED",
+        "NO_DOCUMENT_ACCESS",
+      ],
+      authorization: "UNPROVEN_AUTHORIZATION",
+    },
+  });
+};
+
+const handlePublicContributionLookup = async (c: any) => {
+  const trxId = c.req.param("id") || c.req.param("trxId");
+  if (!trxId) {
+    return c.json({ success: false, error: "Parameter ID kontribusi wajib diisi", lookupStatus: "NOT_FOUND" }, 400);
+  }
+
+  const donation = await dbService.getDonationByTrxId(trxId);
+  if (!donation) {
+    return c.json({
+      success: false,
+      error: "Transaksi atau kontribusi tidak ditemukan. Periksa kembali referensi ID Anda.",
+      lookupStatus: "NOT_FOUND",
+    }, 404);
+  }
+
+  let batchInfo: any = null;
+  let proof: string[] = [];
+  const batchIdNum = (donation as any).batchId ? Number((donation as any).batchId) : null;
+  if (batchIdNum) {
+    batchInfo = await dbService.getBatchByNumber(batchIdNum);
+    const proofRes = dataStore.getProofForTrx(donation.trxId, donation.salt, donation.amountIDR);
+    if (proofRes && proofRes.proof) {
+      proof = proofRes.proof;
+    }
+  }
+
+  return c.json({
+    success: true,
+    lookupStatus: "FOUND",
+    contribution: {
+      trxId: donation.trxId,
+      status: donation.status || "PENDING",
+      paidAt: donation.paidAt || null,
+      timestamp: donation.timestamp,
+      batchId: batchIdNum,
+      merkleRoot: batchInfo?.merkleRoot || null,
+      batchTxHash: batchInfo?.txHash || null,
+      proof: proof.length > 0 ? proof : null,
+      proofType: "MERKLE_TREE",
+      zkStatus: "PENDING",
+      paymentMethod: donation.paymentMethod || "QRIS",
+      zakatType: "Zakat",
+      donorName: null,
+      isAnonymous: true,
+      salt: null,
+      amountIDR: null,
+      limitations: [
+        "DONOR_NAME_RESTRICTED",
+        "AMOUNT_RESTRICTED",
+        "SALT_RESTRICTED",
+        "NO_DOCUMENT_ACCESS",
+      ],
+      authorization: "UNPROVEN_AUTHORIZATION",
     },
   });
 };
 
 app.get("/api/donations/status/:trxId", handleGetDonationStatus);
 app.get("/api/donations/:trxId", handleGetDonationStatus);
+app.get("/api/public/contributions/:id", handlePublicContributionLookup);
 
 // 1c. Inflow: Midtrans Payment Webhook (Idempotent & Signature-Verified)
 app.post("/api/webhooks/payment", async (c) => {
@@ -600,14 +695,26 @@ app.post("/api/verify-receipt", async (c) => {
       const leaf = computeDonationLeaf(trxId, salt, Number(amountIDR));
       return c.json({
         isValid: false,
+        proofType: "MERKLE_TREE",
+        zkStatus: "PENDING",
         message: "Transaction not found in settled batch",
         leaf,
         proof: [],
       });
     }
 
+    const isProofValid = Boolean(
+      result.isValid &&
+      result.proof &&
+      result.proof.length > 0 &&
+      result.merkleRoot &&
+      MerkleTree.verifyProof(result.leaf as Hex, result.proof as Hex[], result.merkleRoot as Hex)
+    );
+
     return c.json({
-      isValid: result.isValid,
+      isValid: isProofValid,
+      proofType: "MERKLE_TREE",
+      zkStatus: "PENDING",
       batchId: result.batchId,
       merkleRoot: result.merkleRoot,
       leaf: result.leaf,

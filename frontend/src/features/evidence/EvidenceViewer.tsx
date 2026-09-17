@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Search, Loader2, Sparkles, Share2, FileCheck, Layers, Eye, RefreshCw } from "lucide-react";
+import { Search, Loader2, Share2, FileCheck, Layers, Eye, RefreshCw, AlertCircle, AlertTriangle } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { DocumentPreviewer } from "./DocumentPreviewer";
 import { MetadataInspectorCard } from "./MetadataInspectorCard";
@@ -12,23 +12,23 @@ interface EvidenceViewerProps {
   initialCid?: string;
 }
 
-const SAMPLE_EVIDENCE_CIDS = [
-  { label: "BAST Beras Fakir (PDF)", cid: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco", type: "BAST_RECEIPT" },
-  { label: "Survei Kelayakan Gharimin (PDF)", cid: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG", type: "SURVEY_REPORT" },
-  { label: "Atestasi Audit Syariah WTP (JSON)", cid: "QmZtmD2qtWbpPyv6CW1bgX84Txjd3DAxL6zzN1OQvU8hk7", type: "AUDITOR_ATTESTATION" },
-];
-
 export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
-  const [cidInput, setCidInput] = useState(initialCid || SAMPLE_EVIDENCE_CIDS[0].cid);
-  const [activeCid, setActiveCid] = useState(initialCid || SAMPLE_EVIDENCE_CIDS[0].cid);
+  const [cidInput, setCidInput] = useState(initialCid);
+  const [activeCid, setActiveCid] = useState(initialCid);
   const [loading, setLoading] = useState(false);
+  const [errorStatus, setErrorStatus] = useState<string | null>(null);
 
   const [inspectionData, setInspectionData] = useState<any>(null);
   const [activeAttachment, setActiveAttachment] = useState<any>(null);
 
   const fetchInspection = async (targetCid: string) => {
-    if (!targetCid.trim()) return;
+    if (!targetCid.trim()) {
+      setInspectionData(null);
+      setErrorStatus(null);
+      return;
+    }
     setLoading(true);
+    setErrorStatus(null);
     try {
       const res = await fetch(`${getApiBaseUrl()}/api/ipfs/inspect/${encodeURIComponent(targetCid.trim())}`);
       if (res.ok) {
@@ -36,50 +36,17 @@ export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
         setInspectionData(json);
         setActiveAttachment(null);
       } else {
-        // Fallback demo mock if backend offline
-        setInspectionData({
-          cid: targetCid,
-          isJson: true,
-          mimeType: "application/json",
-          data: {
-            schemaVersion: "1.1.0",
-            docType: "BAST_RECEIPT",
-            programTitle: "Penyaluran Paket Pangan & Sembako Asnaf Fakir",
-            asnafLabel: "Fakir Miskin",
-            disbursedAmount: 2500000,
-            currency: "IDR",
-            disbursementChannel: "BANK_TRANSFER",
-            bankReferenceNumber: "TRF-BCA-881920",
-            beneficiaryName: "Hamba Allah (Fakir)",
-            beneficiaryNIKMasked: "3201************",
-            beneficiaryHash: "0x7a8b9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
-            location: {
-              province: "Jawa Barat",
-              regencyCity: "Kabupaten Bogor",
-              district: "Cibinong",
-            },
-            attachments: [
-              {
-                name: "bast_serah_terima.pdf",
-                fileType: "application/pdf",
-                cid: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco",
-                description: "Dokumen BAST resmi dengan tanda tangan penerima",
-              },
-            ],
-            timestamp: new Date().toISOString(),
-          },
-          onChainContext: {
-            proposalId: 1,
-            asnafLabel: "Fakir",
-            status: "EXECUTED",
-            amount: 2500000,
-            currencyType: 0,
-            auditOpinion: "WTP (Clean)",
-          },
-        });
+        setInspectionData(null);
+        if (res.status === 404) {
+          setErrorStatus("Dokumen bukti dengan CID tersebut tidak ditemukan.");
+        } else {
+          setErrorStatus(`Layanan inspeksi mengembalikan status ${res.status}. Berkas tidak tersedia.`);
+        }
       }
     } catch (err) {
       console.error("Inspect error:", err);
+      setInspectionData(null);
+      setErrorStatus("Koneksi ke layanan IPFS terputus atau server sedang tidak tersedia.");
       toast.error("Gagal memeriksa CID IPFS.");
     } finally {
       setLoading(false);
@@ -87,7 +54,9 @@ export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
   };
 
   useEffect(() => {
-    fetchInspection(activeCid);
+    if (activeCid) {
+      fetchInspection(activeCid);
+    }
   }, [activeCid]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -98,25 +67,26 @@ export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
   };
 
   const handleCopyShareLink = () => {
+    if (!activeCid) return;
     const url = `${window.location.origin}/transparansi/bukti?cid=${activeCid}`;
     navigator.clipboard.writeText(url);
     toast.success("Tautan bukti audit disalin ke clipboard!");
   };
 
   const previewCid = activeAttachment?.cid || activeCid;
-  const previewFileName = activeAttachment?.name || "dokumen_audit_zakat.pdf";
+  const previewFileName = activeAttachment?.name || "dokumen_bukti_zakat.pdf";
   const previewFileType = activeAttachment?.fileType || "application/pdf";
 
   return (
     <div className="space-y-8">
-      {/* Search Bar & Sample Presets */}
+      {/* Search Bar */}
       <div className="rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-8 shadow-xs space-y-5">
         <div>
           <h3 className="font-serif text-xl font-bold text-[#17332c]">
             Pencarian & Pemeriksaan Bukti IPFS
           </h3>
           <p className="text-xs text-[#5e7a70] mt-0.5">
-            Masukkan Content Identifier (CID) berkas untuk memeriksa dokumen fisik, metadata terstruktur, dan stempel integritas smart contract.
+            Masukkan Content Identifier (CID) berkas untuk memeriksa dokumen fisik, metadata terstruktur, dan status integritas on-chain.
           </p>
         </div>
 
@@ -140,74 +110,76 @@ export function EvidenceViewer({ initialCid = "" }: EvidenceViewerProps) {
           </button>
         </form>
 
-        {/* Preset Sample Buttons */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#dbe7dd]/60 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-semibold text-[#5e7a70] flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-[#1b765e]" /> Contoh Berkas:
+        {activeCid && (
+          <div className="flex items-center justify-between pt-2 border-t border-[#dbe7dd]/60 text-xs">
+            <span className="text-[11px] text-[#5e7a70]">
+              Pemeriksaan dokumen nyata tanpa mock otomatis
             </span>
-            {SAMPLE_EVIDENCE_CIDS.map((sample) => (
-              <button
-                key={sample.cid}
-                type="button"
-                onClick={() => {
-                  setCidInput(sample.cid);
-                  setActiveCid(sample.cid);
-                }}
-                className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer border ${
-                  activeCid === sample.cid
-                    ? "bg-[#17332c] text-white border-transparent"
-                    : "bg-[#f4f8f3] text-[#17332c] border-[#dbe7dd] hover:bg-[#eaf3e8]"
-                }`}
-              >
-                {sample.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={handleCopyShareLink}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-[#1b765e] hover:underline cursor-pointer"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Bagikan Tautan</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Error / Not Found Status */}
+      {errorStatus && !loading && (
+        <div role="alert" className="rounded-3xl border border-amber-200 bg-amber-50/70 p-6 sm:p-8 space-y-2 animate-in fade-in duration-300">
+          <div className="flex items-center gap-2.5 text-amber-900 font-bold">
+            <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
+            <h4 className="font-serif text-lg">Dokumen Bukti Tidak Tersedia</h4>
+          </div>
+          <p className="text-xs text-amber-800 leading-relaxed">
+            {errorStatus}
+          </p>
+          <p className="text-[11px] text-amber-700/80 pt-1">
+            Data contoh atau dokumen fiktif tidak dimuat saat berkas nyata tidak ditemukan.
+          </p>
+        </div>
+      )}
+
+      {/* When data exists */}
+      {inspectionData && (
+        <div className="space-y-8 animate-in fade-in duration-300">
+          {/* On-Chain Integrity Seal */}
+          <OnChainIntegrityBadge
+            cid={activeCid}
+            onChainContext={inspectionData?.onChainContext}
+          />
+
+          {/* Main Split-View: Document Preview (Left) + Structured Metadata (Right) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Document Viewer (7 cols) */}
+            <div className="lg:col-span-7 space-y-4">
+              <DocumentPreviewer
+                cid={previewCid}
+                fileName={previewFileName}
+                fileType={previewFileType}
+              />
+            </div>
+
+            {/* Metadata Inspector Card (5 cols) */}
+            <div className="lg:col-span-5 space-y-6">
+              <MetadataInspectorCard
+                metadata={inspectionData?.data}
+                onSelectAttachment={(att) => setActiveAttachment(att)}
+              />
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleCopyShareLink}
-            className="inline-flex items-center gap-1.5 text-xs font-bold text-[#1b765e] hover:underline cursor-pointer"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>Bagikan Tautan</span>
-          </button>
+          {/* Secondary Raw JSON Tree Inspector */}
+          {inspectionData?.data && (
+            <RawJsonTree
+              data={inspectionData.data}
+              title={`Raw JSON Tree Payload (CID: ${activeCid.slice(0, 12)}...)`}
+            />
+          )}
         </div>
-      </div>
-
-      {/* On-Chain Integrity Seal */}
-      <OnChainIntegrityBadge
-        cid={activeCid}
-        onChainContext={inspectionData?.onChainContext}
-      />
-
-      {/* Main Split-View: Document Preview (Left) + Structured Metadata (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Document Viewer (7 cols) */}
-        <div className="lg:col-span-7 space-y-4">
-          <DocumentPreviewer
-            cid={previewCid}
-            fileName={previewFileName}
-            fileType={previewFileType}
-          />
-        </div>
-
-        {/* Metadata Inspector Card (5 cols) */}
-        <div className="lg:col-span-5 space-y-6">
-          <MetadataInspectorCard
-            metadata={inspectionData?.data}
-            onSelectAttachment={(att) => setActiveAttachment(att)}
-          />
-        </div>
-      </div>
-
-      {/* Secondary Raw JSON Tree Inspector */}
-      {inspectionData?.data && (
-        <RawJsonTree
-          data={inspectionData.data}
-          title={`Raw JSON Tree Payload (CID: ${activeCid.slice(0, 12)}...)`}
-        />
       )}
     </div>
   );
