@@ -27,6 +27,12 @@ export type Program = {
 export type IdentityBasis = { kind: "NIK"; value: string } | { kind: "ALTERNATIVE"; description: string };
 export type Guardian = { name: string; relationship: string };
 
+export type BeneficiaryContact = {
+  phone?: string | null;
+  email?: string | null;
+  relation?: string | null;
+};
+
 export type Beneficiary = {
   id: string;
   name: string;
@@ -35,6 +41,7 @@ export type Beneficiary = {
   addressOrScope: string;
   guardian: Guardian | null;
   paymentRecipient: { name: string; relation: string } | null;
+  contact?: BeneficiaryContact | null;
 };
 
 export type AidValue =
@@ -71,6 +78,7 @@ export type ProposalDocumentCategory =
   | "ALTERNATIVE_IDENTITY_PROOF"
   | "REPRESENTATION_PROOF"
   | "PAYMENT_RECIPIENT_PROOF"
+  | "BENEFICIARY_ROSTER"
   | "OTHER";
 
 export type ProposalDocument = {
@@ -395,6 +403,7 @@ export const newBeneficiary = (): Beneficiary => ({
   addressOrScope: "",
   guardian: null,
   paymentRecipient: null,
+  contact: null,
 });
 
 export const newAidLine = (beneficiaryId: string): AidLine => ({
@@ -423,3 +432,85 @@ export const emptyProposalDraft = (program: Program): ProposalDraft => ({
   createdAt: 0,
   updatedAt: 0,
 });
+
+// ---------------------------------------------------------------------------
+// Beneficiary Tabular Import & Export (Ticket #92)
+// ---------------------------------------------------------------------------
+
+export type BeneficiaryTabularIssue = {
+  scope: "file" | "row" | "cell";
+  rowNumber: number | null;
+  column: string | null;
+  field?: string;
+  message: string;
+  code: string;
+  isWarning?: boolean;
+};
+
+export type BeneficiaryRowPreview = {
+  rowNumber: number;
+  isValid: boolean;
+  rawCells: Record<string, string>;
+  issues: BeneficiaryTabularIssue[];
+  beneficiary: Beneficiary | null;
+  aidLine: AidLine | null;
+  recipientKey: string | null;
+};
+
+export type BeneficiaryImportPreviewResult = {
+  fileName: string;
+  format: "xlsx" | "csv";
+  uniqueBeneficiaryCount: number;
+  aidLineCount: number;
+  validRowsCount: number;
+  invalidRowsCount: number;
+  totalsByUnit: Record<string, string>;
+  isPartial: boolean;
+  beneficiaries: Beneficiary[];
+  aidLines: AidLine[];
+  allRowsPreview: BeneficiaryRowPreview[];
+  issues: BeneficiaryTabularIssue[];
+  fileIssues?: any[];
+};
+
+export async function downloadBeneficiaryTemplate(
+  requests: PrivateRequests,
+  format: "xlsx" | "csv" = "xlsx"
+): Promise<{ blob: Blob; fileName: string }> {
+  const res = await requests.get(`/api/workspace/proposals/template?format=${format}`);
+  if (!res.ok) throw new Error("Gagal mengunduh template daftar penerima.");
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition");
+  const match = disposition?.match(/filename="([^"]+)"/);
+  const fileName = match ? match[1] : `tawf.beneficiary.template.v1.${format}`;
+  return { blob, fileName };
+}
+
+export async function previewBeneficiaryImport(
+  requests: PrivateRequests,
+  body: { fileName: string; contentBase64: string; defaultAidPeriod?: string }
+): Promise<BeneficiaryImportPreviewResult> {
+  const res = await requests.post("/api/workspace/proposals/import/preview", body);
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    const error = new Error(json.error || "Gagal memproses pratinjau daftar penerima.");
+    (error as any).issues = json.issues;
+    throw error;
+  }
+  return json.preview;
+}
+
+export async function exportProposalBeneficiaries(
+  requests: PrivateRequests,
+  proposalId: string,
+  format: "xlsx" | "csv" = "xlsx"
+): Promise<{ blob: Blob; fileName: string }> {
+  const res = await requests.get(`/api/workspace/proposals/${proposalId}/export?format=${format}`);
+  if (!res.ok) throw new Error("Gagal mengekspor data penerima pengajuan.");
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition");
+  const match = disposition?.match(/filename="([^"]+)"/);
+  const fileName = match ? match[1] : `proposal-${proposalId}-beneficiaries.${format}`;
+  return { blob, fileName };
+}
+

@@ -4,8 +4,11 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import {
+  exportProposalBeneficiaries,
   submitProposalDraft,
   withdrawProposal,
+  type AidLine,
+  type Beneficiary,
   type ProposalDraft,
   type ProposalTotals,
   type RecurringAidWarning,
@@ -13,6 +16,7 @@ import {
 import { ProposalDetails, ProposalRoster, ProposalSummary } from "./ProposalSections";
 import { ProposalDocumentManager } from "./ProposalDocumentManager";
 import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
+import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
 
 export function ProposalDraftForm({
   requests,
@@ -39,6 +43,34 @@ export function ProposalDraftForm({
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
   const [withdrawReason, setWithdrawReason] = useState("");
   const [withdrawing, setWithdrawing] = useState(false);
+
+  // Beneficiary import state
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const handleExport = async (format: "xlsx" | "csv") => {
+    try {
+      setSubmissionError(null);
+      const { blob, fileName } = await exportProposalBeneficiaries(requests, draft.id, format);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setSubmissionError(err.message || "Gagal mengekspor roster.");
+    }
+  };
+
+  const handleApplyImport = (importedBeneficiaries: Beneficiary[], importedAidLines: AidLine[]) => {
+    setDraft({
+      ...draft,
+      beneficiaries: importedBeneficiaries,
+      aidLines: importedAidLines,
+    });
+  };
 
   const isReadOnly =
     draft.status === "SUBMITTED" ||
@@ -224,7 +256,12 @@ export function ProposalDraftForm({
       <fieldset disabled={saving || unknown || isReadOnly} className="min-w-0 space-y-4">
         <legend className="sr-only">Pengajuan penyaluran</legend>
         <ProposalDetails draft={draft} setDraft={setDraft} />
-        <ProposalRoster draft={draft} setDraft={setDraft} />
+        <ProposalRoster
+          draft={draft}
+          setDraft={setDraft}
+          onOpenImport={() => setShowImportModal(true)}
+          onExport={handleExport}
+        />
       </fieldset>
 
       {/* Proposal Document Manager */}
@@ -329,6 +366,14 @@ export function ProposalDraftForm({
           </div>
         </div>
       )}
+      {/* Beneficiary Import Modal */}
+      <BeneficiaryImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        requests={requests}
+        defaultAidPeriod={draft.aidPeriod ? `${draft.aidPeriod.start} s/d ${draft.aidPeriod.end}` : undefined}
+        onApply={handleApplyImport}
+      />
     </div>
   );
 }

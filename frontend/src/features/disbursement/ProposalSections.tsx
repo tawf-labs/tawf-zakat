@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Download, FileSpreadsheet, Plus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { newAidLine, newBeneficiary, type ProposalDraft, type ProposalTotals } from "./disbursementClient";
 import { issuesFor, IssueList } from "./ProposalIssues";
@@ -6,6 +6,10 @@ import { BeneficiaryCard } from "./BeneficiaryCard";
 import { AidLineRow } from "./AidLineRow";
 
 type DraftSectionProps = { draft: ProposalDraft; setDraft: (draft: ProposalDraft) => void };
+type RosterSectionProps = DraftSectionProps & {
+  onOpenImport?: () => void;
+  onExport?: (format: "xlsx" | "csv") => void;
+};
 
 export function ProposalDetails({ draft, setDraft }: DraftSectionProps) {
   return <>
@@ -58,20 +62,47 @@ export function ProposalDetails({ draft, setDraft }: DraftSectionProps) {
   </>;
 }
 
-export function ProposalRoster({ draft, setDraft }: DraftSectionProps) {
+export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: RosterSectionProps) {
   return <>
       <section>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-stone-900">
             Penerima ({draft.beneficiaries.length}) dan rincian bantuan ({draft.aidLines.length})
           </h3>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setDraft({ ...draft, beneficiaries: [...draft.beneficiaries, newBeneficiary()] })}
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Tambah penerima
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenImport && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onOpenImport}
+                className="text-xs"
+              >
+                <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5 text-emerald-600" />
+                Impor XLSX / CSV
+              </Button>
+            )}
+            {onExport && draft.beneficiaries.length > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onExport("xlsx")}
+                className="text-xs"
+              >
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                Ekspor Roster
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDraft({ ...draft, beneficiaries: [...draft.beneficiaries, newBeneficiary()] })}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> Tambah penerima
+            </Button>
+          </div>
         </div>
 
         <div className="mt-3 space-y-3">

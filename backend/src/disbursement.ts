@@ -75,6 +75,12 @@ export type IdentityBasis =
 
 export type Guardian = { name: string; relationship: string };
 
+export type BeneficiaryContact = {
+  phone?: string | null;
+  email?: string | null;
+  relation?: string | null;
+};
+
 export type Beneficiary = {
   /** Stable within this proposal. Assigned once, kept on every re-save. */
   id: string;
@@ -85,6 +91,8 @@ export type Beneficiary = {
   guardian: Guardian | null;
   /** When the payment goes to someone other than the beneficiary (e.g. a school). */
   paymentRecipient: { name: string; relation: string } | null;
+  /** Optional contact for verification and notification (Ticket #92). */
+  contact?: BeneficiaryContact | null;
 };
 
 export type AidValue =
@@ -340,6 +348,7 @@ export type ProposalDocumentCategory =
   | "ALTERNATIVE_IDENTITY_PROOF"
   | "REPRESENTATION_PROOF"
   | "PAYMENT_RECIPIENT_PROOF"
+  | "BENEFICIARY_ROSTER"
   | "OTHER";
 
 export const PROPOSAL_DOCUMENT_CATEGORIES: ProposalDocumentCategory[] = [
@@ -348,6 +357,7 @@ export const PROPOSAL_DOCUMENT_CATEGORIES: ProposalDocumentCategory[] = [
   "ALTERNATIVE_IDENTITY_PROOF",
   "REPRESENTATION_PROOF",
   "PAYMENT_RECIPIENT_PROOF",
+  "BENEFICIARY_ROSTER",
   "OTHER",
 ];
 
@@ -360,6 +370,7 @@ export const PROPOSAL_DOCUMENT_CATEGORY_LABELS: Record<ProposalDocumentCategory,
   ALTERNATIVE_IDENTITY_PROOF: "Surat Keterangan Identitas Alternatif",
   REPRESENTATION_PROOF: "Surat Kuasa / Dokumen Perwakilan",
   PAYMENT_RECIPIENT_PROOF: "Dokumen Rekening / Penerima Pembayaran",
+  BENEFICIARY_ROSTER: "Berkas Impor Daftar Penerima (XLSX/CSV)",
   OTHER: "Dokumen Pendukung Lainnya",
 };
 

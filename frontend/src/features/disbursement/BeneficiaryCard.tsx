@@ -114,6 +114,7 @@ export function BeneficiaryCard({
         )}
 
         <PaymentRecipientFields beneficiary={beneficiary} onChange={onChange} />
+        <BeneficiaryContactFields beneficiary={beneficiary} onChange={onChange} />
       </div>
 
       <IssueList issues={rowIssues} />
@@ -121,6 +122,94 @@ export function BeneficiaryCard({
   );
 }
 
+function BeneficiaryContactFields({
+  beneficiary,
+  onChange,
+}: {
+  beneficiary: Beneficiary;
+  onChange: (value: Beneficiary) => void;
+}) {
+  const hasContact = beneficiary.contact !== null && beneficiary.contact !== undefined;
+  return (
+    <div className="border-t border-stone-100 pt-2 sm:col-span-2 space-y-2">
+      <label className="flex items-center gap-2 text-xs font-medium text-stone-600">
+        <input
+          type="checkbox"
+          checked={hasContact}
+          onChange={(e) =>
+            onChange({
+              ...beneficiary,
+              contact: e.target.checked
+                ? { phone: "", email: "", relation: "Penerima Langsung" }
+                : null,
+            })
+          }
+        />
+        Catat data kontak untuk konfirmasi penyaluran (opsional)
+      </label>
+      {hasContact && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <label className="block text-xs font-medium text-stone-600">
+            Nomor Telepon / WhatsApp
+            <input
+              type="tel"
+              className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-1.5 text-sm"
+              placeholder="mis. 081234567890"
+              value={beneficiary.contact?.phone ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...beneficiary,
+                  contact: {
+                    phone: e.target.value,
+                    email: beneficiary.contact?.email ?? "",
+                    relation: beneficiary.contact?.relation ?? "",
+                  },
+                })
+              }
+            />
+          </label>
+          <label className="block text-xs font-medium text-stone-600">
+            Alamat Email
+            <input
+              type="email"
+              className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-1.5 text-sm"
+              placeholder="mis. nama@example.org"
+              value={beneficiary.contact?.email ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...beneficiary,
+                  contact: {
+                    phone: beneficiary.contact?.phone ?? "",
+                    email: e.target.value,
+                    relation: beneficiary.contact?.relation ?? "",
+                  },
+                })
+              }
+            />
+          </label>
+          <label className="block text-xs font-medium text-stone-600">
+            Relasi Kontak
+            <input
+              className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-1.5 text-sm"
+              placeholder="mis. Penerima Langsung / Wali"
+              value={beneficiary.contact?.relation ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...beneficiary,
+                  contact: {
+                    phone: beneficiary.contact?.phone ?? "",
+                    email: beneficiary.contact?.email ?? "",
+                    relation: e.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PaymentRecipientFields({ beneficiary, onChange }: { beneficiary: Beneficiary; onChange: (value: Beneficiary) => void }) {
   return <>

@@ -26,11 +26,20 @@ import {
   withStableIds,
   type AidLine,
   type Beneficiary,
+  type BeneficiaryContact,
   type ExaminationChecklist,
   type ProposalDocumentCategory,
   type ProposalDocumentRecord,
   type ProposalDraftInput,
 } from "../disbursement";
+import { decodeTabular } from "../tabular-reader";
+import {
+  beneficiaryTemplateFileName,
+  generateBeneficiaryCsvTemplate,
+  generateBeneficiaryExport,
+  generateBeneficiaryXlsxTemplate,
+} from "../beneficiary-template-generator";
+import { mapBeneficiaryTabular } from "../beneficiary-tabular-schema";
 import {
   DraftOperationConflictError,
   ProposalDraftConflictError,
@@ -229,6 +238,7 @@ const beneficiaryFrom = (raw: unknown): Beneficiary | null => {
   const identity = row.identityBasis as Record<string, unknown> | undefined;
   const guardian = row.guardian as Record<string, unknown> | null | undefined;
   const paymentRecipient = row.paymentRecipient as Record<string, unknown> | null | undefined;
+  const contact = row.contact as Record<string, unknown> | null | undefined;
   return {
     id: text(row.id),
     name: text(row.name),
@@ -241,6 +251,13 @@ const beneficiaryFrom = (raw: unknown): Beneficiary | null => {
     guardian: guardian ? { name: text(guardian.name), relationship: text(guardian.relationship) } : null,
     paymentRecipient: paymentRecipient
       ? { name: text(paymentRecipient.name), relation: text(paymentRecipient.relation) }
+      : null,
+    contact: contact
+      ? {
+          phone: text(contact.phone) || null,
+          email: text(contact.email) || null,
+          relation: text(contact.relation) || null,
+        }
       : null,
   };
 };
@@ -445,6 +462,92 @@ disbursementRoutes.post("/policy", async (c) => {
   return c.json({ success: true, policy });
 });
 
+// ---------------------------------------------------------------------------
+// Beneficiary Import & Template (Ticket #92)
+// ---------------------------------------------------------------------------
+
+disbursementRoutes.get("/proposals/template", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const format = (c.req.query("format") || "xlsx").toLowerCase() === "csv" ? "csv" : "xlsx";
+  const disposition = `attachment; filename="${beneficiaryTemplateFileName(format)}"`;
+
+  if (format === "csv") {
+    return c.body(generateBeneficiaryCsvTemplate(), 200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": disposition,
+      "Cache-Control": "no-cache",
+    });
+  }
+
+  return c.body(generateBeneficiaryXlsxTemplate() as unknown as ArrayBuffer, 200, {
+    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": disposition,
+    "Cache-Control": "no-cache",
+  });
+});
+
+disbursementRoutes.post("/proposals/import/preview", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS");
+
+  const fileName = text(body.fileName);
+  const contentBase64 = text(body.contentBase64);
+  if (!fileName || !contentBase64) {
+    return badRequest(c, "Nama berkas dan isi berkas (base64) wajib diisi.");
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(Buffer.from(contentBase64.trim(), "base64"));
+  } catch {
+    return badRequest(c, "Isi berkas harus base64 yang sah.");
+  }
+
+  const decodeResult = decodeTabular(bytes, fileName);
+  if (!decodeResult.table) {
+    return c.json(
+      {
+        success: false,
+        error: decodeResult.issues[0]?.message ?? "Gagal membaca berkas tabular.",
+        issues: decodeResult.issues,
+      },
+      400
+    );
+  }
+
+  const defaultAidPeriod =
+    typeof body.defaultAidPeriod === "string" && body.defaultAidPeriod.trim()
+      ? body.defaultAidPeriod.trim()
+      : undefined;
+
+  const mapping = mapBeneficiaryTabular(decodeResult.table, { defaultAidPeriod });
+
+  return c.json({
+    success: true,
+    preview: {
+      fileName,
+      format: decodeResult.format,
+      ...mapping,
+      fileIssues: decodeResult.issues,
+    },
+  });
+});
+
 disbursementRoutes.get("/proposals/queue/examiner", async (c) => {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
@@ -489,6 +592,43 @@ disbursementRoutes.get("/proposals/:id", async (c) => {
       aidLines: draft.aidLines,
     }),
   });
+});
+
+disbursementRoutes.get("/proposals/:id/export", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const format = (c.req.query("format") || "xlsx").toLowerCase() === "csv" ? "csv" : "xlsx";
+  const disposition = `attachment; filename="proposal-${draft.id}-beneficiaries.${format}"`;
+
+  if (format === "csv") {
+    return c.body(generateBeneficiaryExport(draft.beneficiaries, draft.aidLines, "csv") as string, 200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": disposition,
+      "Cache-Control": "no-cache",
+    });
+  }
+
+  return c.body(
+    generateBeneficiaryExport(draft.beneficiaries, draft.aidLines, "xlsx") as unknown as ArrayBuffer,
+    200,
+    {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": disposition,
+      "Cache-Control": "no-cache",
+    }
+  );
 });
 
 disbursementRoutes.delete("/proposals/:id", async (c) => {
