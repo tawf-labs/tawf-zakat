@@ -474,15 +474,59 @@ export const institutionDisbursementPolicies = pgTable("institution_disbursement
   requireAlternativeIdProof: boolean("require_alternative_id_proof").notNull().default(true),
   requireGuardianProof: boolean("require_guardian_proof").notNull().default(true),
   warnRecurringAid: boolean("warn_recurring_aid").notNull().default(true),
+  sopRequiresMultiSignerQuorum: boolean("sop_requires_multi_signer_quorum").notNull().default(false),
   version: integer("version").notNull().default(1),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   updatedBy: text("updated_by").notNull(),
+});
+
+// Ticket #93: institutional decisions and their single-use signing challenges
+export const proposalDecisions = pgTable("proposal_decisions", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  proposalVersion: integer("proposal_version").notNull(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  action: text("action").notNull(), // 'APPROVE' | 'REJECT'
+  decisionReference: text("decision_reference").notNull(),
+  decisionDate: text("decision_date").notNull(),
+  notes: text("notes"),
+  rejectionReason: text("rejection_reason"),
+  rightsDigest: text("rights_digest").notNull(),
+  operatorOfficerId: text("operator_officer_id").notNull().references(() => officerProfiles.id),
+  operatorAccount: text("operator_account").notNull(),
+  signerAccount: text("signer_account").notNull(),
+  mandateId: text("mandate_id").notNull().references(() => operationalMandates.id),
+  signature: text("signature").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const proposalDecisionChallenges = pgTable("proposal_decision_challenges", {
+  nonce: text("nonce").primaryKey(),
+  proposalId: text("proposal_id").notNull(),
+  proposalVersion: integer("proposal_version").notNull(),
+  institutionId: text("institution_id").notNull(),
+  operatorOfficerId: text("operator_officer_id").notNull(),
+  operatorAccount: text("operator_account").notNull(),
+  signerAccount: text("signer_account").notNull(),
+  action: text("action").notNull(),
+  rightsDigest: text("rights_digest").notNull(),
+  decisionReference: text("decision_reference").notNull(),
+  decisionDate: text("decision_date").notNull(),
+  mandateId: text("mandate_id").notNull(),
+  mandateValidUntil: bigint("mandate_valid_until", { mode: "number" }).notNull(),
+  issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  consumedAt: bigint("consumed_at", { mode: "number" }),
 });
 
 export type ProposalDocumentRow = typeof proposalDocuments.$inferSelect;
 export type ProposalVersionRow = typeof proposalVersions.$inferSelect;
 export type ProposalHistoryRow = typeof proposalHistory.$inferSelect;
 export type InstitutionDisbursementPolicyRow = typeof institutionDisbursementPolicies.$inferSelect;
+export type ProposalDecisionRow = typeof proposalDecisions.$inferSelect;
+export type NewProposalDecisionRow = typeof proposalDecisions.$inferInsert;
+export type ProposalDecisionChallengeRow = typeof proposalDecisionChallenges.$inferSelect;
+export type NewProposalDecisionChallengeRow = typeof proposalDecisionChallenges.$inferInsert;
 
 // 13. Contributions and Tabular Imports (Spec #100, Ticket #102)
 export const contributions = pgTable("contributions", {

@@ -22,6 +22,8 @@
  *   a zero rupiah figure.
  */
 
+import { createHash } from "node:crypto";
+
 export type FundType = "ZAKAT" | "INFAK" | "SEDEKAH" | "LAINNYA";
 export const FUND_TYPES: FundType[] = ["ZAKAT", "INFAK", "SEDEKAH", "LAINNYA"];
 export const isFundType = (value: unknown): value is FundType =>
@@ -409,6 +411,7 @@ export type DisbursementPolicy = {
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;
   warnRecurringAid: boolean;
+  sopRequiresMultiSignerQuorum: boolean;
   version: number;
   updatedAt: number;
   updatedBy: string;
@@ -421,6 +424,7 @@ export const DEFAULT_DISBURSEMENT_POLICY = (institutionId: string): Disbursement
   requireAlternativeIdProof: true,
   requireGuardianProof: true,
   warnRecurringAid: true,
+  sopRequiresMultiSignerQuorum: false,
   version: 1,
   updatedAt: 0,
   updatedBy: "system",
@@ -596,7 +600,9 @@ export type ProposalHistoryAction =
   | "WITHDRAW"
   | "START_EXAMINATION"
   | "RETURN_FOR_REVISION"
-  | "MARK_READY";
+  | "MARK_READY"
+  | "APPROVE"
+  | "REJECT";
 
 export type ProposalHistoryRecord = {
   id: number;
@@ -612,3 +618,339 @@ export type ProposalHistoryRecord = {
   notes: string | null;
   occurredAt: number;
 };
+
+
+// ---------------------------------------------------------------------------
+// Keputusan lembaga (Spec #86, ticket #93)
+// ---------------------------------------------------------------------------
+
+export type ProposalDecisionAction = "APPROVE" | "REJECT";
+
+export const isProposalDecisionAction = (value: unknown): value is ProposalDecisionAction =>
+  value === "APPROVE" || value === "REJECT";
+
+export const SOP_QUORUM_HELD_MESSAGE =
+  "Konfigurasi SOP lembaga mewajibkan kuorum digital banyak pejabat yang belum didukung oleh sistem; pencatatan pengesahan digital ditahan.";
+
+export const DISBURSEMENT_DECISION_PURPOSE =
+  "Pengesahan keputusan lembaga atas pengajuan penyaluran" as const;
+
+export const DISBURSEMENT_DECISION_DOMAIN = {
+  name: "ZKT Disbursement Decision",
+  version: "1",
+} as const;
+
+export const DISBURSEMENT_DECISION_TYPES = {
+  DisbursementDecision: [
+    { name: "purpose", type: "string" },
+    { name: "institutionId", type: "string" },
+    { name: "proposalId", type: "string" },
+    { name: "proposalVersion", type: "uint256" },
+    { name: "action", type: "string" },
+    { name: "rightsDigest", type: "bytes32" },
+    { name: "decisionReference", type: "string" },
+    { name: "decisionDate", type: "string" },
+    { name: "operatorOfficerId", type: "string" },
+    { name: "operatorAccount", type: "address" },
+    { name: "signerAccount", type: "address" },
+    { name: "mandateId", type: "string" },
+    { name: "mandateValidUntil", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+    { name: "issuedAt", type: "uint256" },
+    { name: "expiresAt", type: "uint256" },
+  ],
+} as const;
+
+type Hex32 = `0x${string}`;
+
+export type ApprovedAidLineInput = {
+  id: string;
+  amountApprovedIdr?: string | null;
+  quantityApproved?: string | null;
+};
+
+/** What the institution decided - the content the rights digest commits to. */
+export type ProposalDecisionIntent = {
+  action: ProposalDecisionAction;
+  decisionReference: string;
+  decisionDate: string; // YYYY-MM-DD
+  notes: string | null;
+  rejectionReason: string | null;
+  approvedAidLines: ApprovedAidLineInput[];
+};
+
+export type ProposalDecisionInput = ProposalDecisionIntent & {
+  signerAccount: string;
+  mandateId: string;
+  nonce: string;
+  signature: string;
+  expectedVersion: number;
+};
+
+/** Everything one signature binds. A challenge stores it; the typed data mirrors it field for field. */
+export type DecisionBinding = {
+  institutionId: string;
+  proposalId: string;
+  proposalVersion: number;
+  action: ProposalDecisionAction;
+  rightsDigest: Hex32;
+  decisionReference: string;
+  decisionDate: string;
+  operatorOfficerId: string;
+  operatorAccount: string;
+  signerAccount: string;
+  mandateId: string;
+  mandateValidUntil: number;
+  nonce: Hex32;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type ProposalDecisionChallenge = DecisionBinding & { consumedAt: number | null };
+
+export type ProposalDecisionRecord = {
+  id: string;
+  proposalId: string;
+  proposalVersion: number;
+  institutionId: string;
+  action: ProposalDecisionAction;
+  decisionReference: string;
+  decisionDate: string;
+  notes: string | null;
+  rejectionReason: string | null;
+  rightsDigest: string;
+  operatorOfficerId: string;
+  operatorAccount: string;
+  signerAccount: string;
+  mandateId: string;
+  signature: string;
+  createdAt: number;
+};
+
+/** Compares two non-negative decimal strings exactly. */
+function compareDecimalStrings(a: string, b: string): number {
+  const [aInt, aFrac = ""] = a.split(".");
+  const [bInt, bFrac = ""] = b.split(".");
+  const scale = Math.max(aFrac.length, bFrac.length);
+  const left = BigInt(aInt + aFrac.padEnd(scale, "0"));
+  const right = BigInt(bInt + bFrac.padEnd(scale, "0"));
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+/**
+ * The aid lines as the decision fixes them. A rejection leaves them untouched;
+ * an approval sets every approved value, defaulting to the requested one and
+ * never exceeding it, for lines that exist on this version only.
+ */
+export function decidedAidLines(
+  aidLines: AidLine[],
+  intent: Pick<ProposalDecisionIntent, "action" | "approvedAidLines">
+): { ok: true; lines: AidLine[] } | { ok: false; error: string } {
+  if (intent.action === "REJECT") return { ok: true, lines: aidLines };
+
+  const approved = new Map<string, ApprovedAidLineInput>();
+  for (const item of intent.approvedAidLines) {
+    if (approved.has(item.id)) return { ok: false, error: `Baris bantuan ${item.id} disetujui lebih dari sekali.` };
+    if (!aidLines.some((line) => line.id === item.id)) {
+      return { ok: false, error: `Baris bantuan ${item.id} tidak ada pada versi pengajuan ini.` };
+    }
+    approved.set(item.id, item);
+  }
+
+  const lines: AidLine[] = [];
+  for (const line of aidLines) {
+    const match = approved.get(line.id);
+    if (line.value.kind === "MONEY") {
+      const value = match?.amountApprovedIdr ?? line.value.amountRequestedIdr;
+      if (compareDecimalStrings(value, line.value.amountRequestedIdr) > 0) {
+        return { ok: false, error: `Jumlah disetujui pada baris ${line.id} melebihi jumlah yang diajukan.` };
+      }
+      lines.push({ ...line, value: { ...line.value, amountApprovedIdr: value } });
+    } else {
+      const value = match?.quantityApproved ?? line.value.quantityRequested;
+      if (compareDecimalStrings(value, line.value.quantityRequested) > 0) {
+        return { ok: false, error: `Jumlah barang disetujui pada baris ${line.id} melebihi jumlah yang diajukan.` };
+      }
+      lines.push({ ...line, value: { ...line.value, quantityApproved: value } });
+    }
+  }
+  return { ok: true, lines };
+}
+
+/** The IDR nominal a decision commits: approved where set, requested otherwise. */
+export function decidedIdr(aidLines: AidLine[]): bigint {
+  return aidLines.reduce((total, line) => {
+    if (line.value.kind !== "MONEY") return total;
+    const amount = line.value.amountApprovedIdr ?? line.value.amountRequestedIdr;
+    return isExactNonNegativeInteger(amount) ? total + BigInt(amount) : total;
+  }, 0n);
+}
+
+/** Deterministic SHA-256 over the decided rights and the decision's own content. */
+export function computeRightsDigest(decidedLines: AidLine[], intent: Omit<ProposalDecisionIntent, "approvedAidLines">): Hex32 {
+  const lines = decidedLines.map((line) =>
+    line.value.kind === "MONEY"
+      ? {
+          id: line.id,
+          beneficiaryId: line.beneficiaryId,
+          kind: "MONEY",
+          aidType: line.aidType,
+          period: line.period,
+          amountRequestedIdr: line.value.amountRequestedIdr,
+          amountApprovedIdr: line.value.amountApprovedIdr ?? null,
+        }
+      : {
+          id: line.id,
+          beneficiaryId: line.beneficiaryId,
+          kind: "GOODS",
+          aidType: line.aidType,
+          period: line.period,
+          unit: line.value.unit,
+          quantityRequested: line.value.quantityRequested,
+          quantityApproved: line.value.quantityApproved ?? null,
+          valuedAmountIdr: line.value.valuedAmountIdr,
+        }
+  );
+  const payload = JSON.stringify({
+    action: intent.action,
+    decisionReference: intent.decisionReference,
+    decisionDate: intent.decisionDate,
+    notes: intent.notes,
+    rejectionReason: intent.rejectionReason,
+    lines,
+  });
+  return `0x${createHash("sha256").update(payload).digest("hex")}`;
+}
+
+export function disbursementDecisionTypedDataWire(binding: DecisionBinding) {
+  return {
+    domain: DISBURSEMENT_DECISION_DOMAIN,
+    types: DISBURSEMENT_DECISION_TYPES,
+    primaryType: "DisbursementDecision" as const,
+    message: {
+      purpose: DISBURSEMENT_DECISION_PURPOSE,
+      institutionId: binding.institutionId,
+      proposalId: binding.proposalId,
+      proposalVersion: binding.proposalVersion,
+      action: binding.action,
+      rightsDigest: binding.rightsDigest,
+      decisionReference: binding.decisionReference,
+      decisionDate: binding.decisionDate,
+      operatorOfficerId: binding.operatorOfficerId,
+      operatorAccount: binding.operatorAccount.toLowerCase() as Hex32,
+      signerAccount: binding.signerAccount.toLowerCase() as Hex32,
+      mandateId: binding.mandateId,
+      mandateValidUntil: binding.mandateValidUntil,
+      nonce: binding.nonce,
+      issuedAt: binding.issuedAt,
+      expiresAt: binding.expiresAt,
+    },
+  };
+}
+
+export function disbursementDecisionSigningPayload(binding: DecisionBinding) {
+  const wire = disbursementDecisionTypedDataWire(binding);
+  return {
+    ...wire,
+    message: {
+      ...wire.message,
+      proposalVersion: BigInt(wire.message.proposalVersion),
+      mandateValidUntil: BigInt(wire.message.mandateValidUntil),
+      issuedAt: BigInt(wire.message.issuedAt),
+      expiresAt: BigInt(wire.message.expiresAt),
+    },
+  };
+}
+
+const trimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+/** Validates the decision content shared by the challenge request and the signed submission. */
+export function validateDecisionIntent(input: unknown): { ok: true; value: ProposalDecisionIntent } | { ok: false; error: string } {
+  if (typeof input !== "object" || input === null) {
+    return { ok: false, error: "Data keputusan bukan objek yang sah." };
+  }
+  const raw = input as Record<string, unknown>;
+
+  const action = raw.action;
+  if (!isProposalDecisionAction(action)) {
+    return { ok: false, error: "Tindakan keputusan harus 'APPROVE' atau 'REJECT'." };
+  }
+
+  const decisionReference = trimmed(raw.decisionReference);
+  if (!decisionReference) {
+    return { ok: false, error: "Rujukan keputusan lembaga (SK / Berita Acara Pleno) wajib diisi." };
+  }
+
+  const decisionDate = trimmed(raw.decisionDate);
+  if (!isIsoDate(decisionDate)) {
+    return { ok: false, error: "Tanggal keputusan harus berformat tanggal yang sah (YYYY-MM-DD)." };
+  }
+
+  const rejectionReason = action === "REJECT" ? trimmed(raw.rejectionReason) : null;
+  if (rejectionReason === "") {
+    return { ok: false, error: "Alasan penolakan wajib diisi secara jelas bila pengajuan ditolak." };
+  }
+
+  const approvedAidLines: ApprovedAidLineInput[] = [];
+  if (action === "APPROVE" && Array.isArray(raw.approvedAidLines)) {
+    for (const entry of raw.approvedAidLines) {
+      const item = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+      const id = trimmed(item.id);
+      if (!id) return { ok: false, error: "Setiap baris bantuan yang disetujui wajib memiliki ID." };
+      const amountApprovedIdr = item.amountApprovedIdr == null ? null : String(item.amountApprovedIdr).trim();
+      if (amountApprovedIdr !== null && !isExactNonNegativeInteger(amountApprovedIdr)) {
+        return { ok: false, error: `Jumlah IDR disetujui pada baris ${id} harus bilangan bulat non-negatif.` };
+      }
+      const quantityApproved = item.quantityApproved == null ? null : String(item.quantityApproved).trim();
+      if (quantityApproved !== null && !isExactNonNegativeDecimal(quantityApproved)) {
+        return { ok: false, error: `Jumlah barang disetujui pada baris ${id} harus angka desimal yang sah.` };
+      }
+      approvedAidLines.push({ id, amountApprovedIdr, quantityApproved });
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      action,
+      decisionReference,
+      decisionDate,
+      notes: trimmed(raw.notes) || null,
+      rejectionReason,
+      approvedAidLines,
+    },
+  };
+}
+
+export function validateProposalDecisionInput(input: unknown): { ok: true; value: ProposalDecisionInput } | { ok: false; error: string } {
+  const intent = validateDecisionIntent(input);
+  if (!intent.ok) return intent;
+  const raw = input as Record<string, unknown>;
+
+  const signerAccount = trimmed(raw.signerAccount).toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(signerAccount)) {
+    return { ok: false, error: "Alamat akun pengesah tidak sah." };
+  }
+
+  const mandateId = trimmed(raw.mandateId);
+  if (!mandateId) {
+    return { ok: false, error: "ID mandat operasional pengesah wajib ditentukan." };
+  }
+
+  const nonce = trimmed(raw.nonce);
+  if (!nonce) {
+    return { ok: false, error: "Tantangan nonce pengesahan wajib disertakan." };
+  }
+
+  const signature = trimmed(raw.signature);
+  if (!/^0x[0-9a-fA-F]+$/.test(signature)) {
+    return { ok: false, error: "Tanda tangan digital pengesahan tidak sah." };
+  }
+
+  const expectedVersion = typeof raw.expectedVersion === "number" ? raw.expectedVersion : NaN;
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    return { ok: false, error: "Versi pengajuan yang diharapkan tidak sah." };
+  }
+
+  return { ok: true, value: { ...intent.value, signerAccount, mandateId, nonce, signature, expectedVersion } };
+}

@@ -15,6 +15,11 @@ import {
   submitProposalDraft,
   uploadProposalDocument,
   withdrawProposal,
+  getProposalDecisionReview,
+  createProposalDecisionChallenge,
+  submitProposalDecision,
+  getProposalDecision,
+  signableTypedData,
 } from "./disbursementClient";
 import type { PrivateRequests } from "../workspace/privateRequests";
 
@@ -231,5 +236,67 @@ describe("disbursementClient Ticket #91 methods", () => {
     });
     expect(capturedPath).toBe("/api/workspace/policy");
     expect(savedPol.requireProposalLetter).toBe(true);
+  });
+});
+
+describe("disbursementClient Ticket #93 methods", () => {
+  it("converts exactly the uint256 fields of the wire typed data to bigint", () => {
+    const signable = signableTypedData({
+      domain: { name: "ZKT Disbursement Decision", version: "1" },
+      types: {
+        DisbursementDecision: [
+          { name: "proposalVersion", type: "uint256" },
+          { name: "decisionDate", type: "string" },
+          { name: "mandateValidUntil", type: "uint256" },
+          { name: "expiresAt", type: "uint256" },
+        ],
+      },
+      primaryType: "DisbursementDecision",
+      message: { proposalVersion: 2, decisionDate: "2026-09-17", mandateValidUntil: 1800086400, expiresAt: 1800000300 },
+    });
+    expect(signable.message).toEqual({
+      proposalVersion: 2n,
+      decisionDate: "2026-09-17",
+      mandateValidUntil: 1800086400n,
+      expiresAt: 1800000300n,
+    });
+  });
+
+  it("calls review, challenge, decide and decision read on their own paths", async () => {
+    const calls: { path: string; method: string; body: any }[] = [];
+    const requests = mockRequests(async (path, init) => {
+      calls.push({ path, method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body as string) : null });
+      return { success: true };
+    });
+    const intent = {
+      action: "APPROVE" as const,
+      decisionReference: "SK-001",
+      decisionDate: "2026-09-17",
+      notes: null,
+      rejectionReason: null,
+      approvedAidLines: [{ id: "aid-1", amountApprovedIdr: "300000" }],
+    };
+
+    await getProposalDecisionReview(requests, "prop-1");
+    await createProposalDecisionChallenge(requests, "prop-1", { ...intent, signerAccount: "0x123", expectedVersion: 1 });
+    await submitProposalDecision(requests, "prop-1", {
+      ...intent,
+      signerAccount: "0x123",
+      mandateId: "man-123",
+      nonce: "0xnonce",
+      signature: "0xsig",
+      expectedVersion: 1,
+      operationId: "op-1",
+    });
+    await getProposalDecision(requests, "prop-1");
+
+    expect(calls.map(({ path, method }) => `${method} ${path}`)).toEqual([
+      "GET /api/workspace/proposals/prop-1/decision-review",
+      "POST /api/workspace/proposals/prop-1/decision-challenge",
+      "POST /api/workspace/proposals/prop-1/decide",
+      "GET /api/workspace/proposals/prop-1/decision",
+    ]);
+    expect(calls[1]!.body.approvedAidLines).toEqual(intent.approvedAidLines);
+    expect(calls[2]!.body.operationId).toBe("op-1");
   });
 });

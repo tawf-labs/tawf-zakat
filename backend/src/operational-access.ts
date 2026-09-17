@@ -19,13 +19,17 @@ export async function operationalActor(runtime: WorkspaceRuntime, session: Pick<
   }
   const now = runtime.now();
   const mandates = await runtime.store.activeMandatesForOfficer(session.institutionId, officer.id, now);
+  type Target = { programId?: string | null; nominalAmount?: bigint | null };
+  const check = (fn: OperationalFunction, target: Target) =>
+    checkOperationalMandate(mandates, { fn, ...target, now, account: session.account });
   return {
     officer,
-    allows(fn: OperationalFunction, target: { programId?: string | null; nominalAmount?: bigint | null }) {
-      return checkOperationalMandate(mandates, { fn, ...target, now, account: session.account }).allowed;
+    check,
+    allows(fn: OperationalFunction, target: Target) {
+      return check(fn, target).allowed;
     },
-    require(fn: OperationalFunction, target: { programId?: string | null; nominalAmount?: bigint | null } = {}) {
-      const result = checkOperationalMandate(mandates, { fn, ...target, now, account: session.account });
+    require(fn: OperationalFunction, target: Target = {}) {
+      const result = check(fn, target);
       if (!result.allowed) throw new OperationalAccessDenied(result.reason);
       return result.mandate;
     },

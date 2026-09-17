@@ -72,6 +72,7 @@ export type ProposalStatus =
   | "REVISION_REQUIRED"
   | "READY_FOR_DECISION"
   | "APPROVED"
+  | "REJECTED"
   | "WITHDRAWN";
 
 export type ProposalDocumentCategory =
@@ -105,6 +106,7 @@ export type DisbursementPolicy = {
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;
   warnRecurringAid: boolean;
+  sopRequiresMultiSignerQuorum: boolean;
   version: number;
   updatedAt: number;
   updatedBy: string;
@@ -534,3 +536,114 @@ export const previewStoredBeneficiaryImport = (requests: PrivateRequests, propos
       `/api/workspace/proposals/${proposalId}/documents/${documentId}/import-preview`
     )
     .then((r) => r.preview);
+
+// ---------------------------------------------------------------------------
+// Keputusan lembaga (ticket #93)
+// ---------------------------------------------------------------------------
+
+export type ProposalDecisionAction = "APPROVE" | "REJECT";
+
+export type ApprovedAidLineInput = {
+  id: string;
+  amountApprovedIdr?: string | null;
+  quantityApproved?: string | null;
+};
+
+/** The decision content the signed rights digest commits to. */
+export type ProposalDecisionIntent = {
+  action: ProposalDecisionAction;
+  decisionReference: string;
+  decisionDate: string;
+  notes: string | null;
+  rejectionReason: string | null;
+  approvedAidLines: ApprovedAidLineInput[];
+};
+
+export type ProposalDecision = {
+  id: string;
+  proposalId: string;
+  proposalVersion: number;
+  institutionId: string;
+  action: ProposalDecisionAction;
+  decisionReference: string;
+  decisionDate: string;
+  notes: string | null;
+  rejectionReason: string | null;
+  rightsDigest: string;
+  operatorOfficerId: string;
+  operatorAccount: string;
+  signerAccount: string;
+  mandateId: string;
+  signature: string;
+  createdAt: number;
+};
+
+export type DecisionReviewData = {
+  draft: ProposalDraft;
+  program: Program | null;
+  examination: { checklist: ExaminationChecklist | null; notes: string | null };
+  canDecide: boolean;
+  refusalReason: string | null;
+  sopQuorumHeld: boolean;
+  mandate: { id: string; assignmentRef: string; nominalLimit: string | null; validUntil: number } | null;
+  operator: { officerId: string; name: string; account: string };
+  availableSigners: {
+    personal: string;
+    institutional: Array<{ id: string; accountAddress: string; label: string }>;
+  };
+  referenceCeilingWarning: string;
+  quorumStatement: string;
+  existingDecision: ProposalDecision | null;
+};
+
+export type WireTypedData = {
+  domain: Record<string, unknown>;
+  types: Record<string, readonly { name: string; type: string }[]>;
+  primaryType: string;
+  message: Record<string, unknown>;
+};
+
+export type DecisionChallengeResponse = {
+  challenge: { nonce: string; mandateId: string; signerAccount: string; rightsDigest: string; expiresAt: number };
+  typedData: WireTypedData;
+};
+
+export type SubmitDecisionInput = ProposalDecisionIntent & {
+  signerAccount: string;
+  mandateId: string;
+  nonce: string;
+  signature: string;
+  expectedVersion: number;
+  operationId: string;
+};
+
+/** JSON carries uint256 fields as numbers; a wallet signs them as bigint. */
+export function signableTypedData(typedData: WireTypedData) {
+  const uints = new Set((typedData.types[typedData.primaryType] ?? []).filter((field) => field.type === "uint256").map((field) => field.name));
+  const message = Object.fromEntries(
+    Object.entries(typedData.message).map(([name, value]) => [name, uints.has(name) ? BigInt(value as number) : value])
+  );
+  return { ...typedData, message };
+}
+
+export const getProposalDecisionReview = (requests: PrivateRequests, proposalId: string) =>
+  requests.json<DecisionReviewData>(`/api/workspace/proposals/${proposalId}/decision-review`);
+
+export const createProposalDecisionChallenge = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ProposalDecisionIntent & { signerAccount: string; expectedVersion: number }
+) =>
+  requests.json<DecisionChallengeResponse>(`/api/workspace/proposals/${proposalId}/decision-challenge`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const submitProposalDecision = (requests: PrivateRequests, proposalId: string, input: SubmitDecisionInput) =>
+  requests.json<{ draft: ProposalDraft; decision: ProposalDecision }>(`/api/workspace/proposals/${proposalId}/decide`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const getProposalDecision = (requests: PrivateRequests, proposalId: string) =>
+  requests.json<{ decision: ProposalDecision }>(`/api/workspace/proposals/${proposalId}/decision`);

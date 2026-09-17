@@ -14,20 +14,31 @@
  */
 
 import { createHash } from "node:crypto";
-import { Hono } from "hono";
-import type { Context } from "hono";
+import { Hono, type Context } from "hono";
+import { toHex, type Hex } from "viem";
+import { verifyAccountSignature } from "../account-signature";
 import {
+  computeRightsDigest,
+  decidedAidLines,
+  decidedIdr,
+  disbursementDecisionSigningPayload,
+  disbursementDecisionTypedDataWire,
   evaluateRecurringAidWarnings,
   FUND_TYPES,
   isFundType,
   isProposalDocumentCategory,
+  SOP_QUORUM_HELD_MESSAGE,
   summarizeProposalDraft,
+  validateDecisionIntent,
   validateProgramInput,
+  validateProposalDecisionInput,
   validateProposalDraft,
   withStableIds,
   type AidLine,
   type Beneficiary,
+  type DecisionBinding,
   type ExaminationChecklist,
+  type ProposalDecisionIntent,
   type ProposalDocumentCategory,
   type ProposalDocumentRecord,
   type ProposalDraftInput,
@@ -42,10 +53,13 @@ import {
 } from "../beneficiary-template-generator";
 import { attachRecurringAidWarnings, mapBeneficiaryTabular } from "../beneficiary-tabular-schema";
 import {
+  DecisionChallengeSpentError,
   DraftOperationConflictError,
   ProposalDraftConflictError,
   ProposalStateConflictError,
   ProposalSubmissionIncompleteError,
+  type ProposalContributor,
+  type StoredProposalDraft,
 } from "../disbursement-store";
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
 import { authorize } from "../tenancy";
@@ -61,10 +75,14 @@ import { createRestrictedDocuments, DocumentError } from "../restricted-document
 import { operationalActor, OperationalAccessDenied, requestedIdr } from "../operational-access";
 import { readJson, text } from "./evidence-preparation";
 
+const randomHex = (bytes: number): Hex =>
+  toHex(crypto.getRandomValues(new Uint8Array(bytes)));
+
 const disbursementRoutes = new Hono();
 
 disbursementRoutes.onError((error, c) => {
   if (error instanceof OperationalAccessDenied) return c.json({ success: false, error: error.message }, 403);
+  if (error instanceof DecisionChallengeSpentError) return refuse(c, 401, "replayed");
   if (
     error instanceof ProposalDraftConflictError ||
     error instanceof DraftOperationConflictError ||
@@ -455,6 +473,7 @@ disbursementRoutes.post("/policy", async (c) => {
       requireAlternativeIdProof: body.requireAlternativeIdProof !== undefined ? Boolean(body.requireAlternativeIdProof) : true,
       requireGuardianProof: body.requireGuardianProof !== undefined ? Boolean(body.requireGuardianProof) : true,
       warnRecurringAid: body.warnRecurringAid !== undefined ? Boolean(body.warnRecurringAid) : true,
+      sopRequiresMultiSignerQuorum: Boolean(body.sopRequiresMultiSignerQuorum),
       version: expectedVersion,
       updatedAt: runtime.now(),
       updatedBy: auth.session.account,
@@ -1208,6 +1227,307 @@ disbursementRoutes.post("/proposals/:id/verify-approval", async (c) => {
   }
 
   return c.json({ success: true, allowed: true, mandate });
+});
+
+// ---------------------------------------------------------------------------
+// Keputusan lembaga: telaah, tantangan pengesahan, dan pencatatan (ticket #93)
+// ---------------------------------------------------------------------------
+
+const CHALLENGE_TTL_SECONDS = 300;
+
+/** First reason this officer - operating from `operatorAccount`, signing as `signerAccount` - may not decide it. */
+function separationOfDutiesRefusal(
+  contributors: ProposalContributor[],
+  officerId: string,
+  operatorAccount: string,
+  signerAccount: string
+): string | null {
+  for (const contributor of contributors) {
+    const check = assertCanApproveProposal({
+      creatorOfficerId: contributor.officerId,
+      creatorAccount: contributor.account,
+      approverOfficerId: officerId,
+      approverAccount: operatorAccount,
+    });
+    if (!check.allowed) return check.reason;
+    if (contributor.account.toLowerCase() === signerAccount.toLowerCase()) {
+      return "Akun yang digunakan penyusun tidak boleh digunakan sebagai akun pengesah.";
+    }
+  }
+  return null;
+}
+
+/** A signer is the operator's own account or an institutional account this officer is authorised for. */
+async function signerRefusal(
+  runtime: ReturnType<typeof runtimeOf>,
+  institutionId: string,
+  officerId: string,
+  operatorAccount: string,
+  signerAccount: string
+): Promise<string | null> {
+  if (signerAccount.toLowerCase() === operatorAccount.toLowerCase()) return null;
+  const accounts = await runtime.store.activeEndorsementAccountsForOfficer(institutionId, officerId);
+  return accounts.some((account) => account.accountAddress.toLowerCase() === signerAccount.toLowerCase())
+    ? null
+    : "Akun pengesahan institusi tidak sah atau tidak diizinkan untuk petugas ini.";
+}
+
+type ResolvedDecision =
+  | { ok: false; status: 403 | 409; error: string }
+  | { ok: true; binding: Omit<DecisionBinding, "nonce" | "issuedAt" | "expiresAt">; decidedLines: AidLine[] };
+
+/**
+ * Everything a decision must satisfy right now, shared by the challenge and the
+ * signed submission so the two can never judge the same decision differently.
+ * The mandate is checked against the nominal the decision actually commits.
+ */
+async function resolveDecision(
+  runtime: ReturnType<typeof runtimeOf>,
+  session: { institutionId: string; account: string },
+  draft: StoredProposalDraft,
+  intent: ProposalDecisionIntent,
+  signerAccount: string
+): Promise<ResolvedDecision> {
+  if (draft.status !== "READY_FOR_DECISION") {
+    return {
+      ok: false,
+      status: 409,
+      error: `Pengajuan berstatus "${draft.status}"; hanya pengajuan siap keputusan (READY_FOR_DECISION) yang dapat disahkan.`,
+    };
+  }
+  const policy = await runtime.disbursement.getInstitutionPolicy(session.institutionId);
+  if (policy.sopRequiresMultiSignerQuorum) return { ok: false, status: 403, error: SOP_QUORUM_HELD_MESSAGE };
+
+  const actor = await operationalActor(runtime, session);
+  const contributors = await runtime.disbursement.proposalContributors(session.institutionId, draft.id);
+  const refusal =
+    separationOfDutiesRefusal(contributors, actor.officer.id, session.account, signerAccount) ??
+    (await signerRefusal(runtime, session.institutionId, actor.officer.id, session.account, signerAccount));
+  if (refusal) return { ok: false, status: 403, error: refusal };
+
+  const decided = decidedAidLines(draft.aidLines, intent);
+  if (!decided.ok) return { ok: false, status: 409, error: decided.error };
+
+  const mandate = actor.check("APPROVE_DECISIONS", {
+    programId: draft.programId,
+    nominalAmount: decidedIdr(decided.lines),
+  });
+  if (!mandate.allowed) return { ok: false, status: 403, error: mandate.reason };
+
+  return {
+    ok: true,
+    decidedLines: decided.lines,
+    binding: {
+      institutionId: session.institutionId,
+      proposalId: draft.id,
+      proposalVersion: draft.version,
+      action: intent.action,
+      rightsDigest: computeRightsDigest(decided.lines, intent),
+      decisionReference: intent.decisionReference,
+      decisionDate: intent.decisionDate,
+      operatorOfficerId: actor.officer.id,
+      operatorAccount: session.account.toLowerCase(),
+      signerAccount: signerAccount.toLowerCase(),
+      mandateId: mandate.mandate.id,
+      mandateValidUntil: mandate.mandate.validUntil,
+    },
+  };
+}
+
+const staleVersion = (c: Context) =>
+  c.json({ success: false, error: "Versi pengajuan sudah berubah. Muat ulang sebelum memutuskan." }, 409);
+
+disbursementRoutes.get("/proposals/:id/decision-review", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  const contributors = await runtime.disbursement.proposalContributors(auth.session.institutionId, draft.id);
+  const policy = await runtime.disbursement.getInstitutionPolicy(auth.session.institutionId);
+  const mandate = actor.check("APPROVE_DECISIONS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const refusalReason =
+    (draft.status !== "READY_FOR_DECISION"
+      ? `Pengajuan berstatus "${draft.status}", bukan siap keputusan.`
+      : null) ??
+    (policy.sopRequiresMultiSignerQuorum ? SOP_QUORUM_HELD_MESSAGE : null) ??
+    separationOfDutiesRefusal(contributors, actor.officer.id, auth.session.account, auth.session.account) ??
+    (mandate.allowed ? null : mandate.reason);
+
+  return c.json({
+    success: true,
+    draft,
+    program: draft.programId
+      ? await runtime.disbursement.getProgram(auth.session.institutionId, draft.programId)
+      : null,
+    examination: { checklist: draft.examinationChecklist, notes: draft.examinationNotes },
+    contributors,
+    canDecide: refusalReason === null,
+    refusalReason,
+    sopQuorumHeld: policy.sopRequiresMultiSignerQuorum,
+    mandate: mandate.allowed ? mandate.mandate : null,
+    operator: { officerId: actor.officer.id, name: actor.officer.displayName, account: auth.session.account },
+    availableSigners: {
+      personal: auth.session.account,
+      institutional: await runtime.store.activeEndorsementAccountsForOfficer(auth.session.institutionId, actor.officer.id),
+    },
+    referenceCeilingWarning:
+      "Pagu referensi adalah acuan perencanaan program, bukan saldo bank terverifikasi dan tidak mereservasi anggaran lintas pengajuan.",
+    quorumStatement:
+      "Satu pejabat mengesahkan pencatatan keputusan lembaga; bukan bukti seluruh peserta pleno menandatangani secara digital.",
+    existingDecision: await runtime.disbursement.getProposalDecision(auth.session.institutionId, draft.id),
+  });
+});
+
+disbursementRoutes.post("/proposals/:id/decision-challenge", async (c) => {
+  const runtime = runtimeOf();
+  const body = (await readJson(c)) ?? {};
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const intent = validateDecisionIntent(body);
+  if (!intent.ok) return badRequest(c, intent.error);
+
+  const signerAccount =
+    typeof body.signerAccount === "string" ? body.signerAccount.trim().toLowerCase() : auth.session.account.toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(signerAccount)) return badRequest(c, "Alamat akun pengesah tidak sah.");
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+  if (body.expectedVersion !== draft.version) return staleVersion(c);
+
+  const resolved = await resolveDecision(runtime, auth.session, draft, intent.value, signerAccount);
+  if (!resolved.ok) return c.json({ success: false, error: resolved.error }, resolved.status);
+
+  const issuedAt = runtime.now();
+  const challenge = await runtime.disbursement.createDecisionChallenge({
+    ...resolved.binding,
+    nonce: randomHex(32),
+    issuedAt,
+    expiresAt: issuedAt + CHALLENGE_TTL_SECONDS,
+  });
+
+  return c.json({ success: true, challenge, typedData: disbursementDecisionTypedDataWire(challenge) }, 201);
+});
+
+disbursementRoutes.post("/proposals/:id/decide", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const validation = validateProposalDecisionInput(body);
+  if (!validation.ok) return badRequest(c, validation.error);
+  const input = validation.value;
+
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "ID operasi wajib diisi.");
+
+  const proposalId = c.req.param("id");
+  const operation = { id: operationId, account: auth.session.account, requestHash: requestHash(["decide", proposalId, input]) };
+
+  // An identical retry returns the committed decision, even though the proposal no longer awaits one.
+  const committed = await runtime.disbursement.getProposalDraftOperation(auth.session.institutionId, operation.account, operationId);
+  if (committed) {
+    if (committed.requestHash !== operation.requestHash) throw new DraftOperationConflictError();
+    return c.json({ success: true, ...JSON.parse(committed.resultJson) }, 200);
+  }
+
+  const challenge = await runtime.disbursement.readDecisionChallenge(input.nonce);
+  if (!challenge) return refuse(c, 401, "unknown-challenge");
+  if (challenge.consumedAt !== null) return refuse(c, 401, "replayed");
+  if (runtime.now() > challenge.expiresAt) return refuse(c, 401, "expired");
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+  if (draft.version !== input.expectedVersion) return staleVersion(c);
+
+  const resolved = await resolveDecision(runtime, auth.session, draft, input, input.signerAccount);
+  if (!resolved.ok) return c.json({ success: false, error: resolved.error }, resolved.status);
+
+  // What is true now must be exactly what was signed: rights, operator, signer, mandate and its validity.
+  const signed = challenge as Record<string, unknown>;
+  const changed =
+    input.mandateId !== challenge.mandateId ||
+    Object.entries(resolved.binding).some(([field, value]) => signed[field] !== value);
+  if (changed) {
+    return c.json(
+      {
+        success: false,
+        error: "Konteks pengesahan (isi keputusan, operator, akun pengesah, versi, atau mandat) berubah sejak tanda tangan diminta. Minta tantangan baru.",
+      },
+      409
+    );
+  }
+
+  let rpcUnavailable = false;
+  const proof = await verifyAccountSignature({
+    typedData: disbursementDecisionSigningPayload(challenge),
+    account: input.signerAccount,
+    signature: input.signature,
+    ethCall: async (call) => {
+      try {
+        return await runtime.ethCall(call);
+      } catch (error) {
+        rpcUnavailable = true;
+        throw error;
+      }
+    },
+  });
+  if (!proof.ok && rpcUnavailable) {
+    return c.json(
+      {
+        success: false,
+        reason: "signature-unverifiable",
+        error: "Tanda tangan akun kontrak belum dapat diperiksa karena jaringan tidak tersedia. Keputusan belum dicatat; coba lagi.",
+      },
+      503
+    );
+  }
+  if (!proof.ok) return refuse(c, 401, proof.reason);
+
+  const result = await runtime.disbursement.recordProposalDecision(
+    auth.session.institutionId,
+    draft.id,
+    { input, decidedLines: resolved.decidedLines, challenge },
+    operation,
+    { account: auth.session.account, officerId: resolved.binding.operatorOfficerId },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: result.draft, decision: result.decision }, 200);
+});
+
+/** Readable by anyone who may read the proposal itself (see `GET /proposals/:id`). */
+disbursementRoutes.get("/proposals/:id/decision", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const decision = await runtime.disbursement.getProposalDecision(auth.session.institutionId, c.req.param("id"));
+  if (!decision) return refuse(c, 404, "not-found");
+
+  return c.json({ success: true, decision });
 });
 
 disbursementRoutes.get("/fund-types", async (c) => c.json({ success: true, fundTypes: FUND_TYPES }));

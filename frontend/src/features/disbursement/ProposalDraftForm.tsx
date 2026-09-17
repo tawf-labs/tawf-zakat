@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { AlertCircle, ArrowUpRight, CheckCircle2, RotateCcw, Save, Undo2 } from "lucide-react";
+import { AlertCircle, ArrowUpRight, CheckCircle2, FileSignature, RotateCcw, Save, Undo2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import {
   submitProposalDraft,
   withdrawProposal,
+  type ProposalDecision,
   type ProposalDraft,
+  type ProposalStatus,
   type ProposalTotals,
   type RecurringAidWarning,
 } from "./disbursementClient";
@@ -16,6 +18,19 @@ import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
 import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
 import { BeneficiaryImportNotice } from "./BeneficiaryImportNotice";
 import { useBeneficiaryImport } from "./useBeneficiaryImport";
+import { ProposalDecisionModal } from "./ProposalDecisionModal";
+import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
+
+const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
+  DRAFT: { variant: "neutral", label: "Draf Pengajuan" },
+  SUBMITTED: { variant: "info", label: "Menunggu Pemeriksaan" },
+  UNDER_EXAMINATION: { variant: "info", label: "Sedang Diperiksa" },
+  REVISION_REQUIRED: { variant: "warning", label: "Perlu Revisi Amil" },
+  READY_FOR_DECISION: { variant: "success", label: "Siap Diputus" },
+  APPROVED: { variant: "success", label: "Disetujui Lembaga" },
+  REJECTED: { variant: "danger", label: "Ditolak Lembaga" },
+  WITHDRAWN: { variant: "neutral", label: "Ditarik" },
+};
 
 export function ProposalDraftForm({
   requests,
@@ -43,10 +58,15 @@ export function ProposalDraftForm({
   const [withdrawReason, setWithdrawReason] = useState("");
   const [withdrawing, setWithdrawing] = useState(false);
 
+  const [showDecisionModal, setShowDecisionModal] = useState(false);
+  const [recordedDecision, setRecordedDecision] = useState<ProposalDecision | null>(null);
+
   const isReadOnly =
     draft.status === "SUBMITTED" ||
     draft.status === "UNDER_EXAMINATION" ||
     draft.status === "READY_FOR_DECISION" ||
+    draft.status === "APPROVED" ||
+    draft.status === "REJECTED" ||
     draft.status === "WITHDRAWN";
 
   const rosterImport = useBeneficiaryImport({ requests, draft, setDraft, dirty, readOnly: isReadOnly });
@@ -128,29 +148,7 @@ export function ProposalDraftForm({
       {/* Header status bar */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Badge
-            variant={
-              draft.status === "READY_FOR_DECISION"
-                ? "success"
-                : draft.status === "SUBMITTED" || draft.status === "UNDER_EXAMINATION"
-                ? "info"
-                : draft.status === "REVISION_REQUIRED"
-                ? "warning"
-                : "neutral"
-            }
-          >
-            {draft.status === "DRAFT"
-              ? "Draf Pengajuan"
-              : draft.status === "SUBMITTED"
-              ? "Menunggu Pemeriksaan"
-              : draft.status === "UNDER_EXAMINATION"
-              ? "Sedang Diperiksa"
-              : draft.status === "REVISION_REQUIRED"
-              ? "Perlu Revisi Amil"
-              : draft.status === "READY_FOR_DECISION"
-              ? "Siap Diputus"
-              : "Ditarik"}
-          </Badge>
+          <Badge variant={STATUS_BADGES[draft.status].variant}>{STATUS_BADGES[draft.status].label}</Badge>
           <span
             role="status"
             className={`rounded-full px-2.5 py-1 text-xs font-medium ${
@@ -197,11 +195,22 @@ export function ProposalDraftForm({
 
       {/* Ready for decision banner */}
       {draft.status === "READY_FOR_DECISION" && (
-        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-xs text-emerald-900 space-y-1">
-          <p className="font-bold flex items-center gap-1.5 text-emerald-950">
-            <CheckCircle2 className="h-4 w-4 text-emerald-700" />
-            Pengajuan Telah Memenuhi Syarat & Siap Diputus
-          </p>
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-xs text-emerald-900 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-bold flex items-center gap-1.5 text-emerald-950 text-sm">
+              <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+              Pengajuan Telah Memenuhi Syarat & Siap Diputus
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setShowDecisionModal(true)}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white gap-1.5"
+            >
+              <FileSignature className="h-3.5 w-3.5" />
+              Tinjau & Putuskan
+            </Button>
+          </div>
           {draft.examinationNotes && (
             <p className="mt-1">
               <strong>Catatan Pemeriksa:</strong> {draft.examinationNotes}
@@ -209,6 +218,8 @@ export function ProposalDraftForm({
           )}
         </div>
       )}
+
+      <ProposalDecisionBanner requests={requests} draft={draft} recorded={recordedDecision} />
 
       {/* Recurring aid warnings banner */}
       {recurringWarnings.length > 0 && (
@@ -345,6 +356,19 @@ export function ProposalDraftForm({
             </div>
           </div>
         </div>
+      )}
+      {showDecisionModal && (
+        <ProposalDecisionModal
+          requests={requests}
+          proposalId={draft.id}
+          isOpen={showDecisionModal}
+          onClose={() => setShowDecisionModal(false)}
+          onDecisionRecorded={(updatedDraft, rec) => {
+            acceptSaved(updatedDraft);
+            setRecordedDecision(rec);
+            if (summary) onSaved(updatedDraft, summary);
+          }}
+        />
       )}
       {rosterImport.dialog && (
         <BeneficiaryImportModal

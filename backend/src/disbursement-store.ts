@@ -16,6 +16,11 @@ import {
   type ProgramRecord,
   type ProgramStatus,
   type ProposalCompletenessIssue,
+  type DecisionBinding,
+  type ProposalDecisionAction,
+  type ProposalDecisionChallenge,
+  type ProposalDecisionInput,
+  type ProposalDecisionRecord,
   type ProposalDocumentCategory,
   type ProposalDocumentRecord,
   type ProposalHistoryAction,
@@ -97,6 +102,14 @@ export class ProposalSubmissionIncompleteError extends Error {
   constructor(readonly issues: ProposalCompletenessIssue[]) {
     super("Pengajuan belum lengkap atau belum memenuhi kebijakan dokumen lembaga.");
     this.name = "ProposalSubmissionIncompleteError";
+  }
+}
+
+/** The challenge was spent - by a replay or by a concurrent submission - before this decision committed. */
+export class DecisionChallengeSpentError extends Error {
+  constructor() {
+    super("Tantangan pengesahan sudah digunakan. Minta tantangan baru sebelum menandatangani ulang.");
+    this.name = "DecisionChallengeSpentError";
   }
 }
 
@@ -242,11 +255,50 @@ const policyFrom = (row: any, institutionId: string): DisbursementPolicy => {
     requireAlternativeIdProof: Boolean(row.require_alternative_id_proof),
     requireGuardianProof: Boolean(row.require_guardian_proof),
     warnRecurringAid: Boolean(row.warn_recurring_aid),
+    sopRequiresMultiSignerQuorum: Boolean(row.sop_requires_multi_signer_quorum),
     version: Number(row.version),
     updatedAt: asSeconds(row.updated_at),
     updatedBy: row.updated_by,
   };
 };
+
+const decisionRecordFrom = (row: any): ProposalDecisionRecord => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  proposalVersion: Number(row.proposal_version),
+  institutionId: row.institution_id,
+  action: row.action as ProposalDecisionAction,
+  decisionReference: row.decision_reference,
+  decisionDate: row.decision_date,
+  notes: row.notes ?? null,
+  rejectionReason: row.rejection_reason ?? null,
+  rightsDigest: row.rights_digest,
+  operatorOfficerId: row.operator_officer_id,
+  operatorAccount: row.operator_account,
+  signerAccount: row.signer_account,
+  mandateId: row.mandate_id,
+  signature: row.signature,
+  createdAt: asSeconds(row.created_at),
+});
+
+const decisionChallengeFrom = (row: any): ProposalDecisionChallenge => ({
+  nonce: row.nonce as `0x${string}`,
+  proposalId: row.proposal_id,
+  proposalVersion: Number(row.proposal_version),
+  institutionId: row.institution_id,
+  operatorOfficerId: row.operator_officer_id,
+  operatorAccount: row.operator_account,
+  signerAccount: row.signer_account,
+  action: row.action as ProposalDecisionAction,
+  rightsDigest: row.rights_digest as `0x${string}`,
+  decisionReference: row.decision_reference,
+  decisionDate: row.decision_date,
+  mandateId: row.mandate_id,
+  mandateValidUntil: asSeconds(row.mandate_valid_until),
+  issuedAt: asSeconds(row.issued_at),
+  expiresAt: asSeconds(row.expires_at),
+  consumedAt: row.consumed_at == null ? null : asSeconds(row.consumed_at),
+});
 
 const historyFrom = (row: any): ProposalHistoryRecord => ({
   id: Number(row.id),
@@ -396,6 +448,46 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      AND NOT EXISTS (SELECT 1 FROM proposal_draft_contributors c WHERE c.draft_id = d.id
        AND c.version = (o.result_json::jsonb->>'version')::integer)
    ON CONFLICT DO NOTHING;`,
+  `ALTER TABLE institution_disbursement_policies ADD COLUMN IF NOT EXISTS sop_requires_multi_signer_quorum BOOLEAN NOT NULL DEFAULT FALSE;`,
+  `CREATE TABLE IF NOT EXISTS proposal_decisions (
+     id TEXT PRIMARY KEY,
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
+     proposal_version INTEGER NOT NULL,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     action TEXT NOT NULL,
+     decision_reference TEXT NOT NULL,
+     decision_date TEXT NOT NULL,
+     notes TEXT,
+     rejection_reason TEXT,
+     rights_digest TEXT NOT NULL,
+     operator_officer_id TEXT NOT NULL REFERENCES officer_profiles(id),
+     operator_account TEXT NOT NULL,
+     signer_account TEXT NOT NULL,
+     mandate_id TEXT NOT NULL REFERENCES operational_mandates(id),
+     signature TEXT NOT NULL,
+     created_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS proposal_decisions_by_proposal ON proposal_decisions (institution_id, proposal_id, created_at DESC);`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS proposal_decisions_one_per_version ON proposal_decisions (proposal_id, proposal_version);`,
+  `CREATE TABLE IF NOT EXISTS proposal_decision_challenges (
+     nonce TEXT PRIMARY KEY,
+     proposal_id TEXT NOT NULL,
+     proposal_version INTEGER NOT NULL,
+     institution_id TEXT NOT NULL,
+     operator_officer_id TEXT NOT NULL,
+     operator_account TEXT NOT NULL,
+     signer_account TEXT NOT NULL,
+     action TEXT NOT NULL,
+     rights_digest TEXT NOT NULL,
+     decision_reference TEXT NOT NULL,
+     decision_date TEXT NOT NULL,
+     mandate_id TEXT NOT NULL,
+     mandate_valid_until BIGINT NOT NULL,
+     issued_at BIGINT NOT NULL,
+     expires_at BIGINT NOT NULL,
+     consumed_at BIGINT
+   );`,
+  `CREATE INDEX IF NOT EXISTS proposal_decision_challenges_by_proposal ON proposal_decision_challenges (institution_id, proposal_id, nonce);`,
 ] as const;
 
 export function createDisbursementStore(db: DisbursementDatabase) {
@@ -628,6 +720,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
               require_alternative_id_proof = ${policy.requireAlternativeIdProof},
               require_guardian_proof = ${policy.requireGuardianProof},
               warn_recurring_aid = ${policy.warnRecurringAid},
+              sop_requires_multi_signer_quorum = ${Boolean(policy.sopRequiresMultiSignerQuorum)},
               version = version + 1,
               updated_at = ${policy.updatedAt},
               updated_by = ${policy.updatedBy}
@@ -642,11 +735,11 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             INSERT INTO institution_disbursement_policies (
               institution_id, require_proposal_letter, require_identity_doc,
               require_alternative_id_proof, require_guardian_proof, warn_recurring_aid,
-              version, updated_at, updated_by
+              sop_requires_multi_signer_quorum, version, updated_at, updated_by
             ) VALUES (
               ${policy.institutionId}, ${policy.requireProposalLetter}, ${policy.requireIdentityDoc},
               ${policy.requireAlternativeIdProof}, ${policy.requireGuardianProof}, ${policy.warnRecurringAid},
-              1, ${policy.updatedAt}, ${policy.updatedBy}
+              ${Boolean(policy.sopRequiresMultiSignerQuorum)}, 1, ${policy.updatedAt}, ${policy.updatedBy}
             ) RETURNING *
           `)
         )[0];
@@ -1226,6 +1319,174 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         submittedAt: row.submitted_at ? asSeconds(row.submitted_at) : null,
         examination: row.examination_json ? JSON.parse(row.examination_json) : null,
         createdAt: asSeconds(row.created_at),
+      };
+    },
+
+    // -----------------------------------------------------------------------
+    // Keputusan lembaga (ticket #93)
+    // -----------------------------------------------------------------------
+
+    async createDecisionChallenge(binding: DecisionBinding): Promise<ProposalDecisionChallenge> {
+      const row = rowsOf(
+        await db.execute(sql`
+          INSERT INTO proposal_decision_challenges (
+            nonce, proposal_id, proposal_version, institution_id,
+            operator_officer_id, operator_account, signer_account,
+            action, rights_digest, decision_reference, decision_date,
+            mandate_id, mandate_valid_until, issued_at, expires_at
+          ) VALUES (
+            ${binding.nonce.toLowerCase()}, ${binding.proposalId}, ${binding.proposalVersion}, ${binding.institutionId},
+            ${binding.operatorOfficerId}, ${binding.operatorAccount.toLowerCase()}, ${binding.signerAccount.toLowerCase()},
+            ${binding.action}, ${binding.rightsDigest}, ${binding.decisionReference}, ${binding.decisionDate},
+            ${binding.mandateId}, ${binding.mandateValidUntil}, ${binding.issuedAt}, ${binding.expiresAt}
+          )
+          RETURNING *
+        `)
+      )[0];
+      return decisionChallengeFrom(row);
+    },
+
+    async readDecisionChallenge(nonce: string): Promise<ProposalDecisionChallenge | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM proposal_decision_challenges
+          WHERE nonce = ${nonce.toLowerCase()}
+        `)
+      )[0];
+      return row ? decisionChallengeFrom(row) : null;
+    },
+
+    /**
+     * Spends the challenge, applies the decided rights and records the decision in
+     * one transaction: a failure leaves the challenge unspent, and a retry with the
+     * same operation returns the committed result even though the nonce is spent.
+     */
+    async recordProposalDecision(
+      institutionId: string,
+      proposalId: string,
+      decision: { input: ProposalDecisionInput; decidedLines: AidLine[]; challenge: ProposalDecisionChallenge },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ draft: StoredProposalDraft; decision: ProposalDecisionRecord }> {
+      const { input, decidedLines, challenge } = decision;
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const spent = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_decision_challenges SET consumed_at = ${now}
+            WHERE nonce = ${challenge.nonce.toLowerCase()} AND consumed_at IS NULL
+            RETURNING nonce
+          `)
+        )[0];
+        if (!spent) throw new DecisionChallengeSpentError();
+
+        const currentRaw = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!currentRaw) throw new ProposalDraftConflictError(proposalId);
+        const current = draftFrom(currentRaw);
+        if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
+        if (current.status !== "READY_FOR_DECISION") {
+          throw new ProposalStateConflictError(
+            `Pengajuan berstatus "${current.status}" tidak dalam status siap keputusan (READY_FOR_DECISION).`
+          );
+        }
+
+        const nextStatus: ProposalStatus = input.action === "APPROVE" ? "APPROVED" : "REJECTED";
+
+        const updatedRaw = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_drafts SET
+              status = ${nextStatus},
+              aid_lines_json = ${JSON.stringify(decidedLines)},
+              revision_reason = ${input.rejectionReason},
+              updated_at = ${now}
+            WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${input.expectedVersion}
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          UPDATE proposal_versions SET status = ${nextStatus}
+          WHERE proposal_id = ${proposalId} AND version = ${current.version}
+        `);
+
+        // The unique (proposal_id, proposal_version) index refuses a second decision for this version.
+        const decisionRow = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO proposal_decisions (
+              id, proposal_id, proposal_version, institution_id, action,
+              decision_reference, decision_date, notes, rejection_reason,
+              rights_digest, operator_officer_id, operator_account, signer_account,
+              mandate_id, signature, created_at
+            ) VALUES (
+              ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${current.version}, ${institutionId}, ${input.action},
+              ${input.decisionReference}, ${input.decisionDate}, ${input.notes}, ${input.rejectionReason},
+              ${challenge.rightsDigest}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${input.signerAccount.toLowerCase()},
+              ${input.mandateId}, ${input.signature}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        const outcome = input.action === "APPROVE" ? "Disetujui" : "Ditolak";
+        await tx.execute(sql`
+          INSERT INTO proposal_history (
+            proposal_id, institution_id, version, from_status, to_status, action,
+            actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${proposalId}, ${institutionId}, ${current.version}, ${current.status},
+            ${nextStatus}, ${input.action}, ${actor.account.toLowerCase()}, ${actor.officerId},
+            ${input.rejectionReason}, ${input.notes ?? `Keputusan: ${outcome} (${input.decisionReference})`},
+            ${now}
+          )
+        `);
+
+        return {
+          draft: draftFrom(updatedRaw),
+          decision: decisionRecordFrom(decisionRow),
+        };
+      });
+    },
+
+    async getProposalDecision(
+      institutionId: string,
+      proposalId: string
+    ): Promise<ProposalDecisionRecord | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM proposal_decisions
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `)
+      )[0];
+      return row ? decisionRecordFrom(row) : null;
+    },
+
+    /**
+     * The committed result of an earlier operation, if any. A decision's retry must
+     * reach it before the route's pre-checks, which a decided proposal no longer passes.
+     */
+    async getProposalDraftOperation(
+      institutionId: string,
+      account: string,
+      operationId: string
+    ): Promise<{ requestHash: string; resultJson: string } | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT request_hash, result_json FROM proposal_draft_operations
+          WHERE institution_id = ${institutionId} AND account = ${account} AND operation_id = ${operationId}
+        `)
+      )[0];
+      if (!row || !row.result_json) return null;
+      return {
+        requestHash: row.request_hash,
+        resultJson: row.result_json,
       };
     },
   };
