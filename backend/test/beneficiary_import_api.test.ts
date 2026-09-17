@@ -405,7 +405,7 @@ describe("Beneficiary Tabular Import & Mass Validation (Ticket #92)", () => {
       const person = { nama: "Ahmad Sahal", nik: "3201010101801234", alamat_cakupan: "Jl. Mawar 1", kontak_telepon: "081234567890" };
       const result = await preview(token, [
         moneyRow({ ...person, nilai_idr: "1000000" }),
-        moneyRow({ ...person, jenis_bantuan: "BARANG", nama_bantuan: "Paket sembako", nilai_idr: "", jumlah_barang: "2", satuan_barang: "Paket", nilai_idr_barang: "500000" }),
+        moneyRow({ ...person, jenis_bantuan: "BARANG", nama_bantuan: "Paket sembako", nilai_idr: "", jumlah_barang: "2", satuan_barang: "Paket", nilai_idr_barang: "500000", dasar_valuasi_barang: "Estimasi berdasarkan penawaran pemasok sintetis REF-01" }),
       ]);
 
       expect(result.uniqueBeneficiaryCount).toBe(1);
@@ -484,7 +484,7 @@ describe("Beneficiary Tabular Import & Mass Validation (Ticket #92)", () => {
       const goods = { jenis_bantuan: "BARANG", nilai_idr: "" };
       const result = await preview(token, [
         moneyRow({ ...goods, nik: "3201010101801111", nama_bantuan: "Sembako", jumlah_barang: "5", satuan_barang: "Paket" }),
-        moneyRow({ ...goods, nik: "3201010101802222", nama_bantuan: "Beras", jumlah_barang: "25", satuan_barang: "Kg", nilai_idr_barang: "350000" }),
+        moneyRow({ ...goods, nik: "3201010101802222", nama_bantuan: "Beras", jumlah_barang: "25", satuan_barang: "Kg", nilai_idr_barang: "350000", dasar_valuasi_barang: "Estimasi berdasarkan penawaran pemasok sintetis REF-01" }),
       ]);
       expect(result.totalsByUnit).toEqual({ "Sembako:Paket": "5", "Beras:Kg": "25" });
       expect(result.isPartial).toBe(true);
@@ -492,7 +492,7 @@ describe("Beneficiary Tabular Import & Mass Validation (Ticket #92)", () => {
 
     it("sums fractional goods quantities exactly", async () => {
       const token = await signIn(officer, SINAR);
-      const goods = { jenis_bantuan: "BARANG", nilai_idr: "", nama_bantuan: "Minyak", satuan_barang: "Liter", nilai_idr_barang: "10000" };
+      const goods = { jenis_bantuan: "BARANG", nilai_idr: "", nama_bantuan: "Minyak", satuan_barang: "Liter", nilai_idr_barang: "10000", dasar_valuasi_barang: "Estimasi berdasarkan penawaran pemasok sintetis REF-01" };
       const result = await preview(token, [
         moneyRow({ ...goods, nik: "3201010101801111", jumlah_barang: "2.5" }),
         moneyRow({ ...goods, nik: "3201010101802222", jumlah_barang: "1" }),
@@ -622,7 +622,7 @@ describe("Beneficiary Tabular Import & Mass Validation (Ticket #92)", () => {
       const program = await createProgram(token);
       const imported = await preview(token, [
         moneyRow({ nama: "Keluarga Pak Somad", nik: "3201010101807777", jenis_bantuan: "BARANG", nama_bantuan: "Beras", nilai_idr: "",
-          jumlah_barang: "50", satuan_barang: "Kg", nilai_idr_barang: "750000", kontak_telepon: "081987654321", kontak_relasi: "Kepala Keluarga" }),
+          jumlah_barang: "50", satuan_barang: "Kg", nilai_idr_barang: "750000", dasar_valuasi_barang: "Estimasi berdasarkan penawaran pemasok sintetis REF-01", kontak_telepon: "081987654321", kontak_relasi: "Kepala Keluarga" }),
       ]);
       const saveRes = await post(`${WORKSPACE}/proposals`, draftBody(program.id, imported), token);
       expect(saveRes.status).toBe(201);
@@ -638,6 +638,7 @@ describe("Beneficiary Tabular Import & Mass Validation (Ticket #92)", () => {
       expect(reloaded?.beneficiaries[0].contact?.relation).toBe("Kepala Keluarga");
       expect(reloaded?.aidLines[0].aidType).toBe("Beras");
       expect(reloaded?.aidLines[0].value.kind).toBe("GOODS");
+      expect(reloaded?.aidLines[0].value).toMatchObject({ valuationBasis: "Estimasi berdasarkan penawaran pemasok sintetis REF-01" });
     });
   });
 

@@ -88,6 +88,7 @@ export const SYNTHETIC_SAMPLE_BENEFICIARIES: SheetRow[] = [
     jumlah_barang: "50",
     satuan_barang: "Kg",
     nilai_idr_barang: "750000",
+    dasar_valuasi_barang: "Estimasi 50 kg × Rp15.000; penawaran pemasok NOTA-BERAS-44",
     periode_bantuan: "2026-03",
     referensi_bukti: "NOTA-BERAS-44",
     kontak_telepon: "081700112233",
@@ -115,6 +116,7 @@ export const BENEFICIARY_INSTRUCTION_ROWS = [
   ["nilai_idr", "Kondisional", "Wajib jika jenis_bantuan 'UANG'. Nominal rupiah dalam bilangan bulat positif tanpa desimal atau koma (misal: 1500000)."],
   ["jumlah_barang", "Kondisional", "Wajib jika jenis_bantuan 'BARANG'. Kuantitas barang berupa angka desimal eksak (misal: 2 atau 2.5)."],
   ["satuan_barang", "Kondisional", "Wajib jika jenis_bantuan 'BARANG'. Satuan barang yang jelas (misal: Paket, Kg, Kotak, Unit)."],
+  ["dasar_valuasi_barang", "Kondisional", "Wajib jika nilai_idr_barang diisi: sebutkan sumber/rujukan dan perhitungan estimasi pengajuan. Biaya aktual dicatat terpisah."],
   ["nilai_idr_barang", "Opsional", "Taksiran nilai rupiah bantuan barang bila dasar penilaian tersedia. Jika belum diketahui, kosongkan (tidak diubah menjadi nol rupiah)."],
   ["periode_bantuan", "Opsional", "Periode bantuan spesifik (misal: 2026-03 atau 2026-Q1). Jika kosong, mengikuti periode bantuan yang diisi pada form pengajuan."],
   ["nama_penerima_pembayaran", "Opsional", "Nama pihak yang menerima transfer bila disalurkan ke penyedia/sekolah (misal: Madrasah Ibtidaiyah Al-Hidayah)."],
@@ -163,6 +165,7 @@ function aidLineCellsOf(line: AidLine): SheetRow {
     jumlah_barang: value.kind === "GOODS" ? value.quantityRequested : "",
     satuan_barang: value.kind === "GOODS" ? value.unit : "",
     nilai_idr_barang: value.kind === "GOODS" ? (value.valuedAmountIdr ?? "") : "",
+    dasar_valuasi_barang: value.kind === "GOODS" ? (value.valuationBasis ?? "") : "",
     periode_bantuan: line.period,
     referensi_bukti: line.evidenceReference ?? "",
   };

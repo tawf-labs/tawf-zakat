@@ -76,7 +76,7 @@ export function RecipientConfirmationModal({ requests, proposalId, realization, 
     <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto" showCloseButton={!busy}>
       <DialogTitle>Konfirmasi penerimaan</DialogTitle>
       <DialogDescription>
-        Penyerahan tunai {formatIdrAmount(realization.amountIdr)} kepada {beneficiaryName}. Konfirmasi ini terpisah dari catatan realisasi petugas.
+        Penyerahan {realization.quantity != null ? `${realization.quantity} ${realization.unit}` : formatIdrAmount(realization.amountIdr ?? "0")} kepada {beneficiaryName}. Konfirmasi ini terpisah dari catatan realisasi petugas.
       </DialogDescription>
 
       <div role="radiogroup" aria-label="Cara konfirmasi" className="flex flex-col gap-2 text-sm sm:flex-row">

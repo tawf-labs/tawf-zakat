@@ -103,6 +103,15 @@ export function AidLineRow({
               onChange({ ...line, value: { ...line.value, kind: "GOODS", valuedAmountIdr: e.target.value || null } as AidLine["value"] })
             }
           />
+          <label className="text-xs sm:col-span-3">
+            Dasar estimasi nilai barang (wajib jika nilai IDR diisi)
+            <input className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1.5"
+              aria-label={`Dasar valuasi barang ${index + 1}`}
+              placeholder="Sumber/rujukan dan perhitungan, mis. penawaran pemasok: 10 kg × Rp15.000"
+              value={line.value.valuationBasis ?? ""}
+              onChange={(e) => onChange({ ...line, value: { ...line.value, valuationBasis: e.target.value || null } as AidLine["value"] })} />
+            Estimasi pengajuan; biaya aktual dicatat terpisah pada uang muka & biaya.
+          </label>
         </div>
       )}
       <input

@@ -1,3 +1,4 @@
+import { compareDecimalStrings, addDecimalStrings, subtractDecimalStrings, isExactNonNegativeDecimal } from "../../../../shared/exact-decimal";
 import { useId, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/Dialog";
@@ -21,8 +22,17 @@ export function evidencedIdr(realization: DisbursementRealization, documents: Re
   return documents
     .filter((doc) => doc.documentType === required)
     .flatMap((doc) => doc.allocations)
-    .filter((allocation) => allocation.realizationId === realization.id)
-    .reduce((total, allocation) => total + BigInt(allocation.amountIdr), 0n);
+    .filter((allocation) => allocation.realizationId === realization.id && allocation.amountIdr != null)
+    .reduce((total, allocation) => total + BigInt(allocation.amountIdr!), 0n);
+}
+
+export function evidencedQuantity(realization: DisbursementRealization, documents: RealizationDocument[]): string {
+  const required = REQUIRED_EVIDENCE_BY_METHOD[realization.method];
+  return documents
+    .filter((doc) => doc.documentType === required)
+    .flatMap((doc) => doc.allocations)
+    .filter((allocation) => allocation.realizationId === realization.id && allocation.quantity != null)
+    .reduce((total, allocation) => addDecimalStrings(total, allocation.quantity!), "0");
 }
 
 /**
@@ -46,7 +56,13 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
   const batch = realization.batchGroupId
     ? realizations.filter((other) => other.batchGroupId === realization.batchGroupId && other.method === realization.method)
     : [realization];
-  const uncovered = (target: DisbursementRealization) => (BigInt(target.amountIdr) - evidencedIdr(target, documents)).toString();
+  const isGoods = (target: DisbursementRealization) => target.quantity != null;
+  const uncovered = (target: DisbursementRealization) => {
+    if (isGoods(target)) {
+      return subtractDecimalStrings(target.quantity!, evidencedQuantity(target, documents));
+    }
+    return (BigInt(target.amountIdr ?? "0") - evidencedIdr(target, documents)).toString();
+  };
 
   const [documentType, setDocumentType] = useState<RealizationDocumentType>(required);
   const [file, setFile] = useState<File | null>(null);
@@ -63,13 +79,37 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
   async function upload() {
     const allocations = documentType === "SUPPORTING_PHOTO" ? [] : batch
       .filter((target) => amounts[target.id])
-      .map((target) => ({ realizationId: target.id, amountIdr: amounts[target.id]! }));
+      .map((target) => {
+        if (isGoods(target)) {
+          return {
+            realizationId: target.id,
+            quantity: amounts[target.id]!,
+            unit: target.unit ?? null,
+            amountIdr: null,
+          };
+        }
+        return {
+          realizationId: target.id,
+          amountIdr: amounts[target.id]!,
+          quantity: null,
+          unit: null,
+        };
+      });
     const problem = operation.state === "UNKNOWN" ? null
       : !file ? "Pilih berkas bukti."
       : documentType !== "SUPPORTING_PHOTO" && !allocations.some((allocation) => allocation.realizationId === realization.id)
         ? "Sebutkan jumlah yang dibuktikan untuk realisasi ini."
-      : allocations.find((allocation) => BigInt(allocation.amountIdr) > BigInt(uncovered(batch.find((t) => t.id === allocation.realizationId)!)))
-        ? "Jumlah yang dibuktikan melebihi nominal realisasi yang belum berbukti."
+      : allocations.find((allocation) => {
+          const target = batch.find((t) => t.id === allocation.realizationId)!;
+          if (isGoods(target)) {
+            return !allocation.quantity || !isExactNonNegativeDecimal(allocation.quantity)
+              || compareDecimalStrings(allocation.quantity, "0") <= 0
+              || compareDecimalStrings(allocation.quantity, uncovered(target)) > 0;
+          }
+          return !allocation.amountIdr || !/^\d+$/.test(allocation.amountIdr)
+            || BigInt(allocation.amountIdr) <= 0n || BigInt(allocation.amountIdr) > BigInt(uncovered(target));
+        })
+        ? "Jumlah yang dibuktikan harus lebih dari nol dan tidak melebihi realisasi yang belum berbukti."
       : null;
     setValidation(problem);
     if (problem) return;
@@ -94,7 +134,8 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
     <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto" showCloseButton={!operation.locked}>
       <DialogTitle>Lengkapi bukti realisasi</DialogTitle>
       <DialogDescription>
-        {realization.method === "CASH" ? "Penyerahan tunai dibuktikan dengan tanda terima atau BAST beserta jumlahnya."
+        {realization.method === "CASH" || realization.method === "GOODS_HANDOVER"
+          ? "Penyerahan tunai atau barang dibuktikan dengan tanda terima atau BAST beserta jumlahnya."
           : "Transfer dan pembayaran penyedia dibuktikan dengan bukti pembayaran."} Berkas disimpan privat; keberadaan berkas tidak membuktikan kebenaran isinya.
       </DialogDescription>
 
@@ -115,9 +156,17 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
           {documentType === "SUPPORTING_PHOTO" ? <p className="text-xs text-stone-600">Foto hanya pendukung dan tidak melengkapi bukti.</p> : <div className="space-y-2">
             <p className="text-xs font-semibold">{batch.length > 1 ? "Alokasi bukti kelompok per penerima" : "Jumlah yang dibuktikan"}</p>
             {batch.map((target) => <label key={target.id} className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-[1fr_10rem] sm:items-center" htmlFor={`${id}-alloc-${target.id}`}>
-              <span>{beneficiaryName(target)} · belum berbukti {formatIdrAmount(uncovered(target))}</span>
-              <input id={`${id}-alloc-${target.id}`} inputMode="numeric" value={amounts[target.id] ?? ""} className="rounded-lg border border-stone-300 p-2 font-mono text-sm"
-                onChange={(event) => setAmounts((current) => ({ ...current, [target.id]: event.target.value.replace(/\D/g, "") }))} />
+              <span>
+                {beneficiaryName(target)} · belum berbukti{" "}
+                {isGoods(target) ? `${uncovered(target)} ${target.unit}` : formatIdrAmount(uncovered(target))}
+              </span>
+              <input id={`${id}-alloc-${target.id}`} inputMode={isGoods(target) ? "decimal" : "numeric"} value={amounts[target.id] ?? ""} className="rounded-lg border border-stone-300 p-2 font-mono text-sm"
+                onChange={(event) => setAmounts((current) => ({
+                  ...current,
+                  [target.id]: isGoods(target)
+                    ? event.target.value.replace(/[^0-9.]/g, "")
+                    : event.target.value.replace(/\D/g, ""),
+                }))} />
             </label>)}
           </div>}
         </fieldset>

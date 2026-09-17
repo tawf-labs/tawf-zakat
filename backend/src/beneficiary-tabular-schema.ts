@@ -52,6 +52,7 @@ export const BENEFICIARY_COLUMNS = [
   "jumlah_barang",
   "satuan_barang",
   "nilai_idr_barang",
+  "dasar_valuasi_barang",
   "periode_bantuan",
   "nama_penerima_pembayaran",
   "hubungan_penerima_pembayaran",
@@ -201,6 +202,7 @@ const aidLineFieldColumns: Record<string, { column: BeneficiaryColumn; code: Ben
   "value.amountRequestedIdr": { column: "nilai_idr", code: "INVALID_AMOUNT" },
   "value.unit": { column: "satuan_barang", code: "MISSING_UNIT" },
   "value.quantityRequested": { column: "jumlah_barang", code: "INVALID_QUANTITY" },
+  "value.valuationBasis": { column: "dasar_valuasi_barang", code: "REQUIRED_FIELD_MISSING" },
   "value.valuedAmountIdr": { column: "nilai_idr_barang", code: "INVALID_AMOUNT" },
 };
 
@@ -313,6 +315,7 @@ function aidValueOf(cells: BeneficiaryCells): AidValue | null {
       quantityRequested: cells.jumlah_barang,
       quantityApproved: null,
       valuedAmountIdr: cells.nilai_idr_barang || null,
+      valuationBasis: cells.dasar_valuasi_barang || null,
     };
   }
   return null;

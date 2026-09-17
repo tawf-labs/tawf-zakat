@@ -20,7 +20,11 @@ export function ProposalExaminationDetails({ draft, warnings }: { draft: Proposa
           {draft.aidLines.filter(line => line.beneficiaryId === beneficiary.id).map(line =>
             <li key={line.id}>{line.aidType} · {line.period} · {line.value.kind === "MONEY"
               ? formatQuantity({ amount: line.value.amountRequestedIdr, unit: "IDR" })
-              : `${line.value.quantityRequested} ${line.value.unit}`}</li>)}
+              : `${line.value.quantityRequested} ${line.value.unit}`}
+              {line.value.kind === "GOODS" && line.value.valuedAmountIdr != null && line.value.valuationBasis &&
+                <p>Estimasi pengajuan {formatQuantity({ amount: line.value.valuedAmountIdr, unit: "IDR" })}.
+                  Dasar: {line.value.valuationBasis}. Biaya aktual dicatat terpisah.</p>}
+            </li>)}
         </ul>
       </li>)}
     </ul>

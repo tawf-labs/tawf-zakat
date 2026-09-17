@@ -1,3 +1,5 @@
+import { RealizationSummaryMetrics } from "./RealizationSummaryMetrics";
+import { compareDecimalStrings } from "../../../../shared/exact-decimal";
 import { useRealizationOverview, useInvalidateRealizations } from "./useRealizationQueries";
 import { useState } from "react";
 import { Banknote, Coins, PlusCircle } from "lucide-react";
@@ -8,7 +10,6 @@ import {
   DISBURSEMENT_METHOD_LABELS,
   downloadRealizationDocument,
   REALIZATION_DOCUMENT_TYPE_LABELS,
-  REALIZATION_PROGRESS_LABELS,
   type ConfirmationStatus,
   type DisbursementRealization,
   type ProposalDraft,
@@ -32,12 +33,6 @@ const CONFIRMATION_TEXT: Record<ConfirmationStatus, string> = {
   DISPUTED: "Diperselisihkan, konfirmasi ditahan",
 };
 
-const Metric = ({ label, value, detail }: { label: string; value: string; detail: string }) =>
-  <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-    <dt className="text-xs text-stone-600">{label}</dt>
-    <dd className="font-mono text-base font-bold text-stone-900">{value}</dd>
-    <dd className="text-xs text-stone-600">{detail}</dd>
-  </div>;
 
 /**
  * Staged IDR realization of an approved proposal. Disbursement progress, evidence completeness
@@ -69,12 +64,15 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
   }
 
   const summary = loaded?.summary;
+  const hasRemainingGoods = summary?.lines.some((l) => l.kind === "GOODS" && l.quantityRemaining && compareDecimalStrings(l.quantityRemaining, "0") > 0);
+  const canRecord = summary && (summary.totalRemainingIdr !== "0" || hasRemainingGoods);
+
   return <section aria-labelledby={`realization-${draft.id}`} className="space-y-4 rounded-2xl border border-emerald-200 bg-white p-4 text-sm text-stone-800 shadow-sm sm:p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex items-start gap-2">
         <Coins className="mt-0.5 h-5 w-5 text-emerald-600" />
         <div>
-          <h3 id={`realization-${draft.id}`} className="font-bold text-stone-900">Realisasi penyaluran IDR</h3>
+          <h3 id={`realization-${draft.id}`} className="font-bold text-stone-900">Realisasi penyaluran</h3>
           {loaded && <p className="text-xs text-stone-600">{loaded.notice}</p>}
         </div>
       </div>
@@ -83,7 +81,7 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
           onClick={() => setOpen({ kind: "advances" })}>
           <Banknote className="h-4 w-4" /> Uang muka & biaya
         </Button>
-        <Button type="button" size="sm" className="flex items-center gap-1.5" disabled={!summary || summary.totalRemainingIdr === "0"}
+        <Button type="button" size="sm" className="flex items-center gap-1.5" disabled={!canRecord}
           onClick={() => setOpen({ kind: "record" })}>
           <PlusCircle className="h-4 w-4" /> Catat realisasi
         </Button>
@@ -92,17 +90,7 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
 
     {error && <p role="alert" className="rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
 
-    {summary && <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Metric label="Hak disetujui" value={formatIdrAmount(summary.totalApprovedIdr)} detail={`${summary.approvedBeneficiaryCount} penerima manfaat`} />
-      <Metric label="Tersalur (dilaporkan)" value={formatIdrAmount(summary.totalRealizedIdr)}
-        detail={`${summary.realizedBeneficiaryCount} dari ${summary.approvedBeneficiaryCount} penerima · ${summary.paymentEventCount} kejadian pembayaran`} />
-      <Metric label="Sisa hak" value={formatIdrAmount(summary.totalRemainingIdr)} detail={REALIZATION_PROGRESS_LABELS[summary.disbursementStatus]} />
-      <Metric label="Kelengkapan bukti" value={summary.evidenceCompleteness === "EVIDENCE_COMPLETE" ? "Bukti lengkap" : "Bukti perlu dilengkapi"}
-        detail={`${summary.pendingEvidenceCount} kejadian belum berbukti · ${formatIdrAmount(summary.totalPendingEvidenceIdr)}`} />
-    </dl>}
-    {summary && <p className="text-xs text-stone-600">
-      Konfirmasi penerima: {summary.confirmedCount} dikonfirmasi · {summary.disputedCount} diperselisihkan. Status tersalur tidak berarti bukti lengkap atau opini audit.
-    </p>}
+    {summary && <RealizationSummaryMetrics summary={summary} />}
 
     {loaded && (loaded.realizations.length === 0
       ? <p className="rounded-xl border border-dashed border-stone-200 p-4 text-center text-stone-600">Belum ada realisasi yang dicatat.</p>
@@ -111,10 +99,14 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
           const evidence = loaded.documents.filter((doc) =>
             doc.realizationId === realization.id || doc.allocations.some((allocation) => allocation.realizationId === realization.id));
           const evidenced = evidencedIdr(realization, loaded.documents);
-          const confirmable = realization.method === "CASH" && realization.confirmationStatus === "UNCONFIRMED";
+          const isGoods = realization.quantity != null;
+          const amountOrQtyText = isGoods
+            ? `${realization.quantity} ${realization.unit}`
+            : formatIdrAmount(realization.amountIdr ?? "0");
+          const confirmable = (realization.method === "CASH" || realization.method === "GOODS_HANDOVER") && realization.confirmationStatus === "UNCONFIRMED";
           return <li key={realization.id} className="space-y-2 rounded-xl border border-stone-200 p-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="font-semibold text-stone-900">{beneficiaryName(realization)} · {formatIdrAmount(realization.amountIdr)}</p>
+              <p className="font-semibold text-stone-900">{beneficiaryName(realization)} · {amountOrQtyText}</p>
               <p className="text-xs text-stone-600">{DISBURSEMENT_METHOD_LABELS[realization.method]}{realization.batchGroupId ? " · penyerahan kelompok" : ""}</p>
             </div>
             <p className="text-xs text-stone-600">
@@ -126,11 +118,18 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
             </p>
             <p className="flex flex-wrap gap-2 text-xs">
               <span className={`rounded px-2 py-0.5 font-semibold ${realization.evidenceStatus === "EVIDENCE_COMPLETE" ? "bg-emerald-100 text-emerald-900" : "bg-amber-100 text-amber-900"}`}>
-                {realization.evidenceStatus === "EVIDENCE_COMPLETE" ? "Bukti lengkap" : `Bukti belum lengkap · berbukti ${formatIdrAmount(evidenced.toString())}`}
+                {realization.evidenceStatus === "EVIDENCE_COMPLETE"
+                  ? "Bukti lengkap"
+                  : isGoods
+                  ? "Bukti belum lengkap"
+                  : `Bukti belum lengkap · berbukti ${formatIdrAmount(evidenced.toString())}`}
               </span>
               <span className={`rounded px-2 py-0.5 font-semibold ${realization.confirmationStatus === "DISPUTED" ? "bg-red-100 text-red-900" : "bg-stone-100 text-stone-800"}`}>
-                {realization.method === "CASH" ? CONFIRMATION_TEXT[realization.confirmationStatus]
-                  : realization.confirmationStatus === "DISPUTED" ? CONFIRMATION_TEXT.DISPUTED : "Dibuktikan dengan bukti pembayaran"}
+                {realization.method === "CASH" || realization.method === "GOODS_HANDOVER"
+                  ? CONFIRMATION_TEXT[realization.confirmationStatus]
+                  : realization.confirmationStatus === "DISPUTED"
+                  ? CONFIRMATION_TEXT.DISPUTED
+                  : "Dibuktikan dengan bukti pembayaran"}
                 {realization.confirmationMethod === "OTP" ? " (OTP)" : realization.confirmationMethod === "BAST_EXAMINED" ? " (BAST diperiksa)" : ""}
               </span>
             </p>

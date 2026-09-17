@@ -12,7 +12,7 @@
  */
 
 import { normalizeFundType, type JenisDana } from "./contribution";
-import type { AidLine, FundType } from "./disbursement";
+import { goodsValuationOf, type AidLine, type FundType } from "./disbursement";
 import type { CurrencyUnit } from "./reconciliation";
 
 /**
@@ -166,7 +166,7 @@ export function activityTarget(aidLines: AidLine[]): { targetAmount: string; tar
   let total = 0n;
   let partial = false;
   for (const line of aidLines) {
-    const idr = line.value.kind === "MONEY" ? line.value.amountRequestedIdr : line.value.valuedAmountIdr;
+    const idr = line.value.kind === "MONEY" ? line.value.amountRequestedIdr : goodsValuationOf(line.value);
     if (idr === null) {
       partial = true;
       continue;

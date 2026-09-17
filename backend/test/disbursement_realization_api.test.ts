@@ -544,7 +544,7 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
     expect(pending.totalPendingEvidenceIdr).toBe("800000");
 
     const queue = (await (await get("/proposals/queue/incomplete-evidence", amilToken)).json()).queue;
-    expect(queue).toEqual([{ proposalId: draft.id, purpose: "Bantuan biaya sekolah", pendingCount: 1, totalPendingIdr: "800000", oldestPendingReportedAt: clock - 3600 }]);
+    expect(queue).toEqual([{ proposalId: draft.id, purpose: "Bantuan biaya sekolah", pendingCount: 1, totalPendingIdr: "800000", goods: [], oldestPendingReportedAt: clock - 3600 }]);
 
     // A photo supports, never completes, and is never allocated an amount.
     expect((await upload(draft, rec.id, amilToken, { documentType: "SUPPORTING_PHOTO", allocations: [{ realizationId: rec.id, amountIdr: "800000" }] })).status).toBe(400);
@@ -947,6 +947,38 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
     expect((await retried.json()).records[0].id).toBe(rec.id);
     expect(await rowsOf("SELECT id FROM disbursement_realizations")).toHaveLength(1);
   });
+  it("migrates the pre-goods schema without changing IDR records, evidence, disputes or OTP amounts", async () => {
+    const { draft, amilToken } = await prepareApprovedProposal();
+    const rec = await realizeOne(draft, amilToken, { amountIdr: "100000" });
+    expect((await issueOtp(draft, rec.id, amilToken)).status).toBe(201);
+    expect((await upload(draft, rec.id, amilToken, { documentType: "RECEIPT_OR_BAST",
+      allocations: [{ realizationId: rec.id, amountIdr: "100000" }] })).status).toBe(201);
+    expect((await post(`/proposals/${draft.id}/realizations/${rec.id}/disputes`, {
+      complainantType: "OFFICER", subject: "AMOUNT", reason: "Periksa nominal historis", disputedAmountIdr: "10000",
+    }, amilToken)).status).toBe(201);
+    const legacyDonations = await rowsOf("SELECT * FROM donations ORDER BY id");
+    const oldTables = ["disbursement_realizations", "disbursement_realization_document_allocations", "disbursement_realization_challenges", "disbursement_realization_disputes"];
+    const original = new Map<string, any[]>();
+    for (const table of oldTables) {
+      const dispute = table.endsWith("disputes");
+      await rowsOf(`ALTER TABLE ${table} DROP COLUMN ${dispute ? "disputed_quantity" : "quantity"}`);
+      await rowsOf(`ALTER TABLE ${table} DROP COLUMN ${dispute ? "disputed_unit" : "unit"}`);
+      await rowsOf(`ALTER TABLE ${table} ALTER COLUMN ${dispute ? "disputed_amount_idr" : "amount_idr"} SET NOT NULL`);
+      original.set(table, await rowsOf(`SELECT * FROM ${table}`));
+    }
+    await disbursement.ensureSchema();
+    await disbursement.ensureSchema();
+    for (const table of oldTables) {
+      const migrated = await rowsOf(`SELECT * FROM ${table}`);
+      expect(migrated).toHaveLength(original.get(table)!.length);
+      expect(migrated[0]).toMatchObject(original.get(table)![0]);
+      expect(migrated[0][table.endsWith("disputes") ? "disputed_quantity" : "quantity"]).toBeNull();
+    }
+    expect(await rowsOf("SELECT * FROM donations ORDER BY id")).toEqual(legacyDonations);
+    expect((await summaryOf(draft, amilToken)).totalRealizedIdr).toBe("100000");
+    expect((await realize(draft, amilToken, [item(draft, 0, { amountIdr: "10000" })])).status).toBe(201);
+  });
+
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: record, lose the response and retry safely, complete evidence and read back, on laptop and phone with the keyboard", async () => {
     const { draft, programId } = await prepareApprovedProposal({ beneficiariesCount: 2, perBeneficiaryAmount: "750000", purpose: "Realisasi Smoke" });
     let dropNextRealization = false;
@@ -1010,7 +1042,7 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
         await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
         await page.getByLabel(/Program bantuan/).selectOption(programId);
         await page.getByRole("button", { name: /Realisasi Smoke/ }).click();
-        await page.getByRole("heading", { name: "Realisasi penyaluran IDR" }).waitFor();
+        await page.getByRole("heading", { name: "Realisasi penyaluran" }).waitFor();
         await page.getByText(REALIZATION_DISCLAIMER_NOTICE).first().waitFor();
         return page;
       };

@@ -46,7 +46,7 @@ export type Beneficiary = {
 
 export type AidValue =
   | { kind: "MONEY"; amountRequestedIdr: string; amountApprovedIdr: string | null }
-  | { kind: "GOODS"; unit: string; quantityRequested: string; quantityApproved: string | null; valuedAmountIdr: string | null };
+  | { kind: "GOODS"; unit: string; quantityRequested: string; quantityApproved: string | null; valuedAmountIdr: string | null; valuationBasis?: string | null };
 
 export type AidLine = {
   id: string;
@@ -692,7 +692,7 @@ export const getProposalDecision = (requests: PrivateRequests, proposalId: strin
 // Shapes mirror backend/src/disbursement.ts; the disclaimer comes from the server response.
 // ---------------------------------------------------------------------------
 
-export type DisbursementMethod = "CASH" | "BANK_TRANSFER";
+export type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "GOODS_HANDOVER";
 export type RealizationEvidenceStatus = "EVIDENCE_PENDING" | "EVIDENCE_COMPLETE";
 export type ConfirmationStatus = "UNCONFIRMED" | "CONFIRMED" | "DISPUTED";
 export type ConfirmationMethod = "OTP" | "BAST_EXAMINED";
@@ -705,11 +705,17 @@ export type RealizationDocumentType = "PAYMENT_PROOF" | "RECEIPT_OR_BAST" | "SUP
 
 /** Who the payment went to when it is not the beneficiary (school, hospital, vendor). Null means the beneficiary. */
 export type PaymentRecipient = { name: string; relation: string };
-export type EvidenceAllocation = { realizationId: string; amountIdr: string };
+export type EvidenceAllocation = {
+  realizationId: string;
+  amountIdr?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+};
 
 export const DISBURSEMENT_METHOD_LABELS: Record<DisbursementMethod, string> = {
   CASH: "Tunai",
   BANK_TRANSFER: "Transfer bank",
+  GOODS_HANDOVER: "Penyerahan Barang",
 };
 
 export const REALIZATION_DOCUMENT_TYPE_LABELS: Record<RealizationDocumentType, string> = {
@@ -722,6 +728,7 @@ export const REALIZATION_DOCUMENT_TYPE_LABELS: Record<RealizationDocumentType, s
 export const REQUIRED_EVIDENCE_BY_METHOD: Record<DisbursementMethod, RealizationDocumentType> = {
   BANK_TRANSFER: "PAYMENT_PROOF",
   CASH: "RECEIPT_OR_BAST",
+  GOODS_HANDOVER: "RECEIPT_OR_BAST",
 };
 
 export const REALIZATION_PROGRESS_LABELS: Record<RealizationProgress, string> = {
@@ -757,7 +764,9 @@ export type DisbursementRealization = {
   batchGroupId: string | null;
   paymentRecipient: PaymentRecipient | null;
   method: DisbursementMethod;
-  amountIdr: string;
+  amountIdr: string | null;
+  quantity?: string | null;
+  unit?: string | null;
   reportedAt: number;
   recordedAt: number;
   operatorAccount: string;
@@ -776,11 +785,27 @@ export type RealizationLineSummary = {
   beneficiaryId: string;
   beneficiaryName: string;
   paymentRecipients: PaymentRecipient[];
-  amountApprovedIdr: string;
-  amountRealizedIdr: string;
-  amountRemainingIdr: string;
+  kind: "MONEY" | "GOODS";
+  aidType: string;
+  amountApprovedIdr: string | null;
+  amountRealizedIdr: string | null;
+  amountRemainingIdr: string | null;
+  quantityApproved?: string | null;
+  quantityRealized?: string | null;
+  quantityRemaining?: string | null;
+  unit?: string | null;
+  valuedAmountIdr?: string | null;
+  valuationBasis?: string | null;
   status: RealizationProgress;
   isDisputed: boolean;
+};
+
+export type RealizationUnitSummary = {
+  aidType: string;
+  unit: string;
+  approved: string;
+  realized: string;
+  remaining: string;
 };
 
 export type ProposalRealizationSummary = {
@@ -789,6 +814,10 @@ export type ProposalRealizationSummary = {
   totalApprovedIdr: string;
   totalRealizedIdr: string;
   totalRemainingIdr: string;
+  totalsByUnit: Record<string, RealizationUnitSummary>;
+  unitSummaries: RealizationUnitSummary[];
+  hasUnvaluedGoods: boolean;
+  totalValuedGoodsApprovedIdr: string | null;
   approvedBeneficiaryCount: number;
   realizedBeneficiaryCount: number;
   paymentEventCount: number;
@@ -808,7 +837,9 @@ export type RealizationItemInput = {
   aidLineId: string;
   beneficiaryId: string;
   method: DisbursementMethod;
-  amountIdr: string;
+  amountIdr?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
   reportedAt: number;
   paymentRecipient: PaymentRecipient | null;
   notes: string | null;
@@ -868,7 +899,9 @@ export type RealizationDispute = {
   complainantType: ComplainantType;
   subject: DisputeSubject;
   reason: string;
-  disputedAmountIdr: string;
+  disputedAmountIdr: string | null;
+  disputedQuantity?: string | null;
+  disputedUnit?: string | null;
   status: DisputeStatus;
   recordedByOfficerId: string;
   createdAt: number;
@@ -906,7 +939,8 @@ export type IncompleteEvidenceQueueItem = {
   proposalId: string;
   purpose: string;
   pendingCount: number;
-  totalPendingIdr: string;
+  totalPendingIdr: string | null;
+  goods: Array<{ aidType: string; unit: string; quantity: string }>;
   oldestPendingReportedAt: number;
 };
 
@@ -982,7 +1016,15 @@ export const recordRealizationDispute = (
   requests: PrivateRequests,
   proposalId: string,
   realizationId: string,
-  input: { operationId: string; complainantType: ComplainantType; subject: DisputeSubject; reason: string; disputedAmountIdr: string }
+  input: {
+    operationId: string;
+    complainantType: ComplainantType;
+    subject: DisputeSubject;
+    reason: string;
+    disputedAmountIdr?: string | null;
+    disputedQuantity?: string | null;
+    disputedUnit?: string | null;
+  }
 ) =>
   requests.json<{ dispute: RealizationDispute; realization: DisbursementRealization }>(
     `${realizationPath(proposalId, realizationId)}/disputes`,

@@ -18,6 +18,7 @@ import { Hono, type Context } from "hono";
 import { toHex, type Hex } from "viem";
 import { verifyAccountSignature } from "../account-signature";
 import {
+  compareDecimalStrings,
   computeRightsDigest,
   decidedAidLines,
   decidedIdr,
@@ -327,6 +328,7 @@ const aidLineFrom = (raw: unknown): AidLine | null => {
         unit: text(value.unit),
         quantityRequested: String(value.quantityRequested ?? "").trim(),
         quantityApproved: null,
+        valuationBasis: text(value.valuationBasis) || null,
         valuedAmountIdr:
           value.valuedAmountIdr === null || value.valuedAmountIdr === undefined
             ? null
@@ -1721,7 +1723,7 @@ disbursementRoutes.post("/proposals/:id/realizations", async (c) => {
 
   const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
   if (!access.ok) return access.response;
-  const nominalAmount = items.reduce((total, item) => total + BigInt(item.amountIdr), 0n);
+  const nominalAmount = items.reduce((total, item) => total + (item.amountIdr ? BigInt(item.amountIdr) : 0n), 0n);
   access.actor.require("RECORD_REALIZATION", { programId: access.draft.programId, nominalAmount });
 
   const result = await runtime.disbursement.recordRealizations(
@@ -1899,10 +1901,13 @@ disbursementRoutes.post("/proposals/:id/realizations/:realizationId/otp-challeng
   );
 
   try {
+    const aidDescription = challenge.quantity != null
+      ? `sebanyak ${challenge.quantity} ${challenge.unit}`
+      : `sebesar Rp${BigInt(challenge.amountIdr ?? 0).toLocaleString("id-ID")}`;
     await runtime.messages.send({
       to: contact,
       body:
-        `Konfirmasi penerimaan ${challenge.aidType} sebesar Rp${BigInt(challenge.amountIdr).toLocaleString("id-ID")}. ` +
+        `Konfirmasi penerimaan ${challenge.aidType} ${aidDescription}. ` +
         `Sebutkan kode ${code} kepada petugas hanya jika Anda sudah menerima bantuan tersebut. Berlaku 15 menit.`,
     });
   } catch {
@@ -1970,7 +1975,14 @@ disbursementRoutes.post("/proposals/:id/realizations/:realizationId/disputes", a
   const reason = text(body.reason);
   if (!reason) return badRequest(c, "Uraian sengketa/keberatan wajib diisi.");
   const disputedAmountIdr = parsePositiveIdr(body.disputedAmountIdr);
-  if (!disputedAmountIdr) return badRequest(c, "Nominal yang diperselisihkan harus bilangan bulat rupiah lebih dari nol.");
+  const disputedQuantity = typeof body.disputedQuantity === "string" && /^\d+(\.\d+)?$/.test(body.disputedQuantity.trim()) && compareDecimalStrings(body.disputedQuantity.trim(), "0") > 0
+    ? body.disputedQuantity.trim()
+    : null;
+  const disputedUnit = text(body.disputedUnit) || null;
+
+  if (!disputedAmountIdr && (!disputedQuantity || !disputedUnit)) {
+    return badRequest(c, "Sengketa wajib menyertakan nominal rupiah atau kuantitas dan satuan barang yang diperselisihkan.");
+  }
 
   const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION", ...EXAMINING_FUNCTIONS]);
   if (!access.ok) return access.response;
@@ -1982,7 +1994,7 @@ disbursementRoutes.post("/proposals/:id/realizations/:realizationId/disputes", a
     access.session.institutionId,
     access.draft.id,
     c.req.param("realizationId"),
-    { complainantType: body.complainantType, subject: body.subject, reason, disputedAmountIdr },
+    { complainantType: body.complainantType, subject: body.subject, reason, disputedAmountIdr, disputedQuantity, disputedUnit },
     { officerId: access.officer.id },
     runtime.now(),
     { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }

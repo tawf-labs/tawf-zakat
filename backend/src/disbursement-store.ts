@@ -6,8 +6,12 @@
 import { timingSafeEqual } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  addDecimalStrings,
   approvedIdrOf,
+  approvedQuantityOf,
+  approvedUnitOf,
   calculateProposalRealizationSummary,
+  compareDecimalStrings,
   contactHintOf,
   DEFAULT_DISBURSEMENT_POLICY,
   evaluateRecurringAidWarnings,
@@ -412,7 +416,9 @@ const realizationRecordFrom = (row: any): RealizationRecord => ({
   batchGroupId: row.batch_group_id ?? null,
   paymentRecipient: row.payment_recipient_json ? JSON.parse(row.payment_recipient_json) : null,
   method: row.method as DisbursementMethod,
-  amountIdr: row.amount_idr,
+  amountIdr: row.amount_idr ?? null,
+  quantity: row.quantity ?? null,
+  unit: row.unit ?? null,
   reportedAt: asSeconds(row.reported_at),
   recordedAt: asSeconds(row.recorded_at),
   operatorAccount: row.operator_account,
@@ -454,7 +460,9 @@ const realizationChallengeFrom = (row: any): RealizationChallenge => ({
   contactHint: row.contact_hint,
   confirmer: row.confirmer_json ? JSON.parse(row.confirmer_json) : null,
   aidType: row.aid_type,
-  amountIdr: row.amount_idr,
+  amountIdr: row.amount_idr ?? null,
+  quantity: row.quantity ?? null,
+  unit: row.unit ?? null,
   codeHash: row.code_hash,
   attempts: Number(row.attempts),
   issuedAt: asSeconds(row.issued_at),
@@ -491,7 +499,9 @@ const realizationDisputeFrom = (row: any, examinations: DisputeExaminationRecord
   complainantType: row.complainant_type as ComplainantType,
   subject: row.subject as DisputeSubject,
   reason: row.reason,
-  disputedAmountIdr: row.disputed_amount_idr,
+  disputedAmountIdr: row.disputed_amount_idr ?? null,
+  disputedQuantity: row.disputed_quantity ?? null,
+  disputedUnit: row.disputed_unit ?? null,
   status: row.status as DisputeStatus,
   recordedByOfficerId: row.recorded_by_officer_id,
   createdAt: asSeconds(row.created_at),
@@ -558,9 +568,9 @@ async function updateRealizationStatus(
   return realizationRecordFrom(row);
 }
 
-/** Only a cash handover is confirmed by its recipient, once, and never while a dispute holds it. */
+/** Cash or goods handovers are confirmed by their recipients, once, and never while a dispute holds them. */
 function assertRecipientConfirmable(realization: RealizationRecord) {
-  if (realization.method !== "CASH") {
+  if (realization.method !== "CASH" && realization.method !== "GOODS_HANDOVER") {
     throw new RealizationStateError(
       "Transfer atau pembayaran penyedia dibuktikan dengan bukti pembayaran, bukan konfirmasi penerima."
     );
@@ -575,24 +585,35 @@ function assertRecipientConfirmable(realization: RealizationRecord) {
 
 async function evidenceAllocationsOf(tx: Executor, institutionId: string, realizationId: string) {
   return rowsOf(await tx.execute(sql`
-    SELECT d.document_type, a.amount_idr
+    SELECT d.document_type, a.amount_idr, a.quantity, a.unit
     FROM disbursement_realization_document_allocations a
     JOIN disbursement_realization_documents d ON d.id = a.document_id
     WHERE a.realization_id = ${realizationId} AND a.institution_id = ${institutionId}
-  `)).map((row) => ({ documentType: row.document_type as RealizationDocumentType, amountIdr: row.amount_idr as string }));
+  `)).map((row) => {
+    const item: { documentType: RealizationDocumentType; amountIdr: string | null; quantity?: string | null; unit?: string | null } = {
+      documentType: row.document_type as RealizationDocumentType,
+      amountIdr: (row.amount_idr as string) ?? null,
+    };
+    if (row.quantity != null) item.quantity = row.quantity as string;
+    if (row.unit != null) item.unit = row.unit as string;
+    return item;
+  });
 }
 
 async function allocationsByDocument(tx: Executor, institutionId: string, documentIds: string[]) {
   const byDocument = new Map<string, EvidenceAllocation[]>();
   if (!documentIds.length) return byDocument;
   const rows = rowsOf(await tx.execute(sql`
-    SELECT document_id, realization_id, amount_idr FROM disbursement_realization_document_allocations
+    SELECT document_id, realization_id, amount_idr, quantity, unit FROM disbursement_realization_document_allocations
     WHERE institution_id = ${institutionId} AND document_id IN (${sql.join(documentIds.map((id) => sql`${id}`), sql`, `)})
     ORDER BY realization_id
   `));
   for (const row of rows) {
     const list = byDocument.get(row.document_id) ?? [];
-    list.push({ realizationId: row.realization_id, amountIdr: row.amount_idr });
+    const allocation: EvidenceAllocation = { realizationId: row.realization_id, amountIdr: row.amount_idr ?? null };
+    if (row.quantity != null) allocation.quantity = row.quantity;
+    if (row.unit != null) allocation.unit = row.unit;
+    list.push(allocation);
     byDocument.set(row.document_id, list);
   }
   return byDocument;
@@ -839,96 +860,116 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
    );`,
   `CREATE INDEX IF NOT EXISTS proposal_decision_challenges_by_proposal ON proposal_decision_challenges (institution_id, proposal_id, nonce);`,
   `CREATE TABLE IF NOT EXISTS disbursement_realizations (
-     id TEXT PRIMARY KEY,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
-     proposal_version INTEGER NOT NULL,
-     aid_line_id TEXT NOT NULL,
-     beneficiary_id TEXT NOT NULL,
-     batch_group_id TEXT,
-     payment_recipient_json TEXT,
-     method TEXT NOT NULL,
-     amount_idr TEXT NOT NULL,
-     reported_at BIGINT NOT NULL,
-     recorded_at BIGINT NOT NULL,
-     operator_account TEXT NOT NULL,
-     operator_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
-     notes TEXT,
-     evidence_status TEXT NOT NULL DEFAULT 'EVIDENCE_PENDING',
-     confirmation_status TEXT NOT NULL DEFAULT 'UNCONFIRMED',
-     confirmation_method TEXT,
-     version INTEGER NOT NULL DEFAULT 1,
-     created_at BIGINT NOT NULL,
-     updated_at BIGINT NOT NULL
-   );`,
+      id TEXT PRIMARY KEY,
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+      proposal_version INTEGER NOT NULL,
+      aid_line_id TEXT NOT NULL,
+      beneficiary_id TEXT NOT NULL,
+      batch_group_id TEXT,
+      payment_recipient_json TEXT,
+      method TEXT NOT NULL,
+      amount_idr TEXT,
+      quantity TEXT,
+      unit TEXT,
+      reported_at BIGINT NOT NULL,
+      recorded_at BIGINT NOT NULL,
+      operator_account TEXT NOT NULL,
+      operator_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+      notes TEXT,
+      evidence_status TEXT NOT NULL DEFAULT 'EVIDENCE_PENDING',
+      confirmation_status TEXT NOT NULL DEFAULT 'UNCONFIRMED',
+      confirmation_method TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );`,
   `CREATE INDEX IF NOT EXISTS disbursement_realizations_by_proposal ON disbursement_realizations (institution_id, proposal_id, aid_line_id);`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_documents (
-     id TEXT PRIMARY KEY,
-     seq BIGINT GENERATED ALWAYS AS IDENTITY,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
-     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
-     batch_group_id TEXT,
-     document_type TEXT NOT NULL,
-     file_name TEXT NOT NULL,
-     mime_type TEXT NOT NULL,
-     size_bytes INTEGER NOT NULL,
-     content_sha256 TEXT NOT NULL,
-     storage_ref TEXT NOT NULL,
-     uploaded_by TEXT NOT NULL,
-     created_at BIGINT NOT NULL
-   );`,
+      id TEXT PRIMARY KEY,
+      seq BIGINT GENERATED ALWAYS AS IDENTITY,
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+      realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+      batch_group_id TEXT,
+      document_type TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      content_sha256 TEXT NOT NULL,
+      storage_ref TEXT NOT NULL,
+      uploaded_by TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    );`,
   `CREATE INDEX IF NOT EXISTS disbursement_realization_documents_by_proposal ON disbursement_realization_documents (institution_id, proposal_id);`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_document_allocations (
-     document_id TEXT NOT NULL REFERENCES disbursement_realization_documents (id),
-     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     amount_idr TEXT NOT NULL,
-     PRIMARY KEY (document_id, realization_id)
-   );`,
+      document_id TEXT NOT NULL REFERENCES disbursement_realization_documents (id),
+      realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      amount_idr TEXT,
+      quantity TEXT,
+      unit TEXT,
+      PRIMARY KEY (document_id, realization_id)
+    );`,
   `CREATE INDEX IF NOT EXISTS disbursement_realization_allocations_by_realization ON disbursement_realization_document_allocations (institution_id, realization_id);`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_challenges (
-     nonce TEXT PRIMARY KEY,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
-     proposal_version INTEGER NOT NULL,
-     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
-     realization_version INTEGER NOT NULL,
-     beneficiary_id TEXT NOT NULL,
-     contact_hint TEXT NOT NULL,
-     confirmer_json TEXT,
-     aid_type TEXT NOT NULL,
-     amount_idr TEXT NOT NULL,
-     code_hash TEXT NOT NULL,
-     attempts INTEGER NOT NULL DEFAULT 0,
-     issued_at BIGINT NOT NULL,
-     expires_at BIGINT NOT NULL,
-     consumed_at BIGINT
-   );`,
+      nonce TEXT PRIMARY KEY,
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+      proposal_version INTEGER NOT NULL,
+      realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+      realization_version INTEGER NOT NULL,
+      beneficiary_id TEXT NOT NULL,
+      contact_hint TEXT NOT NULL,
+      confirmer_json TEXT,
+      aid_type TEXT NOT NULL,
+      amount_idr TEXT,
+      quantity TEXT,
+      unit TEXT,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      issued_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      consumed_at BIGINT
+    );`,
   `ALTER TABLE disbursement_realization_challenges ADD COLUMN IF NOT EXISTS confirmer_json TEXT;`,
+  `ALTER TABLE disbursement_realizations ADD COLUMN IF NOT EXISTS quantity TEXT;`,
+  `ALTER TABLE disbursement_realizations ADD COLUMN IF NOT EXISTS unit TEXT;`,
+  `ALTER TABLE disbursement_realizations ALTER COLUMN amount_idr DROP NOT NULL;`,
+  `ALTER TABLE disbursement_realization_document_allocations ADD COLUMN IF NOT EXISTS quantity TEXT;`,
+  `ALTER TABLE disbursement_realization_document_allocations ADD COLUMN IF NOT EXISTS unit TEXT;`,
+  `ALTER TABLE disbursement_realization_document_allocations ALTER COLUMN amount_idr DROP NOT NULL;`,
+  `ALTER TABLE disbursement_realization_challenges ADD COLUMN IF NOT EXISTS quantity TEXT;`,
+  `ALTER TABLE disbursement_realization_challenges ADD COLUMN IF NOT EXISTS unit TEXT;`,
+  `ALTER TABLE disbursement_realization_challenges ALTER COLUMN amount_idr DROP NOT NULL;`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_bast_examinations (
-     id TEXT PRIMARY KEY,
-     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     verifier_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
-     verifier_account TEXT NOT NULL,
-     notes TEXT NOT NULL,
-     verified_at BIGINT NOT NULL
-   );`,
+      id TEXT PRIMARY KEY,
+      realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      verifier_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+      verifier_account TEXT NOT NULL,
+      notes TEXT NOT NULL,
+      verified_at BIGINT NOT NULL
+    );`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_disputes (
-     id TEXT PRIMARY KEY,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
-     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
-     aid_line_id TEXT NOT NULL,
-     complainant_type TEXT NOT NULL,
-     subject TEXT NOT NULL,
-     reason TEXT NOT NULL,
-     disputed_amount_idr TEXT NOT NULL,
-     status TEXT NOT NULL DEFAULT 'OPEN',
-     recorded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
-     created_at BIGINT NOT NULL
-   );`,
+      id TEXT PRIMARY KEY,
+      institution_id TEXT NOT NULL REFERENCES institutions (id),
+      proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+      realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+      aid_line_id TEXT NOT NULL,
+      complainant_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      disputed_amount_idr TEXT,
+      disputed_quantity TEXT,
+      disputed_unit TEXT,
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      recorded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+      created_at BIGINT NOT NULL
+    );`,
+  `ALTER TABLE disbursement_realization_disputes ADD COLUMN IF NOT EXISTS disputed_quantity TEXT;`,
+  `ALTER TABLE disbursement_realization_disputes ADD COLUMN IF NOT EXISTS disputed_unit TEXT;`,
+  `ALTER TABLE disbursement_realization_disputes ALTER COLUMN disputed_amount_idr DROP NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS disbursement_realization_disputes_by_realization ON disbursement_realization_disputes (institution_id, realization_id);`,
   `CREATE TABLE IF NOT EXISTS disbursement_realization_dispute_examinations (
      id TEXT PRIMARY KEY,
@@ -2037,12 +2078,19 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         }
         if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
 
-        const lineCumulative = new Map<string, bigint>();
+        const lineCumulativeIdr = new Map<string, bigint>();
+        const lineCumulativeQty = new Map<string, string>();
         for (const row of rowsOf(await tx.execute(sql`
-          SELECT aid_line_id, amount_idr FROM disbursement_realizations
+          SELECT aid_line_id, amount_idr, quantity FROM disbursement_realizations
           WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
         `))) {
-          lineCumulative.set(row.aid_line_id, (lineCumulative.get(row.aid_line_id) ?? 0n) + BigInt(row.amount_idr));
+          if (row.amount_idr != null) {
+            lineCumulativeIdr.set(row.aid_line_id, (lineCumulativeIdr.get(row.aid_line_id) ?? 0n) + BigInt(row.amount_idr));
+          }
+          if (row.quantity != null) {
+            const prev = lineCumulativeQty.get(row.aid_line_id) ?? "0";
+            lineCumulativeQty.set(row.aid_line_id, addDecimalStrings(prev, row.quantity));
+          }
         }
 
         const aidLineMap = new Map(current.aidLines.map((line) => [line.id, line]));
@@ -2056,30 +2104,56 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           if (line.beneficiaryId !== item.beneficiaryId) {
             throw new RealizationInputError(`Penerima '${item.beneficiaryId}' tidak sesuai dengan rincian bantuan '${item.aidLineId}'.`);
           }
-          const approvedIdr = approvedIdrOf(line);
-          if (approvedIdr === null) {
-            throw new RealizationInputError(`Rincian '${item.aidLineId}' berupa barang dan tidak dicatat sebagai realisasi IDR.`);
-          }
 
-          const realizedIdr = lineCumulative.get(item.aidLineId) ?? 0n;
-          const newTotal = realizedIdr + BigInt(item.amountIdr);
-          if (newTotal > approvedIdr) {
-            throw new RealizationCapExceededError(
-              `Realisasi sebesar Rp${item.amountIdr} melebihi sisa hak yang disetujui pada baris ${item.aidLineId} (Disetujui: Rp${approvedIdr}, Terealisasi: Rp${realizedIdr}).`
-            );
+          if (line.value.kind === "GOODS") {
+            if (item.method !== "GOODS_HANDOVER" || item.quantity == null || !item.unit) {
+              throw new RealizationInputError(`Rincian '${item.aidLineId}' berupa barang dan membutuhkan kuantitas serta satuan.`);
+            }
+            const approvedQty = approvedQuantityOf(line);
+            const approvedUnit = approvedUnitOf(line);
+            if (approvedQty === null || approvedUnit === null) {
+              throw new RealizationInputError(`Rincian '${item.aidLineId}' tidak memiliki kuantitas barang yang valid.`);
+            }
+            if (item.unit !== approvedUnit) {
+              throw new RealizationInputError(`Satuan '${item.unit}' tidak sesuai dengan satuan yang disetujui ('${approvedUnit}').`);
+            }
+            const realizedQty = lineCumulativeQty.get(item.aidLineId) ?? "0";
+            const newTotalQty = addDecimalStrings(realizedQty, item.quantity);
+            if (compareDecimalStrings(newTotalQty, approvedQty) > 0) {
+              throw new RealizationCapExceededError(
+                `Realisasi sebesar ${item.quantity} ${item.unit} melebihi sisa hak yang disetujui pada baris ${item.aidLineId} (Disetujui: ${approvedQty} ${approvedUnit}, Terealisasi: ${realizedQty} ${approvedUnit}).`
+              );
+            }
+            lineCumulativeQty.set(item.aidLineId, newTotalQty);
+          } else {
+            if (item.method === "GOODS_HANDOVER" || !item.amountIdr) {
+              throw new RealizationInputError(`Rincian '${item.aidLineId}' berupa uang dan membutuhkan nominal IDR.`);
+            }
+            const approvedIdr = approvedIdrOf(line);
+            if (approvedIdr === null) {
+              throw new RealizationInputError(`Rincian '${item.aidLineId}' berupa barang dan tidak dicatat sebagai realisasi IDR.`);
+            }
+
+            const realizedIdr = lineCumulativeIdr.get(item.aidLineId) ?? 0n;
+            const newTotal = realizedIdr + BigInt(item.amountIdr);
+            if (newTotal > approvedIdr) {
+              throw new RealizationCapExceededError(
+                `Realisasi sebesar Rp${item.amountIdr} melebihi sisa hak yang disetujui pada baris ${item.aidLineId} (Disetujui: Rp${approvedIdr}, Terealisasi: Rp${realizedIdr}).`
+              );
+            }
+            lineCumulativeIdr.set(item.aidLineId, newTotal);
           }
-          lineCumulative.set(item.aidLineId, newTotal);
 
           const row = rowsOf(await tx.execute(sql`
             INSERT INTO disbursement_realizations (
               id, institution_id, proposal_id, proposal_version, aid_line_id, beneficiary_id,
-              batch_group_id, payment_recipient_json, method, amount_idr,
+              batch_group_id, payment_recipient_json, method, amount_idr, quantity, unit,
               reported_at, recorded_at, operator_account, operator_officer_id, notes,
               evidence_status, confirmation_status, confirmation_method, version,
               created_at, updated_at
             ) VALUES (
               ${`rea-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${current.version}, ${item.aidLineId}, ${item.beneficiaryId},
-              ${input.batchGroupId}, ${item.paymentRecipient ? JSON.stringify(item.paymentRecipient) : null}, ${item.method}, ${item.amountIdr},
+              ${input.batchGroupId}, ${item.paymentRecipient ? JSON.stringify(item.paymentRecipient) : null}, ${item.method}, ${line.value.kind === "MONEY" ? item.amountIdr : null}, ${line.value.kind === "GOODS" ? item.quantity : null}, ${line.value.kind === "GOODS" ? item.unit : null},
               ${item.reportedAt}, ${now}, ${actor.account.toLowerCase()}, ${actor.officerId}, ${item.notes},
               'EVIDENCE_PENDING', 'UNCONFIRMED', NULL, 1,
               ${now}, ${now}
@@ -2159,18 +2233,39 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           const required = REQUIRED_EVIDENCE_BY_METHOD[target.method];
           if (document.documentType !== required) {
             throw new RealizationInputError(
-              target.method === "CASH"
-                ? `Realisasi tunai ${target.id} dibuktikan dengan tanda terima atau BAST.`
+              target.method === "CASH" || target.method === "GOODS_HANDOVER"
+                ? `Realisasi ${target.method === "CASH" ? "tunai" : "barang"} ${target.id} dibuktikan dengan tanda terima atau BAST.`
                 : `Realisasi transfer ${target.id} dibuktikan dengan bukti pembayaran.`
             );
           }
-          const covered = (await evidenceAllocationsOf(tx, institutionId, target.id))
-            .filter((existing) => existing.documentType === required)
-            .reduce((total, existing) => total + BigInt(existing.amountIdr), 0n);
-          if (covered + BigInt(allocation.amountIdr) > BigInt(target.amountIdr)) {
-            throw new RealizationInputError(
-              `Jumlah bukti untuk realisasi ${target.id} melebihi nominal realisasi (Rp${target.amountIdr}, sudah dibuktikan Rp${covered}).`
-            );
+          if (target.quantity != null) {
+            if (allocation.quantity == null || !allocation.unit) {
+              throw new RealizationInputError(`Alokasi bukti untuk realisasi barang ${target.id} wajib menyertakan kuantitas dan satuan.`);
+            }
+            if (allocation.unit !== target.unit) {
+              throw new RealizationInputError(`Satuan alokasi bukti '${allocation.unit}' tidak sesuai dengan satuan realisasi ('${target.unit}').`);
+            }
+            const covered = (await evidenceAllocationsOf(tx, institutionId, target.id))
+              .filter((existing) => existing.documentType === required && existing.quantity != null)
+              .reduce((total, existing) => addDecimalStrings(total, existing.quantity!), "0");
+            const newTotal = addDecimalStrings(covered, allocation.quantity);
+            if (compareDecimalStrings(newTotal, target.quantity) > 0) {
+              throw new RealizationInputError(
+                `Jumlah bukti untuk realisasi ${target.id} melebihi kuantitas realisasi (${target.quantity} ${target.unit}, sudah dibuktikan ${covered} ${target.unit}).`
+              );
+            }
+          } else {
+            if (!allocation.amountIdr) {
+              throw new RealizationInputError(`Alokasi bukti untuk realisasi uang ${target.id} wajib menyertakan nominal IDR.`);
+            }
+            const covered = (await evidenceAllocationsOf(tx, institutionId, target.id))
+              .filter((existing) => existing.documentType === required && existing.amountIdr != null)
+              .reduce((total, existing) => total + BigInt(existing.amountIdr!), 0n);
+            if (covered + BigInt(allocation.amountIdr) > BigInt(target.amountIdr!)) {
+              throw new RealizationInputError(
+                `Jumlah bukti untuk realisasi ${target.id} melebihi nominal realisasi (Rp${target.amountIdr}, sudah dibuktikan Rp${covered}).`
+              );
+            }
           }
           allocated.push(target);
         }
@@ -2190,8 +2285,12 @@ export function createDisbursementStore(db: DisbursementDatabase) {
 
         for (const allocation of allocations) {
           await tx.execute(sql`
-            INSERT INTO disbursement_realization_document_allocations (document_id, realization_id, institution_id, amount_idr)
-            VALUES (${documentRow.id}, ${allocation.realizationId}, ${institutionId}, ${allocation.amountIdr})
+            INSERT INTO disbursement_realization_document_allocations (
+              document_id, realization_id, institution_id, amount_idr, quantity, unit
+            ) VALUES (
+              ${documentRow.id}, ${allocation.realizationId}, ${institutionId},
+              ${allocation.amountIdr ?? null}, ${allocation.quantity ?? null}, ${allocation.unit ?? null}
+            )
           `);
         }
 
@@ -2276,11 +2375,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         const row = rowsOf(await tx.execute(sql`
           INSERT INTO disbursement_realization_challenges (
             nonce, institution_id, proposal_id, proposal_version, realization_id, realization_version,
-            beneficiary_id, contact_hint, confirmer_json, aid_type, amount_idr, code_hash, attempts,
+            beneficiary_id, contact_hint, confirmer_json, aid_type, amount_idr, quantity, unit, code_hash, attempts,
             issued_at, expires_at, consumed_at
           ) VALUES (
             ${challenge.nonce}, ${institutionId}, ${proposalId}, ${realization.proposalVersion}, ${realizationId}, ${realization.version},
-            ${realization.beneficiaryId}, ${contactHintOf(normalize(destination))}, ${JSON.stringify(confirmer)}, ${aidType}, ${realization.amountIdr}, ${challenge.codeHash}, 0,
+            ${realization.beneficiaryId}, ${contactHintOf(normalize(destination))}, ${JSON.stringify(confirmer)}, ${aidType},
+            ${realization.amountIdr ?? null}, ${realization.quantity ?? null}, ${realization.unit ?? null},
+            ${challenge.codeHash}, 0,
             ${now}, ${now + challenge.ttlSeconds}, NULL
           )
           RETURNING *
@@ -2380,8 +2481,17 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         assertRecipientConfirmable(realization);
         const receipts = (await evidenceAllocationsOf(tx, institutionId, realizationId))
           .filter((allocation) => allocation.documentType === "RECEIPT_OR_BAST");
-        if (receipts.reduce((total, receipt) => total + BigInt(receipt.amountIdr), 0n) !== BigInt(realization.amountIdr)) {
-          throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh nominal sebelum konfirmasi penuh.");
+        if (realization.quantity != null) {
+          const totalQty = receipts
+            .filter((receipt) => receipt.quantity != null)
+            .reduce((total, receipt) => addDecimalStrings(total, receipt.quantity!), "0");
+          if (compareDecimalStrings(totalQty, realization.quantity) !== 0) {
+            throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh kuantitas sebelum konfirmasi penuh.");
+          }
+        } else {
+          if (receipts.reduce((total, receipt) => total + BigInt(receipt.amountIdr ?? 0), 0n) !== BigInt(realization.amountIdr!)) {
+            throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh nominal sebelum konfirmasi penuh.");
+          }
         }
 
         const examinationRow = rowsOf(await tx.execute(sql`
@@ -2410,27 +2520,52 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       institutionId: string,
       proposalId: string,
       realizationId: string,
-      dispute: { complainantType: ComplainantType; subject: DisputeSubject; reason: string; disputedAmountIdr: string },
+      dispute: {
+        complainantType: ComplainantType;
+        subject: DisputeSubject;
+        reason: string;
+        disputedAmountIdr?: string | null;
+        disputedQuantity?: string | null;
+        disputedUnit?: string | null;
+      },
       actor: { officerId: string },
       now: number,
       operation: DraftOperation
     ): Promise<{ dispute: RealizationDisputeRecord; realization: RealizationRecord }> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
         const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
-        if (BigInt(dispute.disputedAmountIdr) > BigInt(realization.amountIdr)) {
-          throw new RealizationInputError(
-            `Nominal yang diperselisihkan melebihi nominal realisasi (Rp${realization.amountIdr}).`
-          );
+        if (realization.quantity != null) {
+          if (!dispute.disputedQuantity || !dispute.disputedUnit) {
+            throw new RealizationInputError("Sengketa atas barang wajib mencantumkan kuantitas dan satuan.");
+          }
+          if (dispute.disputedUnit !== realization.unit) {
+            throw new RealizationInputError(`Satuan sengketa '${dispute.disputedUnit}' tidak sesuai dengan satuan realisasi ('${realization.unit}').`);
+          }
+          if (compareDecimalStrings(dispute.disputedQuantity, realization.quantity) > 0) {
+            throw new RealizationInputError(
+              `Kuantitas yang diperselisihkan (${dispute.disputedQuantity} ${dispute.disputedUnit}) melebihi kuantitas realisasi (${realization.quantity} ${realization.unit}).`
+            );
+          }
+        } else {
+          if (!dispute.disputedAmountIdr) {
+            throw new RealizationInputError("Sengketa atas uang wajib mencantumkan nominal IDR.");
+          }
+          if (BigInt(dispute.disputedAmountIdr) > BigInt(realization.amountIdr!)) {
+            throw new RealizationInputError(
+              `Nominal yang diperselisihkan melebihi nominal realisasi (Rp${realization.amountIdr}).`
+            );
+          }
         }
 
         const row = rowsOf(await tx.execute(sql`
           INSERT INTO disbursement_realization_disputes (
             id, institution_id, proposal_id, realization_id, aid_line_id, complainant_type, subject,
-            reason, disputed_amount_idr, status, recorded_by_officer_id, created_at
+            reason, disputed_amount_idr, disputed_quantity, disputed_unit, status, recorded_by_officer_id, created_at
           ) VALUES (
             ${`disp-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${realizationId}, ${realization.aidLineId},
-            ${dispute.complainantType}, ${dispute.subject}, ${dispute.reason}, ${dispute.disputedAmountIdr}, 'OPEN',
-            ${actor.officerId}, ${now}
+            ${dispute.complainantType}, ${dispute.subject}, ${dispute.reason},
+            ${dispute.disputedAmountIdr ?? null}, ${dispute.disputedQuantity ?? null}, ${dispute.disputedUnit ?? null},
+            'OPEN', ${actor.officerId}, ${now}
           )
           RETURNING *
         `))[0];
@@ -2608,30 +2743,50 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       proposalId: string;
       purpose: string;
       pendingCount: number;
-      totalPendingIdr: string;
+      totalPendingIdr: string | null;
+      goods: Array<{ aidType: string; unit: string; quantity: string }>;
       oldestPendingReportedAt: number;
     }>> {
       const rows = rowsOf(await db.execute(sql`
-        SELECT r.proposal_id, p.purpose, r.amount_idr, r.reported_at
+        SELECT r.proposal_id, p.purpose, r.amount_idr, r.quantity, r.unit, r.aid_line_id,
+               r.reported_at, v.data_json
         FROM disbursement_realizations r
         JOIN proposal_drafts p ON p.id = r.proposal_id AND p.institution_id = r.institution_id
+        LEFT JOIN proposal_versions v ON v.proposal_id = r.proposal_id
+          AND v.institution_id = r.institution_id AND v.version = r.proposal_version
         WHERE r.institution_id = ${institutionId} AND r.evidence_status = 'EVIDENCE_PENDING'
         ORDER BY r.reported_at ASC, r.id ASC
       `));
-      const queue = new Map<string, { proposalId: string; purpose: string; pendingCount: number; total: bigint; oldestPendingReportedAt: number }>();
+      type PendingGoods = { aidType: string; unit: string; quantity: string };
+      const queue = new Map<string, { proposalId: string; purpose: string; pendingCount: number;
+        total: bigint | null; goods: Map<string, PendingGoods>; oldestPendingReportedAt: number }>();
       for (const row of rows) {
         const entry = queue.get(row.proposal_id) ?? {
           proposalId: row.proposal_id,
           purpose: row.purpose,
           pendingCount: 0,
-          total: 0n,
+          total: null,
+          goods: new Map<string, PendingGoods>(),
           oldestPendingReportedAt: asSeconds(row.reported_at),
         };
         entry.pendingCount++;
-        entry.total += BigInt(row.amount_idr);
+        if (row.quantity != null) {
+          const lines: AidLine[] = JSON.parse(row.data_json ?? "{}").aidLines ?? [];
+          const line = lines.find((line) => line.id === row.aid_line_id);
+          if (!line || line.value.kind !== "GOODS") throw new Error("Rincian barang pada versi realisasi tidak tersedia.");
+          const key = JSON.stringify([line.aidType, row.unit]);
+          const current = entry.goods.get(key);
+          entry.goods.set(key, { aidType: line.aidType, unit: row.unit,
+            quantity: addDecimalStrings(current?.quantity ?? "0", row.quantity) });
+        } else if (row.amount_idr != null) {
+          entry.total = (entry.total ?? 0n) + BigInt(row.amount_idr);
+        }
         queue.set(row.proposal_id, entry);
       }
-      return [...queue.values()].map(({ total, ...entry }) => ({ ...entry, totalPendingIdr: total.toString() }));
+      return [...queue.values()].map(({ total, goods, ...entry }) => ({ ...entry,
+        totalPendingIdr: total?.toString() ?? null,
+        goods: [...goods.values()].sort((a, b) => a.aidType.localeCompare(b.aidType) || a.unit.localeCompare(b.unit)),
+      }));
     },
   };
 }

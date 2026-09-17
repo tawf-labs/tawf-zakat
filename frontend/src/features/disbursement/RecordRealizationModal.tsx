@@ -1,10 +1,11 @@
+import { compareDecimalStrings } from "../../../../shared/exact-decimal";
 import { RealizationPaymentRecipientFields, type PaymentRecipientFields } from "./RealizationPaymentRecipientFields";
 import { useId, useState } from "react";
 import { RealizationRecipientRows, type RealizationRow } from "./RealizationRecipientRows";
 import { Button } from "../../components/ui/Button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/Dialog";
 import type { PrivateRequests } from "../workspace/privateRequests";
-import { formatIdrAmount } from "../workspace/mandateLabels";
+import { validateRealizationRows } from "./validateRealizationRows";
 import {
   DISBURSEMENT_METHOD_LABELS,
   recordRealizations,
@@ -44,8 +45,17 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
   onRecorded: (records: DisbursementRealization[], summary: ProposalRealizationSummary, addEvidence: boolean) => void;
 }) {
   const id = useId();
-  const open = summary.lines.filter((line) => BigInt(line.amountRemainingIdr) > 0n);
-  const [rows, setRows] = useState<RealizationRow[]>(() => [{ key: crypto.randomUUID(), aidLineId: open[0]?.aidLineId ?? "", amountIdr: open[0]?.amountRemainingIdr ?? "" }]);
+  const open = summary.lines.filter((line) =>
+    line.kind === "GOODS"
+      ? (line.quantityRemaining != null && compareDecimalStrings(line.quantityRemaining, "0") > 0)
+      : (BigInt(line.amountRemainingIdr ?? "0") > 0n)
+  );
+  const initialLine = open[0];
+  const [rows, setRows] = useState<RealizationRow[]>(() => [
+    initialLine?.kind === "GOODS"
+      ? { key: crypto.randomUUID(), aidLineId: initialLine.aidLineId, amountIdr: "", quantity: initialLine.quantityRemaining ?? "", unit: initialLine.unit ?? "" }
+      : { key: crypto.randomUUID(), aidLineId: initialLine?.aidLineId ?? "", amountIdr: initialLine?.amountRemainingIdr ?? "" }
+  ]);
   const [reportedDate, setReportedDate] = useState(today);
   const [method, setMethod] = useState<DisbursementMethod>("CASH");
   const [payment, setPayment] = useState<PaymentRecipientFields>({ enabled: false, name: "", relation: "" });
@@ -64,15 +74,8 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
   function validate(): string | null {
     const [year, month, day] = reportedDate.split("-").map(Number);
     if (!year || !month || !day) return "Tanggal kejadian wajib diisi.";
-    const chosen = new Set<string>();
-    for (const row of rows) {
-      const line = lineOf(row.aidLineId);
-      if (!line) return "Pilih rincian bantuan untuk setiap baris.";
-      if (chosen.has(row.aidLineId)) return `${line.beneficiaryName} dipilih lebih dari sekali.`;
-      chosen.add(row.aidLineId);
-      if (!/^\d+$/.test(row.amountIdr) || BigInt(row.amountIdr) <= 0n) return `Nominal untuk ${line.beneficiaryName} harus rupiah bulat lebih dari nol.`;
-      if (BigInt(row.amountIdr) > BigInt(line.amountRemainingIdr)) return `Nominal untuk ${line.beneficiaryName} melebihi sisa hak ${formatIdrAmount(line.amountRemainingIdr)}.`;
-    }
+    const rowProblem = validateRealizationRows(rows, summary);
+    if (rowProblem) return rowProblem;
     if (payment.enabled && (!payment.name.trim() || !payment.relation.trim())) return "Nama penerima pembayaran dan hubungannya wajib diisi.";
     return null;
   }
@@ -87,15 +90,21 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
       operationId,
       expectedVersion: draft.version,
       batchGroupId: rows.length > 1 ? `kelompok-${operationId}` : null,
-      items: rows.map((row) => ({
-        aidLineId: row.aidLineId,
-        beneficiaryId: lineOf(row.aidLineId)!.beneficiaryId,
-        method,
-        amountIdr: row.amountIdr,
-        reportedAt,
-        paymentRecipient: payment.enabled ? { name: payment.name.trim(), relation: payment.relation.trim() } : null,
-        notes: notes.trim() || null,
-      })),
+      items: rows.map((row) => {
+        const line = lineOf(row.aidLineId)!;
+        const isGoods = line.kind === "GOODS";
+        return {
+          aidLineId: row.aidLineId,
+          beneficiaryId: line.beneficiaryId,
+          method: isGoods ? "GOODS_HANDOVER" : method,
+          amountIdr: isGoods ? null : row.amountIdr,
+          quantity: isGoods ? row.quantity : null,
+          unit: isGoods ? (row.unit || line.unit) : null,
+          reportedAt,
+          paymentRecipient: payment.enabled ? { name: payment.name.trim(), relation: payment.relation.trim() } : null,
+          notes: notes.trim() || null,
+        };
+      }),
     }));
     if (result) setRecorded({ records: result.records, summary: result.summary });
   }
@@ -108,7 +117,7 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
   const status = STATE_TEXT[operation.state];
   return <Dialog open={isOpen} onOpenChange={(next) => { if (!next && !operation.locked) (recorded ? finish(false) : onClose()); }}>
     <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto" showCloseButton={!operation.locked}>
-      <DialogTitle>Catat realisasi penyaluran IDR</DialogTitle>
+      <DialogTitle>Catat realisasi penyaluran</DialogTitle>
       <DialogDescription>{notice}</DialogDescription>
 
       <form className="space-y-4 text-sm text-stone-800" onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -122,10 +131,10 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
                 onChange={(event) => setReportedDate(event.target.value)} />
             </label>
             <label className="block text-xs font-semibold" htmlFor={`${id}-method`}>
-              Cara penyaluran
+              Cara penyaluran uang (barang dicatat sebagai penyerahan barang)
               <select id={`${id}-method`} value={method} className="mt-1 w-full rounded-lg border border-stone-300 p-2 text-sm font-normal"
                 onChange={(event) => setMethod(event.target.value as DisbursementMethod)}>
-                {(Object.keys(DISBURSEMENT_METHOD_LABELS) as DisbursementMethod[]).map((value) =>
+                {(["CASH", "BANK_TRANSFER"] as const).map((value) =>
                   <option key={value} value={value}>{DISBURSEMENT_METHOD_LABELS[value]}</option>)}
               </select>
             </label>

@@ -730,8 +730,10 @@ export const disbursementRealizations = pgTable("disbursement_realizations", {
   beneficiaryId: text("beneficiary_id").notNull(),
   batchGroupId: text("batch_group_id"),
   paymentRecipientJson: text("payment_recipient_json"),
-  method: text("method").notNull(), // 'BANK_TRANSFER' | 'CASH'
-  amountIdr: text("amount_idr").notNull(),
+  method: text("method").notNull(), // 'BANK_TRANSFER' | 'CASH' | 'GOODS_HANDOVER'
+  amountIdr: text("amount_idr"),
+  quantity: text("quantity"),
+  unit: text("unit"),
   reportedAt: bigint("reported_at", { mode: "number" }).notNull(),
   recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
   operatorAccount: text("operator_account").notNull(),
@@ -767,7 +769,9 @@ export const disbursementRealizationDocumentAllocations = pgTable("disbursement_
   documentId: text("document_id").notNull().references(() => disbursementRealizationDocuments.id),
   realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
   institutionId: text("institution_id").notNull().references(() => institutions.id),
-  amountIdr: text("amount_idr").notNull(),
+  amountIdr: text("amount_idr"),
+  quantity: text("quantity"),
+  unit: text("unit"),
 }, table => [primaryKey({ columns: [table.documentId, table.realizationId] })]);
 
 export const disbursementRealizationChallenges = pgTable("disbursement_realization_challenges", {
@@ -781,7 +785,9 @@ export const disbursementRealizationChallenges = pgTable("disbursement_realizati
   contactHint: text("contact_hint").notNull(),
   confirmerJson: text("confirmer_json"),
   aidType: text("aid_type").notNull(),
-  amountIdr: text("amount_idr").notNull(),
+  amountIdr: text("amount_idr"),
+  quantity: text("quantity"),
+  unit: text("unit"),
   codeHash: text("code_hash").notNull(),
   attempts: integer("attempts").notNull().default(0),
   issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
@@ -808,7 +814,9 @@ export const disbursementRealizationDisputes = pgTable("disbursement_realization
   complainantType: text("complainant_type").notNull(), // 'BENEFICIARY' | 'OFFICER' | 'AUDITOR'
   subject: text("subject").notNull(), // 'RECEIPT' | 'AMOUNT'
   reason: text("reason").notNull(),
-  disputedAmountIdr: text("disputed_amount_idr").notNull(),
+  disputedAmountIdr: text("disputed_amount_idr"),
+  disputedQuantity: text("disputed_quantity"),
+  disputedUnit: text("disputed_unit"),
   status: text("status").notNull().default("OPEN"), // 'OPEN' | 'EXAMINED' | 'RESOLVED'
   recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),

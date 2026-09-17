@@ -23,6 +23,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { addDecimalStrings, compareDecimalStrings, subtractDecimalStrings, isExactNonNegativeDecimal } from "../../shared/exact-decimal";
+export { addDecimalStrings, compareDecimalStrings, subtractDecimalStrings, isExactNonNegativeDecimal } from "../../shared/exact-decimal";
 
 export type FundType = "ZAKAT" | "INFAK" | "SEDEKAH" | "LAINNYA";
 export const FUND_TYPES: FundType[] = ["ZAKAT", "INFAK", "SEDEKAH", "LAINNYA"];
@@ -113,7 +115,16 @@ export type AidValue =
       quantityApproved: string | null;
       /** Rupiah valuation, only when a valuation basis is actually available. */
       valuedAmountIdr: string | null;
+      /** Institution-declared source and calculation for the proposal estimate; absent on legacy data. */
+      valuationBasis?: string | null;
     };
+
+/** A proposal estimate is usable only with the institution's stated valuation basis. */
+export function goodsValuationOf(value: Extract<AidValue, { kind: "GOODS" }>): string | null {
+  return typeof value.valuationBasis === "string" && value.valuationBasis.trim()
+    && value.valuedAmountIdr != null && isExactNonNegativeInteger(value.valuedAmountIdr)
+    ? value.valuedAmountIdr : null;
+}
 
 export type AidLine = {
   /** Stable within this proposal. */
@@ -195,6 +206,9 @@ export function validateAidLine(
     if (row.value.valuedAmountIdr !== null && !isExactNonNegativeInteger(row.value.valuedAmountIdr)) {
       at("value.valuedAmountIdr", "Nilai IDR barang harus bilangan bulat rupiah bila dasar penilaian tersedia.");
     }
+    if (row.value.valuedAmountIdr !== null && !(typeof row.value.valuationBasis === "string" && row.value.valuationBasis.trim())) {
+      at("value.valuationBasis", "Nyatakan sumber dan perhitungan estimasi nilai barang, atau kosongkan nilai IDR.");
+    }
   }
 }
 
@@ -263,21 +277,6 @@ export type ProposalTotals = {
   isPartial: boolean;
 };
 
-export const isExactNonNegativeDecimal = (value: string): boolean => /^\d+(\.\d+)?$/.test(value);
-
-/** Adds two non-negative decimal strings exactly, without passing through floats. */
-export function addDecimalStrings(a: string, b: string): string {
-  const [aInt, aFrac = ""] = a.split(".");
-  const [bInt, bFrac = ""] = b.split(".");
-  const scale = Math.max(aFrac.length, bFrac.length);
-  const scaled = (int: string, frac: string) => BigInt(int + frac.padEnd(scale, "0"));
-  const digits = (scaled(aInt, aFrac) + scaled(bInt, bFrac)).toString().padStart(scale + 1, "0");
-  if (scale === 0) return digits;
-  const fraction = digits.slice(-scale).replace(/0+$/, "");
-  const whole = digits.slice(0, -scale);
-  return fraction ? `${whole}.${fraction}` : whole;
-}
-
 export function summarizeProposalDraft(input: Pick<ProposalDraftInput, "beneficiaries" | "aidLines">): ProposalTotals {
   const totalsByUnit: Record<string, string> = {};
   let isPartial = false;
@@ -293,7 +292,7 @@ export function summarizeProposalDraft(input: Pick<ProposalDraftInput, "benefici
     if (isExactNonNegativeDecimal(line.value.quantityRequested)) {
       totalsByUnit[key] = addDecimalStrings(totalsByUnit[key] ?? "0", line.value.quantityRequested);
     }
-    if (line.value.valuedAmountIdr === null) isPartial = true;
+    if (goodsValuationOf(line.value) === null) isPartial = true;
   }
 
   return {
@@ -750,16 +749,6 @@ export type ProposalDecisionRecord = {
   createdAt: number;
 };
 
-/** Compares two non-negative decimal strings exactly. */
-function compareDecimalStrings(a: string, b: string): number {
-  const [aInt, aFrac = ""] = a.split(".");
-  const [bInt, bFrac = ""] = b.split(".");
-  const scale = Math.max(aFrac.length, bFrac.length);
-  const left = BigInt(aInt + aFrac.padEnd(scale, "0"));
-  const right = BigInt(bInt + bFrac.padEnd(scale, "0"));
-  return left === right ? 0 : left < right ? -1 : 1;
-}
-
 /**
  * The aid lines as the decision fixes them. A rejection leaves them untouched;
  * an approval sets every approved value, defaulting to the requested one and
@@ -835,6 +824,7 @@ export function computeRightsDigest(
           quantityRequested: line.value.quantityRequested,
           quantityApproved: line.value.quantityApproved ?? null,
           valuedAmountIdr: line.value.valuedAmountIdr,
+          ...(line.value.valuationBasis ? { valuationBasis: line.value.valuationBasis } : {}),
         }
   );
   const payload = JSON.stringify({
@@ -993,7 +983,7 @@ export function validateProposalDecisionInput(input: unknown): { ok: true; value
 export const REALIZATION_DISCLAIMER_NOTICE =
   "Aplikasi mencatat kejadian penyaluran di luar aplikasi, bukan mengirim dana atau memverifikasi transaksi bank.";
 
-export const DISBURSEMENT_METHODS = ["BANK_TRANSFER", "CASH"] as const;
+export const DISBURSEMENT_METHODS = ["BANK_TRANSFER", "CASH", "GOODS_HANDOVER"] as const;
 export type DisbursementMethod = (typeof DISBURSEMENT_METHODS)[number];
 export const isDisbursementMethod = (v: unknown): v is DisbursementMethod =>
   typeof v === "string" && (DISBURSEMENT_METHODS as readonly string[]).includes(v);
@@ -1001,6 +991,7 @@ export const isDisbursementMethod = (v: unknown): v is DisbursementMethod =>
 export const DISBURSEMENT_METHOD_LABELS: Record<DisbursementMethod, string> = {
   BANK_TRANSFER: "Transfer Bank",
   CASH: "Tunai",
+  GOODS_HANDOVER: "Penyerahan Barang",
 };
 
 export const REALIZATION_DOCUMENT_TYPES = [
@@ -1022,6 +1013,7 @@ export const REALIZATION_DOCUMENT_TYPE_LABELS: Record<RealizationDocumentType, s
 export const REQUIRED_EVIDENCE_BY_METHOD: Record<DisbursementMethod, RealizationDocumentType> = {
   BANK_TRANSFER: "PAYMENT_PROOF",
   CASH: "RECEIPT_OR_BAST",
+  GOODS_HANDOVER: "RECEIPT_OR_BAST",
 };
 
 export const REALIZATION_EVIDENCE_STATUSES = ["EVIDENCE_PENDING", "EVIDENCE_COMPLETE"] as const;
@@ -1031,7 +1023,7 @@ export type RealizationEvidenceStatus = (typeof REALIZATION_EVIDENCE_STATUSES)[n
 export const CONFIRMATION_STATUSES = ["UNCONFIRMED", "CONFIRMED", "DISPUTED"] as const;
 export type ConfirmationStatus = (typeof CONFIRMATION_STATUSES)[number];
 
-/** Only a cash handover is confirmed by the recipient; a transfer keeps its payment proof and no confirmation label. */
+/** Cash and goods handovers are confirmed by the recipient; a transfer keeps its payment proof and no confirmation label. */
 export const CONFIRMATION_METHODS = ["OTP", "BAST_EXAMINED"] as const;
 export type ConfirmationMethod = (typeof CONFIRMATION_METHODS)[number];
 
@@ -1061,14 +1053,21 @@ export type RealizationProgress = (typeof REALIZATION_PROGRESS)[number];
 /** Who the payment went to when it is not the beneficiary (a school, hospital, vendor). Absent means the beneficiary. */
 export type PaymentRecipient = { name: string; relation: string };
 
-export type EvidenceAllocation = { realizationId: string; amountIdr: string };
+export type EvidenceAllocation = {
+  realizationId: string;
+  amountIdr?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+};
 
 export type RealizationItemInput = {
   aidLineId: string;
   beneficiaryId: string;
   paymentRecipient: PaymentRecipient | null;
   method: DisbursementMethod;
-  amountIdr: string;
+  amountIdr?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
   reportedAt: number;
   notes: string | null;
 };
@@ -1083,7 +1082,9 @@ export type RealizationRecord = {
   batchGroupId: string | null;
   paymentRecipient: PaymentRecipient | null;
   method: DisbursementMethod;
-  amountIdr: string;
+  amountIdr: string | null;
+  quantity: string | null;
+  unit: string | null;
   reportedAt: number;
   recordedAt: number;
   operatorAccount: string;
@@ -1127,7 +1128,9 @@ export type RealizationChallenge = {
   contactHint: string;
   confirmer: { beneficiaryName: string; guardian: Guardian | null; contactRelation: string } | null;
   aidType: string;
-  amountIdr: string;
+  amountIdr: string | null;
+  quantity: string | null;
+  unit: string | null;
   codeHash: string;
   attempts: number;
   issuedAt: number;
@@ -1164,7 +1167,9 @@ export type RealizationDisputeRecord = {
   complainantType: ComplainantType;
   subject: DisputeSubject;
   reason: string;
-  disputedAmountIdr: string;
+  disputedAmountIdr: string | null;
+  disputedQuantity: string | null;
+  disputedUnit: string | null;
   status: DisputeStatus;
   recordedByOfficerId: string;
   createdAt: number;
@@ -1204,11 +1209,27 @@ export type RealizationLineSummary = {
   beneficiaryId: string;
   beneficiaryName: string;
   paymentRecipients: PaymentRecipient[];
-  amountApprovedIdr: string;
-  amountRealizedIdr: string;
-  amountRemainingIdr: string;
+  kind: "MONEY" | "GOODS";
+  aidType: string;
+  unit?: string | null;
+  quantityApproved?: string | null;
+  quantityRealized?: string | null;
+  quantityRemaining?: string | null;
+  amountApprovedIdr: string | null;
+  amountRealizedIdr: string | null;
+  amountRemainingIdr: string | null;
+  valuedAmountIdr: string | null;
+  valuationBasis: string | null;
   status: RealizationProgress;
   isDisputed: boolean;
+};
+
+export type RealizationUnitSummary = {
+  aidType: string;
+  unit: string;
+  approved: string;
+  realized: string;
+  remaining: string;
 };
 
 export type ProposalRealizationSummary = {
@@ -1230,6 +1251,10 @@ export type ProposalRealizationSummary = {
   disputedCount: number;
   totalAdvancesIdr: string;
   totalExpensesIdr: string;
+  totalsByUnit: Record<string, RealizationUnitSummary>;
+  unitSummaries: RealizationUnitSummary[];
+  hasUnvaluedGoods: boolean;
+  totalValuedGoodsApprovedIdr: string | null;
   lines: RealizationLineSummary[];
 };
 
@@ -1242,11 +1267,21 @@ export function parsePositiveIdr(value: unknown): string | null {
   return amount > 0n ? amount.toString() : null;
 }
 
-/** The IDR right a decision granted a line. Only a MONEY line has one; goods are realized elsewhere (#95). */
+/** The IDR right a decision granted a line. Only a MONEY line has one; goods use approvedQuantityOf (#95). */
 export function approvedIdrOf(line: AidLine): bigint | null {
   if (line.value.kind !== "MONEY") return null;
   const approved = line.value.amountApprovedIdr;
   return approved != null && isExactNonNegativeInteger(approved) ? BigInt(approved) : 0n;
+}
+
+export function approvedQuantityOf(line: AidLine): string | null {
+  if (line.value.kind !== "GOODS") return null;
+  const approved = line.value.quantityApproved ?? line.value.quantityRequested;
+  return isExactNonNegativeDecimal(approved) ? approved : null;
+}
+
+export function approvedUnitOf(line: AidLine): string | null {
+  return line.value.kind === "GOODS" ? line.value.unit : null;
 }
 
 export function realizationProgress(approved: bigint, realized: bigint): RealizationProgress {
@@ -1254,16 +1289,36 @@ export function realizationProgress(approved: bigint, realized: bigint): Realiza
   return realized > 0n ? "PARTIALLY_REALIZED" : "NOT_REALIZED";
 }
 
-/** Evidence is complete once documents of the method's required type account for exactly the realized amount. */
+export function realizationProgressDecimal(approved: string, realized: string): RealizationProgress {
+  if (compareDecimalStrings(approved, "0") > 0 && compareDecimalStrings(realized, approved) >= 0) {
+    return "FULLY_REALIZED";
+  }
+  return compareDecimalStrings(realized, "0") > 0 ? "PARTIALLY_REALIZED" : "NOT_REALIZED";
+}
+
+/** Evidence is complete once documents of the method's required type account for exactly the realized amount or quantity. */
 export function evidenceStatusOf(
-  realization: Pick<RealizationRecord, "method" | "amountIdr">,
-  documents: Array<{ documentType: RealizationDocumentType; amountIdr: string }>
+  realization: Pick<RealizationRecord, "method" | "amountIdr" | "quantity" | "unit">,
+  documents: Array<{ documentType: RealizationDocumentType; amountIdr?: string | null; quantity?: string | null }>
 ): RealizationEvidenceStatus {
   const required = REQUIRED_EVIDENCE_BY_METHOD[realization.method];
-  const covered = documents
-    .filter((doc) => doc.documentType === required)
-    .reduce((total, doc) => total + BigInt(doc.amountIdr), 0n);
-  return covered === BigInt(realization.amountIdr) ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING";
+  const matching = documents.filter((doc) => doc.documentType === required);
+
+  if (realization.quantity !== null && realization.quantity !== undefined) {
+    const coveredQuantity = matching
+      .filter((doc) => doc.quantity !== null && doc.quantity !== undefined)
+      .reduce((total, doc) => addDecimalStrings(total, doc.quantity!), "0");
+    return compareDecimalStrings(coveredQuantity, realization.quantity) === 0 ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING";
+  }
+
+  if (realization.amountIdr !== null && realization.amountIdr !== undefined) {
+    const coveredIdr = matching
+      .filter((doc) => doc.amountIdr !== null && doc.amountIdr !== undefined)
+      .reduce((total, doc) => total + BigInt(doc.amountIdr!), 0n);
+    return coveredIdr === BigInt(realization.amountIdr) ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING";
+  }
+
+  return "EVIDENCE_PENDING";
 }
 
 /** Only the hint survives storage: enough for the officer to recognise which contact received the code. */
@@ -1302,12 +1357,7 @@ export function validateRealizationItemInput(item: unknown): { ok: true; value: 
   if (!beneficiaryId) return { ok: false, error: "ID penerima manfaat (beneficiaryId) wajib diisi." };
 
   if (!isDisbursementMethod(raw.method)) {
-    return { ok: false, error: "Metode penyaluran harus 'BANK_TRANSFER' atau 'CASH'." };
-  }
-
-  const amountIdr = parsePositiveIdr(raw.amountIdr);
-  if (!amountIdr) {
-    return { ok: false, error: "Jumlah nominal IDR realisasi harus bilangan bulat rupiah lebih dari nol." };
+    return { ok: false, error: "Metode penyaluran harus 'BANK_TRANSFER', 'CASH', atau 'GOODS_HANDOVER'." };
   }
 
   const reportedAt = typeof raw.reportedAt === "number" ? raw.reportedAt : NaN;
@@ -1318,6 +1368,36 @@ export function validateRealizationItemInput(item: unknown): { ok: true; value: 
   const paymentRecipient = paymentRecipientOf(raw.paymentRecipient);
   if (!paymentRecipient.ok) return paymentRecipient;
 
+  if (raw.method === "GOODS_HANDOVER") {
+    const quantity = trimmed(raw.quantity);
+    const unit = trimmed(raw.unit);
+    if (!quantity || !isExactNonNegativeDecimal(quantity) || compareDecimalStrings(quantity, "0") <= 0) {
+      return { ok: false, error: "Jumlah barang realisasi harus bilangan desimal eksak lebih dari nol." };
+    }
+    if (!unit) {
+      return { ok: false, error: "Satuan barang realisasi wajib dinyatakan." };
+    }
+    return {
+      ok: true,
+      value: {
+        aidLineId,
+        beneficiaryId,
+        paymentRecipient: paymentRecipient.value,
+        method: "GOODS_HANDOVER",
+        amountIdr: raw.amountIdr ? parsePositiveIdr(raw.amountIdr) : null,
+        quantity,
+        unit,
+        reportedAt,
+        notes: trimmed(raw.notes) || null,
+      },
+    };
+  }
+
+  const amountIdr = parsePositiveIdr(raw.amountIdr);
+  if (!amountIdr) {
+    return { ok: false, error: "Jumlah nominal IDR realisasi harus bilangan bulat rupiah lebih dari nol." };
+  }
+
   return {
     ok: true,
     value: {
@@ -1326,6 +1406,8 @@ export function validateRealizationItemInput(item: unknown): { ok: true; value: 
       paymentRecipient: paymentRecipient.value,
       method: raw.method,
       amountIdr,
+      quantity: null,
+      unit: null,
       reportedAt,
       notes: trimmed(raw.notes) || null,
     },
@@ -1340,13 +1422,30 @@ export function validateEvidenceAllocations(raw: unknown): { ok: true; value: Ev
   for (const entry of raw) {
     const fields = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
     const realizationId = trimmed(fields.realizationId);
-    const amountIdr = parsePositiveIdr(fields.amountIdr);
-    if (!realizationId || !amountIdr) {
-      return { ok: false, error: "Setiap alokasi bukti wajib menunjuk realisasi dan jumlah rupiah lebih dari nol." };
+    if (!realizationId) {
+      return { ok: false, error: "Setiap alokasi bukti wajib menunjuk realisasi yang sah." };
     }
     if (seen.has(realizationId)) return { ok: false, error: `Realisasi ${realizationId} dialokasikan lebih dari sekali.` };
     seen.add(realizationId);
-    allocations.push({ realizationId, amountIdr });
+
+    const hasAmount = fields.amountIdr != null && fields.amountIdr !== "";
+    const hasQuantity = fields.quantity != null && fields.quantity !== "";
+    const hasUnit = fields.unit != null && fields.unit !== "";
+    if (hasAmount === hasQuantity || (hasAmount && hasUnit)) {
+      return { ok: false, error: "Alokasi bukti harus berupa rupiah atau kuantitas dan satuan barang, tidak keduanya." };
+    }
+    if (hasAmount) {
+      const amountIdr = parsePositiveIdr(fields.amountIdr);
+      if (!amountIdr) return { ok: false, error: "Nominal alokasi harus rupiah bulat lebih dari nol." };
+      allocations.push({ realizationId, amountIdr });
+    } else {
+      const quantity = trimmed(fields.quantity);
+      const unit = trimmed(fields.unit);
+      if (!isExactNonNegativeDecimal(quantity) || compareDecimalStrings(quantity, "0") <= 0 || !unit) {
+        return { ok: false, error: "Alokasi barang harus memuat kuantitas desimal eksak lebih dari nol dan satuan." };
+      }
+      allocations.push({ realizationId, quantity, unit });
+    }
   }
   return { ok: true, value: allocations };
 }
@@ -1364,7 +1463,8 @@ export function calculateProposalRealizationSummary(
 ): ProposalRealizationSummary {
   const beneficiaryMap = new Map(proposal.beneficiaries.map((b) => [b.id, b]));
 
-  const realizedByLine = new Map<string, bigint>();
+  const realizedIdrByLine = new Map<string, bigint>();
+  const realizedQuantityByLine = new Map<string, string>();
   const recipientsByLine = new Map<string, Map<string, PaymentRecipient>>();
   const lineDisputed = new Set<string>();
   const uniqueRealizedBeneficiaryIds = new Set<string>();
@@ -1376,7 +1476,15 @@ export function calculateProposalRealizationSummary(
   let disputedCount = 0;
 
   for (const rea of realizations) {
-    realizedByLine.set(rea.aidLineId, (realizedByLine.get(rea.aidLineId) ?? 0n) + BigInt(rea.amountIdr));
+    if (rea.amountIdr) {
+      realizedIdrByLine.set(rea.aidLineId, (realizedIdrByLine.get(rea.aidLineId) ?? 0n) + BigInt(rea.amountIdr));
+    }
+    if (rea.quantity) {
+      realizedQuantityByLine.set(
+        rea.aidLineId,
+        addDecimalStrings(realizedQuantityByLine.get(rea.aidLineId) ?? "0", rea.quantity)
+      );
+    }
     uniqueRealizedBeneficiaryIds.add(rea.beneficiaryId);
     if (rea.paymentRecipient) {
       const recipients = recipientsByLine.get(rea.aidLineId) ?? new Map<string, PaymentRecipient>();
@@ -1388,7 +1496,9 @@ export function calculateProposalRealizationSummary(
       completeEvidenceCount++;
     } else {
       pendingEvidenceCount++;
-      totalPendingEvidence += BigInt(rea.amountIdr);
+      if (rea.amountIdr) {
+        totalPendingEvidence += BigInt(rea.amountIdr);
+      }
     }
 
     if (rea.confirmationStatus === "CONFIRMED") {
@@ -1401,25 +1511,101 @@ export function calculateProposalRealizationSummary(
 
   let totalApproved = 0n;
   let totalRealized = 0n;
+  let totalValuedGoodsApproved = 0n;
+  let hasUnvaluedGoods = false;
+  const totalsByUnit: Record<string, RealizationUnitSummary> = {};
 
-  const lines = proposal.aidLines.flatMap((line): RealizationLineSummary[] => {
-    const approved = approvedIdrOf(line);
-    if (approved === null) return [];
-    const realized = realizedByLine.get(line.id) ?? 0n;
-    totalApproved += approved;
-    totalRealized += realized;
-    return [{
+  const lines: RealizationLineSummary[] = proposal.aidLines.map((line): RealizationLineSummary => {
+    const beneficiaryName = beneficiaryMap.get(line.beneficiaryId)?.name ?? "Tidak dikenal";
+    const paymentRecipients = [...(recipientsByLine.get(line.id)?.values() ?? [])];
+    const isDisputed = lineDisputed.has(line.id);
+
+    if (line.value.kind === "MONEY") {
+      const approved = approvedIdrOf(line) ?? 0n;
+      const realized = realizedIdrByLine.get(line.id) ?? 0n;
+      totalApproved += approved;
+      totalRealized += realized;
+      const remaining = approved > realized ? approved - realized : 0n;
+
+      return {
+        aidLineId: line.id,
+        beneficiaryId: line.beneficiaryId,
+        beneficiaryName,
+        paymentRecipients,
+        kind: "MONEY",
+        aidType: line.aidType,
+        unit: null,
+        quantityApproved: null,
+        quantityRealized: null,
+        quantityRemaining: null,
+        amountApprovedIdr: approved.toString(),
+        amountRealizedIdr: realized.toString(),
+        amountRemainingIdr: remaining.toString(),
+        valuedAmountIdr: null,
+        valuationBasis: null,
+        status: realizationProgress(approved, realized),
+        isDisputed,
+      };
+    }
+
+    // GOODS
+    const approvedQty = approvedQuantityOf(line) ?? "0";
+    const realizedQty = realizedQuantityByLine.get(line.id) ?? "0";
+    const remainingQty = subtractDecimalStrings(approvedQty, realizedQty);
+    const lineStatus = realizationProgressDecimal(approvedQty, realizedQty);
+
+    const valuation = goodsValuationOf(line.value);
+    if (valuation !== null) {
+      totalValuedGoodsApproved += BigInt(valuation);
+    } else {
+      hasUnvaluedGoods = true;
+    }
+
+    const unit = line.value.unit;
+    const key = JSON.stringify([line.aidType, unit]);
+    const currentUnit = totalsByUnit[key] ?? { aidType: line.aidType, unit, approved: "0", realized: "0", remaining: "0" };
+    totalsByUnit[key] = {
+      aidType: line.aidType,
+      unit,
+      approved: addDecimalStrings(currentUnit.approved, approvedQty),
+      realized: addDecimalStrings(currentUnit.realized, realizedQty),
+      remaining: addDecimalStrings(currentUnit.remaining, remainingQty),
+    };
+
+    return {
       aidLineId: line.id,
       beneficiaryId: line.beneficiaryId,
-      beneficiaryName: beneficiaryMap.get(line.beneficiaryId)?.name ?? "Tidak dikenal",
-      paymentRecipients: [...(recipientsByLine.get(line.id)?.values() ?? [])],
-      amountApprovedIdr: approved.toString(),
-      amountRealizedIdr: realized.toString(),
-      amountRemainingIdr: (approved > realized ? approved - realized : 0n).toString(),
-      status: realizationProgress(approved, realized),
-      isDisputed: lineDisputed.has(line.id),
-    }];
+      beneficiaryName,
+      paymentRecipients,
+      kind: "GOODS",
+      aidType: line.aidType,
+      unit: line.value.unit,
+      quantityApproved: approvedQty,
+      quantityRealized: realizedQty,
+      quantityRemaining: remainingQty,
+      amountApprovedIdr: valuation,
+      amountRealizedIdr: null,
+      amountRemainingIdr: null,
+      valuedAmountIdr: valuation,
+      valuationBasis: valuation !== null ? line.value.valuationBasis!.trim() : null,
+      status: lineStatus,
+      isDisputed,
+    };
   });
+
+  const unitSummaries: RealizationUnitSummary[] = Object.values(totalsByUnit);
+
+  // Overall disbursement status across all lines
+  let disbursementStatus: RealizationProgress = "NOT_REALIZED";
+  if (lines.length > 0) {
+    const allFully = lines.every((l) => l.status === "FULLY_REALIZED");
+    const anyProgress = lines.some((l) => l.status === "PARTIALLY_REALIZED" || l.status === "FULLY_REALIZED");
+    if (allFully) {
+      disbursementStatus = "FULLY_REALIZED";
+    } else if (anyProgress) {
+      disbursementStatus = "PARTIALLY_REALIZED";
+    }
+  }
 
   return {
     proposalId: proposal.id,
@@ -1430,7 +1616,7 @@ export function calculateProposalRealizationSummary(
     approvedBeneficiaryCount: proposal.beneficiaries.length,
     realizedBeneficiaryCount: uniqueRealizedBeneficiaryIds.size,
     paymentEventCount: realizations.length,
-    disbursementStatus: realizationProgress(totalApproved, totalRealized),
+    disbursementStatus,
     evidenceCompleteness: pendingEvidenceCount === 0 && realizations.length > 0 ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING",
     pendingEvidenceCount,
     completeEvidenceCount,
@@ -1439,6 +1625,10 @@ export function calculateProposalRealizationSummary(
     disputedCount,
     totalAdvancesIdr: advances.reduce((acc, a) => acc + BigInt(a.amountIdr), 0n).toString(),
     totalExpensesIdr: expenses.reduce((acc, e) => acc + BigInt(e.amountIdr), 0n).toString(),
+    totalsByUnit,
+    unitSummaries,
+    hasUnvaluedGoods,
+    totalValuedGoodsApprovedIdr: lines.some((line) => line.kind === "GOODS" && line.valuedAmountIdr !== null) ? totalValuedGoodsApproved.toString() : null,
     lines,
   };
 }
