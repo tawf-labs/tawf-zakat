@@ -3,6 +3,9 @@ import { computeDonationLeaf, type DonationRecord } from "./merkle";
 import { computeBeneficiaryHash, uploadDisbursementProofToIPFS } from "./ipfs";
 import { dbService } from "./db/index";
 
+// Seeded donations are already settled into a batch, so they must read as paid and batched.
+const settled = (donation: DonationRecord): DonationRecord => ({ ...donation, status: "BATCHED", paidAt: donation.timestamp });
+
 export async function runSeeder() {
   // 1. Seed 10 Realistic Donations Synchronously to Store
   const sampleDonations: DonationRecord[] = [
@@ -86,7 +89,7 @@ export async function runSeeder() {
       amountIDR: 10000000,
       timestamp: "2026-08-24T16:30:00Z",
     },
-  ];
+  ].map(settled);
 
   // Immediately populate in-memory store
   for (const d of sampleDonations) {
@@ -99,14 +102,14 @@ export async function runSeeder() {
     "0x8b926f1457b19b6b56ae010d1fefa7012ee61e25170b2e56f92e0cc22684a593"
   );
 
-  const sampleDonation2: DonationRecord = {
+  const sampleDonation2: DonationRecord = settled({
     trxId: "TRX-20260826-3488",
     donorName: "Bryan Digdaya",
     isAnonymous: false,
     salt: "salt_q5uravo2gt_1787733439579",
     amountIDR: 3500000,
     timestamp: "2026-08-26T08:37:19.579Z",
-  };
+  });
   dataStore.recordDonation(sampleDonation2, 2);
   const batch2 = dataStore.settleBatch(
     2,

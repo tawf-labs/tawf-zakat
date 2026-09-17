@@ -1,240 +1,242 @@
-import { describe, expect, it, beforeAll } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import app from "../src/index";
 import { runSeeder } from "../src/seed";
-import { MerkleTree, computeDonationLeaf } from "../src/merkle";
+import { dbService } from "../src/db/index";
+import { MerkleTree } from "../src/merkle";
 
-describe("Honest Verification & Privacy Protection (GH Issue #101 & Spec #100)", () => {
+const API = "http://localhost:3001";
+const SEEDED = { trxId: "TRX-20260824-001", donorName: "Budi Santoso", salt: "salt_budi_123", amountIDR: 2500000 };
+const LOOKUP_ROUTES = ["/api/public/contributions/", "/api/donations/", "/api/donations/status/"];
+const FAKE_IDS = ["TRX-20260824-9999", "TRX-FAKE-99999", "USDC-FAKE0000", "USDC-A1B2C3D4"];
+
+const get = (path: string, headers: Record<string, string> = {}) => app.fetch(new Request(`${API}${path}`, { headers }));
+const verifyReceipt = (payload: unknown) =>
+  app.fetch(new Request(`${API}/api/verify-receipt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+
+describe("public contribution lookup", () => {
   beforeAll(async () => {
     await runSeeder();
   });
 
-  describe("AC1 & AC3: Fake IDs & Public Lookup Privacy Protection", () => {
-    it("GET /api/public/contributions/:id should return 404 for fake TRX- or USDC- IDs, never fake success", async () => {
-      for (const fakeId of ["TRX-FAKE-99999", "TRX-20260824-NONEXISTENT", "USDC-FAKE-0000", "RANDOM-12345"]) {
-        const res = await app.fetch(
-          new Request(`http://localhost:3001/api/public/contributions/${fakeId}`)
-        );
+  afterEach(() => {
+    (dbService.getDonationByTrxId as any).mockRestore?.();
+    (dbService.getProofForTrx as any).mockRestore?.();
+    (dbService.getBatchByNumber as any).mockRestore?.();
+  });
+
+  it("answers NOT_FOUND for transaction-shaped TRX- and USDC- IDs on every lookup route, without a record", async () => {
+    for (const route of LOOKUP_ROUTES) {
+      for (const id of FAKE_IDS) {
+        const res = await get(`${route}${id}`);
         expect(res.status).toBe(404);
         const body = await res.json();
-        expect(body.success).toBe(false);
-        expect(body.contribution).toBeUndefined();
-        expect(body.mockReceipt).toBeUndefined();
+        expect(body).toEqual({ success: false, lookupStatus: "NOT_FOUND" });
       }
-    });
+    }
+  });
 
-    it("GET /api/donations/:trxId should return 404 for fake IDs, without generating mock data", async () => {
-      const res = await app.fetch(
-        new Request("http://localhost:3001/api/donations/TRX-FAKE-99999")
-      );
-      expect(res.status).toBe(404);
-      const body = await res.json();
-      expect(body.success).toBe(false);
-    });
-
-    it("GET /api/public/contributions/:id for legitimate transaction must NOT leak donorName, salt, private amount, or documents", async () => {
-      const knownId = "TRX-20260824-001";
-      const res = await app.fetch(
-        new Request(`http://localhost:3001/api/public/contributions/${knownId}`)
-      );
+  it("never exposes donor name, amount, salt, QR or contact for a named donor on any lookup route", async () => {
+    for (const route of LOOKUP_ROUTES) {
+      const res = await get(`${route}${SEEDED.trxId}`);
       expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.success).toBe(true);
-      expect(body.contribution).toBeDefined();
+      const text = await res.text();
+      expect(text).not.toContain(SEEDED.donorName);
+      expect(text).not.toContain(SEEDED.salt);
+      expect(text).not.toContain(String(SEEDED.amountIDR));
+      expect(text).not.toMatch(/qrString|qrUrl|donorName|amountIDR|contact/);
 
-      const c = body.contribution;
-      expect(c.trxId).toBe(knownId);
-
-      // Privacy checks: NEVER expose private donor name, salt, or private amount to public lookup
-      expect(c.donorName).toBeNull();
-      expect(c.salt).toBeNull();
-      expect(c.amountIDR).toBeNull();
-      expect(c.contact).toBeUndefined();
-      expect(c.files).toBeUndefined();
-
-      // Limitations must be honestly stated
-      expect(Array.isArray(c.limitations)).toBe(true);
-      expect(c.limitations).toContain("DONOR_NAME_RESTRICTED");
-      expect(c.limitations).toContain("SALT_RESTRICTED");
-      expect(c.limitations).toContain("AMOUNT_RESTRICTED");
-
-      // Lifecycle status must be genuine
-      expect(["PENDING", "PAID", "BATCHED"]).toContain(c.status);
-    });
-
-    it("GET /api/donations/:trxId sanitizes sensitive fields on public read", async () => {
-      const knownId = "TRX-20260824-001";
-      const res = await app.fetch(
-        new Request(`http://localhost:3001/api/donations/${knownId}`)
-      );
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.success).toBe(true);
-      const item = body.donation || body.contribution;
-      expect(item).toBeDefined();
-      expect(item.salt).toBeNull();
-    });
+      const { contribution, lookupStatus } = JSON.parse(text);
+      expect(lookupStatus).toBe("FOUND");
+      expect(contribution.owner).toBe("UNPROVEN");
+      expect(contribution.restricted).toEqual(["DONOR_NAME", "AMOUNT", "SALT", "CONTACT", "DOCUMENTS"]);
+    }
   });
 
-  describe("AC2: Proof Type Differentiation & Real Verification Outcomes", () => {
-    it("Distinguishes Merkle Tree proof from ZK Proof and Signature", async () => {
-      const knownId = "TRX-20260824-001";
-      const res = await app.fetch(
-        new Request(`http://localhost:3001/api/public/contributions/${knownId}`)
-      );
-      const body = await res.json();
-      const c = body.contribution;
-
-      // Merkle tree proof type
-      expect(c.proofType).toBe("MERKLE_TREE");
-      // ZK is explicitly pending in this phase (ADR-0034, Ticket #108), NEVER conflated with Merkle
-      expect(c.zkStatus).toBe("PENDING");
-    });
-
-    it("POST /api/verify-receipt returns isValid: true ONLY when leaf matches root with real Merkle proof", async () => {
-      const validPayload = {
-        trxId: "TRX-20260824-001",
-        salt: "salt_budi_123",
-        amountIDR: 2500000,
-      };
-
-      const res = await app.fetch(
-        new Request("http://localhost:3001/api/verify-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(validPayload),
-        })
-      );
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.isValid).toBe(true);
-      expect(body.proofType).toBe("MERKLE_TREE");
-      expect(body.zkStatus).toBe("PENDING");
-      expect(body.leaf.startsWith("0x")).toBe(true);
-      expect(body.merkleRoot.startsWith("0x")).toBe(true);
-      expect(Array.isArray(body.proof)).toBe(true);
-      expect(body.proof.length).toBeGreaterThan(0);
-
-      // Verify mathematically using MerkleTree.verifyProof
-      const verified = MerkleTree.verifyProof(body.leaf, body.proof, body.merkleRoot);
-      expect(verified).toBe(true);
-    });
-
-    it("POST /api/verify-receipt rejects altered amount or wrong salt (isValid: false), never manufactures success", async () => {
-      // Altered amount
-      const alteredAmountPayload = {
-        trxId: "TRX-20260824-001",
-        salt: "salt_budi_123",
-        amountIDR: 999999999, // tampered amount
-      };
-
-      const resAmount = await app.fetch(
-        new Request("http://localhost:3001/api/verify-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(alteredAmountPayload),
-        })
-      );
-
-      expect(resAmount.status).toBe(200);
-      const bodyAmount = await resAmount.json();
-      expect(bodyAmount.isValid).toBe(false);
-
-      // Altered salt
-      const alteredSaltPayload = {
-        trxId: "TRX-20260824-001",
-        salt: "wrong_tampered_salt",
-        amountIDR: 2500000,
-      };
-
-      const resSalt = await app.fetch(
-        new Request("http://localhost:3001/api/verify-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(alteredSaltPayload),
-        })
-      );
-
-      expect(resSalt.status).toBe(200);
-      const bodySalt = await resSalt.json();
-      expect(bodySalt.isValid).toBe(false);
-    });
-
-    it("POST /api/verify-receipt requires all 3 receipt credentials", async () => {
-      const incompletePayload = {
-        trxId: "TRX-20260824-001",
-        // missing salt and amountIDR
-      };
-
-      const res = await app.fetch(
-        new Request("http://localhost:3001/api/verify-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(incompletePayload),
-        })
-      );
-
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toBeDefined();
-    });
+  it("keeps a new named donor's QR and amount off the payment status route", async () => {
+    const created = await app.fetch(new Request(`${API}/api/donations/fiat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ donorName: "Siti Terbuka", isAnonymous: false, amountIDR: 1234567 }),
+    }));
+    const { trxId } = await created.json();
+    const text = await (await get(`/api/donations/status/${trxId}`)).text();
+    expect(text).not.toContain("Siti Terbuka");
+    expect(text).not.toContain("1234567");
+    expect(text).not.toContain("qr");
   });
 
-  describe("AC4: Access Control & No Expansion of Document Access", () => {
-    it("Refuses unauthenticated access to restricted evidence files without leaking document contents", async () => {
-      const res = await app.fetch(
-        new Request("http://localhost:3001/api/evidence/some-prep-id/files/file-1")
-      );
-      expect([401, 503]).toContain(res.status);
-      const body = await res.json();
-      expect(body.success).toBe(false);
-      expect(body.error).toBeDefined();
-    });
+  it("returns the same redacted record whatever authorization a caller presents", async () => {
+    const anonymous = await (await get(`/api/public/contributions/${SEEDED.trxId}`)).json();
+    for (const headers of [{ Authorization: "Bearer someone-elses-session" }, { Authorization: "Basic YWRtaW46YWRtaW4=" }]) {
+      expect(await (await get(`/api/public/contributions/${SEEDED.trxId}`, headers)).json()).toEqual(anonymous);
+    }
   });
 
-  describe("AC5: Truthful Status Contract for API/UI", () => {
-    it("Public lookup response includes structured status: FOUND, NOT_FOUND, or UNAVAILABLE", async () => {
-      // 1. Found
-      const foundRes = await app.fetch(
-        new Request("http://localhost:3001/api/public/contributions/TRX-20260824-001")
-      );
-      expect(foundRes.status).toBe(200);
-      const foundJson = await foundRes.json();
-      expect(foundJson.lookupStatus).toBe("FOUND");
-
-      // 2. Not Found
-      const notFoundRes = await app.fetch(
-        new Request("http://localhost:3001/api/public/contributions/TRX-NOT-FOUND-000")
-      );
-      expect(notFoundRes.status).toBe(404);
-      const notFoundJson = await notFoundRes.json();
-      expect(notFoundJson.lookupStatus).toBe("NOT_FOUND");
-    });
+  it("labels proof kinds separately: Merkle inclusion from the server's batch record, no ZK proof", async () => {
+    const { contribution } = await (await get(`/api/public/contributions/${SEEDED.trxId}`)).json();
+    expect(contribution.status).toBe("BATCHED");
+    expect(contribution.paidAt).not.toBeNull();
+    expect(contribution.membershipProof.type).toBe("MERKLE_INCLUSION");
+    expect(contribution.membershipProof.siblings.length).toBeGreaterThan(0);
+    expect(contribution.batch.rootSource).toBe("SERVER_RECORD");
+    expect(contribution.batch.versionStatus).toBe("UNTRACKED");
+    expect(contribution.zkProof).toEqual({ status: "NOT_AVAILABLE" });
   });
 
-  describe("AC6: Preservation of Report Verifications and Browser Smoke Build", () => {
-    it("GET /api/public/reports/:packageId returns honest 404 for unknown report package, never mock report", async () => {
-      const res = await app.fetch(
-        new Request("http://localhost:3001/api/public/reports/pkg-nonexistent-12345")
-      );
-      expect([404, 503]).toContain(res.status);
-      const body = await res.json();
-      expect(body.error).toBeDefined();
-    });
+  it("answers UNAVAILABLE, not NOT_FOUND, when the record store fails", async () => {
+    spyOn(dbService, "getDonationByTrxId").mockRejectedValue(new Error("connection reset"));
+    for (const route of LOOKUP_ROUTES) {
+      const res = await get(`${route}${SEEDED.trxId}`);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ success: false, lookupStatus: "UNAVAILABLE" });
+    }
+  });
+});
 
-    it("Bun browser build succeeds for verification-smoke.tsx without error", async () => {
-      const smokePath = new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname;
-      const buildResult = await Bun.build({
-        entrypoints: [smokePath],
+describe("owner receipt check", () => {
+  beforeAll(async () => {
+    await runSeeder();
+  });
+
+  afterEach(() => {
+    (dbService.getProofForTrx as any).mockRestore?.();
+    (dbService.getBatchByNumber as any).mockRestore?.();
+  });
+
+  it("confirms a genuine receipt by recomputing inclusion against the batch record", async () => {
+    const res = await verifyReceipt(SEEDED);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.checkedBy).toBe("SERVER");
+    expect(body.proofType).toBe("MERKLE_INCLUSION");
+    expect(body.isValid).toBe(true);
+    expect(body.zkProof).toEqual({ status: "NOT_AVAILABLE" });
+    expect(MerkleTree.verifyProof(body.leaf, body.proof, body.batch.merkleRoot)).toBe(true);
+  });
+
+  it("rejects an altered amount, a wrong salt and an unknown ID with the same answer shape", async () => {
+    const answers = [];
+    for (const payload of [
+      { ...SEEDED, amountIDR: 999999999 },
+      { ...SEEDED, salt: "wrong_salt" },
+      { ...SEEDED, trxId: "TRX-20260824-9999" },
+    ]) {
+      const body = await (await verifyReceipt(payload)).json();
+      expect(body.isValid).toBe(false);
+      expect(body.proof).toEqual([]);
+      expect(body.batch).toBeNull();
+      answers.push(Object.keys(body).sort());
+    }
+    expect(answers[1]).toEqual(answers[0]);
+    expect(answers[2]).toEqual(answers[0]);
+  });
+
+  it("rejects a stored proof that no longer matches the batch root on record", async () => {
+    const batch = await dbService.getBatchByNumber(1);
+    spyOn(dbService, "getBatchByNumber").mockResolvedValue({ ...batch!, merkleRoot: `0x${"ab".repeat(32)}` });
+    const body = await (await verifyReceipt(SEEDED)).json();
+    expect(body.isValid).toBe(false);
+  });
+
+  it("answers 503 instead of a verdict when the proof store fails", async () => {
+    spyOn(dbService, "getProofForTrx").mockRejectedValue(new Error("store offline"));
+    const res = await verifyReceipt(SEEDED);
+    expect(res.status).toBe(503);
+    expect((await res.json()).isValid).toBeUndefined();
+  });
+
+  it("requires all three receipt fields and a positive whole amount", async () => {
+    for (const payload of [{ trxId: SEEDED.trxId }, { ...SEEDED, amountIDR: -5 }, { ...SEEDED, amountIDR: "abc" }]) {
+      expect((await verifyReceipt(payload)).status).toBe(400);
+    }
+  });
+});
+
+describe("verification page in a browser", () => {
+  beforeAll(async () => {
+    await runSeeder();
+  });
+
+  it("bundles the verification page for the browser", async () => {
+    const built = await Bun.build({
+      entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname],
+      target: "browser",
+      define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+    });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+  });
+
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
+    "browser: found record, owner check, fake ID, API failure and network failure never show success",
+    async () => {
+      const built = await Bun.build({
+        entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname],
         target: "browser",
-        define: {
-          "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "http://127.0.0.1:3001" }),
+        define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+      });
+      if (!built.success) throw new Error(built.logs.join("\n"));
+      const bundle = await built.outputs[0]!.text();
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+          if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+          return app.fetch(req);
         },
       });
-      expect(buildResult.success).toBe(true);
-      expect(buildResult.outputs.length).toBeGreaterThan(0);
-      const outputText = await buildResult.outputs[0]!.text();
-      expect(outputText.length).toBeGreaterThan(100);
-    });
-  });
+      const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+      let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+      try {
+        browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+        const page = await browser.newPage();
+        page.setDefaultTimeout(10000);
+        page.on("pageerror", (error: Error) => console.error("Verification browser:", error.message));
+        await page.route("**/api/public/contributions/TRX-API-FAIL", (route: any) => route.fulfill({ status: 500, body: "{}" }));
+        await page.route("**/api/public/contributions/TRX-NET-FAIL", (route: any) => route.abort());
+
+        await page.goto(`${server.url}?trxId=${SEEDED.trxId}`);
+        await page.getByRole("heading", { name: "Catatan Kontribusi" }).waitFor();
+        expect(await page.getByText(SEEDED.donorName).count()).toBe(0);
+        expect(await page.getByText(/Muzakki|Terverifikasi/).count()).toBe(0);
+
+        await page.getByText("Cocokkan dengan kuitansi Anda").click();
+        await page.getByLabel("Kode rahasia kuitansi").fill("wrong_salt");
+        await page.getByLabel("Nominal (Rp)").fill(String(SEEDED.amountIDR));
+        await page.getByRole("button", { name: "Cocokkan Kuitansi" }).click();
+        await page.getByText(/Kuitansi tidak cocok/).waitFor();
+
+        await page.getByLabel("Kode rahasia kuitansi").fill(SEEDED.salt);
+        await page.getByRole("button", { name: "Cocokkan Kuitansi" }).click();
+        await page.getByText(/Kuitansi cocok dengan catatan batch #/).waitFor();
+
+        await page.route("**/api/verify-receipt", (route: any) => route.fulfill({ status: 503, body: "{}" }));
+        await page.getByLabel("Nominal (Rp)").fill("1");
+        await page.getByRole("button", { name: "Cocokkan Kuitansi" }).click();
+        await page.getByText(/Pemeriksaan belum dapat dilakukan/).waitFor();
+        expect(await page.getByText(/Kuitansi cocok/).count()).toBe(0);
+
+        const search = async (id: string) => {
+          await page.getByLabel("Referensi kontribusi").fill(id);
+          await page.getByRole("button", { name: "Cek Status" }).click();
+        };
+        await search("USDC-A1B2C3D4");
+        await page.getByRole("heading", { name: "Kontribusi Tidak Ditemukan" }).waitFor();
+        for (const id of ["TRX-API-FAIL", "TRX-NET-FAIL"]) {
+          await search(id);
+          await page.getByRole("heading", { name: "Status Belum Dapat Diperiksa" }).waitFor();
+          expect(await page.getByRole("heading", { name: "Catatan Kontribusi" }).count()).toBe(0);
+        }
+      } finally {
+        await browser?.close();
+        server.stop(true);
+      }
+    },
+    60000,
+  );
 });

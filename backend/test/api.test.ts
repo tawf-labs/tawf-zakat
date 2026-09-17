@@ -42,7 +42,7 @@ describe("Backend API Endpoints", () => {
     expect(body.isValid).toBe(true);
     expect(body.leaf.startsWith("0x")).toBe(true);
     expect(body.proof.length).toBeGreaterThan(0);
-    expect(body.merkleRoot.startsWith("0x")).toBe(true);
+    expect(body.batch.merkleRoot.startsWith("0x")).toBe(true);
   });
 
   it("GET /api/proposals should return proposals list", async () => {

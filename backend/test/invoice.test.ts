@@ -52,10 +52,10 @@ describe("Fiat Invoice Generation & Status API (Ticket #18)", () => {
     expect(statusRes.status).toBe(200);
     const statusBody = await statusRes.json();
     expect(statusBody.success).toBe(true);
-    expect(statusBody.donation.trxId).toBe(trxId);
-    expect(statusBody.donation.status).toBe("PENDING");
-    expect(statusBody.donation.donorName).toBe("Hamba Allah");
-    expect(statusBody.donation.amountIDR).toBe(750000);
+    expect(statusBody.contribution.trxId).toBe(trxId);
+    expect(statusBody.contribution.status).toBe("PENDING");
+    expect(statusBody.contribution.donorName).toBeUndefined();
+    expect(statusBody.contribution.amountIDR).toBeUndefined();
   });
 
   it("GET /api/donations/status/:trxId should return 404 for non-existent transaction", async () => {

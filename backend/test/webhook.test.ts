@@ -56,8 +56,8 @@ describe("Webhook Settlement & Payment Simulator API (Ticket #19)", () => {
       new Request(`http://localhost:3001/api/donations/status/${trxId}`)
     );
     const statusBody = await statusRes.json();
-    expect(statusBody.donation.status).toBe("PAID");
-    expect(statusBody.donation.paidAt).toBeDefined();
+    expect(statusBody.contribution.status).toBe("PAID");
+    expect(statusBody.contribution.paidAt).toBeDefined();
   });
 
   it("POST /api/webhooks/payment should reject webhook with invalid signature", async () => {
@@ -103,7 +103,7 @@ describe("Webhook Settlement & Payment Simulator API (Ticket #19)", () => {
       new Request(`http://localhost:3001/api/donations/status/${trxId}`)
     );
     const statusBody = await statusRes.json();
-    expect(statusBody.donation.status).toBe("PENDING");
+    expect(statusBody.contribution.status).toBe("PENDING");
   });
 
   it("POST /api/webhooks/payment should be idempotent on duplicate calls", async () => {

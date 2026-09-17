@@ -213,10 +213,12 @@ export const dbService = {
           qrString: record.qrString || null,
           qrUrl: record.qrUrl || null,
           batchId: batchNumber || null,
+          paidAt: record.paidAt ? new Date(record.paidAt) : null,
         }).onConflictDoUpdate({
           target: schema.donations.trxId,
           set: {
             status: record.status || "PENDING",
+            ...(record.paidAt ? { paidAt: new Date(record.paidAt) } : {}),
             qrString: record.qrString || null,
             qrUrl: record.qrUrl || null,
           },
@@ -255,7 +257,9 @@ export const dbService = {
           };
         }
       } catch (err) {
+        // A failed read must not fall through to the in-memory store and read as "not found".
         console.error("Failed to query donation from DB:", err);
+        throw err;
       }
     }
 

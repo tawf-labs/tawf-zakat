@@ -22,6 +22,7 @@ import {
 } from "./ipfs";
 import { settleBatchOnChain } from "./relayer";
 import { dbService } from "./db/index";
+import { checkReceipt, lookupContribution } from "./contribution-trace";
 import { verifyTypedData, createPublicClient, createWalletClient, http, toHex, parseAbi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia } from "viem/chains";
@@ -394,159 +395,31 @@ const handleFiatDonation = async (c: any) => {
 app.post("/api/donations", handleFiatDonation);
 app.post("/api/donations/fiat", handleFiatDonation);
 
-// 1b. Inflow: Query Donation Status (with live Midtrans sync)
-// 1b. Inflow: Query Donation Status (with live Midtrans sync)
-const handleGetDonationStatus = async (c: any) => {
-  const trxId = c.req.param("trxId");
-  if (!trxId) {
-    return c.json({ error: "Missing trxId parameter", success: false, lookupStatus: "NOT_FOUND" }, 400);
+// 1b. Inflow: public contribution lookup (the pending check also syncs Midtrans settlement)
+const syncPendingPayment = async (donation: DonationRecord) => {
+  if (donation.status !== "PENDING") return;
+  const midtransCheck = await checkMidtransStatus(donation.trxId);
+  if (midtransCheck && midtransCheck.isSettled) {
+    const paidTime = midtransCheck.settlementTime || new Date().toISOString();
+    await dbService.markDonationAsPaid(donation.trxId, paidTime);
+    donation.status = "PAID";
+    donation.paidAt = paidTime;
   }
-
-  let donation = await dbService.getDonationByTrxId(trxId);
-  if (!donation) {
-    return c.json({ error: "Donation not found", success: false, lookupStatus: "NOT_FOUND" }, 404);
-  }
-
-  // If still PENDING, query Midtrans API live to check if paid via external Midtrans Simulator
-  if (donation.status === "PENDING") {
-    const midtransCheck = await checkMidtransStatus(trxId);
-    if (midtransCheck && midtransCheck.isSettled) {
-      const paidTime = midtransCheck.settlementTime || new Date().toISOString();
-      await dbService.markDonationAsPaid(trxId, paidTime);
-      donation.status = "PAID";
-      donation.paidAt = paidTime;
-    }
-  }
-
-  let batchInfo: any = null;
-  let proof: string[] = [];
-  const batchIdNum = (donation as any).batchId ? Number((donation as any).batchId) : null;
-  if (batchIdNum) {
-    batchInfo = await dbService.getBatchByNumber(batchIdNum);
-    const proofRes = dataStore.getProofForTrx(donation.trxId, donation.salt, donation.amountIDR);
-    if (proofRes && proofRes.proof) {
-      proof = proofRes.proof;
-    }
-  }
-
-  const isStatusEndpoint = typeof c.req.path === "string" && c.req.path.includes("/status/");
-
-  return c.json({
-    success: true,
-    lookupStatus: "FOUND",
-    donation: {
-      trxId: donation.trxId,
-      donorName: isStatusEndpoint ? (donation.isAnonymous ? "Hamba Allah" : donation.donorName) : null,
-      isAnonymous: donation.isAnonymous,
-      salt: null,
-      amountIDR: isStatusEndpoint ? donation.amountIDR : null,
-      status: donation.status || "PENDING",
-      paymentMethod: donation.paymentMethod || "QRIS",
-      qrString: isStatusEndpoint ? donation.qrString : undefined,
-      qrUrl: isStatusEndpoint ? donation.qrUrl : undefined,
-      timestamp: donation.timestamp,
-      paidAt: donation.paidAt,
-      batchId: batchIdNum,
-      merkleRoot: batchInfo?.merkleRoot || null,
-      batchTxHash: batchInfo?.txHash || null,
-      proof: proof.length > 0 ? proof : undefined,
-      proofType: "MERKLE_TREE",
-      zkStatus: "PENDING",
-      limitations: [
-        "DONOR_NAME_RESTRICTED",
-        "AMOUNT_RESTRICTED",
-        "SALT_RESTRICTED",
-        "NO_DOCUMENT_ACCESS",
-      ],
-    },
-    contribution: {
-      trxId: donation.trxId,
-      status: donation.status || "PENDING",
-      paidAt: donation.paidAt || null,
-      timestamp: donation.timestamp,
-      batchId: batchIdNum,
-      merkleRoot: batchInfo?.merkleRoot || null,
-      batchTxHash: batchInfo?.txHash || null,
-      proof: proof.length > 0 ? proof : null,
-      proofType: "MERKLE_TREE",
-      zkStatus: "PENDING",
-      paymentMethod: donation.paymentMethod || "QRIS",
-      zakatType: "Zakat",
-      donorName: null,
-      isAnonymous: true,
-      salt: null,
-      amountIDR: null,
-      limitations: [
-        "DONOR_NAME_RESTRICTED",
-        "AMOUNT_RESTRICTED",
-        "SALT_RESTRICTED",
-        "NO_DOCUMENT_ACCESS",
-      ],
-      authorization: "UNPROVEN_AUTHORIZATION",
-    },
-  });
 };
 
-const handlePublicContributionLookup = async (c: any) => {
-  const trxId = c.req.param("id") || c.req.param("trxId");
-  if (!trxId) {
-    return c.json({ success: false, error: "Parameter ID kontribusi wajib diisi", lookupStatus: "NOT_FOUND" }, 400);
-  }
+const LOOKUP_HTTP_STATUS = { FOUND: 200, NOT_FOUND: 404, UNAVAILABLE: 503 } as const;
 
-  const donation = await dbService.getDonationByTrxId(trxId);
-  if (!donation) {
-    return c.json({
-      success: false,
-      error: "Transaksi atau kontribusi tidak ditemukan. Periksa kembali referensi ID Anda.",
-      lookupStatus: "NOT_FOUND",
-    }, 404);
-  }
-
-  let batchInfo: any = null;
-  let proof: string[] = [];
-  const batchIdNum = (donation as any).batchId ? Number((donation as any).batchId) : null;
-  if (batchIdNum) {
-    batchInfo = await dbService.getBatchByNumber(batchIdNum);
-    const proofRes = dataStore.getProofForTrx(donation.trxId, donation.salt, donation.amountIDR);
-    if (proofRes && proofRes.proof) {
-      proof = proofRes.proof;
-    }
-  }
-
-  return c.json({
-    success: true,
-    lookupStatus: "FOUND",
-    contribution: {
-      trxId: donation.trxId,
-      status: donation.status || "PENDING",
-      paidAt: donation.paidAt || null,
-      timestamp: donation.timestamp,
-      batchId: batchIdNum,
-      merkleRoot: batchInfo?.merkleRoot || null,
-      batchTxHash: batchInfo?.txHash || null,
-      proof: proof.length > 0 ? proof : null,
-      proofType: "MERKLE_TREE",
-      zkStatus: "PENDING",
-      paymentMethod: donation.paymentMethod || "QRIS",
-      zakatType: "Zakat",
-      donorName: null,
-      isAnonymous: true,
-      salt: null,
-      amountIDR: null,
-      limitations: [
-        "DONOR_NAME_RESTRICTED",
-        "AMOUNT_RESTRICTED",
-        "SALT_RESTRICTED",
-        "NO_DOCUMENT_ACCESS",
-      ],
-      authorization: "UNPROVEN_AUTHORIZATION",
-    },
-  });
+const contributionLookupHandler = (param: string, syncPayment: boolean) => async (c: any) => {
+  c.header("Cache-Control", "no-store");
+  const trxId = c.req.param(param)?.trim();
+  if (!trxId) return c.json({ success: false, lookupStatus: "NOT_FOUND" }, 400);
+  const lookup = await lookupContribution(trxId, syncPayment ? syncPendingPayment : undefined);
+  return c.json({ success: lookup.lookupStatus === "FOUND", ...lookup }, LOOKUP_HTTP_STATUS[lookup.lookupStatus]);
 };
 
-app.get("/api/donations/status/:trxId", handleGetDonationStatus);
-app.get("/api/donations/:trxId", handleGetDonationStatus);
-app.get("/api/public/contributions/:id", handlePublicContributionLookup);
+app.get("/api/donations/status/:trxId", contributionLookupHandler("trxId", true));
+app.get("/api/donations/:trxId", contributionLookupHandler("trxId", false));
+app.get("/api/public/contributions/:id", contributionLookupHandler("id", false));
 
 // 1c. Inflow: Midtrans Payment Webhook (Idempotent & Signature-Verified)
 app.post("/api/webhooks/payment", async (c) => {
@@ -678,51 +551,21 @@ app.post("/api/webhooks/simulator", async (c) => {
   }
 });
 
-// 2. Muzakki Verification: Verify Receipt via Merkle Inclusion Proof
+// 2. Owner receipt check: Merkle inclusion recomputed on the server against its batch record
 app.post("/api/verify-receipt", async (c) => {
+  c.header("Cache-Control", "no-store");
+  const body = await c.req.json().catch(() => null);
+  const trxId = typeof body?.trxId === "string" ? body.trxId.trim() : "";
+  const salt = typeof body?.salt === "string" ? body.salt : "";
+  const amountIDR = Number(body?.amountIDR);
+  if (!trxId || !salt || !Number.isSafeInteger(amountIDR) || amountIDR <= 0) {
+    return c.json({ error: "Missing required fields: trxId, salt, amountIDR" }, 400);
+  }
   try {
-    const body = await c.req.json();
-    const { trxId, salt, amountIDR } = body;
-
-    if (!trxId || !salt || !amountIDR) {
-      return c.json({ error: "Missing required fields: trxId, salt, amountIDR" }, 400);
-    }
-
-    const result = await dbService.getProofForTrx(trxId, salt, Number(amountIDR));
-
-    if (!result) {
-      // If not in recorded map, still calculate leaf for user preview
-      const leaf = computeDonationLeaf(trxId, salt, Number(amountIDR));
-      return c.json({
-        isValid: false,
-        proofType: "MERKLE_TREE",
-        zkStatus: "PENDING",
-        message: "Transaction not found in settled batch",
-        leaf,
-        proof: [],
-      });
-    }
-
-    const isProofValid = Boolean(
-      result.isValid &&
-      result.proof &&
-      result.proof.length > 0 &&
-      result.merkleRoot &&
-      MerkleTree.verifyProof(result.leaf as Hex, result.proof as Hex[], result.merkleRoot as Hex)
-    );
-
-    return c.json({
-      isValid: isProofValid,
-      proofType: "MERKLE_TREE",
-      zkStatus: "PENDING",
-      batchId: result.batchId,
-      merkleRoot: result.merkleRoot,
-      leaf: result.leaf,
-      proof: result.proof,
-      verifiedAt: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    return c.json({ error: error.message || "Failed to verify receipt" }, 500);
+    return c.json(await checkReceipt(trxId, salt, amountIDR));
+  } catch (error) {
+    console.error("Receipt check failed:", error);
+    return c.json({ error: "Pemeriksaan kuitansi belum dapat dilakukan." }, 503);
   }
 });
 

@@ -1,10 +1,11 @@
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SearchReceiptForm } from "../src/features/verification/SearchReceiptForm";
 
-const searchParams = new URLSearchParams(window.location.search);
-const initialTrxId = searchParams.get("trxId") ?? "";
+const initialTrxId = new URLSearchParams(window.location.search).get("trxId") ?? "";
 
-const container = document.getElementById("root");
-if (container) {
-  createRoot(container).render(<SearchReceiptForm initialTrxId={initialTrxId} />);
-}
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={new QueryClient()}>
+    <SearchReceiptForm initialTrxId={initialTrxId} />
+  </QueryClientProvider>,
+);
