@@ -54,6 +54,8 @@ export type AidLine = {
   aidType: string;
   period: string;
   value: AidValue;
+  /** A note naming a supporting document; never proof that the document is stored. */
+  evidenceReference?: string | null;
 };
 
 export type ProposalIssue = {
@@ -437,20 +439,50 @@ export const emptyProposalDraft = (program: Program): ProposalDraft => ({
 // Beneficiary Tabular Import & Export (Ticket #92)
 // ---------------------------------------------------------------------------
 
+export type TabularFormat = "xlsx" | "csv";
+
+export type BeneficiaryTabularIssueCode =
+  | "UNSUPPORTED_COLUMN"
+  | "DUPLICATE_COLUMN"
+  | "REQUIRED_FIELD_MISSING"
+  | "INVALID_NIK"
+  | "INVALID_IDENTITY_BASIS"
+  | "INVALID_AMOUNT"
+  | "INVALID_QUANTITY"
+  | "INVALID_ASNAF"
+  | "INVALID_AID_TYPE"
+  | "MISSING_UNIT"
+  | "EXACT_DUPLICATE_AID"
+  | "DUPLICATE_LINE_ID"
+  | "CONFLICTING_RECIPIENT"
+  | "RECURRING_AID_WARNING"
+  | "MISSING_GUARDIAN_RELATION"
+  | "MISSING_PAYMENT_RECIPIENT_RELATION";
+
 export type BeneficiaryTabularIssue = {
-  scope: "file" | "row" | "cell";
+  scope: "file" | "row";
   rowNumber: number | null;
   column: string | null;
   field?: string;
   message: string;
-  code: string;
+  code: BeneficiaryTabularIssueCode;
   isWarning?: boolean;
+};
+
+/** A problem the tabular reader reports before any beneficiary rule runs. */
+export type TabularFileIssue = {
+  scope: "file" | "sheet" | "row" | "cell";
+  rowNumber: number | null;
+  column: string | null;
+  message: string;
+  code: string;
 };
 
 export type BeneficiaryRowPreview = {
   rowNumber: number;
   isValid: boolean;
-  rawCells: Record<string, string>;
+  /** Cells keyed by template column, whatever alias the file used. */
+  cells: Record<string, string>;
   issues: BeneficiaryTabularIssue[];
   beneficiary: Beneficiary | null;
   aidLine: AidLine | null;
@@ -459,58 +491,46 @@ export type BeneficiaryRowPreview = {
 
 export type BeneficiaryImportPreviewResult = {
   fileName: string;
-  format: "xlsx" | "csv";
+  format: TabularFormat;
+  /** Set when the preview was re-read from a roster kept on the proposal. */
+  documentId?: string;
+  sharedContext: { programName: string | null; aidPeriod: string | null };
   uniqueBeneficiaryCount: number;
   aidLineCount: number;
   validRowsCount: number;
   invalidRowsCount: number;
   totalsByUnit: Record<string, string>;
   isPartial: boolean;
+  canApply: boolean;
   beneficiaries: Beneficiary[];
   aidLines: AidLine[];
   allRowsPreview: BeneficiaryRowPreview[];
   issues: BeneficiaryTabularIssue[];
-  fileIssues?: any[];
+  fileIssues: TabularFileIssue[];
 };
 
-export async function downloadBeneficiaryTemplate(
-  requests: PrivateRequests,
-  format: "xlsx" | "csv" = "xlsx"
-): Promise<{ blob: Blob; fileName: string }> {
-  const res = await requests.get(`/api/workspace/proposals/template?format=${format}`);
-  if (!res.ok) throw new Error("Gagal mengunduh template daftar penerima.");
-  const blob = await res.blob();
-  const disposition = res.headers.get("content-disposition");
-  const match = disposition?.match(/filename="([^"]+)"/);
-  const fileName = match ? match[1] : `tawf.beneficiary.template.v1.${format}`;
-  return { blob, fileName };
-}
+export const beneficiaryTemplateFileName = (format: TabularFormat) => `tawf.beneficiary.template.v1.${format}`;
 
-export async function previewBeneficiaryImport(
-  requests: PrivateRequests,
-  body: { fileName: string; contentBase64: string; defaultAidPeriod?: string }
-): Promise<BeneficiaryImportPreviewResult> {
-  const res = await requests.post("/api/workspace/proposals/import/preview", body);
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    const error = new Error(json.error || "Gagal memproses pratinjau daftar penerima.");
-    (error as any).issues = json.issues;
-    throw error;
-  }
-  return json.preview;
-}
+export const downloadBeneficiaryTemplate = (requests: PrivateRequests, format: TabularFormat) =>
+  requests.blob(`/api/workspace/proposals/template?format=${format}`);
 
-export async function exportProposalBeneficiaries(
-  requests: PrivateRequests,
-  proposalId: string,
-  format: "xlsx" | "csv" = "xlsx"
-): Promise<{ blob: Blob; fileName: string }> {
-  const res = await requests.get(`/api/workspace/proposals/${proposalId}/export?format=${format}`);
-  if (!res.ok) throw new Error("Gagal mengekspor data penerima pengajuan.");
-  const blob = await res.blob();
-  const disposition = res.headers.get("content-disposition");
-  const match = disposition?.match(/filename="([^"]+)"/);
-  const fileName = match ? match[1] : `proposal-${proposalId}-beneficiaries.${format}`;
-  return { blob, fileName };
-}
+export const exportProposalBeneficiaries = (requests: PrivateRequests, proposalId: string, format: TabularFormat) =>
+  requests.blob(`/api/workspace/proposals/${proposalId}/export?format=${format}`);
 
+export const previewBeneficiaryImport = (
+  requests: PrivateRequests,
+  body: { fileName: string; contentBase64: string; proposalId: string; programId: string | null; sharedAidPeriod: string | null }
+) =>
+  requests
+    .json<{ preview: BeneficiaryImportPreviewResult }>("/api/workspace/proposals/import/preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    .then((r) => r.preview);
+
+export const previewStoredBeneficiaryImport = (requests: PrivateRequests, proposalId: string, documentId: string) =>
+  requests
+    .json<{ preview: BeneficiaryImportPreviewResult }>(
+      `/api/workspace/proposals/${proposalId}/documents/${documentId}/import-preview`
+    )
+    .then((r) => r.preview);

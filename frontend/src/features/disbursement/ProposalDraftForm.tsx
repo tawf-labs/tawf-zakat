@@ -4,11 +4,8 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import {
-  exportProposalBeneficiaries,
   submitProposalDraft,
   withdrawProposal,
-  type AidLine,
-  type Beneficiary,
   type ProposalDraft,
   type ProposalTotals,
   type RecurringAidWarning,
@@ -17,6 +14,8 @@ import { ProposalDetails, ProposalRoster, ProposalSummary } from "./ProposalSect
 import { ProposalDocumentManager } from "./ProposalDocumentManager";
 import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
 import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
+import { BeneficiaryImportNotice } from "./BeneficiaryImportNotice";
+import { useBeneficiaryImport } from "./useBeneficiaryImport";
 
 export function ProposalDraftForm({
   requests,
@@ -44,39 +43,13 @@ export function ProposalDraftForm({
   const [withdrawReason, setWithdrawReason] = useState("");
   const [withdrawing, setWithdrawing] = useState(false);
 
-  // Beneficiary import state
-  const [showImportModal, setShowImportModal] = useState(false);
-
-  const handleExport = async (format: "xlsx" | "csv") => {
-    try {
-      setSubmissionError(null);
-      const { blob, fileName } = await exportProposalBeneficiaries(requests, draft.id, format);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      setSubmissionError(err.message || "Gagal mengekspor roster.");
-    }
-  };
-
-  const handleApplyImport = (importedBeneficiaries: Beneficiary[], importedAidLines: AidLine[]) => {
-    setDraft({
-      ...draft,
-      beneficiaries: importedBeneficiaries,
-      aidLines: importedAidLines,
-    });
-  };
-
   const isReadOnly =
     draft.status === "SUBMITTED" ||
     draft.status === "UNDER_EXAMINATION" ||
     draft.status === "READY_FOR_DECISION" ||
     draft.status === "WITHDRAWN";
+
+  const rosterImport = useBeneficiaryImport({ requests, draft, setDraft, dirty, readOnly: isReadOnly });
 
   const handleSubmit = async () => {
     if (dirty) {
@@ -259,13 +232,20 @@ export function ProposalDraftForm({
         <ProposalRoster
           draft={draft}
           setDraft={setDraft}
-          onOpenImport={() => setShowImportModal(true)}
-          onExport={handleExport}
+          onOpenImport={isReadOnly ? undefined : rosterImport.open}
+          onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
         />
       </fieldset>
+      <BeneficiaryImportNotice
+        pendingSource={rosterImport.pendingSource}
+        storedRoster={rosterImport.storedRoster}
+        onReopen={rosterImport.reopenStored}
+      />
+      {rosterImport.error && <p role="alert" className="text-xs text-red-700">{rosterImport.error}</p>}
 
       {/* Proposal Document Manager */}
       {draft.version > 0 && <ProposalDocumentManager
+        key={rosterImport.documentsRevision}
         requests={requests}
         proposalId={draft.id}
         beneficiaries={draft.beneficiaries}
@@ -366,14 +346,15 @@ export function ProposalDraftForm({
           </div>
         </div>
       )}
-      {/* Beneficiary Import Modal */}
-      <BeneficiaryImportModal
-        isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
-        requests={requests}
-        defaultAidPeriod={draft.aidPeriod ? `${draft.aidPeriod.start} s/d ${draft.aidPeriod.end}` : undefined}
-        onApply={handleApplyImport}
-      />
+      {rosterImport.dialog && (
+        <BeneficiaryImportModal
+          requests={requests}
+          context={rosterImport.context}
+          initialPreview={rosterImport.dialog.initialPreview}
+          onClose={rosterImport.close}
+          onApply={rosterImport.apply}
+        />
+      )}
     </div>
   );
 }

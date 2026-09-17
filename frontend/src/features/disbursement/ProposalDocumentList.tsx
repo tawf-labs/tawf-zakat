@@ -9,6 +9,7 @@ export const CATEGORY_LABELS: Record<ProposalDocumentCategory, string> = {
   ALTERNATIVE_IDENTITY_PROOF: "Identitas Alternatif",
   REPRESENTATION_PROOF: "Kuasa/Perwalian",
   PAYMENT_RECIPIENT_PROOF: "Rekening/Kuasa",
+  BENEFICIARY_ROSTER: "Berkas Impor Daftar Penerima",
   OTHER: "Pendukung Lain",
 };
 

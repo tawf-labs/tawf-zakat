@@ -5,7 +5,7 @@
  * testable without a DOM.
  */
 
-function saveBlob(fileName: string, blob: Blob) {
+export function saveBlob(fileName: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;

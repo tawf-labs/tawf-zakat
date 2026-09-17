@@ -105,6 +105,13 @@ export function AidLineRow({
           />
         </div>
       )}
+      <input
+        className="mt-2 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+        aria-label={`Referensi bukti ${index + 1}`}
+        placeholder="Referensi bukti (catatan nomor surat; unggah dokumennya pada lampiran)"
+        value={line.evidenceReference ?? ""}
+        onChange={(e) => onChange({ ...line, evidenceReference: e.target.value || null })}
+      />
       <IssueList issues={rowIssues} />
     </div>
   );

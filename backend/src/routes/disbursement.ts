@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import {
+  evaluateRecurringAidWarnings,
   FUND_TYPES,
   isFundType,
   isProposalDocumentCategory,
@@ -26,20 +27,20 @@ import {
   withStableIds,
   type AidLine,
   type Beneficiary,
-  type BeneficiaryContact,
   type ExaminationChecklist,
   type ProposalDocumentCategory,
   type ProposalDocumentRecord,
   type ProposalDraftInput,
 } from "../disbursement";
-import { decodeTabular } from "../tabular-reader";
+import { decodeTabular, type TabularFormat } from "../tabular-reader";
 import {
+  beneficiaryExportFileName,
   beneficiaryTemplateFileName,
-  generateBeneficiaryCsvTemplate,
   generateBeneficiaryExport,
-  generateBeneficiaryXlsxTemplate,
+  generateBeneficiaryTemplate,
+  type BeneficiarySheet,
 } from "../beneficiary-template-generator";
-import { mapBeneficiaryTabular } from "../beneficiary-tabular-schema";
+import { attachRecurringAidWarnings, mapBeneficiaryTabular } from "../beneficiary-tabular-schema";
 import {
   DraftOperationConflictError,
   ProposalDraftConflictError,
@@ -282,6 +283,7 @@ const aidLineFrom = (raw: unknown): AidLine | null => {
             ? null
             : String(value.valuedAmountIdr).trim(),
       },
+      evidenceReference: text(row.evidenceReference) || null,
     };
   }
   return {
@@ -294,6 +296,7 @@ const aidLineFrom = (raw: unknown): AidLine | null => {
       amountRequestedIdr: String(value?.amountRequestedIdr ?? "").trim(),
       amountApprovedIdr: null,
     },
+    evidenceReference: text(row.evidenceReference) || null,
   };
 };
 
@@ -466,27 +469,63 @@ disbursementRoutes.post("/policy", async (c) => {
 // Beneficiary Import & Template (Ticket #92)
 // ---------------------------------------------------------------------------
 
+const tabularFormatOf = (value: string | undefined): TabularFormat =>
+  (value ?? "").toLowerCase() === "csv" ? "csv" : "xlsx";
+
+const sheetResponse = (c: Context, sheet: BeneficiarySheet, fileName: string) => {
+  const headers = {
+    "Content-Type":
+      sheet.format === "csv"
+        ? "text/csv; charset=utf-8"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": `attachment; filename="${fileName}"`,
+    "Cache-Control": "no-cache",
+  };
+  return sheet.format === "csv"
+    ? c.body(sheet.body, 200, headers)
+    : c.body(sheet.body as unknown as ArrayBuffer, 200, headers);
+};
+
+/**
+ * Reads an uploaded roster and maps it onto the draft model. The program and
+ * aid period filled once on the proposal form are shared into the preview, and
+ * recipients already on another proposal are flagged for review.
+ */
+async function previewBeneficiaryFile(
+  runtime: ReturnType<typeof runtimeOf>,
+  institutionId: string,
+  input: { bytes: Uint8Array; fileName: string; proposalId: string; programId: string | null; aidPeriod: string | null }
+) {
+  const decoded = decodeTabular(input.bytes, input.fileName);
+  if (!decoded.table) return { ok: false as const, issues: decoded.issues };
+
+  const program = input.programId ? await runtime.disbursement.getProgram(institutionId, input.programId) : null;
+  const mapping = mapBeneficiaryTabular(decoded.table, { sharedAidPeriod: input.aidPeriod ?? undefined });
+  const policy = await runtime.disbursement.getInstitutionPolicy(institutionId);
+  if (policy.warnRecurringAid && mapping.beneficiaries.length > 0) {
+    const matches = await runtime.disbursement.findRecurringAidMatches(institutionId, input.proposalId, mapping.beneficiaries);
+    attachRecurringAidWarnings(mapping, evaluateRecurringAidWarnings(mapping.beneficiaries, matches));
+  }
+  return {
+    ok: true as const,
+    preview: {
+      fileName: input.fileName,
+      format: decoded.format,
+      sharedContext: { programName: program?.name ?? null, aidPeriod: mapping.sharedAidPeriod },
+      ...mapping,
+      fileIssues: decoded.issues,
+    },
+  };
+}
+
 disbursementRoutes.get("/proposals/template", async (c) => {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
   if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
 
-  const format = (c.req.query("format") || "xlsx").toLowerCase() === "csv" ? "csv" : "xlsx";
-  const disposition = `attachment; filename="${beneficiaryTemplateFileName(format)}"`;
-
-  if (format === "csv") {
-    return c.body(generateBeneficiaryCsvTemplate(), 200, {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": disposition,
-      "Cache-Control": "no-cache",
-    });
-  }
-
-  return c.body(generateBeneficiaryXlsxTemplate() as unknown as ArrayBuffer, 200, {
-    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "Content-Disposition": disposition,
-    "Cache-Control": "no-cache",
-  });
+  const format = tabularFormatOf(c.req.query("format"));
+  return sheetResponse(c, generateBeneficiaryTemplate(format), beneficiaryTemplateFileName(format));
 });
 
 disbursementRoutes.post("/proposals/import/preview", async (c) => {
@@ -511,41 +550,20 @@ disbursementRoutes.post("/proposals/import/preview", async (c) => {
     return badRequest(c, "Nama berkas dan isi berkas (base64) wajib diisi.");
   }
 
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(Buffer.from(contentBase64.trim(), "base64"));
-  } catch {
-    return badRequest(c, "Isi berkas harus base64 yang sah.");
-  }
-
-  const decodeResult = decodeTabular(bytes, fileName);
-  if (!decodeResult.table) {
+  const result = await previewBeneficiaryFile(runtime, auth.session.institutionId, {
+    bytes: new Uint8Array(Buffer.from(contentBase64, "base64")),
+    fileName,
+    proposalId: text(body.proposalId),
+    programId: text(body.programId) || null,
+    aidPeriod: text(body.sharedAidPeriod) || null,
+  });
+  if (!result.ok) {
     return c.json(
-      {
-        success: false,
-        error: decodeResult.issues[0]?.message ?? "Gagal membaca berkas tabular.",
-        issues: decodeResult.issues,
-      },
+      { success: false, error: result.issues[0]?.message ?? "Gagal membaca berkas tabular.", issues: result.issues },
       400
     );
   }
-
-  const defaultAidPeriod =
-    typeof body.defaultAidPeriod === "string" && body.defaultAidPeriod.trim()
-      ? body.defaultAidPeriod.trim()
-      : undefined;
-
-  const mapping = mapBeneficiaryTabular(decodeResult.table, { defaultAidPeriod });
-
-  return c.json({
-    success: true,
-    preview: {
-      fileName,
-      format: decodeResult.format,
-      ...mapping,
-      fileIssues: decodeResult.issues,
-    },
-  });
+  return c.json({ success: true, preview: result.preview });
 });
 
 disbursementRoutes.get("/proposals/queue/examiner", async (c) => {
@@ -582,15 +600,7 @@ disbursementRoutes.get("/proposals/:id", async (c) => {
   return c.json({
     success: true,
     draft,
-    summary: summarizeProposalDraft({
-      programId: draft.programId,
-      originOfRequest: draft.originOfRequest,
-      purpose: draft.purpose,
-      aidPeriod: draft.aidPeriod,
-      personInCharge: draft.personInCharge,
-      beneficiaries: draft.beneficiaries,
-      aidLines: draft.aidLines,
-    }),
+    summary: summarizeProposalDraft(draft),
   });
 });
 
@@ -609,26 +619,43 @@ disbursementRoutes.get("/proposals/:id/export", async (c) => {
     nominalAmount: requestedIdr(draft.aidLines),
   });
 
-  const format = (c.req.query("format") || "xlsx").toLowerCase() === "csv" ? "csv" : "xlsx";
-  const disposition = `attachment; filename="proposal-${draft.id}-beneficiaries.${format}"`;
-
-  if (format === "csv") {
-    return c.body(generateBeneficiaryExport(draft.beneficiaries, draft.aidLines, "csv") as string, 200, {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": disposition,
-      "Cache-Control": "no-cache",
-    });
-  }
-
-  return c.body(
-    generateBeneficiaryExport(draft.beneficiaries, draft.aidLines, "xlsx") as unknown as ArrayBuffer,
-    200,
-    {
-      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": disposition,
-      "Cache-Control": "no-cache",
-    }
+  const format = tabularFormatOf(c.req.query("format"));
+  return sheetResponse(
+    c,
+    generateBeneficiaryExport(draft.beneficiaries, draft.aidLines, format),
+    beneficiaryExportFileName(draft.id, format)
   );
+});
+
+/** Re-reads a roster kept as a private proposal document, so its invalid rows stay reviewable. */
+disbursementRoutes.get("/proposals/:id/documents/:docId/import-preview", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+
+  const document = await runtime.disbursement.getProposalDocument(auth.session.institutionId, proposalId, c.req.param("docId"));
+  if (!document || document.category !== "BENEFICIARY_ROSTER") return refuse(c, 404, "not-found");
+
+  const restricted = createRestrictedDocuments(runtime.evidence, runtime.files, runtime.registry?.store, runtime.disbursement);
+  const { bytes } = await restricted.read({ institutionId: auth.session.institutionId, proposalId }, document.id);
+  const result = await previewBeneficiaryFile(runtime, auth.session.institutionId, {
+    bytes,
+    fileName: document.fileName,
+    proposalId,
+    programId: draft.programId,
+    aidPeriod: draft.aidPeriod ? `${draft.aidPeriod.start} s/d ${draft.aidPeriod.end}` : null,
+  });
+  if (!result.ok) {
+    return c.json({ success: false, error: result.issues[0]?.message ?? "Gagal membaca berkas tabular.", issues: result.issues }, 400);
+  }
+  return c.json({ success: true, preview: { ...result.preview, documentId: document.id } });
 });
 
 disbursementRoutes.delete("/proposals/:id", async (c) => {

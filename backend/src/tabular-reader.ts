@@ -68,9 +68,11 @@ export type TabularIssue = {
     | "AMBIGUOUS_VALUE";
 };
 
+export type TabularFormat = "xlsx" | "csv";
+
 export type TabularDecodeResult = {
   success: boolean;
-  format: "xlsx" | "csv";
+  format: TabularFormat;
   table: TabularTable | null;
   issues: TabularIssue[];
 };

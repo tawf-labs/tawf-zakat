@@ -1,6 +1,6 @@
 import { Download, FileSpreadsheet, Plus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
-import { newAidLine, newBeneficiary, type ProposalDraft, type ProposalTotals } from "./disbursementClient";
+import { newAidLine, newBeneficiary, type ProposalDraft, type ProposalTotals, type TabularFormat } from "./disbursementClient";
 import { issuesFor, IssueList } from "./ProposalIssues";
 import { BeneficiaryCard } from "./BeneficiaryCard";
 import { AidLineRow } from "./AidLineRow";
@@ -8,7 +8,8 @@ import { AidLineRow } from "./AidLineRow";
 type DraftSectionProps = { draft: ProposalDraft; setDraft: (draft: ProposalDraft) => void };
 type RosterSectionProps = DraftSectionProps & {
   onOpenImport?: () => void;
-  onExport?: (format: "xlsx" | "csv") => void;
+  /** Exports the saved roster; omitted while the draft has never been saved. */
+  onExport?: (format: TabularFormat) => void;
 };
 
 export function ProposalDetails({ draft, setDraft }: DraftSectionProps) {
@@ -88,10 +89,11 @@ export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: Rost
                 variant="outline"
                 size="sm"
                 onClick={() => onExport("xlsx")}
+                title="Mengekspor daftar penerima versi tersimpan, lengkap dengan ID stabil untuk diunggah ulang"
                 className="text-xs"
               >
                 <Download className="mr-1.5 h-3.5 w-3.5" />
-                Ekspor Roster
+                Ekspor daftar penerima
               </Button>
             )}
             <Button

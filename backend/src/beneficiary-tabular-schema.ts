@@ -1,221 +1,136 @@
 /**
  * Beneficiary Tabular Schema Mapper (Spec #86, Ticket #92).
  *
- * Maps a decoded TabularTable (from `tabular-reader`) into normalized
- * Beneficiary and AidLine structures for proposal drafts.
+ * Maps a decoded TabularTable (from `tabular-reader`) into the same Beneficiary
+ * and AidLine model the manual proposal form uses.
  *
  * Rules:
- * 1. Preserves every row including broken ones (US-24, Scenario 5). 7 errors out of 100
- *    remain visible in preview and draf storage.
- * 2. Does not turn missing/invalid rows into zeros.
- * 3. Marks calculated totals as partial when invalid rows or unvalued goods exist.
- * 4. Rejects unsupported columns with explicit Indonesian messages naming the column as written.
- * 5. Preserves text identifiers (NIK 16 digits text with leading zeros) and exact IDR integer strings.
- * 6. Groups rows belonging to the same beneficiary (by id_penerima, NIK, or alternative identity).
- * 7. Blocks exact duplicate aid lines on the same recipient with an error; flags distinct
- *    recurring aid as a review warning, not a lifetime rejection (US-28, Scenario 8).
- * 8. Accommodates optional recipient/representative contacts for confirmation without creating
- *    fictitious identity data (Pilot amendment).
+ * 1. Every row stays in the preview, broken ones included (US-24, Scenario 5), even
+ *    when the file also has unsupported columns.
+ * 2. Cells are turned into draft candidates and checked by the draft's own
+ *    validators (`validateBeneficiary`, `validateAidLine`); this module only adds
+ *    what a spreadsheet can get wrong and a typed form cannot (unknown identity or
+ *    aid kind, half-filled representative, conflicting rows for one recipient).
+ * 3. Missing or invalid values never become zeros; totals are marked partial.
+ * 4. Unsupported columns are named as written and block applying the import.
+ * 5. NIK stays 16-digit text and IDR stays an exact integer string.
+ * 6. Rows for the same recipient (id_penerima, else NIK, else name + alternative
+ *    identity) become one beneficiary with several aid lines.
+ * 7. Exact duplicate aid lines are blocked. Aid already recorded on another
+ *    proposal is flagged for review by `attachRecurringAidWarnings`, never refused.
+ * 8. Optional contacts are kept as restricted confirmation data, never as identity.
  */
 
 import type { TabularRow, TabularTable } from "./tabular-reader";
 import {
-  isExactNonNegativeInteger,
+  aidLineFingerprint,
+  summarizeProposalDraft,
+  validateAidLine,
+  validateBeneficiary,
   type AidLine,
   type AidValue,
   type Beneficiary,
-  type BeneficiaryContact,
   type IdentityBasis,
+  type ProposalIssue,
+  type RecurringAidWarning,
 } from "./disbursement";
 
+export const BENEFICIARY_COLUMNS = [
+  "id_baris",
+  "id_penerima",
+  "nama",
+  "dasar_identitas",
+  "nik",
+  "keterangan_identitas",
+  "nama_perwakilan",
+  "hubungan_perwakilan",
+  "alamat_cakupan",
+  "asnaf",
+  "jenis_bantuan",
+  "nama_bantuan",
+  "nilai_idr",
+  "jumlah_barang",
+  "satuan_barang",
+  "nilai_idr_barang",
+  "periode_bantuan",
+  "nama_penerima_pembayaran",
+  "hubungan_penerima_pembayaran",
+  "referensi_bukti",
+  "kontak_telepon",
+  "kontak_email",
+  "kontak_relasi",
+] as const;
+
+export type BeneficiaryColumn = (typeof BENEFICIARY_COLUMNS)[number];
+
+export type BeneficiaryTabularIssueCode =
+  | "UNSUPPORTED_COLUMN"
+  | "DUPLICATE_COLUMN"
+  | "REQUIRED_FIELD_MISSING"
+  | "INVALID_NIK"
+  | "INVALID_IDENTITY_BASIS"
+  | "INVALID_AMOUNT"
+  | "INVALID_QUANTITY"
+  | "INVALID_ASNAF"
+  | "INVALID_AID_TYPE"
+  | "MISSING_UNIT"
+  | "EXACT_DUPLICATE_AID"
+  | "DUPLICATE_LINE_ID"
+  | "CONFLICTING_RECIPIENT"
+  | "RECURRING_AID_WARNING"
+  | "MISSING_GUARDIAN_RELATION"
+  | "MISSING_PAYMENT_RECIPIENT_RELATION";
+
 export type BeneficiaryTabularIssue = {
-  scope: "file" | "row" | "cell";
+  scope: "file" | "row";
   rowNumber: number | null;
+  /** The column header as the file wrote it. */
   column: string | null;
-  field?: string;
+  field?: BeneficiaryColumn;
   message: string;
-  code:
-    | "UNSUPPORTED_COLUMN"
-    | "REQUIRED_FIELD_MISSING"
-    | "INVALID_NIK"
-    | "INVALID_IDENTITY_BASIS"
-    | "INVALID_AMOUNT"
-    | "INVALID_QUANTITY"
-    | "INVALID_ASNAF"
-    | "INVALID_AID_TYPE"
-    | "MISSING_UNIT"
-    | "EXACT_DUPLICATE_AID"
-    | "RECURRING_AID_WARNING"
-    | "MISSING_GUARDIAN_RELATION"
-    | "MISSING_PAYMENT_RECIPIENT_RELATION";
+  code: BeneficiaryTabularIssueCode;
   isWarning?: boolean;
 };
 
-export const BENEFICIARY_COLUMN_ALIASES: Record<string, string> = {
-  // Stable line ID
-  id_baris: "id_baris",
-  id_rincian: "id_baris",
-  aid_line_id: "id_baris",
-  line_id: "id_baris",
+const aliases = (column: BeneficiaryColumn, names: string[]) => names.map((name) => [name, column] as const);
 
-  // Stable beneficiary ID
-  id_penerima: "id_penerima",
-  id_mustahik: "id_penerima",
-  beneficiary_id: "id_penerima",
-  mustahik_id: "id_penerima",
-
-  // Recipient Name
-  nama: "nama",
-  nama_penerima: "nama",
-  nama_mustahik: "nama",
-  name: "nama",
-  penerima: "nama",
-
-  // Identity Basis
-  dasar_identitas: "dasar_identitas",
-  jenis_identitas: "dasar_identitas",
-  identity_basis: "dasar_identitas",
-  dasar_id: "dasar_identitas",
-
-  // NIK
-  nik: "nik",
-  nomor_induk_kependudukan: "nik",
-  no_ktp: "nik",
-  ktp: "nik",
-
-  // Alternative Identity Description
-  keterangan_identitas: "keterangan_identitas",
-  keterangan_id: "keterangan_identitas",
-  alasan_tanpa_nik: "keterangan_identitas",
-  identitas_alternatif: "keterangan_identitas",
-  dasar_alternatif: "keterangan_identitas",
-
-  // Guardian / Representative
-  nama_perwakilan: "nama_perwakilan",
-  nama_wali: "nama_perwakilan",
-  wali: "nama_perwakilan",
-  perwakilan: "nama_perwakilan",
-  guardian_name: "nama_perwakilan",
-
-  hubungan_perwakilan: "hubungan_perwakilan",
-  hubungan_wali: "hubungan_perwakilan",
-  relasi_perwakilan: "hubungan_perwakilan",
-  relasi_wali: "hubungan_perwakilan",
-  guardian_relationship: "hubungan_perwakilan",
-
-  // Address / Scope
-  alamat_cakupan: "alamat_cakupan",
-  alamat: "alamat_cakupan",
-  cakupan: "alamat_cakupan",
-  wilayah: "alamat_cakupan",
-  domisili: "alamat_cakupan",
-  address: "alamat_cakupan",
-
-  // Asnaf
-  asnaf: "asnaf",
-  kategori_asnaf: "asnaf",
-  golongan_asnaf: "asnaf",
-
-  // Aid Type
-  jenis_bantuan: "jenis_bantuan",
-  bantuan: "jenis_bantuan",
-  bentuk_bantuan: "jenis_bantuan",
-  jenis: "jenis_bantuan",
-  aid_type: "jenis_bantuan",
-
-  // IDR Amount
-  nilai_idr: "nilai_idr",
-  nominal: "nilai_idr",
-  jumlah_idr: "nilai_idr",
-  rupiah: "nilai_idr",
-  nilai: "nilai_idr",
-  amount: "nilai_idr",
-  jumlah_uang: "nilai_idr",
-
-  // Goods Quantity
-  jumlah_barang: "jumlah_barang",
-  kuantitas: "jumlah_barang",
-  qty: "jumlah_barang",
-  volume: "jumlah_barang",
-  quantity: "jumlah_barang",
-
-  // Goods Unit
-  satuan_barang: "satuan_barang",
-  satuan: "satuan_barang",
-  unit: "satuan_barang",
-
-  // Goods Rupiah Valuation
-  nilai_idr_barang: "nilai_idr_barang",
-  taksiran_nilai: "nilai_idr_barang",
-  taksiran_rupiah: "nilai_idr_barang",
-  valuasi_idr: "nilai_idr_barang",
-  nilai_taksiran: "nilai_idr_barang",
-  goods_valuation: "nilai_idr_barang",
-
-  // Aid Period
-  periode_bantuan: "periode_bantuan",
-  periode: "periode_bantuan",
-  bulan_bantuan: "periode_bantuan",
-  period: "periode_bantuan",
-
-  // Payment Recipient
-  nama_penerima_pembayaran: "nama_penerima_pembayaran",
-  penerima_pembayaran: "nama_penerima_pembayaran",
-  rekening_tujuan: "nama_penerima_pembayaran",
-  tujuan_transfer: "nama_penerima_pembayaran",
-  pihak_ketiga: "nama_penerima_pembayaran",
-  payment_recipient_name: "nama_penerima_pembayaran",
-
-  hubungan_penerima_pembayaran: "hubungan_penerima_pembayaran",
-  hubungan_pembayaran: "hubungan_penerima_pembayaran",
-  relasi_penerima_pembayaran: "hubungan_penerima_pembayaran",
-  relasi_pembayaran: "hubungan_penerima_pembayaran",
-  payment_recipient_relation: "hubungan_penerima_pembayaran",
-
-  // Evidence Reference Note
-  referensi_bukti: "referensi_bukti",
-  referensi_dokumen: "referensi_dokumen",
-  nomor_bukti: "referensi_bukti",
-  rujukan_bukti: "referensi_bukti",
-  nomor_surat: "referensi_bukti",
-  reference: "referensi_bukti",
-
-  // Contact (Pilot amendment)
-  kontak_telepon: "kontak_telepon",
-  telepon: "kontak_telepon",
-  no_hp: "kontak_telepon",
-  no_telp: "kontak_telepon",
-  nohp: "kontak_telepon",
-  phone: "kontak_telepon",
-  whatsapp: "kontak_telepon",
-  wa: "kontak_telepon",
-
-  kontak_email: "kontak_email",
-  email: "kontak_email",
-  surel: "kontak_email",
-
-  kontak_relasi: "kontak_relasi",
-  relasi_kontak: "kontak_relasi",
-  hubungan_kontak: "kontak_relasi",
-};
-
-export const VALID_ASNAF = new Set([
-  "FAKIR",
-  "MISKIN",
-  "AMIL",
-  "MUALAF",
-  "MUALLAF",
-  "RIQAB",
-  "GHARIM",
-  "GHARIMIN",
-  "FISABILILLAH",
-  "IBNU_SABIL",
+export const BENEFICIARY_COLUMN_ALIASES: Record<string, BeneficiaryColumn> = Object.fromEntries([
+  ...BENEFICIARY_COLUMNS.map((column) => [column, column] as const),
+  ...aliases("id_baris", ["id_rincian", "aid_line_id", "line_id"]),
+  ...aliases("id_penerima", ["id_mustahik", "beneficiary_id", "mustahik_id"]),
+  ...aliases("nama", ["nama_penerima", "nama_mustahik", "name", "penerima"]),
+  ...aliases("dasar_identitas", ["jenis_identitas", "identity_basis", "dasar_id"]),
+  ...aliases("nik", ["nomor_induk_kependudukan", "no_ktp", "ktp"]),
+  ...aliases("keterangan_identitas", ["keterangan_id", "alasan_tanpa_nik", "identitas_alternatif", "dasar_alternatif"]),
+  ...aliases("nama_perwakilan", ["nama_wali", "wali", "perwakilan", "guardian_name"]),
+  ...aliases("hubungan_perwakilan", ["hubungan_wali", "relasi_perwakilan", "relasi_wali", "guardian_relationship"]),
+  ...aliases("alamat_cakupan", ["alamat", "cakupan", "wilayah", "domisili", "address"]),
+  ...aliases("asnaf", ["kategori_asnaf", "golongan_asnaf"]),
+  ...aliases("jenis_bantuan", ["bantuan", "bentuk_bantuan", "jenis", "aid_type"]),
+  ...aliases("nama_bantuan", ["nama_barang", "uraian_bantuan", "item_bantuan", "aid_name"]),
+  ...aliases("nilai_idr", ["nominal", "jumlah_idr", "rupiah", "nilai", "amount", "jumlah_uang"]),
+  ...aliases("jumlah_barang", ["kuantitas", "qty", "volume", "quantity"]),
+  ...aliases("satuan_barang", ["satuan", "unit"]),
+  ...aliases("nilai_idr_barang", ["taksiran_nilai", "taksiran_rupiah", "valuasi_idr", "nilai_taksiran", "goods_valuation"]),
+  ...aliases("periode_bantuan", ["periode", "bulan_bantuan", "period"]),
+  ...aliases("nama_penerima_pembayaran", ["penerima_pembayaran", "rekening_tujuan", "tujuan_transfer", "pihak_ketiga", "payment_recipient_name"]),
+  ...aliases("hubungan_penerima_pembayaran", ["hubungan_pembayaran", "relasi_penerima_pembayaran", "relasi_pembayaran", "payment_recipient_relation"]),
+  ...aliases("referensi_bukti", ["referensi_dokumen", "nomor_bukti", "rujukan_bukti", "nomor_surat", "reference"]),
+  ...aliases("kontak_telepon", ["telepon", "no_hp", "no_telp", "nohp", "phone", "whatsapp", "wa"]),
+  ...aliases("kontak_email", ["email", "surel"]),
+  ...aliases("kontak_relasi", ["relasi_kontak", "hubungan_kontak"]),
 ]);
+
+export const VALID_ASNAF = new Set(["FAKIR", "MISKIN", "AMIL", "MUALAF", "RIQAB", "GHARIM", "FISABILILLAH", "IBNU_SABIL"]);
+const ASNAF_SPELLINGS: Record<string, string> = { MUALLAF: "MUALAF", GHARIMIN: "GHARIM" };
+
+export type BeneficiaryCells = Record<BeneficiaryColumn, string>;
 
 export type BeneficiaryRowPreview = {
   rowNumber: number;
   isValid: boolean;
-  rawCells: Record<string, string>;
+  /** Trimmed cells keyed by template column, whatever alias the file used. */
+  cells: BeneficiaryCells;
   issues: BeneficiaryTabularIssue[];
   beneficiary: Beneficiary | null;
   aidLine: AidLine | null;
@@ -229,517 +144,319 @@ export type BeneficiaryMappingResult = {
   invalidRowsCount: number;
   totalsByUnit: Record<string, string>;
   isPartial: boolean;
+  /** False while a file-level problem (e.g. an unsupported column) remains. */
+  canApply: boolean;
+  /** The period shared from the proposal form, used where a row leaves it empty. */
+  sharedAidPeriod: string | null;
   beneficiaries: Beneficiary[];
   aidLines: AidLine[];
   allRowsPreview: BeneficiaryRowPreview[];
   issues: BeneficiaryTabularIssue[];
 };
 
-const addDecimalIntegers = (a: string, b: string): string =>
-  (BigInt(a) + BigInt(b)).toString();
+type ColumnHeaders = Partial<Record<BeneficiaryColumn, { normalized: string; raw: string }>>;
+
+function resolveHeaders(table: TabularTable): { headers: ColumnHeaders; issues: BeneficiaryTabularIssue[] } {
+  const headers: ColumnHeaders = {};
+  const issues: BeneficiaryTabularIssue[] = [];
+  const fileIssue = (raw: string, code: BeneficiaryTabularIssueCode, message: string) =>
+    issues.push({ scope: "file", rowNumber: null, column: raw, code, message });
+
+  table.headers.forEach((raw, index) => {
+    const normalized = table.normalizedHeaders[index];
+    const column = BENEFICIARY_COLUMN_ALIASES[normalized];
+    if (!column) {
+      fileIssue(raw, "UNSUPPORTED_COLUMN", `Kolom "${raw}" tidak dikenali dalam template daftar penerima. Periksa template terversi resmi.`);
+    } else if (headers[column]) {
+      fileIssue(raw, "DUPLICATE_COLUMN", `Kolom "${raw}" dan "${headers[column]!.raw}" sama-sama berarti "${column}". Sisakan satu kolom.`);
+    } else {
+      headers[column] = { normalized, raw };
+    }
+  });
+  return { headers, issues };
+}
+
+const cellsOf = (row: TabularRow, headers: ColumnHeaders): BeneficiaryCells =>
+  Object.fromEntries(
+    BENEFICIARY_COLUMNS.map((column) => {
+      const header = headers[column];
+      return [column, header ? (row.cells[header.normalized] ?? "").trim() : ""];
+    })
+  ) as BeneficiaryCells;
+
+/** Draft validator fields, as the spreadsheet column that holds them. */
+const beneficiaryFieldColumns: Record<string, (b: Beneficiary) => { column: BeneficiaryColumn; code: BeneficiaryTabularIssueCode }> = {
+  name: () => ({ column: "nama", code: "REQUIRED_FIELD_MISSING" }),
+  asnaf: () => ({ column: "asnaf", code: "REQUIRED_FIELD_MISSING" }),
+  addressOrScope: () => ({ column: "alamat_cakupan", code: "REQUIRED_FIELD_MISSING" }),
+  identityBasis: (b) =>
+    b.identityBasis.kind === "NIK"
+      ? { column: "nik", code: "INVALID_NIK" }
+      : { column: "keterangan_identitas", code: "INVALID_IDENTITY_BASIS" },
+};
+
+const aidLineFieldColumns: Record<string, { column: BeneficiaryColumn; code: BeneficiaryTabularIssueCode }> = {
+  aidType: { column: "nama_bantuan", code: "REQUIRED_FIELD_MISSING" },
+  period: { column: "periode_bantuan", code: "REQUIRED_FIELD_MISSING" },
+  "value.amountRequestedIdr": { column: "nilai_idr", code: "INVALID_AMOUNT" },
+  "value.unit": { column: "satuan_barang", code: "MISSING_UNIT" },
+  "value.quantityRequested": { column: "jumlah_barang", code: "INVALID_QUANTITY" },
+  "value.valuedAmountIdr": { column: "nilai_idr_barang", code: "INVALID_AMOUNT" },
+};
+
+/** Stand-in ids so the draft validators judge content only; real ids are assigned once a row is valid. */
+const CANDIDATE_ID = "candidate";
+
+type ParsedRow = {
+  issues: BeneficiaryTabularIssue[];
+  beneficiary: Beneficiary | null;
+  aidLine: AidLine | null;
+};
+
+function parseRow(
+  rowNumber: number,
+  cells: BeneficiaryCells,
+  headers: ColumnHeaders,
+  sharedAidPeriod: string | null
+): ParsedRow {
+  const issues: BeneficiaryTabularIssue[] = [];
+  const header = (column: BeneficiaryColumn) => headers[column]?.raw ?? column;
+  const issueAt = (column: BeneficiaryColumn, code: BeneficiaryTabularIssueCode, detail: string) =>
+    issues.push({
+      scope: "row",
+      rowNumber,
+      column: header(column),
+      field: column,
+      code,
+      message: `Baris ${rowNumber} kolom "${header(column)}": ${detail}`,
+    });
+  const bothOrNeither = (nameColumn: BeneficiaryColumn, relationColumn: BeneficiaryColumn, code: BeneficiaryTabularIssueCode, label: string) => {
+    const name = cells[nameColumn];
+    const relation = cells[relationColumn];
+    if (!name && !relation) return null;
+    if (!name) issueAt(nameColumn, code, `Nama ${label} harus diisi bila hubungannya diisi.`);
+    else if (!relation) issueAt(relationColumn, code, `Hubungan ${label} harus diisi bila namanya diisi.`);
+    else return { name, relation };
+    return null;
+  };
+
+  const identityBasis = identityOf(cells);
+  if (!identityBasis) {
+    issueAt("dasar_identitas", "INVALID_IDENTITY_BASIS", "Dasar identitas harus 'NIK' atau 'ALTERNATIF'.");
+  }
+
+  const asnaf = ASNAF_SPELLINGS[cells.asnaf.toUpperCase()] ?? cells.asnaf.toUpperCase();
+  if (asnaf && !VALID_ASNAF.has(asnaf)) {
+    issueAt("asnaf", "INVALID_ASNAF", `Kategori asnaf "${cells.asnaf}" tidak sah. Pilih salah satu: Fakir, Miskin, Amil, Mualaf, Riqab, Gharim, Fisabilillah, Ibnu Sabil.`);
+  }
+
+  const guardian = bothOrNeither("nama_perwakilan", "hubungan_perwakilan", "MISSING_GUARDIAN_RELATION", "perwakilan/wali");
+  const paymentRecipient = bothOrNeither("nama_penerima_pembayaran", "hubungan_penerima_pembayaran", "MISSING_PAYMENT_RECIPIENT_RELATION", "penerima pembayaran");
+
+  const value = aidValueOf(cells);
+  if (!value) issueAt("jenis_bantuan", "INVALID_AID_TYPE", "Jenis bantuan harus 'UANG' atau 'BARANG'.");
+
+  const hasContact = cells.kontak_telepon || cells.kontak_email || cells.kontak_relasi;
+  const beneficiary: Beneficiary | null = identityBasis && {
+    id: cells.id_penerima || CANDIDATE_ID,
+    name: cells.nama,
+    identityBasis,
+    asnaf,
+    addressOrScope: cells.alamat_cakupan,
+    guardian: guardian && { name: guardian.name, relationship: guardian.relation },
+    paymentRecipient,
+    contact: hasContact
+      ? { phone: cells.kontak_telepon || null, email: cells.kontak_email || null, relation: cells.kontak_relasi || null }
+      : null,
+  };
+  const aidLine: AidLine | null = value && {
+    id: cells.id_baris || CANDIDATE_ID,
+    beneficiaryId: beneficiary?.id ?? CANDIDATE_ID,
+    aidType: cells.nama_bantuan || (value.kind === "MONEY" ? "UANG" : "BARANG"),
+    period: cells.periode_bantuan || sharedAidPeriod || "",
+    value,
+    evidenceReference: cells.referensi_bukti || null,
+  };
+
+  const draftIssues: ProposalIssue[] = [];
+  if (beneficiary) validateBeneficiary(beneficiary, 0, draftIssues);
+  if (aidLine) validateAidLine(aidLine, 0, new Set([aidLine.beneficiaryId]), draftIssues);
+  for (const issue of draftIssues) {
+    const target =
+      issue.scope === "recipient"
+        ? beneficiaryFieldColumns[issue.field]?.(beneficiary!)
+        : aidLineFieldColumns[issue.field];
+    if (target) issueAt(target.column, target.code, issue.message);
+  }
+
+  return { issues, beneficiary, aidLine };
+}
+
+function identityOf(cells: BeneficiaryCells): IdentityBasis | null {
+  const kind = cells.dasar_identitas.toUpperCase();
+  if (kind === "NIK" || (!kind && cells.nik)) return { kind: "NIK", value: cells.nik };
+  if (kind === "ALTERNATIF" || (!kind && cells.keterangan_identitas)) {
+    return { kind: "ALTERNATIVE", description: cells.keterangan_identitas };
+  }
+  return null;
+}
+
+function aidValueOf(cells: BeneficiaryCells): AidValue | null {
+  const kind = cells.jenis_bantuan.toUpperCase();
+  if (kind === "UANG" || (!kind && cells.nilai_idr)) {
+    return { kind: "MONEY", amountRequestedIdr: cells.nilai_idr, amountApprovedIdr: null };
+  }
+  if (kind === "BARANG" || (!kind && (cells.jumlah_barang || cells.satuan_barang))) {
+    return {
+      kind: "GOODS",
+      unit: cells.satuan_barang,
+      quantityRequested: cells.jumlah_barang,
+      quantityApproved: null,
+      valuedAmountIdr: cells.nilai_idr_barang || null,
+    };
+  }
+  return null;
+}
+
+/** Everything that describes the person, so two rows claiming one recipient can be compared. */
+const recipientMaterial = ({ id: _id, ...rest }: Beneficiary) => JSON.stringify(rest);
 
 /**
- * Maps a decoded TabularTable into structured Beneficiary and AidLine data.
+ * Merges valid rows into beneficiaries and aid lines, assigning ids once.
+ * Rows that contradict an earlier row for the same recipient, reuse a line id,
+ * or repeat an aid line exactly are turned invalid with a located issue.
  */
+function groupRows(rows: BeneficiaryRowPreview[], nextId: () => string) {
+  const byKey = new Map<string, Beneficiary>();
+  const keyByNik = new Map<string, string>();
+  const lineIds = new Set<string>();
+  const fingerprints = new Set<string>();
+  const beneficiaries: Beneficiary[] = [];
+  const aidLines: AidLine[] = [];
+
+  const reject = (row: BeneficiaryRowPreview, code: BeneficiaryTabularIssueCode, detail: string) => {
+    row.isValid = false;
+    row.issues.push({ scope: "row", rowNumber: row.rowNumber, column: null, code, message: `Baris ${row.rowNumber}: ${detail}` });
+  };
+
+  for (const row of rows) {
+    if (!row.isValid || !row.beneficiary || !row.aidLine) continue;
+    const candidate = row.beneficiary;
+    const nik = candidate.identityBasis.kind === "NIK" ? candidate.identityBasis.value : null;
+    const ownKey = row.cells.id_penerima
+      ? `id:${row.cells.id_penerima}`
+      : nik
+      ? `nik:${nik}`
+      : `alt:${candidate.name.toLowerCase()}:${candidate.identityBasis.kind === "ALTERNATIVE" ? candidate.identityBasis.description.toLowerCase() : ""}`;
+    const nikKey = nik ? keyByNik.get(nik) : undefined;
+    if (nikKey && nikKey !== ownKey && row.cells.id_penerima) {
+      reject(row, "CONFLICTING_RECIPIENT", `NIK ini sudah dipakai penerima lain dengan id_penerima berbeda.`);
+      continue;
+    }
+    const key = nikKey ?? ownKey;
+
+    const existing = byKey.get(key);
+    if (existing && recipientMaterial(existing) !== recipientMaterial({ ...candidate, id: existing.id })) {
+      reject(row, "CONFLICTING_RECIPIENT", `Data penerima "${candidate.name}" berbeda dengan baris sebelumnya untuk penerima yang sama. Samakan nama, identitas, asnaf, alamat, perwakilan, dan kontak.`);
+      continue;
+    }
+    if (row.cells.id_baris && lineIds.has(row.cells.id_baris)) {
+      reject(row, "DUPLICATE_LINE_ID", `id_baris "${row.cells.id_baris}" sudah dipakai baris lain.`);
+      continue;
+    }
+
+    const beneficiary = existing ?? { ...candidate, id: row.cells.id_penerima || nextId() };
+    const line: AidLine = { ...row.aidLine, id: row.cells.id_baris || nextId(), beneficiaryId: beneficiary.id };
+    const fingerprint = aidLineFingerprint(line);
+    if (fingerprints.has(fingerprint)) {
+      reject(row, "EXACT_DUPLICATE_AID", `Rincian bantuan ini duplikat persis baris lain untuk penerima "${beneficiary.name}". Duplikasi persis diblokir.`);
+      continue;
+    }
+
+    if (!existing) {
+      byKey.set(key, beneficiary);
+      beneficiaries.push(beneficiary);
+    }
+    if (nik) keyByNik.set(nik, key);
+    lineIds.add(line.id);
+    fingerprints.add(fingerprint);
+    aidLines.push(line);
+    row.beneficiary = beneficiary;
+    row.aidLine = line;
+    row.recipientKey = key;
+  }
+
+  for (const row of rows) {
+    if (!row.isValid) {
+      row.beneficiary = null;
+      row.aidLine = null;
+    }
+  }
+  return { beneficiaries, aidLines };
+}
+
+/** Maps a decoded TabularTable into the proposal draft model, keeping every row visible. */
 export function mapBeneficiaryTabular(
   table: TabularTable,
-  options?: { defaultAidPeriod?: string; generateId?: () => string }
+  options?: { sharedAidPeriod?: string; generateId?: () => string }
 ): BeneficiaryMappingResult {
-  const issues: BeneficiaryTabularIssue[] = [];
   const nextId = options?.generateId ?? (() => crypto.randomUUID());
-  const defaultPeriod = options?.defaultAidPeriod ?? "Periode Pengajuan";
+  const sharedAidPeriod = options?.sharedAidPeriod?.trim() || null;
+  const { headers, issues: fileIssues } = resolveHeaders(table);
 
-  // 1. Check headers and detect unsupported columns
-  const headerMap: Record<string, { canon: string; raw: string }> = {};
-  for (let i = 0; i < table.headers.length; i++) {
-    const rawHeader = table.headers[i];
-    const normHeader = table.normalizedHeaders[i];
-    const canon = BENEFICIARY_COLUMN_ALIASES[normHeader];
-
-    if (!canon) {
-      issues.push({
-        scope: "file",
-        rowNumber: null,
-        column: rawHeader,
-        code: "UNSUPPORTED_COLUMN",
-        message: `Kolom "${rawHeader}" tidak dikenali dalam template daftar penerima. Periksa template terversi resmi.`,
-      });
-    } else {
-      headerMap[canon] = { canon, raw: rawHeader };
-    }
-  }
-
-  // If there are unsupported columns at the file scope, return early
-  if (issues.some((i) => i.code === "UNSUPPORTED_COLUMN")) {
+  const allRowsPreview: BeneficiaryRowPreview[] = table.rows.map((row) => {
+    const cells = cellsOf(row, headers);
+    const parsed = parseRow(row.rowNumber, cells, headers, sharedAidPeriod);
     return {
-      uniqueBeneficiaryCount: 0,
-      aidLineCount: 0,
-      validRowsCount: 0,
-      invalidRowsCount: table.rows.length,
-      totalsByUnit: {},
-      isPartial: true,
-      beneficiaries: [],
-      aidLines: [],
-      allRowsPreview: [],
-      issues,
+      rowNumber: row.rowNumber,
+      isValid: parsed.issues.length === 0,
+      cells,
+      issues: parsed.issues,
+      beneficiary: parsed.beneficiary,
+      aidLine: parsed.aidLine,
+      recipientKey: null,
     };
-  }
+  });
 
-  const allRowsPreview: BeneficiaryRowPreview[] = [];
-  const parsedValidLines: Array<{
-    rowNumber: number;
-    beneficiary: Beneficiary;
-    aidLine: AidLine;
-    recipientKey: string;
-  }> = [];
-
-  // Helper to read mapped cell by canonical name
-  const cellOf = (row: TabularRow, canon: string): string => {
-    // Find matching header normalized
-    for (let i = 0; i < table.normalizedHeaders.length; i++) {
-      const norm = table.normalizedHeaders[i];
-      if (BENEFICIARY_COLUMN_ALIASES[norm] === canon) {
-        return row.cells[norm] ?? "";
-      }
-    }
-    return "";
-  };
-
-  const rawHeaderOf = (canon: string): string =>
-    headerMap[canon]?.raw ?? canon;
-
-  // 2. Validate every row
-  for (const row of table.rows) {
-    const rowNumber = row.rowNumber;
-    const rowIssues: BeneficiaryTabularIssue[] = [];
-
-    const rawIdBaris = cellOf(row, "id_baris").trim();
-    const rawIdPenerima = cellOf(row, "id_penerima").trim();
-    const nama = cellOf(row, "nama").trim();
-    const dasarIdentitasRaw = cellOf(row, "dasar_identitas").trim().toUpperCase();
-    const nik = cellOf(row, "nik").trim();
-    const keteranganIdentitas = cellOf(row, "keterangan_identitas").trim();
-    const namaPerwakilan = cellOf(row, "nama_perwakilan").trim();
-    const hubunganPerwakilan = cellOf(row, "hubungan_perwakilan").trim();
-    const alamatCakupan = cellOf(row, "alamat_cakupan").trim();
-    const asnafRaw = cellOf(row, "asnaf").trim().toUpperCase();
-    const jenisBantuanRaw = cellOf(row, "jenis_bantuan").trim().toUpperCase();
-    const nilaiIdr = cellOf(row, "nilai_idr").trim();
-    const jumlahBarang = cellOf(row, "jumlah_barang").trim();
-    const satuanBarang = cellOf(row, "satuan_barang").trim();
-    const nilaiIdrBarang = cellOf(row, "nilai_idr_barang").trim();
-    const periodeBantuan = cellOf(row, "periode_bantuan").trim() || defaultPeriod;
-    const namaPenerimaPembayaran = cellOf(row, "nama_penerima_pembayaran").trim();
-    const hubunganPenerimaPembayaran = cellOf(row, "hubungan_penerima_pembayaran").trim();
-    const kontakTelepon = cellOf(row, "kontak_telepon").trim();
-    const kontakEmail = cellOf(row, "kontak_email").trim();
-    const kontakRelasi = cellOf(row, "kontak_relasi").trim();
-
-    // Required: nama
-    if (!nama) {
-      rowIssues.push({
-        scope: "row",
-        rowNumber,
-        column: rawHeaderOf("nama"),
-        field: "nama",
-        code: "REQUIRED_FIELD_MISSING",
-        message: `Nama penerima tidak boleh kosong pada baris ${rowNumber} kolom "${rawHeaderOf("nama")}".`,
-      });
-    }
-
-    // Required: alamat_cakupan
-    if (!alamatCakupan) {
-      rowIssues.push({
-        scope: "row",
-        rowNumber,
-        column: rawHeaderOf("alamat_cakupan"),
-        field: "alamat_cakupan",
-        code: "REQUIRED_FIELD_MISSING",
-        message: `Alamat/cakupan penerima tidak boleh kosong pada baris ${rowNumber} kolom "${rawHeaderOf("alamat_cakupan")}".`,
-      });
-    }
-
-    // Required: asnaf
-    let normalizedAsnaf = asnafRaw;
-    if (normalizedAsnaf === "MUALLAF") normalizedAsnaf = "MUALAF";
-    if (normalizedAsnaf === "GHARIMIN") normalizedAsnaf = "GHARIM";
-
-    if (!normalizedAsnaf || !VALID_ASNAF.has(normalizedAsnaf)) {
-      rowIssues.push({
-        scope: "row",
-        rowNumber,
-        column: rawHeaderOf("asnaf"),
-        field: "asnaf",
-        code: "INVALID_ASNAF",
-        message: `Kategori asnaf "${asnafRaw || "(kosong)"}" tidak sah pada baris ${rowNumber} kolom "${rawHeaderOf("asnaf")}". Pilih salah satu: Fakir, Miskin, Amil, Mualaf, Riqab, Gharim, Fisabilillah, Ibnu Sabil.`,
-      });
-    }
-
-    // Identity Basis
-    let identityBasis: IdentityBasis | null = null;
-    const isNikKind =
-      dasarIdentitasRaw === "NIK" || (!dasarIdentitasRaw && nik.length > 0);
-    const isAltKind =
-      dasarIdentitasRaw === "ALTERNATIF" ||
-      (!dasarIdentitasRaw && keteranganIdentitas.length > 0);
-
-    if (isNikKind) {
-      if (!/^\d{16}$/.test(nik)) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("nik"),
-          field: "nik",
-          code: "INVALID_NIK",
-          message: `NIK harus 16 digit angka teks pada baris ${rowNumber} kolom "${rawHeaderOf("nik")}". Angka nol di depan harus dipertahankan.`,
-        });
-      } else {
-        identityBasis = { kind: "NIK", value: nik };
-      }
-    } else if (isAltKind) {
-      if (!keteranganIdentitas) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("keterangan_identitas"),
-          field: "keterangan_identitas",
-          code: "INVALID_IDENTITY_BASIS",
-          message: `Dasar identitas alternatif harus dijelaskan (mis. anak tanpa KTP); tidak boleh mengarang NIK pada baris ${rowNumber} kolom "${rawHeaderOf("keterangan_identitas")}".`,
-        });
-      } else {
-        identityBasis = { kind: "ALTERNATIVE", description: keteranganIdentitas };
-      }
-    } else {
-      rowIssues.push({
-        scope: "row",
-        rowNumber,
-        column: rawHeaderOf("dasar_identitas"),
-        field: "dasar_identitas",
-        code: "INVALID_IDENTITY_BASIS",
-        message: `Dasar identitas harus 'NIK' atau 'ALTERNATIF' pada baris ${rowNumber} kolom "${rawHeaderOf("dasar_identitas")}".`,
-      });
-    }
-
-    // Guardian
-    let guardian: { name: string; relationship: string } | null = null;
-    if (namaPerwakilan || hubunganPerwakilan) {
-      if (!namaPerwakilan) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("nama_perwakilan"),
-          field: "nama_perwakilan",
-          code: "MISSING_GUARDIAN_RELATION",
-          message: `Nama perwakilan/wali harus diisi bila hubungan perwakilan diisi pada baris ${rowNumber} kolom "${rawHeaderOf("nama_perwakilan")}".`,
-        });
-      } else if (!hubunganPerwakilan) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("hubungan_perwakilan"),
-          field: "hubungan_perwakilan",
-          code: "MISSING_GUARDIAN_RELATION",
-          message: `Hubungan perwakilan/wali harus diisi bila nama perwakilan diisi pada baris ${rowNumber} kolom "${rawHeaderOf("hubungan_perwakilan")}".`,
-        });
-      } else {
-        guardian = { name: namaPerwakilan, relationship: hubunganPerwakilan };
-      }
-    }
-
-    // Payment Recipient
-    let paymentRecipient: { name: string; relation: string } | null = null;
-    if (namaPenerimaPembayaran || hubunganPenerimaPembayaran) {
-      if (!namaPenerimaPembayaran) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("nama_penerima_pembayaran"),
-          field: "nama_penerima_pembayaran",
-          code: "MISSING_PAYMENT_RECIPIENT_RELATION",
-          message: `Nama penerima pembayaran harus diisi pada baris ${rowNumber} kolom "${rawHeaderOf("nama_penerima_pembayaran")}".`,
-        });
-      } else if (!hubunganPenerimaPembayaran) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("hubungan_penerima_pembayaran"),
-          field: "hubungan_penerima_pembayaran",
-          code: "MISSING_PAYMENT_RECIPIENT_RELATION",
-          message: `Hubungan penerima pembayaran harus diisi pada baris ${rowNumber} kolom "${rawHeaderOf("hubungan_penerima_pembayaran")}".`,
-        });
-      } else {
-        paymentRecipient = {
-          name: namaPenerimaPembayaran,
-          relation: hubunganPenerimaPembayaran,
-        };
-      }
-    }
-
-    // Contact (Pilot amendment - optional)
-    let contact: BeneficiaryContact | null = null;
-    if (kontakTelepon || kontakEmail || kontakRelasi) {
-      contact = {
-        phone: kontakTelepon || null,
-        email: kontakEmail || null,
-        relation: kontakRelasi || null,
-      };
-    }
-
-    // Aid Value
-    let aidValue: AidValue | null = null;
-    const isMoney =
-      jenisBantuanRaw === "UANG" || (!jenisBantuanRaw && nilaiIdr.length > 0);
-    const isGoods =
-      jenisBantuanRaw === "BARANG" ||
-      (!jenisBantuanRaw && (jumlahBarang.length > 0 || satuanBarang.length > 0));
-
-    if (isMoney) {
-      if (!nilaiIdr || !isExactNonNegativeInteger(nilaiIdr)) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("nilai_idr"),
-          field: "nilai_idr",
-          code: "INVALID_AMOUNT",
-          message: `Jumlah IDR harus bilangan bulat rupiah tanpa desimal pada baris ${rowNumber} kolom "${rawHeaderOf("nilai_idr")}".`,
-        });
-      } else {
-        aidValue = {
-          kind: "MONEY",
-          amountRequestedIdr: nilaiIdr,
-          amountApprovedIdr: null,
-        };
-      }
-    } else if (isGoods) {
-      if (!satuanBarang) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("satuan_barang"),
-          field: "satuan_barang",
-          code: "MISSING_UNIT",
-          message: `Satuan barang harus dinyatakan pada baris ${rowNumber} kolom "${rawHeaderOf("satuan_barang")}".`,
-        });
-      }
-      if (!jumlahBarang || !/^\d+(\.\d+)?$/.test(jumlahBarang)) {
-        rowIssues.push({
-          scope: "row",
-          rowNumber,
-          column: rawHeaderOf("jumlah_barang"),
-          field: "jumlah_barang",
-          code: "INVALID_QUANTITY",
-          message: `Jumlah barang harus angka eksak pada baris ${rowNumber} kolom "${rawHeaderOf("jumlah_barang")}".`,
-        });
-      }
-      let valuedAmountIdr: string | null = null;
-      if (nilaiIdrBarang) {
-        if (!isExactNonNegativeInteger(nilaiIdrBarang)) {
-          rowIssues.push({
-            scope: "row",
-            rowNumber,
-            column: rawHeaderOf("nilai_idr_barang"),
-            field: "nilai_idr_barang",
-            code: "INVALID_AMOUNT",
-            message: `Nilai taksiran IDR barang harus bilangan bulat rupiah pada baris ${rowNumber} kolom "${rawHeaderOf("nilai_idr_barang")}".`,
-          });
-        } else {
-          valuedAmountIdr = nilaiIdrBarang;
-        }
-      }
-
-      if (satuanBarang && jumlahBarang && /^\d+(\.\d+)?$/.test(jumlahBarang) && (nilaiIdrBarang === "" || isExactNonNegativeInteger(nilaiIdrBarang))) {
-        aidValue = {
-          kind: "GOODS",
-          unit: satuanBarang,
-          quantityRequested: jumlahBarang,
-          quantityApproved: null,
-          valuedAmountIdr,
-        };
-      }
-    } else {
-      rowIssues.push({
-        scope: "row",
-        rowNumber,
-        column: rawHeaderOf("jenis_bantuan"),
-        field: "jenis_bantuan",
-        code: "INVALID_AID_TYPE",
-        message: `Jenis bantuan harus 'UANG' atau 'BARANG' pada baris ${rowNumber} kolom "${rawHeaderOf("jenis_bantuan")}".`,
-      });
-    }
-
-    // Determine recipient grouping key
-    let recipientKey: string | null = null;
-    if (rawIdPenerima) {
-      recipientKey = `id:${rawIdPenerima}`;
-    } else if (identityBasis?.kind === "NIK") {
-      recipientKey = `nik:${identityBasis.value}`;
-    } else if (nama) {
-      recipientKey = `alt:${nama.toLowerCase()}:${(identityBasis?.kind === "ALTERNATIVE" ? identityBasis.description : "").toLowerCase()}`;
-    }
-
-    const isValid = rowIssues.length === 0 && identityBasis !== null && aidValue !== null;
-
-    let beneficiary: Beneficiary | null = null;
-    let aidLine: AidLine | null = null;
-
-    if (isValid && recipientKey) {
-      beneficiary = {
-        id: rawIdPenerima || nextId(),
-        name: nama,
-        identityBasis: identityBasis!,
-        asnaf: normalizedAsnaf,
-        addressOrScope: alamatCakupan,
-        guardian,
-        paymentRecipient,
-        contact,
-      };
-
-      aidLine = {
-        id: rawIdBaris || nextId(),
-        beneficiaryId: beneficiary.id,
-        aidType: isMoney ? "UANG" : satuanBarang,
-        period: periodeBantuan,
-        value: aidValue!,
-      };
-
-      parsedValidLines.push({
-        rowNumber,
-        beneficiary,
-        aidLine,
-        recipientKey,
-      });
-    }
-
-    allRowsPreview.push({
-      rowNumber,
-      isValid,
-      rawCells: row.cells,
-      issues: rowIssues,
-      beneficiary,
-      aidLine,
-      recipientKey,
-    });
-
-    issues.push(...rowIssues);
-  }
-
-  // 3. Group valid lines by recipient and check for duplicate aid lines
-  const beneficiaryMap = new Map<string, Beneficiary>();
-  const recipientAidLines = new Map<string, AidLine[]>();
-  const finalBeneficiaries: Beneficiary[] = [];
-  const finalAidLines: AidLine[] = [];
-
-  for (const item of parsedValidLines) {
-    let b = beneficiaryMap.get(item.recipientKey);
-    if (!b) {
-      b = item.beneficiary;
-      beneficiaryMap.set(item.recipientKey, b);
-      recipientAidLines.set(item.recipientKey, []);
-      finalBeneficiaries.push(b);
-    }
-
-    // Ensure aidLine points to the canonical beneficiary id
-    const line: AidLine = {
-      ...item.aidLine,
-      beneficiaryId: b.id,
-    };
-
-    // Check for exact duplicate aid lines on the same recipient (Scenario 8)
-    const existingLines = recipientAidLines.get(item.recipientKey)!;
-    const fingerprint = JSON.stringify([line.aidType, line.period, line.value]);
-    const isExactDuplicate = existingLines.some(
-      (l) => JSON.stringify([l.aidType, l.period, l.value]) === fingerprint
-    );
-
-    if (isExactDuplicate) {
-      const dupIssue: BeneficiaryTabularIssue = {
-        scope: "row",
-        rowNumber: item.rowNumber,
-        column: null,
-        code: "EXACT_DUPLICATE_AID",
-        message: `Baris ${item.rowNumber} duplikat persis rincian bantuan lain untuk penerima "${b.name}" pada pengajuan ini. Duplikasi persis diblokir.`,
-      };
-      issues.push(dupIssue);
-
-      // Invalidate the preview row
-      const preview = allRowsPreview.find((p) => p.rowNumber === item.rowNumber);
-      if (preview) {
-        preview.isValid = false;
-        preview.issues.push(dupIssue);
-      }
-    } else {
-      // Check if recurring aid (different aidType or period for the same person)
-      if (existingLines.length > 0) {
-        const recWarning: BeneficiaryTabularIssue = {
-          scope: "row",
-          rowNumber: item.rowNumber,
-          column: null,
-          code: "RECURRING_AID_WARNING",
-          isWarning: true,
-          message: `Penerima "${b.name}" menerima beberapa rincian bantuan pada pengajuan ini. Ditandai untuk penelaahan kelayakan.`,
-        };
-        issues.push(recWarning);
-        const preview = allRowsPreview.find((p) => p.rowNumber === item.rowNumber);
-        if (preview) {
-          preview.issues.push(recWarning);
-        }
-      }
-
-      existingLines.push(line);
-      finalAidLines.push(line);
-    }
-  }
-
-  // 4. Calculate unit totals and partial status
-  const totalsByUnit: Record<string, string> = {};
-  let isPartial = false;
-
-  // If any row is invalid, the overall imported total is partial
-  const hasInvalidRows = allRowsPreview.some((r) => !r.isValid);
-  if (hasInvalidRows) {
-    isPartial = true;
-  }
-
-  for (const line of finalAidLines) {
-    if (line.value.kind === "MONEY") {
-      if (isExactNonNegativeInteger(line.value.amountRequestedIdr)) {
-        totalsByUnit.IDR = addDecimalIntegers(
-          totalsByUnit.IDR ?? "0",
-          line.value.amountRequestedIdr
-        );
-      }
-    } else {
-      const key = `${line.aidType}:${line.value.unit}`;
-      if (isExactNonNegativeInteger(line.value.quantityRequested)) {
-        totalsByUnit[key] = addDecimalIntegers(
-          totalsByUnit[key] ?? "0",
-          line.value.quantityRequested
-        );
-      } else {
-        // Fractional quantity or non-integer
-        isPartial = true;
-        const current = Number(totalsByUnit[key] ?? 0) + Number(line.value.quantityRequested);
-        totalsByUnit[key] = current.toString();
-      }
-      if (line.value.valuedAmountIdr === null) {
-        isPartial = true;
-      }
-    }
-  }
-
-  const validRowsCount = allRowsPreview.filter((r) => r.isValid).length;
-  const invalidRowsCount = allRowsPreview.filter((r) => !r.isValid).length;
+  const { beneficiaries, aidLines } = groupRows(allRowsPreview, nextId);
+  const summary = summarizeProposalDraft({ beneficiaries, aidLines });
+  const validRowsCount = allRowsPreview.filter((row) => row.isValid).length;
+  const invalidRowsCount = allRowsPreview.length - validRowsCount;
 
   return {
-    uniqueBeneficiaryCount: finalBeneficiaries.length,
-    aidLineCount: finalAidLines.length,
+    uniqueBeneficiaryCount: summary.uniqueBeneficiaryCount,
+    aidLineCount: summary.aidLineCount,
     validRowsCount,
     invalidRowsCount,
-    totalsByUnit,
-    isPartial,
-    beneficiaries: finalBeneficiaries,
-    aidLines: finalAidLines,
+    totalsByUnit: summary.totalsByUnit,
+    isPartial: summary.isPartial || invalidRowsCount > 0 || fileIssues.length > 0,
+    canApply: fileIssues.length === 0 && validRowsCount > 0,
+    sharedAidPeriod,
+    beneficiaries,
+    aidLines,
     allRowsPreview,
-    issues,
+    issues: [...fileIssues, ...allRowsPreview.flatMap((row) => row.issues)],
   };
+}
+
+/** Flags recipients already recorded on another proposal, on their first row, for review only. */
+export function attachRecurringAidWarnings(
+  result: BeneficiaryMappingResult,
+  warnings: RecurringAidWarning[]
+): BeneficiaryMappingResult {
+  for (const warning of warnings) {
+    const row = result.allRowsPreview.find((item) => item.beneficiary?.id === warning.beneficiaryId);
+    if (!row) continue;
+    const issue: BeneficiaryTabularIssue = {
+      scope: "row",
+      rowNumber: row.rowNumber,
+      column: null,
+      code: "RECURRING_AID_WARNING",
+      isWarning: true,
+      message: `Baris ${row.rowNumber}: ${warning.message}`,
+    };
+    row.issues.push(issue);
+    result.issues.push(issue);
+  }
+  return result;
 }

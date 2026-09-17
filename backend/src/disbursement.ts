@@ -121,6 +121,11 @@ export type AidLine = {
   /** Explicit aid period, distinct from the reporting period. */
   period: string;
   value: AidValue;
+  /**
+   * Free-text note naming a supporting document (e.g. a letter number). Never
+   * evidence that the document exists - only a stored proposal document is.
+   */
+  evidenceReference?: string | null;
 };
 
 export type ProposalIssue = {
@@ -143,7 +148,7 @@ export type ProposalDraftInput = {
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
-function validateBeneficiary(row: Beneficiary, index: number, issues: ProposalIssue[]): void {
+export function validateBeneficiary(row: Beneficiary, index: number, issues: ProposalIssue[]): void {
   const at = (field: string, message: string) => issues.push({ scope: "recipient", rowIndex: index, field, message });
   if (row.id.trim() === "") at("id", "Penerima harus mempunyai ID internal.");
   if (row.name.trim() === "") at("name", "Nama penerima tidak boleh kosong.");
@@ -162,7 +167,7 @@ function validateBeneficiary(row: Beneficiary, index: number, issues: ProposalIs
   }
 }
 
-function validateAidLine(
+export function validateAidLine(
   row: AidLine,
   index: number,
   beneficiaryIds: Set<string>,
@@ -182,7 +187,7 @@ function validateAidLine(
     }
   } else {
     if (row.value.unit.trim() === "") at("value.unit", "Satuan barang harus dinyatakan.");
-    if (row.value.quantityRequested.trim() === "" || !/^\d+(\.\d+)?$/.test(row.value.quantityRequested)) {
+    if (!isExactNonNegativeDecimal(row.value.quantityRequested)) {
       at("value.quantityRequested", "Jumlah barang harus angka eksak dengan satuan yang dinyatakan.");
     }
     if (row.value.valuedAmountIdr !== null && !isExactNonNegativeInteger(row.value.valuedAmountIdr)) {
@@ -192,7 +197,7 @@ function validateAidLine(
 }
 
 /** Two aid lines are the same event if every field but the id matches. */
-const aidLineFingerprint = (row: AidLine): string =>
+export const aidLineFingerprint = (row: AidLine): string =>
   JSON.stringify([row.beneficiaryId, row.aidType, row.period, row.value]);
 
 export function validateProposalDraft(input: ProposalDraftInput): ProposalIssue[] {
@@ -256,29 +261,35 @@ export type ProposalTotals = {
   isPartial: boolean;
 };
 
-const addDecimalIntegers = (a: string, b: string): string => (BigInt(a) + BigInt(b)).toString();
+export const isExactNonNegativeDecimal = (value: string): boolean => /^\d+(\.\d+)?$/.test(value);
 
-export function summarizeProposalDraft(input: ProposalDraftInput): ProposalTotals {
+/** Adds two non-negative decimal strings exactly, without passing through floats. */
+export function addDecimalStrings(a: string, b: string): string {
+  const [aInt, aFrac = ""] = a.split(".");
+  const [bInt, bFrac = ""] = b.split(".");
+  const scale = Math.max(aFrac.length, bFrac.length);
+  const scaled = (int: string, frac: string) => BigInt(int + frac.padEnd(scale, "0"));
+  const digits = (scaled(aInt, aFrac) + scaled(bInt, bFrac)).toString().padStart(scale + 1, "0");
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/, "");
+  const whole = digits.slice(0, -scale);
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
+export function summarizeProposalDraft(input: Pick<ProposalDraftInput, "beneficiaries" | "aidLines">): ProposalTotals {
   const totalsByUnit: Record<string, string> = {};
   let isPartial = false;
 
   for (const line of input.aidLines) {
     if (line.value.kind === "MONEY") {
       if (isExactNonNegativeInteger(line.value.amountRequestedIdr)) {
-        totalsByUnit.IDR = addDecimalIntegers(totalsByUnit.IDR ?? "0", line.value.amountRequestedIdr);
+        totalsByUnit.IDR = addDecimalStrings(totalsByUnit.IDR ?? "0", line.value.amountRequestedIdr);
       }
       continue;
     }
     const key = `${line.aidType}:${line.value.unit}`;
-    if (/^\d+(\.\d+)?$/.test(line.value.quantityRequested)) {
-      // Kept as decimal text addition is not exact for fractional quantities in
-      // this slice; goods totals are reported per line in the UI rather than
-      // summed here when fractional. Exact integers still sum precisely.
-      if (isExactNonNegativeInteger(line.value.quantityRequested)) {
-        totalsByUnit[key] = addDecimalIntegers(totalsByUnit[key] ?? "0", line.value.quantityRequested);
-      } else {
-        isPartial = true;
-      }
+    if (isExactNonNegativeDecimal(line.value.quantityRequested)) {
+      totalsByUnit[key] = addDecimalStrings(totalsByUnit[key] ?? "0", line.value.quantityRequested);
     }
     if (line.value.valuedAmountIdr === null) isPartial = true;
   }
