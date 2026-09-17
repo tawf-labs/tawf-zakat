@@ -489,6 +489,8 @@ export const proposalDecisions = pgTable("proposal_decisions", {
   action: text("action").notNull(), // 'APPROVE' | 'REJECT'
   decisionReference: text("decision_reference").notNull(),
   decisionDate: text("decision_date").notNull(),
+  decisionDocumentId: text("decision_document_id").notNull(),
+  decisionDocumentSha256: text("decision_document_sha256").notNull(),
   notes: text("notes"),
   rejectionReason: text("rejection_reason"),
   rightsDigest: text("rights_digest").notNull(),
@@ -497,6 +499,20 @@ export const proposalDecisions = pgTable("proposal_decisions", {
   signerAccount: text("signer_account").notNull(),
   mandateId: text("mandate_id").notNull().references(() => operationalMandates.id),
   signature: text("signature").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const proposalDecisionDocuments = pgTable("proposal_decision_documents", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  proposalVersion: integer("proposal_version").notNull(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageRef: text("storage_ref").notNull(),
+  uploadedBy: text("uploaded_by").notNull(),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
 });
 
@@ -512,6 +528,8 @@ export const proposalDecisionChallenges = pgTable("proposal_decision_challenges"
   rightsDigest: text("rights_digest").notNull(),
   decisionReference: text("decision_reference").notNull(),
   decisionDate: text("decision_date").notNull(),
+  decisionDocumentId: text("decision_document_id").notNull(),
+  decisionDocumentSha256: text("decision_document_sha256").notNull(),
   mandateId: text("mandate_id").notNull(),
   mandateValidUntil: bigint("mandate_valid_until", { mode: "number" }).notNull(),
   issuedAt: bigint("issued_at", { mode: "number" }).notNull(),

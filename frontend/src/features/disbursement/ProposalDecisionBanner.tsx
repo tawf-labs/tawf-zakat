@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, XCircle } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
-import { getProposalDecision, type ProposalDecision, type ProposalDraft } from "./disbursementClient";
+import { Button } from "../../components/ui/Button";
+import { downloadDecisionDocument, getProposalDecision, type ProposalDecision, type ProposalDraft } from "./disbursementClient";
 
 /** The durable decision behind an approved or rejected proposal, with technical detail kept secondary. */
 export function ProposalDecisionBanner({ requests, draft, recorded }: {
@@ -10,6 +11,7 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
   recorded: ProposalDecision | null;
 }) {
   const [loaded, setLoaded] = useState<ProposalDecision | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const decided = draft.status === "APPROVED" || draft.status === "REJECTED";
 
   useEffect(() => {
@@ -20,6 +22,20 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
       .catch(() => { if (current) setLoaded(null); });
     return () => { current = false; };
   }, [requests, draft.id, decided, recorded]);
+
+  async function download(decision: ProposalDecision) {
+    try {
+      const url = URL.createObjectURL(await downloadDecisionDocument(requests, draft.id, decision.decisionDocumentId));
+      requests.assertCurrent();
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `keputusan-${decision.decisionReference}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setDownloadError("Berkas keputusan tidak dapat diunduh atau tidak cocok dengan hash yang ditandatangani.");
+    }
+  }
 
   if (!decided) return null;
   const decision = recorded ?? loaded;
@@ -46,7 +62,12 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
           <div><dt className="inline">Akun operator: </dt><dd className="inline">{decision.operatorAccount}</dd></div>
           <div><dt className="inline">Akun pengesah: </dt><dd className="inline">{decision.signerAccount}</dd></div>
           <div><dt className="inline">Sidik isi hak bantuan: </dt><dd className="inline break-all">{decision.rightsDigest}</dd></div>
+          <div><dt className="inline">Sidik berkas keputusan: </dt><dd className="inline break-all">{decision.decisionDocumentSha256}</dd></div>
         </dl>
+        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void download(decision)}>
+          Unduh berkas keputusan
+        </Button>
+        {downloadError && <p role="alert" className="mt-1">{downloadError}</p>}
       </details>
     </>}
   </div>;

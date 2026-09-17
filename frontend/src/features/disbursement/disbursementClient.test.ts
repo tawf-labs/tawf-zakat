@@ -272,6 +272,7 @@ describe("disbursementClient Ticket #93 methods", () => {
       action: "APPROVE" as const,
       decisionReference: "SK-001",
       decisionDate: "2026-09-17",
+      decisionDocumentId: "doc-1",
       notes: null,
       rejectionReason: null,
       approvedAidLines: [{ id: "aid-1", amountApprovedIdr: "300000" }],

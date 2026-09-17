@@ -554,9 +554,22 @@ export type ProposalDecisionIntent = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string;
+  decisionDocumentId: string;
   notes: string | null;
   rejectionReason: string | null;
   approvedAidLines: ApprovedAidLineInput[];
+};
+
+export type ProposalDecisionDocument = {
+  id: string;
+  proposalId: string;
+  proposalVersion: number;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+  uploadedBy: string;
+  createdAt: number;
 };
 
 export type ProposalDecision = {
@@ -567,6 +580,8 @@ export type ProposalDecision = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: string;
   notes: string | null;
   rejectionReason: string | null;
   rightsDigest: string;
@@ -625,6 +640,30 @@ export function signableTypedData(typedData: WireTypedData) {
   );
   return { ...typedData, message };
 }
+
+/** Reads a browser file as the base64 body the upload endpoints accept. */
+export const readFileBase64 = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(new Error("Berkas tidak dapat dibaca."));
+    reader.readAsDataURL(file);
+  });
+
+export const uploadDecisionDocument = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: { fileName: string; mimeType: string; contentBase64: string; expectedVersion: number }
+) =>
+  requests
+    .json<{ document: ProposalDecisionDocument }>(`/api/workspace/proposals/${proposalId}/decision-documents`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    .then((r) => r.document);
+
+export const downloadDecisionDocument = (requests: PrivateRequests, proposalId: string, documentId: string) =>
+  requests.blob(`/api/workspace/proposals/${proposalId}/decision-documents/${documentId}`);
 
 export const getProposalDecisionReview = (requests: PrivateRequests, proposalId: string) =>
   requests.json<DecisionReviewData>(`/api/workspace/proposals/${proposalId}/decision-review`);

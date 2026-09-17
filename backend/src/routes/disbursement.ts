@@ -67,7 +67,7 @@ import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 import {
   assertCanApproveProposal,
 } from "../operational-mandate";
-import { MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
+import { MAX_EVIDENCE_FILE_BYTES, sha256Of } from "../evidence-files";
 import { createRestrictedDocuments, DocumentError } from "../restricted-documents";
 // Shared with `evidence-preparation.ts` rather than redefined: identical shape,
 // no domain-specific wording, so a second copy here would just be a second
@@ -860,6 +860,20 @@ disbursementRoutes.delete("/proposals/:id/documents/:docId", async (c) => {
   return c.body(null, 204);
 });
 
+/** Proposal files are readable by whoever prepares, examines or decides this proposal. */
+async function requireProposalFileAccess(
+  runtime: ReturnType<typeof runtimeOf>,
+  session: { institutionId: string; account: string },
+  draft: StoredProposalDraft
+) {
+  const actor = await operationalActor(runtime, session);
+  const target = { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) };
+  const allowed = (["PREPARE_PROPOSALS", "EXAMINE_PROPOSALS", "APPROVE_DECISIONS"] as const).some((fn) => actor.allows(fn, target));
+  if (!allowed) {
+    throw new OperationalAccessDenied("Akses berkas pengajuan memerlukan mandat amil, pemeriksa, atau pemutus.");
+  }
+}
+
 disbursementRoutes.get("/proposals/:id/files/:fileId", async (c) => {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
@@ -869,20 +883,7 @@ disbursementRoutes.get("/proposals/:id/files/:fileId", async (c) => {
   const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
   if (!draft) return refuse(c, 404, "not-found");
 
-  const actor = await operationalActor(runtime, auth.session);
-  let allowed = false;
-  for (const fn of ["PREPARE_PROPOSALS", "EXAMINE_PROPOSALS", "APPROVE_DECISIONS"] as const) {
-    try {
-      actor.require(fn, { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
-      allowed = true;
-      break;
-    } catch {
-      // try next mandate
-    }
-  }
-  if (!allowed) {
-    throw new OperationalAccessDenied("Akses berkas pengajuan memerlukan mandat amil, pemeriksa, atau pemutus.");
-  }
+  await requireProposalFileAccess(runtime, auth.session, draft);
 
   const fileId = c.req.param("fileId");
   const verParam = c.req.query("version");
@@ -1305,6 +1306,11 @@ async function resolveDecision(
     (await signerRefusal(runtime, session.institutionId, actor.officer.id, session.account, signerAccount));
   if (refusal) return { ok: false, status: 403, error: refusal };
 
+  const document = await runtime.disbursement.getDecisionDocument(session.institutionId, draft.id, intent.decisionDocumentId);
+  if (!document || document.proposalVersion !== draft.version) {
+    return { ok: false, status: 409, error: "Berkas SK / berita acara tidak ditemukan pada versi pengajuan ini. Unggah ulang berkasnya." };
+  }
+
   const decided = decidedAidLines(draft.aidLines, intent);
   if (!decided.ok) return { ok: false, status: 409, error: decided.error };
 
@@ -1325,6 +1331,8 @@ async function resolveDecision(
       rightsDigest: computeRightsDigest(decided.lines, intent),
       decisionReference: intent.decisionReference,
       decisionDate: intent.decisionDate,
+      decisionDocumentId: document.id,
+      decisionDocumentSha256: document.contentSha256,
       operatorOfficerId: actor.officer.id,
       operatorAccount: session.account.toLowerCase(),
       signerAccount: signerAccount.toLowerCase(),
@@ -1385,6 +1393,91 @@ disbursementRoutes.get("/proposals/:id/decision-review", async (c) => {
       "Satu pejabat mengesahkan pencatatan keputusan lembaga; bukan bukti seluruh peserta pleno menandatangani secara digital.",
     existingDecision: await runtime.disbursement.getProposalDecision(auth.session.institutionId, draft.id),
   });
+});
+
+/**
+ * The SK or berita acara behind a decision. Kept apart from proposal documents:
+ * uploading one must not make the deciding official a material contributor.
+ */
+disbursementRoutes.post("/proposals/:id/decision-documents", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(
+    c,
+    runtime,
+    typeof body.institutionId === "string" ? body.institutionId : undefined
+  );
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+  if (body.expectedVersion !== draft.version) return staleVersion(c);
+  if (draft.status !== "READY_FOR_DECISION") {
+    throw new ProposalStateConflictError(`Berkas keputusan tidak dapat diunggah pada pengajuan berstatus "${draft.status}".`);
+  }
+  (await operationalActor(runtime, auth.session)).require("APPROVE_DECISIONS", { programId: draft.programId });
+
+  const fileName = text(body.fileName);
+  if (!fileName || fileName.length > 255) return badRequest(c, "Nama berkas tidak sah.");
+  if (typeof body.contentBase64 !== "string" || !body.contentBase64.trim()) {
+    return badRequest(c, "Isi berkas (base64) wajib diisi.");
+  }
+  const bytes = new Uint8Array(Buffer.from(body.contentBase64.trim(), "base64"));
+  if (bytes.byteLength === 0) return badRequest(c, "Berkas kosong tidak dapat disimpan.");
+  if (bytes.byteLength > MAX_EVIDENCE_FILE_BYTES) {
+    return badRequest(c, `Berkas melebihi batas ukuran ${MAX_EVIDENCE_FILE_BYTES} byte.`);
+  }
+
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  const id = crypto.randomUUID();
+  let stored;
+  try {
+    stored = await runtime.files.put({ institutionId: auth.session.institutionId, preparationId: draft.id, fileId: id, bytes });
+  } catch {
+    throw new DocumentError("Berkas gagal disimpan. Coba lagi setelah penyimpanan tersedia.", "UNAVAILABLE");
+  }
+
+  const { storageRef: _private, ...document } = await runtime.disbursement.saveDecisionDocument({
+    id,
+    proposalId: draft.id,
+    proposalVersion: draft.version,
+    institutionId: auth.session.institutionId,
+    fileName,
+    mimeType: text(body.mimeType) || "application/octet-stream",
+    sizeBytes: stored.sizeBytes,
+    contentSha256: stored.contentSha256 as `0x${string}`,
+    storageRef: stored.storageRef,
+    uploadedBy: auth.session.account,
+    createdAt: runtime.now(),
+  });
+  return c.json({ success: true, document }, 201);
+});
+
+disbursementRoutes.get("/proposals/:id/decision-documents/:documentId", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+  await requireProposalFileAccess(runtime, auth.session, draft);
+
+  const document = await runtime.disbursement.getDecisionDocument(auth.session.institutionId, draft.id, c.req.param("documentId"));
+  if (!document) return refuse(c, 404, "not-found");
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  const bytes = await runtime.files.get(document.storageRef);
+  if (!bytes) throw new DocumentError("Berkas keputusan tidak ditemukan di penyimpanan.", "MISSING");
+  if (bytes.byteLength !== document.sizeBytes || sha256Of(bytes) !== document.contentSha256) {
+    throw new DocumentError("Berkas keputusan tidak cocok dengan hash yang ditandatangani.", "CORRUPT");
+  }
+
+  c.header("Content-Type", document.mimeType);
+  c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(document.fileName)}"`);
+  c.header("Content-Length", String(bytes.byteLength));
+  return c.body(new Uint8Array(bytes).buffer);
 });
 
 disbursementRoutes.post("/proposals/:id/decision-challenge", async (c) => {

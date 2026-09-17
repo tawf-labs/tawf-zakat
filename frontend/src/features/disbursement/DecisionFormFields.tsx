@@ -35,6 +35,11 @@ export function DecisionFormFields({ review, form, disabled, onChange }: {
       </label>
     </div>
 
+    <label className="block font-medium text-stone-700">Berkas SK / berita acara *
+      <input type="file" className="mt-1 block w-full text-xs" onChange={e => onChange({ documentFile: e.target.files?.[0] ?? null })} />
+      <span className="font-normal text-stone-500">Isi berkas ini dikunci oleh tanda tangan pengesahan.</span>
+    </label>
+
     {form.action === "REJECT" && <label className="block font-medium text-red-700">Alasan penolakan *
       <textarea rows={2} className={`mt-1 ${textarea}`} value={form.rejectionReason}
         onChange={e => onChange({ rejectionReason: e.target.value })} />

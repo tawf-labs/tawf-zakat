@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { Button } from "../../components/ui/Button";
 import type { PrivateRequests } from "../workspace/privateRequests";
-import { uploadProposalDocument, type Beneficiary, type ProposalDocumentCategory } from "./disbursementClient";
+import { readFileBase64, uploadProposalDocument, type Beneficiary, type ProposalDocumentCategory } from "./disbursementClient";
 import { CATEGORY_LABELS } from "./ProposalDocumentList";
 
 export function ProposalDocumentUpload({ requests, proposalId, beneficiaries, onUploaded }: {
@@ -24,12 +24,7 @@ export function ProposalDocumentUpload({ requests, proposalId, beneficiaries, on
     setUploading(true);
     setError(null);
     try {
-      const contentBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1]);
-        reader.onerror = () => reject(new Error("Berkas tidak dapat dibaca."));
-        reader.readAsDataURL(file);
-      });
+      const contentBase64 = await readFileBase64(file);
       await uploadProposalDocument(requests, proposalId, {
         category, beneficiaryId: beneficiaryId || null,
         fileName: file.name, mimeType: file.type || "application/octet-stream", contentBase64,

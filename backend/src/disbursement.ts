@@ -650,6 +650,8 @@ export const DISBURSEMENT_DECISION_TYPES = {
     { name: "rightsDigest", type: "bytes32" },
     { name: "decisionReference", type: "string" },
     { name: "decisionDate", type: "string" },
+    { name: "decisionDocumentId", type: "string" },
+    { name: "decisionDocumentSha256", type: "bytes32" },
     { name: "operatorOfficerId", type: "string" },
     { name: "operatorAccount", type: "address" },
     { name: "signerAccount", type: "address" },
@@ -674,9 +676,26 @@ export type ProposalDecisionIntent = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string; // YYYY-MM-DD
+  /** The uploaded SK or berita acara this decision rests on. */
+  decisionDocumentId: string;
   notes: string | null;
   rejectionReason: string | null;
   approvedAidLines: ApprovedAidLineInput[];
+};
+
+/** The signed SK or berita acara, stored privately; only its hash enters the signature. */
+export type ProposalDecisionDocument = {
+  id: string;
+  proposalId: string;
+  proposalVersion: number;
+  institutionId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: Hex32;
+  storageRef: string;
+  uploadedBy: string;
+  createdAt: number;
 };
 
 export type ProposalDecisionInput = ProposalDecisionIntent & {
@@ -696,6 +715,8 @@ export type DecisionBinding = {
   rightsDigest: Hex32;
   decisionReference: string;
   decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: Hex32;
   operatorOfficerId: string;
   operatorAccount: string;
   signerAccount: string;
@@ -716,6 +737,8 @@ export type ProposalDecisionRecord = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: string;
   notes: string | null;
   rejectionReason: string | null;
   rightsDigest: string;
@@ -787,7 +810,10 @@ export function decidedIdr(aidLines: AidLine[]): bigint {
 }
 
 /** Deterministic SHA-256 over the decided rights and the decision's own content. */
-export function computeRightsDigest(decidedLines: AidLine[], intent: Omit<ProposalDecisionIntent, "approvedAidLines">): Hex32 {
+export function computeRightsDigest(
+  decidedLines: AidLine[],
+  intent: Omit<ProposalDecisionIntent, "approvedAidLines" | "decisionDocumentId">
+): Hex32 {
   const lines = decidedLines.map((line) =>
     line.value.kind === "MONEY"
       ? {
@@ -836,6 +862,8 @@ export function disbursementDecisionTypedDataWire(binding: DecisionBinding) {
       rightsDigest: binding.rightsDigest,
       decisionReference: binding.decisionReference,
       decisionDate: binding.decisionDate,
+      decisionDocumentId: binding.decisionDocumentId,
+      decisionDocumentSha256: binding.decisionDocumentSha256,
       operatorOfficerId: binding.operatorOfficerId,
       operatorAccount: binding.operatorAccount.toLowerCase() as Hex32,
       signerAccount: binding.signerAccount.toLowerCase() as Hex32,
@@ -886,6 +914,11 @@ export function validateDecisionIntent(input: unknown): { ok: true; value: Propo
     return { ok: false, error: "Tanggal keputusan harus berformat tanggal yang sah (YYYY-MM-DD)." };
   }
 
+  const decisionDocumentId = trimmed(raw.decisionDocumentId);
+  if (!decisionDocumentId) {
+    return { ok: false, error: "Berkas SK / berita acara keputusan wajib diunggah." };
+  }
+
   const rejectionReason = action === "REJECT" ? trimmed(raw.rejectionReason) : null;
   if (rejectionReason === "") {
     return { ok: false, error: "Alasan penolakan wajib diisi secara jelas bila pengajuan ditolak." };
@@ -915,6 +948,7 @@ export function validateDecisionIntent(input: unknown): { ok: true; value: Propo
       action,
       decisionReference,
       decisionDate,
+      decisionDocumentId,
       notes: trimmed(raw.notes) || null,
       rejectionReason,
       approvedAidLines,

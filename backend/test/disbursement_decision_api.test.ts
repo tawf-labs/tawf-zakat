@@ -111,6 +111,7 @@ const documentInput = (category = "PROPOSAL_LETTER") => ({
 async function prepareReadyProposal(options?: {
   amount?: string;
   programId?: string;
+  purpose?: string;
   creatorToken?: string;
   examinerToken?: string;
 }) {
@@ -142,7 +143,7 @@ async function prepareReadyProposal(options?: {
       operationId: crypto.randomUUID(),
       programId,
       originOfRequest: "Permohonan mustahik",
-      purpose: "Penyaluran sembako dhuafa",
+      purpose: options?.purpose ?? "Penyaluran sembako dhuafa",
       personInCharge: "Ahmad Amil",
       aidPeriod: { start: "2026-03-01", end: "2026-03-31" },
       beneficiaries: [
@@ -220,7 +221,7 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "disbursement-decision-test-"));
     files = createEncryptedFileStore({ directory: tempDir, key: FILE_KEY });
-    database = await createTestWorkspaceDatabase();
+    database = await createTestWorkspaceDatabase(process.env.DECISION_TEST_DATABASE_URL);
     store = createWorkspaceStore(database.handle());
     disbursement = createDisbursementStore(database.handle());
     activities = createActivityStore(database.handle());
@@ -391,6 +392,7 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     action: "APPROVE" | "REJECT";
     decisionReference: string;
     decisionDate: string;
+    decisionDocumentId?: string;
     notes?: string | null;
     rejectionReason?: string | null;
     approvedAidLines?: { id: string; amountApprovedIdr?: string | null }[];
@@ -405,8 +407,40 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     ...extra,
   });
 
-  const requestChallenge = (token: string, draft: any, intent: DecisionIntentBody, signerAccount?: string) =>
-    post(`/proposals/${draft.id}/decision-challenge`, { ...intent, signerAccount, expectedVersion: draft.version }, token);
+  const DECISION_FILE = "SK Direksi sintetis nomor 014";
+
+  const postDecisionDocument = (token: string, draft: any, content = DECISION_FILE) =>
+    post(
+      `/proposals/${draft.id}/decision-documents`,
+      {
+        fileName: "sk-keputusan.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from(content).toString("base64"),
+        expectedVersion: draft.version,
+      },
+      token
+    );
+
+  async function uploadDecisionDocument(token: string, draft: any, content = DECISION_FILE) {
+    const res = await postDecisionDocument(token, draft, content);
+    expect(res.status).toBe(201);
+    return (await res.json()).document;
+  }
+
+  /** Uploads a decision document first unless the intent names one; a refused upload is the answer. */
+  async function requestChallenge(token: string, draft: any, intent: DecisionIntentBody, signerAccount?: string) {
+    let decisionDocumentId = intent.decisionDocumentId;
+    if (!decisionDocumentId) {
+      const upload = await postDecisionDocument(token, draft);
+      if (upload.status !== 201) return upload;
+      decisionDocumentId = (await upload.json()).document.id;
+    }
+    return post(
+      `/proposals/${draft.id}/decision-challenge`,
+      { ...intent, decisionDocumentId, signerAccount, expectedVersion: draft.version },
+      token
+    );
+  }
 
   /** What a wallet client does with the wire payload: every uint256 field becomes a bigint. */
   function signable(typedData: any) {
@@ -442,6 +476,7 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     post(
       `/proposals/${draft.id}/decide`,
       {
+        decisionDocumentId: signed.challenge.decisionDocumentId,
         ...intent,
         signerAccount: signed.challenge.signerAccount,
         mandateId: signed.challenge.mandateId,
@@ -646,6 +681,54 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     expect((await okRes.json()).draft.aidLines[0].value.amountApprovedIdr).toBe("100000");
   });
 
+  it("binds the uploaded decision document by hash and refuses a swapped or foreign document", async () => {
+    const { draft, programId } = await prepareReadyProposal();
+    const approverToken = await signIn(approverSinar, SINAR);
+
+    const missing = await post(
+      `/proposals/${draft.id}/decision-challenge`,
+      { ...approval("SK-DOK-01"), expectedVersion: draft.version },
+      approverToken
+    );
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toContain("Berkas SK / berita acara");
+
+    // Uploading needs the decision mandate, and does not make the uploader a proposal contributor.
+    const amilUpload = await post(
+      `/proposals/${draft.id}/decision-documents`,
+      { fileName: "x.txt", contentBase64: Buffer.from("x").toString("base64"), expectedVersion: draft.version },
+      await signIn(amilSinar, SINAR)
+    );
+    expect(amilUpload.status).toBe(403);
+
+    const other = await prepareReadyProposal({ programId });
+    const foreign = await uploadDecisionDocument(approverToken, other.draft);
+    const foreignRes = await requestChallenge(approverToken, draft, approval("SK-DOK-01", { decisionDocumentId: foreign.id }));
+    expect(foreignRes.status).toBe(409);
+
+    const document = await uploadDecisionDocument(approverToken, draft);
+    expect(document.contentSha256).toBe(`0x${new Bun.CryptoHasher("sha256").update(DECISION_FILE).digest("hex")}`);
+    expect(document.storageRef).toBeUndefined();
+
+    const intent = approval("SK-DOK-01", { decisionDocumentId: document.id });
+    const signed = await signedChallenge(approverToken, draft, intent);
+    expect(signed.challenge.decisionDocumentSha256).toBe(document.contentSha256);
+
+    const replacement = await uploadDecisionDocument(approverToken, draft, "SK lain yang tidak ditandatangani");
+    const swapped = await decide(approverToken, draft, { ...intent, decisionDocumentId: replacement.id }, signed);
+    expect(swapped.status).toBe(409);
+
+    const okRes = await decide(approverToken, draft, intent, signed);
+    expect(okRes.status).toBe(200);
+    const { decision } = await okRes.json();
+    expect(decision.decisionDocumentId).toBe(document.id);
+    expect(decision.decisionDocumentSha256).toBe(document.contentSha256);
+
+    const download = await get(`/proposals/${draft.id}/decision-documents/${document.id}`, approverToken);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe(DECISION_FILE);
+  });
+
   it("rejects with a mandatory reason, distinct from an approval", async () => {
     const { draft } = await prepareReadyProposal();
     const approverToken = await signIn(approverSinar, SINAR);
@@ -812,4 +895,120 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     expect(activity.proposalId).toBe(draft.id);
     expect(activity.status).toBe("ACTIVE");
   });
+
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: review, upload, sign and record; institutional signer with pending result; context change while signing", async () => {
+    const first = await prepareReadyProposal({ purpose: "Keputusan Smoke A" });
+    const second = await prepareReadyProposal({ programId: first.programId, purpose: "Keputusan Smoke B" });
+    const third = await prepareReadyProposal({ programId: first.programId, purpose: "Keputusan Smoke C" });
+    const approverToken = await signIn(approverSinar, SINAR);
+
+    let beforeSign: (() => Promise<void>) | null = null;
+    const built = await Bun.build({
+      entrypoints: [new URL("../../frontend/test/officer-smoke.tsx", import.meta.url).pathname],
+      target: "browser",
+      define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+    });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    const bundle = await built.outputs[0]!.text();
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname;
+        if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+        if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+        if (path === "/wallet-rpc") {
+          const { method, params } = await req.json();
+          if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([approverSinar.address]);
+          if (method === "eth_chainId") return Response.json("0x7a69");
+          if (method === "eth_signTypedData_v4") {
+            const typedData = JSON.parse(params[1]);
+            if (typedData.primaryType === "DisbursementDecision" && beforeSign) await beforeSign();
+            return Response.json(await approverSinar.signTypedData(typedData));
+          }
+          return Response.json(null);
+        }
+        return app.fetch(req);
+      },
+    });
+
+    let browser: any;
+    try {
+      const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+      browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+      const page = await browser.newPage();
+      await page.addInitScript((now: number) => { Date.now = () => now * 1000; }, NOW);
+      page.setDefaultTimeout(10000);
+      const errors: string[] = [];
+      page.on("pageerror", (error: Error) => errors.push(error.message));
+
+      await page.goto(server.url.toString());
+      await page.getByRole("button", { name: /^0x/ }).waitFor();
+      await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
+      await page.waitForFunction((institution: string) => (document.querySelector("#institution") as HTMLSelectElement)?.value === institution, SINAR);
+      await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+      await page.getByLabel(/Program bantuan/).selectOption(first.programId);
+
+      const openDecision = async (purpose: string) => {
+        await page.getByRole("button", { name: new RegExp(purpose) }).click();
+        await page.getByRole("button", { name: "Tinjau & Putuskan", exact: true }).click();
+        const dialog = page.getByRole("dialog");
+        await dialog.getByText("Hasil pemeriksaan", { exact: true }).waitFor();
+        return dialog;
+      };
+      const fillDecision = async (dialog: any, reference: string) => {
+        await dialog.getByLabel(/Nomor SK/).fill(reference);
+        await dialog.getByLabel(/Berkas SK/).setInputFiles({ name: `${reference}.txt`, mimeType: "text/plain", buffer: Buffer.from(`Berkas ${reference}`) });
+      };
+      const decisionOf = async (id: string) => get(`/proposals/${id}/decision`, approverToken);
+
+      // 1. Review, upload the SK, sign and record a partial approval.
+      let dialog = await openDecision("Keputusan Smoke A");
+      await dialog.getByText("Administrasi: Terpenuhi").waitFor();
+      await dialog.getByText("Citra Direktur", { exact: true }).waitFor();
+      await fillDecision(dialog, "SK-SMOKE-A");
+      await dialog.getByLabel("Disetujui untuk Mustahik Satu", { exact: true }).fill("400000");
+      await dialog.getByRole("button", { name: "Tanda tangani pengesahan", exact: true }).click();
+      await page.getByText("Pengajuan disetujui lembaga", { exact: true }).waitFor();
+      const recordedA = (await (await decisionOf(first.draft.id)).json()).decision;
+      expect(recordedA.decisionReference).toBe("SK-SMOKE-A");
+      expect(recordedA.decisionDocumentSha256).toBe(`0x${new Bun.CryptoHasher("sha256").update("Berkas SK-SMOKE-A").digest("hex")}`);
+      expect((await disbursement.getProposalDraft(SINAR, first.draft.id))!.aidLines[0]!.value).toMatchObject({ amountApprovedIdr: "400000" });
+
+      // 2. The operator signs as the institutional account; an unreachable RPC is pending, not failed.
+      dialog = await openDecision("Keputusan Smoke B");
+      await dialog.getByRole("radio", { name: /Akun Pengesahan Yayasan Sinar/ }).check();
+      await dialog.getByText(CONTRACT_ACCOUNT, { exact: true }).first().waitFor();
+      await fillDecision(dialog, "SK-SMOKE-B");
+      ethCallBehavior = "error";
+      await dialog.getByRole("button", { name: "Tanda tangani pengesahan", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/belum diketahui/).waitFor();
+      expect((await decisionOf(second.draft.id)).status).toBe(404);
+      ethCallBehavior = "magic";
+      await dialog.getByRole("button", { name: "Periksa hasil pengesahan", exact: true }).click();
+      await page.getByText("Pengajuan disetujui lembaga", { exact: true }).waitFor();
+      const recordedB = (await (await decisionOf(second.draft.id)).json()).decision;
+      expect(recordedB.signerAccount.toLowerCase()).toBe(CONTRACT_ACCOUNT.toLowerCase());
+      expect(recordedB.operatorAccount.toLowerCase()).toBe(approverSinar.address.toLowerCase());
+
+      // 3. The mandate is revoked while the wallet is signing: the signature is not applied.
+      dialog = await openDecision("Keputusan Smoke C");
+      await fillDecision(dialog, "SK-SMOKE-C");
+      beforeSign = async () => {
+        beforeSign = null;
+        const [mandate] = await store.listMandates(SINAR, { officerId: "off-approver-sinar", activeOnly: true });
+        await store.revokeMandate({ institutionId: SINAR, id: mandate!.id, expectedVersion: mandate!.version, actor: adminSinar.address, now: clock });
+      };
+      await dialog.getByRole("button", { name: "Tanda tangani pengesahan", exact: true }).click();
+      await dialog.getByRole("alert").waitFor();
+      expect(await dialog.getByRole("alert").textContent()).not.toMatch(/belum diketahui/);
+      expect((await decisionOf(third.draft.id)).status).toBe(404);
+      expect((await disbursement.getProposalDraft(SINAR, third.draft.id))!.status).toBe("READY_FOR_DECISION");
+
+      await page.screenshot({ path: "/tmp/issue93-browser.png", fullPage: true });
+      expect(errors).toEqual([]);
+    } finally {
+      await browser?.close();
+      server.stop(true);
+    }
+  }, 60000);
 });

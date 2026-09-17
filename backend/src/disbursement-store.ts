@@ -19,6 +19,7 @@ import {
   type DecisionBinding,
   type ProposalDecisionAction,
   type ProposalDecisionChallenge,
+  type ProposalDecisionDocument,
   type ProposalDecisionInput,
   type ProposalDecisionRecord,
   type ProposalDocumentCategory,
@@ -270,6 +271,8 @@ const decisionRecordFrom = (row: any): ProposalDecisionRecord => ({
   action: row.action as ProposalDecisionAction,
   decisionReference: row.decision_reference,
   decisionDate: row.decision_date,
+  decisionDocumentId: row.decision_document_id,
+  decisionDocumentSha256: row.decision_document_sha256,
   notes: row.notes ?? null,
   rejectionReason: row.rejection_reason ?? null,
   rightsDigest: row.rights_digest,
@@ -293,11 +296,27 @@ const decisionChallengeFrom = (row: any): ProposalDecisionChallenge => ({
   rightsDigest: row.rights_digest as `0x${string}`,
   decisionReference: row.decision_reference,
   decisionDate: row.decision_date,
+  decisionDocumentId: row.decision_document_id,
+  decisionDocumentSha256: row.decision_document_sha256 as `0x${string}`,
   mandateId: row.mandate_id,
   mandateValidUntil: asSeconds(row.mandate_valid_until),
   issuedAt: asSeconds(row.issued_at),
   expiresAt: asSeconds(row.expires_at),
   consumedAt: row.consumed_at == null ? null : asSeconds(row.consumed_at),
+});
+
+const decisionDocumentFrom = (row: any): ProposalDecisionDocument => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  proposalVersion: Number(row.proposal_version),
+  institutionId: row.institution_id,
+  fileName: row.file_name,
+  mimeType: row.mime_type,
+  sizeBytes: Number(row.size_bytes),
+  contentSha256: row.content_sha256 as `0x${string}`,
+  storageRef: row.storage_ref,
+  uploadedBy: row.uploaded_by,
+  createdAt: asSeconds(row.created_at),
 });
 
 const historyFrom = (row: any): ProposalHistoryRecord => ({
@@ -457,6 +476,8 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      action TEXT NOT NULL,
      decision_reference TEXT NOT NULL,
      decision_date TEXT NOT NULL,
+     decision_document_id TEXT NOT NULL,
+     decision_document_sha256 TEXT NOT NULL,
      notes TEXT,
      rejection_reason TEXT,
      rights_digest TEXT NOT NULL,
@@ -481,11 +502,26 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      rights_digest TEXT NOT NULL,
      decision_reference TEXT NOT NULL,
      decision_date TEXT NOT NULL,
+     decision_document_id TEXT NOT NULL,
+     decision_document_sha256 TEXT NOT NULL,
      mandate_id TEXT NOT NULL,
      mandate_valid_until BIGINT NOT NULL,
      issued_at BIGINT NOT NULL,
      expires_at BIGINT NOT NULL,
      consumed_at BIGINT
+   );`,
+  `CREATE TABLE IF NOT EXISTS proposal_decision_documents (
+     id TEXT PRIMARY KEY,
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
+     proposal_version INTEGER NOT NULL,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     file_name TEXT NOT NULL,
+     mime_type TEXT NOT NULL,
+     size_bytes INTEGER NOT NULL,
+     content_sha256 TEXT NOT NULL,
+     storage_ref TEXT NOT NULL,
+     uploaded_by TEXT NOT NULL,
+     created_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS proposal_decision_challenges_by_proposal ON proposal_decision_challenges (institution_id, proposal_id, nonce);`,
 ] as const;
@@ -1333,17 +1369,50 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             nonce, proposal_id, proposal_version, institution_id,
             operator_officer_id, operator_account, signer_account,
             action, rights_digest, decision_reference, decision_date,
+            decision_document_id, decision_document_sha256,
             mandate_id, mandate_valid_until, issued_at, expires_at
           ) VALUES (
             ${binding.nonce.toLowerCase()}, ${binding.proposalId}, ${binding.proposalVersion}, ${binding.institutionId},
             ${binding.operatorOfficerId}, ${binding.operatorAccount.toLowerCase()}, ${binding.signerAccount.toLowerCase()},
             ${binding.action}, ${binding.rightsDigest}, ${binding.decisionReference}, ${binding.decisionDate},
+            ${binding.decisionDocumentId}, ${binding.decisionDocumentSha256},
             ${binding.mandateId}, ${binding.mandateValidUntil}, ${binding.issuedAt}, ${binding.expiresAt}
           )
           RETURNING *
         `)
       )[0];
       return decisionChallengeFrom(row);
+    },
+
+    async saveDecisionDocument(document: ProposalDecisionDocument): Promise<ProposalDecisionDocument> {
+      const row = rowsOf(
+        await db.execute(sql`
+          INSERT INTO proposal_decision_documents (
+            id, proposal_id, proposal_version, institution_id, file_name, mime_type,
+            size_bytes, content_sha256, storage_ref, uploaded_by, created_at
+          ) VALUES (
+            ${document.id}, ${document.proposalId}, ${document.proposalVersion}, ${document.institutionId},
+            ${document.fileName}, ${document.mimeType}, ${document.sizeBytes}, ${document.contentSha256},
+            ${document.storageRef}, ${document.uploadedBy.toLowerCase()}, ${document.createdAt}
+          )
+          RETURNING *
+        `)
+      )[0];
+      return decisionDocumentFrom(row);
+    },
+
+    async getDecisionDocument(
+      institutionId: string,
+      proposalId: string,
+      documentId: string
+    ): Promise<ProposalDecisionDocument | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM proposal_decision_documents
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND id = ${documentId}
+        `)
+      )[0];
+      return row ? decisionDocumentFrom(row) : null;
     },
 
     async readDecisionChallenge(nonce: string): Promise<ProposalDecisionChallenge | null> {
@@ -1420,13 +1489,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           await tx.execute(sql`
             INSERT INTO proposal_decisions (
               id, proposal_id, proposal_version, institution_id, action,
-              decision_reference, decision_date, notes, rejection_reason,
-              rights_digest, operator_officer_id, operator_account, signer_account,
+              decision_reference, decision_date, decision_document_id, decision_document_sha256,
+              notes, rejection_reason, rights_digest, operator_officer_id, operator_account, signer_account,
               mandate_id, signature, created_at
             ) VALUES (
               ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${current.version}, ${institutionId}, ${input.action},
-              ${input.decisionReference}, ${input.decisionDate}, ${input.notes}, ${input.rejectionReason},
-              ${challenge.rightsDigest}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${input.signerAccount.toLowerCase()},
+              ${input.decisionReference}, ${input.decisionDate},
+              ${challenge.decisionDocumentId}, ${challenge.decisionDocumentSha256},
+              ${input.notes}, ${input.rejectionReason}, ${challenge.rightsDigest}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${input.signerAccount.toLowerCase()},
               ${input.mandateId}, ${input.signature}, ${now}
             )
             RETURNING *
