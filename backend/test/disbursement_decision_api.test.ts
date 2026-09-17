@@ -822,6 +822,85 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     expect((await disbursement.getProposalDraft(SINAR, draft.id))!.status).toBe("READY_FOR_DECISION");
   });
 
+  it("isolates institutions: another institution's decider cannot review, upload, challenge, decide or read", async () => {
+    const { draft } = await prepareReadyProposal();
+    const approverToken = await signIn(approverSinar, SINAR);
+    const intent = approval("SK-ISOLASI-01");
+    const signed = await signedChallenge(approverToken, draft, intent);
+
+    // A Baitul Maal official with a full decision mandate in their own institution.
+    await store.createOfficerProfile({
+      id: "off-approver-baitul", institutionId: BAITUL, displayName: "Pejabat Baitul",
+      account: amilBaitul.address, role: "OFFICER", actor: adminBaitul.address, now: clock,
+    });
+    await store.grantMandate({
+      institutionId: BAITUL, actor: adminBaitul.address, now: clock,
+      mandate: {
+        officerId: "off-approver-baitul", function: "APPROVE_DECISIONS", scopeType: "ALL_PROGRAMS",
+        assignmentRef: "SK-BAITUL-01", validFrom: clock - 1000, validUntil: clock + 86400,
+      },
+    });
+    const baitulToken = await signIn(amilBaitul, BAITUL);
+
+    expect((await get(`/proposals/${draft.id}/decision-review`, baitulToken)).status).toBe(404);
+    expect((await postDecisionDocument(baitulToken, draft)).status).toBe(404);
+    expect((await post(`/proposals/${draft.id}/decision-challenge`,
+      { ...intent, decisionDocumentId: signed.challenge.decisionDocumentId, expectedVersion: draft.version }, baitulToken)).status).toBe(404);
+    expect((await decide(baitulToken, draft, intent, signed)).status).toBe(404);
+    expect((await get(`/proposals/${draft.id}/decision-documents/${signed.challenge.decisionDocumentId}`, baitulToken)).status).toBe(404);
+
+    // Naming the other institution explicitly does not switch the session's tenant.
+    const named = await post(`/proposals/${draft.id}/decide`, {
+      ...intent, institutionId: SINAR, decisionDocumentId: signed.challenge.decisionDocumentId,
+      signerAccount: signed.challenge.signerAccount, mandateId: signed.challenge.mandateId,
+      nonce: signed.challenge.nonce, signature: signed.signature, expectedVersion: draft.version, operationId: crypto.randomUUID(),
+    }, baitulToken);
+    expect(named.status).toBe(403);
+
+    // A challenge signed for one proposal cannot decide another in the same institution.
+    const sibling = await prepareReadyProposal({ programId: draft.programId, purpose: "Pengajuan saudara" });
+    const siblingDocument = await uploadDecisionDocument(approverToken, sibling.draft);
+    const misrouted = await decide(approverToken, sibling.draft, { ...intent, decisionDocumentId: siblingDocument.id }, signed);
+    expect(misrouted.status).toBe(409);
+
+    expect((await get(`/proposals/${draft.id}/decision`, approverToken)).status).toBe(404);
+    expect((await decide(approverToken, draft, intent, signed)).status).toBe(200);
+    expect((await get(`/proposals/${draft.id}/decision`, baitulToken)).status).toBe(404);
+  });
+
+  it("applies nothing from a session that was logged out, expired or had its membership revoked", async () => {
+    const { draft } = await prepareReadyProposal();
+    const intent = approval("SK-SESI-01");
+
+    // Logout between signing and submitting.
+    const loggedOut = await signIn(approverSinar, SINAR);
+    const signed = await signedChallenge(loggedOut, draft, intent);
+    expect((await request("/session", { method: "DELETE", headers: { Authorization: `Bearer ${loggedOut}` } })).status).toBeLessThan(300);
+    const afterLogout = await decide(loggedOut, draft, intent, signed);
+    expect(afterLogout.status).toBe(401);
+    expect((await afterLogout.json()).sessionEnd).toBe("REVOKED");
+
+    // Expiry between signing and submitting.
+    const expiring = await signIn(approverSinar, SINAR);
+    clock += 3601;
+    const afterExpiry = await decide(expiring, draft, intent, signed);
+    expect(afterExpiry.status).toBe(401);
+    expect((await afterExpiry.json()).sessionEnd).toBe("EXPIRED");
+    clock = NOW;
+
+    // Membership revocation ends the session at once.
+    const revoked = await signIn(approverSinar, SINAR);
+    await store.deactivateMembership({ institutionId: SINAR, account: approverSinar.address });
+    expect((await decide(revoked, draft, intent, signed)).status).toBe(401);
+    expect((await get(`/proposals/${draft.id}/decision`, await signIn(adminSinar, SINAR))).status).toBe(404);
+    expect((await disbursement.getProposalDraft(SINAR, draft.id))!.status).toBe("READY_FOR_DECISION");
+
+    // The rightful owner, signed in again, can still use the unspent challenge.
+    await store.upsertMembership({ institutionId: SINAR, account: approverSinar.address, role: "OFFICER" });
+    const restored = await signIn(approverSinar, SINAR);
+    expect((await decide(restored, draft, intent, signed)).status).toBe(200);
+  });
+
   it("holds and explains when institutional policy requires multi-signer digital quorum", async () => {
     const { draft } = await prepareReadyProposal();
     const approverToken = await signIn(approverSinar, SINAR);
@@ -900,6 +979,8 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     const first = await prepareReadyProposal({ purpose: "Keputusan Smoke A" });
     const second = await prepareReadyProposal({ programId: first.programId, purpose: "Keputusan Smoke B" });
     const third = await prepareReadyProposal({ programId: first.programId, purpose: "Keputusan Smoke C" });
+    const fourth = await prepareReadyProposal({ programId: first.programId, purpose: "Keputusan Smoke D" });
+    let holdDecide: Promise<void> | null = null;
     const approverToken = await signIn(approverSinar, SINAR);
 
     let beforeSign: (() => Promise<void>) | null = null;
@@ -927,6 +1008,11 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
           }
           return Response.json(null);
         }
+        if (holdDecide && path.endsWith("/decide")) {
+          const response = await app.fetch(req);
+          await holdDecide;
+          return response;
+        }
         return app.fetch(req);
       },
     });
@@ -943,10 +1029,13 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
 
       await page.goto(server.url.toString());
       await page.getByRole("button", { name: /^0x/ }).waitFor();
-      await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
-      await page.waitForFunction((institution: string) => (document.querySelector("#institution") as HTMLSelectElement)?.value === institution, SINAR);
-      await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
-      await page.getByLabel(/Program bantuan/).selectOption(first.programId);
+      const signInToProgram = async () => {
+        await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
+        await page.waitForFunction((institution: string) => (document.querySelector("#institution") as HTMLSelectElement)?.value === institution, SINAR);
+        await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+        await page.getByLabel(/Program bantuan/).selectOption(first.programId);
+      };
+      await signInToProgram();
 
       const openDecision = async (purpose: string) => {
         await page.getByRole("button", { name: new RegExp(purpose) }).click();
@@ -1003,6 +1092,36 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
       expect(await dialog.getByRole("alert").textContent()).not.toMatch(/belum diketahui/);
       expect((await decisionOf(third.draft.id)).status).toBe(404);
       expect((await disbursement.getProposalDraft(SINAR, third.draft.id))!.status).toBe("READY_FOR_DECISION");
+
+      // 4. A late response to the old session, after logout, is not applied; a new session reads the durable result.
+      await dialog.getByRole("button", { name: "Tutup", exact: true }).click();
+      await store.grantMandate({
+        institutionId: SINAR, actor: adminSinar.address, now: clock,
+        mandate: {
+          officerId: "off-approver-sinar", function: "APPROVE_DECISIONS", scopeType: "ALL_PROGRAMS",
+          assignmentRef: "SK-003/DIREKTUR-ULANG", validFrom: clock - 1000, validUntil: clock + 86400 * 30,
+        },
+      });
+      dialog = await openDecision("Keputusan Smoke D");
+      await fillDecision(dialog, "SK-SMOKE-D");
+      let release!: () => void;
+      holdDecide = new Promise<void>((resolve) => { release = resolve; });
+      await dialog.getByRole("button", { name: "Tanda tangani pengesahan", exact: true }).click();
+      for (let attempt = 0; attempt < 50 && (await decisionOf(fourth.draft.id)).status !== 200; attempt++) await Bun.sleep(100);
+      expect((await decisionOf(fourth.draft.id)).status).toBe(200);
+      // The modal makes the rest of the page inert, so logout is dispatched as the app's own button click.
+      await page.locator("button").filter({ hasText: /^\s*Keluar\s*$/ }).first().dispatchEvent("click");
+      await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).waitFor();
+      release();
+      holdDecide = null;
+      await Bun.sleep(500);
+      expect(await page.getByText("Pengajuan disetujui lembaga", { exact: true }).count()).toBe(0);
+      expect(await page.getByRole("dialog").count()).toBe(0);
+
+      await signInToProgram();
+      await page.getByRole("button", { name: /Keputusan Smoke D/ }).click();
+      await page.getByText("Pengajuan disetujui lembaga", { exact: true }).waitFor();
+      await page.getByText("SK-SMOKE-D", { exact: true }).waitFor();
 
       await page.screenshot({ path: "/tmp/issue93-browser.png", fullPage: true });
       expect(errors).toEqual([]);
