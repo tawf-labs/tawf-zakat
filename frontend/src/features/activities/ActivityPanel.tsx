@@ -8,7 +8,9 @@ import { ActivityTable } from "./ActivityTable";
 import { ActivityDetailModal } from "./ActivityDetailModal";
 import { CreateActivityModal } from "./CreateActivityModal";
 
-export function ActivityPanel({ requests, canManage }: { requests: PrivateRequests; canManage: boolean }) {
+export function ActivityPanel({ requests, canManage, allocationRevision = 0 }: {
+  requests: PrivateRequests; canManage: boolean; allocationRevision?: number;
+}) {
   const [activities, setActivities] = useState<DistributionActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +32,7 @@ export function ActivityPanel({ requests, canManage }: { requests: PrivateReques
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, allocationRevision]);
 
   const q = search.trim().toLowerCase();
   const filtered = q

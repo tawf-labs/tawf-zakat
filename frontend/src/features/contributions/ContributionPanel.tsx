@@ -36,7 +36,9 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-export function ContributionPanel({ requests, canManage }: { requests: PrivateRequests; canManage: boolean }) {
+export function ContributionPanel({ requests, canManage, onAllocated }: {
+  requests: PrivateRequests; canManage: boolean; onAllocated?: () => void;
+}) {
   const [activeTab, setActiveTab] = useState<Tab>("list");
   const [contributions, setContributions] = useState<ContributionRecord[]>([]);
   const [drafts, setDrafts] = useState<ContributionImportDraft[]>([]);
@@ -277,6 +279,7 @@ export function ContributionPanel({ requests, canManage }: { requests: PrivateRe
           contribution={allocatingContribution}
           onClose={() => setAllocatingContribution(null)}
           onAllocated={async () => {
+            onAllocated?.();
             setSuccessMessage(`Kontribusi ${allocatingContribution.id} berhasil dialokasikan.`);
             setAllocatingContribution(null);
             await refresh();

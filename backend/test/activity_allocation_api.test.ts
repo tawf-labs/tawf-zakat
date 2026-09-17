@@ -231,7 +231,7 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "activity-test-files-"));
     files = createEncryptedFileStore({ directory: tempDir, key: FILE_KEY });
-    database = await createTestWorkspaceDatabase();
+    database = await createTestWorkspaceDatabase(process.env.ACTIVITY_TEST_DATABASE_URL);
     const handle = database.handle();
     await createWorkspaceStore(handle).ensureSchema();
     await createDisbursementStore(handle).ensureSchema();
@@ -555,6 +555,91 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
     const cross = await allocate("c-sinar", { activityId: "act-sinar", amountExact: "100000", expectedVersion: 3 }, baitul);
     expect(cross.status).toBe(404);
   });
+
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: creates an activity, allocates partially, rejects excess and reads the remainder after reload", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(programId, "prop-browser", [money("1000000")], tokens);
+    await endorsedContribution("c-browser", "700000", "ZAKAT", "Bantuan", tokens, "Donatur Sintetis");
+    const built = await Bun.build({
+      entrypoints: [new URL("../../frontend/test/officer-smoke.tsx", import.meta.url).pathname],
+      target: "browser",
+      define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+    });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    const bundle = await built.outputs[0]!.text();
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname;
+        if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+        if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+        if (path === "/wallet-rpc") {
+          const { method, params } = await req.json();
+          if (["eth_accounts", "eth_requestAccounts"].includes(method)) return Response.json([amilSinar.address]);
+          if (method === "eth_chainId") return Response.json("0x7a69");
+          if (method === "eth_signTypedData_v4") return Response.json(await amilSinar.signTypedData(JSON.parse(params[1])));
+          return Response.json(null);
+        }
+        return app.fetch(req);
+      },
+    });
+    let browser: any;
+    try {
+      const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+      browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+      const page = await browser.newPage();
+      await page.addInitScript((now: number) => { Date.now = () => now * 1000; }, NOW);
+      page.setDefaultTimeout(10000);
+      const errors: string[] = [];
+      page.on("pageerror", (error: Error) => { errors.push(error.message); console.error("Activity browser:", error.message); });
+      page.on("response", async (response: any) => {
+        if (response.status() >= 400 && response.url().includes("/api/workspace")) console.error("Activity browser HTTP:", response.url(), response.status(), await response.text());
+      });
+      await page.goto(server.url.toString());
+      await page.getByRole("button", { name: /^0x/ }).waitFor();
+      await page.getByLabel("Pengelola Zakat", { exact: true }).selectOption(SINAR);
+      await page.waitForFunction((institution: string) => (document.querySelector("#institution") as HTMLSelectElement)?.value === institution, SINAR);
+      await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
+      await page.getByRole("heading", { name: "LPZ Sinar Amanah (sintetis)" }).waitFor();
+      await page.getByRole("button", { name: "Buat Kegiatan", exact: true }).click();
+      const create = page.getByRole("dialog", { name: "Buat kegiatan penyaluran", exact: true });
+      await create.getByLabel(/ID pengajuan yang disahkan/).fill("prop-browser");
+      await create.getByLabel("Nama kegiatan (opsional)", { exact: true }).fill("Kegiatan Smoke 103");
+      await create.getByRole("button", { name: "Buat Kegiatan", exact: true }).click();
+      await create.waitFor({ state: "detached" });
+      const activityRow = page.getByRole("row").filter({ hasText: "Kegiatan Smoke 103" });
+      await activityRow.waitFor();
+      const contributionRow = page.getByRole("row").filter({ hasText: "TRX-c-browser" });
+      await contributionRow.getByRole("button", { name: "Alokasikan", exact: true }).click();
+      const allocation = page.getByRole("dialog", { name: "Alokasikan kontribusi", exact: true });
+      const activities = (await (await get("/activities", tokens.amil)).json()).activities;
+      await allocation.getByLabel(/Kegiatan penyaluran/).selectOption(activities[0].id);
+      await allocation.getByLabel(/Nominal \(unit minor\)/).fill("700001");
+      await allocation.getByLabel(/Alasan alokasi/).fill("Smoke tahap pertama");
+      await allocation.getByRole("button", { name: "Konfirmasi Alokasi", exact: true }).click();
+      await allocation.getByText(/Nominal melebihi sisa kontribusi/).waitFor();
+      await allocation.getByLabel(/Nominal \(unit minor\)/).fill("300000");
+      await allocation.getByRole("button", { name: "Konfirmasi Alokasi", exact: true }).click();
+      await allocation.waitFor({ state: "detached" });
+      await contributionRow.getByText(/Teralokasi:.*300\.000/).waitFor();
+      await contributionRow.getByText(/Sisa:.*400\.000/).waitFor();
+      // Both panels must reflect the same allocation without a manual reload.
+      await activityRow.getByText(/300\.000/, { exact: false }).waitFor({ timeout: 2000 });
+      await page.reload();
+      await contributionRow.getByText(/Sisa:.*400\.000/).waitFor();
+      await activityRow.getByText(/300\.000/, { exact: false }).waitFor();
+      await activityRow.getByRole("button", { name: "Detail Alokasi", exact: true }).click();
+      await page.getByRole("dialog").getByText("Smoke tahap pertama", { exact: true }).waitFor();
+      const record = (await (await get("/contributions/c-browser", tokens.amil)).json()).contribution;
+      expect(record).toMatchObject({ allocatedAmount: "300000", unallocatedAmount: "400000" });
+      expect(errors).toEqual([]);
+      await page.screenshot({ path: "/tmp/issue103-browser.png", fullPage: true });
+    } finally {
+      await browser?.close();
+      await server.stop(true);
+    }
+  }, 60000);
 
   it("keeps activities, allocations, balances and operation replay across a database restart", async () => {
     const tokens = await signInSinar();

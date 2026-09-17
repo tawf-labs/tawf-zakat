@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, type ComponentProps } from "react";
+import React, { Suspense, createContext, lazy, useContext, useEffect, useState, type ComponentProps } from "react";
 import type { ConnectKitButton, ConnectKitProvider } from "connectkit";
 
 const LazyConnectKitProvider = lazy(() =>
@@ -10,6 +10,7 @@ const LazyConnectKitButtonCustom = lazy(() =>
 );
 
 type SafeConnectKitProviderProps = ComponentProps<typeof ConnectKitProvider>;
+const ConnectKitReady = createContext(false);
 type ConnectKitButtonRenderProps = Parameters<
   NonNullable<ComponentProps<typeof ConnectKitButton.Custom>["children"]>
 >[0];
@@ -22,13 +23,18 @@ type ConnectKitButtonRenderProps = Parameters<
  * children — a real runtime branch, not a bundler tree-shaking assumption.
  */
 export function SafeConnectKitProvider({ children, ...props }: SafeConnectKitProviderProps) {
-  if (typeof window === "undefined") {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  // Match SSR on the initial client render; introduce Suspense only afterwards.
+  if (!mounted) {
     return <>{children}</>;
   }
 
   return (
     <Suspense fallback={<>{children}</>}>
-      <LazyConnectKitProvider {...props}>{children}</LazyConnectKitProvider>
+      <LazyConnectKitProvider {...props}>
+        <ConnectKitReady.Provider value={true}>{children}</ConnectKitReady.Provider>
+      </LazyConnectKitProvider>
     </Suspense>
   );
 }
@@ -52,7 +58,8 @@ export function SafeConnectKitButton({
 }: {
   children: (props: ConnectKitButtonRenderProps) => React.ReactNode;
 }) {
-  if (typeof window === "undefined") {
+  const providerReady = useContext(ConnectKitReady);
+  if (typeof window === "undefined" || !providerReady) {
     return <>{children(DISCONNECTED_STATE)}</>;
   }
 

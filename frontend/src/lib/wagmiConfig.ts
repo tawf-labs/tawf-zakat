@@ -1,6 +1,6 @@
 import { createConfig, http } from "wagmi";
 import { arbitrumSepolia, sepolia } from "wagmi/chains";
-import { coinbaseWallet, injected, walletConnect } from "wagmi/connectors";
+import { coinbaseWallet, walletConnect } from "wagmi/connectors";
 
 const chains = [arbitrumSepolia, sepolia] as const;
 const transports = {
@@ -37,12 +37,15 @@ const appMetadata = {
 // render the static shell, and real wallet connection always happens after
 // hydration.
 export const wagmiConfig = import.meta.env.SSR
-  ? createConfig({ chains: [...chains], transports })
+  ? createConfig({ chains: [...chains], transports, ssr: true })
   : createConfig({
       chains: [...chains],
       transports,
+      ssr: true,
+      // Browser wallets are discovered by EIP-6963 with stable provider IDs.
+      // A generic window.ethereum connector can resolve to another extension
+      // on reload, so it must not be offered alongside discovered wallets.
       connectors: [
-        injected(),
         coinbaseWallet({ appName: appMetadata.name, appLogoUrl: appMetadata.icons[0] }),
         walletConnect({
           projectId: walletConnectProjectId,
@@ -51,4 +54,3 @@ export const wagmiConfig = import.meta.env.SSR
         }),
       ],
     });
-

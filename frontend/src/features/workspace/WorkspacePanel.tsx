@@ -33,6 +33,7 @@ function WorkspaceContents() {
   const busy = access.state === "OPENING";
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
+  const [allocationRevision, setAllocationRevision] = useState(0);
 
   useEffect(() => {
     fetchOnboardingFixtures()
@@ -186,11 +187,13 @@ function WorkspaceContents() {
 
       <AuthorityPanel key={`authority:${requests.contextId}`} requests={requests} workspace={workspace} />
 
-      <ContributionPanel key={`contribution:${requests.contextId}`} requests={requests} canManage={capabilities.prepareEvidence} />
+      <ContributionPanel key={`contribution:${requests.contextId}`} requests={requests} canManage={capabilities.prepareEvidence}
+        onAllocated={() => setAllocationRevision(value => value + 1)} />
 
       <DisbursementPanel key={`disbursement:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
 
-      <ActivityPanel key={`activity:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
+      <ActivityPanel key={`activity:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement}
+        allocationRevision={allocationRevision} />
 
       <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
 

@@ -5,6 +5,7 @@ import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SafeConnectKitProvider } from "../lib/SafeConnectKitProvider";
 import { wagmiConfig } from "../lib/wagmiConfig";
+import { SelectedWalletReconnect } from "../lib/SelectedWalletReconnect";
 import { WalletProvider } from "../lib/WalletContext";
 import { WebSocketProvider } from "../lib/WebSocketContext";
 import { Toaster } from "sonner";
@@ -82,7 +83,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body className="bg-white text-[#17332c] font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-[#c4ed70]/40">
-        <WagmiProvider config={wagmiConfig}>
+        <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
+          <SelectedWalletReconnect />
           <QueryClientProvider client={queryClient}>
             <SafeConnectKitProvider
               theme="soft"

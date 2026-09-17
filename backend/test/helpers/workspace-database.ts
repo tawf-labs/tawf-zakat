@@ -6,7 +6,7 @@
  * behaves. An in-memory map would let every one of those constraints pass by
  * being absent, which is exactly the claim these tests exist to make.
  *
- * Each call gets its own data directory under the OS temp dir, so tests cannot
+ * By default, each call gets its own data directory under the OS temp dir, so tests cannot
  * see each other's rows, and `reopen()` genuinely closes the database and opens
  * the same directory again - the only honest way to test durability.
  *
@@ -15,14 +15,18 @@
  * additive rather than merely asserted to be.
  */
 
+// An explicit connection string uses a unique temporary PostgreSQL schema.
+// Reopening that mode reconnects the client; it does not restart the server.
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
+import { drizzle as postgresDrizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type WorkspaceDatabase = ReturnType<typeof drizzle>;
+export type WorkspaceDatabase = ReturnType<typeof drizzle> | ReturnType<typeof postgresDrizzle>;
 
 const LEGACY_SCHEMA = `
   CREATE TABLE IF NOT EXISTS donations (
@@ -86,11 +90,22 @@ export type TestWorkspaceDatabase = {
  * truncated table is as empty as a fresh one, and the file's directory is still
  * its own.
  */
-export async function createTestWorkspaceDatabase(): Promise<TestWorkspaceDatabase> {
+export async function createTestWorkspaceDatabase(connectionString?: string): Promise<TestWorkspaceDatabase> {
   const directory = await mkdtemp(join(tmpdir(), "tawf-workspace-"));
-
-  let client = new PGlite(directory);
-  let db = drizzle(client);
+  // A unique schema keeps smoke fixtures and truncation away from existing data.
+  const schema = connectionString ? `smoke_${crypto.randomUUID().replaceAll("-", "")}` : "public";
+  const admin = connectionString ? postgres(connectionString, { max: 1, onnotice: () => {} }) : undefined;
+  if (admin) await admin.unsafe(`CREATE SCHEMA ${schema}`);
+  function open() {
+    if (connectionString) {
+      const client = postgres(connectionString, { max: 5, connection: { search_path: schema }, onnotice: () => {} });
+      return { db: postgresDrizzle(client), close: () => client.end() };
+    }
+    const client = new PGlite(directory);
+    return { db: drizzle(client), close: () => client.close() };
+  }
+  let connection = open();
+  let db: WorkspaceDatabase = connection.db;
 
   await db.execute(sql.raw(LEGACY_SCHEMA));
   await db.execute(
@@ -104,28 +119,32 @@ export async function createTestWorkspaceDatabase(): Promise<TestWorkspaceDataba
       for (const table of WORKSPACE_TABLES) {
         // A test file that only installs the tenancy schema has no evidence
         // tables; skipping those is right, inventing them here would not be.
-        const exists: any = await db.execute(sql`SELECT to_regclass(${`public.${table}`}) AS found`);
+        const exists: any = await db.execute(sql`SELECT to_regclass(${`${schema}.${table}`}) AS found`);
         if (!(exists.rows ?? exists)[0]?.found) continue;
         await db.execute(sql.raw(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`));
       }
     },
 
     async reopen() {
-      await client.close();
-      client = new PGlite(directory);
-      db = drizzle(client);
+      await connection.close();
+      connection = open();
+      db = connection.db;
       return db;
     },
 
     async close() {
-      await client.close();
+      await connection.close();
+      if (admin) {
+        await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`);
+        await admin.end();
+      }
       await rm(directory, { recursive: true, force: true });
     },
 
     async columnsOf(table: string) {
       const result: any = await db.execute(sql`
         SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = ${table} ORDER BY column_name ASC
+        WHERE table_schema = ${schema} AND table_name = ${table} ORDER BY column_name ASC
       `);
       return (result.rows ?? result).map((row: any) => row.column_name as string);
     },
