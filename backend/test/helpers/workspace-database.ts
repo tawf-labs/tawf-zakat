@@ -40,6 +40,16 @@ const LEGACY_SCHEMA = `
 
 /** The tables these tickets add, newest first, for truncation between tests. */
 const WORKSPACE_TABLES = [
+  "disbursement_realization_operations",
+  "disbursement_realization_expenses",
+  "disbursement_realization_advances",
+  "disbursement_realization_dispute_examinations",
+  "disbursement_realization_disputes",
+  "disbursement_realization_bast_examinations",
+  "disbursement_realization_challenges",
+  "disbursement_realization_document_allocations",
+  "disbursement_realization_documents",
+  "disbursement_realizations",
   "proposal_decision_challenges",
   "proposal_decisions",
   "proposal_decision_documents",

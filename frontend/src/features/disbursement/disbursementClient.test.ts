@@ -301,3 +301,72 @@ describe("disbursementClient Ticket #93 methods", () => {
     expect(calls[2]!.body.operationId).toBe("op-1");
   });
 });
+
+describe("disbursementClient Ticket #94 realization methods", () => {
+  it("sends the realization, evidence, confirmation, dispute and advance requests the API routes accept", async () => {
+    const client = await import("./disbursementClient");
+    const calls: { path: string; method: string; body: any }[] = [];
+    const requests = mockRequests(async (path, init) => {
+      calls.push({ path, method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body as string) : null });
+      if (path.endsWith("/realization-summary")) return { summary: { proposalId: "prop-1" }, notice: "Catatan dari server" };
+      if (path.endsWith("/realizations") && !init?.method) return { realizations: [] };
+      if (path.endsWith("/realization-documents")) return { documents: [] };
+      if (path.endsWith("/otp-verify") || path.endsWith("/bast-verify")) return { realization: { id: "rea-1" } };
+      if (path.endsWith("/disputes") && !init?.method) return { disputes: [] };
+      if (path.endsWith("/advances")) return init?.method ? { advance: { id: "adv-1" } } : { advances: [] };
+      if (path.endsWith("/expenses")) return init?.method ? { expense: { id: "exp-1" } } : { expenses: [] };
+      if (path.endsWith("/incomplete-evidence")) return { queue: [] };
+      return {};
+    });
+
+    await client.recordRealizations(requests, "prop-1", {
+      operationId: "op-1",
+      expectedVersion: 3,
+      batchGroupId: "kelompok-op-1",
+      items: [{ aidLineId: "aid-1", beneficiaryId: "ben-1", method: "CASH", amountIdr: "500000", reportedAt: 1720000000,
+        paymentRecipient: { name: "SD Negeri 1", relation: "Sekolah" }, notes: null }],
+    });
+    expect((await client.getProposalRealizationSummary(requests, "prop-1")).notice).toBe("Catatan dari server");
+    await client.getProposalRealizations(requests, "prop-1");
+    await client.uploadRealizationDocument(requests, "prop-1", "rea-1", {
+      operationId: "op-2", documentType: "RECEIPT_OR_BAST", fileName: "bast.pdf", mimeType: "application/pdf",
+      contentBase64: "Zm9v", batchGroupId: "kelompok-op-1", allocations: [{ realizationId: "rea-1", amountIdr: "500000" }],
+    });
+    await client.listRealizationDocuments(requests, "prop-1");
+    await client.issueRealizationOtp(requests, "prop-1", "rea-1", "080000000123");
+    await client.verifyRealizationOtp(requests, "prop-1", "rea-1", { nonce: "otp-1", otpCode: "123456" });
+    await client.verifyBastBySecondOfficer(requests, "prop-1", "rea-1", { notes: "Sesuai" });
+    await client.recordRealizationDispute(requests, "prop-1", "rea-1", { operationId: "op-recordRealizationDispute", complainantType: "BENEFICIARY", subject: "AMOUNT", reason: "Kurang", disputedAmountIdr: "100000" });
+    await client.examineRealizationDispute(requests, "prop-1", "rea-1", "disp-1", { operationId: "op-examineRealizationDispute", outcome: "RESOLVED", notes: "Selesai" });
+    await client.listRealizationDisputes(requests, "prop-1", "rea-1");
+    await client.recordRealizationAdvance(requests, "prop-1", { operationId: "op-recordRealizationAdvance", amountIdr: "1000000", purpose: "Transport", reference: "ADV-1" });
+    await client.listRealizationAdvances(requests, "prop-1");
+    await client.recordRealizationExpense(requests, "prop-1", { operationId: "op-recordRealizationExpense", amountIdr: "250000", purpose: "Sewa", payee: "Rental", documentRef: "KWT-1", advanceId: "adv-1" });
+    await client.listRealizationExpenses(requests, "prop-1");
+    await client.listIncompleteEvidenceQueue(requests);
+
+    const base = "/api/workspace/proposals";
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      `POST ${base}/prop-1/realizations`,
+      `GET ${base}/prop-1/realization-summary`,
+      `GET ${base}/prop-1/realizations`,
+      `POST ${base}/prop-1/realizations/rea-1/documents`,
+      `GET ${base}/prop-1/realization-documents`,
+      `POST ${base}/prop-1/realizations/rea-1/otp-challenge`,
+      `POST ${base}/prop-1/realizations/rea-1/otp-verify`,
+      `POST ${base}/prop-1/realizations/rea-1/bast-verify`,
+      `POST ${base}/prop-1/realizations/rea-1/disputes`,
+      `POST ${base}/prop-1/realizations/rea-1/disputes/disp-1/examinations`,
+      `GET ${base}/prop-1/realizations/rea-1/disputes`,
+      `POST ${base}/prop-1/advances`,
+      `GET ${base}/prop-1/advances`,
+      `POST ${base}/prop-1/expenses`,
+      `GET ${base}/prop-1/expenses`,
+      `GET ${base}/queue/incomplete-evidence`,
+    ]);
+    expect(calls[0]!.body).toMatchObject({ operationId: "op-1", expectedVersion: 3, items: [{ method: "CASH", paymentRecipient: { name: "SD Negeri 1" } }] });
+    expect(calls[3]!.body).toMatchObject({ operationId: "op-2", allocations: [{ realizationId: "rea-1", amountIdr: "500000" }] });
+    expect(calls[5]!.body).toEqual({ recipientContact: "080000000123" });
+    expect(calls[9]!.body).toEqual({ operationId: "op-examineRealizationDispute", outcome: "RESOLVED", notes: "Selesai" });
+  });
+});

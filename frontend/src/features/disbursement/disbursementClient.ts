@@ -686,3 +686,355 @@ export const submitProposalDecision = (requests: PrivateRequests, proposalId: st
 
 export const getProposalDecision = (requests: PrivateRequests, proposalId: string) =>
   requests.json<{ decision: ProposalDecision }>(`/api/workspace/proposals/${proposalId}/decision`);
+
+// ---------------------------------------------------------------------------
+// Realisasi Penyaluran IDR bertahap & Bukti Pembayaran (ticket #94)
+// Shapes mirror backend/src/disbursement.ts; the disclaimer comes from the server response.
+// ---------------------------------------------------------------------------
+
+export type DisbursementMethod = "CASH" | "BANK_TRANSFER";
+export type RealizationEvidenceStatus = "EVIDENCE_PENDING" | "EVIDENCE_COMPLETE";
+export type ConfirmationStatus = "UNCONFIRMED" | "CONFIRMED" | "DISPUTED";
+export type ConfirmationMethod = "OTP" | "BAST_EXAMINED";
+export type ComplainantType = "BENEFICIARY" | "OFFICER" | "AUDITOR";
+export type DisputeSubject = "RECEIPT" | "AMOUNT";
+export type DisputeStatus = "OPEN" | "EXAMINED" | "RESOLVED";
+export type DisputeOutcome = "EXAMINED" | "RESOLVED";
+export type RealizationProgress = "NOT_REALIZED" | "PARTIALLY_REALIZED" | "FULLY_REALIZED";
+export type RealizationDocumentType = "PAYMENT_PROOF" | "RECEIPT_OR_BAST" | "SUPPORTING_PHOTO";
+
+/** Who the payment went to when it is not the beneficiary (school, hospital, vendor). Null means the beneficiary. */
+export type PaymentRecipient = { name: string; relation: string };
+export type EvidenceAllocation = { realizationId: string; amountIdr: string };
+
+export const DISBURSEMENT_METHOD_LABELS: Record<DisbursementMethod, string> = {
+  CASH: "Tunai",
+  BANK_TRANSFER: "Transfer bank",
+};
+
+export const REALIZATION_DOCUMENT_TYPE_LABELS: Record<RealizationDocumentType, string> = {
+  PAYMENT_PROOF: "Bukti transfer / pembayaran",
+  RECEIPT_OR_BAST: "Tanda terima / BAST",
+  SUPPORTING_PHOTO: "Foto pendukung",
+};
+
+/** The evidence a method needs; a photo only supports. */
+export const REQUIRED_EVIDENCE_BY_METHOD: Record<DisbursementMethod, RealizationDocumentType> = {
+  BANK_TRANSFER: "PAYMENT_PROOF",
+  CASH: "RECEIPT_OR_BAST",
+};
+
+export const REALIZATION_PROGRESS_LABELS: Record<RealizationProgress, string> = {
+  NOT_REALIZED: "Belum tersalur",
+  PARTIALLY_REALIZED: "Tersalurkan sebagian",
+  FULLY_REALIZED: "Seluruh hak tersalur",
+};
+
+export const DISPUTE_STATUS_LABELS: Record<DisputeStatus, string> = {
+  OPEN: "Terbuka",
+  EXAMINED: "Sedang diperiksa",
+  RESOLVED: "Diselesaikan",
+};
+
+export const DISPUTE_SUBJECT_LABELS: Record<DisputeSubject, string> = {
+  RECEIPT: "Penerimaan bantuan",
+  AMOUNT: "Jumlah yang diterima",
+};
+
+export const COMPLAINANT_TYPE_LABELS: Record<ComplainantType, string> = {
+  BENEFICIARY: "Penerima manfaat / perwakilan",
+  OFFICER: "Petugas lembaga",
+  AUDITOR: "Auditor / pengawas",
+};
+
+export type DisbursementRealization = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  proposalVersion: number;
+  aidLineId: string;
+  beneficiaryId: string;
+  batchGroupId: string | null;
+  paymentRecipient: PaymentRecipient | null;
+  method: DisbursementMethod;
+  amountIdr: string;
+  reportedAt: number;
+  recordedAt: number;
+  operatorAccount: string;
+  operatorOfficerId: string;
+  notes: string | null;
+  evidenceStatus: RealizationEvidenceStatus;
+  confirmationStatus: ConfirmationStatus;
+  confirmationMethod: ConfirmationMethod | null;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type RealizationLineSummary = {
+  aidLineId: string;
+  beneficiaryId: string;
+  beneficiaryName: string;
+  paymentRecipients: PaymentRecipient[];
+  amountApprovedIdr: string;
+  amountRealizedIdr: string;
+  amountRemainingIdr: string;
+  status: RealizationProgress;
+  isDisputed: boolean;
+};
+
+export type ProposalRealizationSummary = {
+  proposalId: string;
+  proposalVersion: number;
+  totalApprovedIdr: string;
+  totalRealizedIdr: string;
+  totalRemainingIdr: string;
+  approvedBeneficiaryCount: number;
+  realizedBeneficiaryCount: number;
+  paymentEventCount: number;
+  disbursementStatus: RealizationProgress;
+  evidenceCompleteness: RealizationEvidenceStatus;
+  pendingEvidenceCount: number;
+  completeEvidenceCount: number;
+  totalPendingEvidenceIdr: string;
+  confirmedCount: number;
+  disputedCount: number;
+  totalAdvancesIdr: string;
+  totalExpensesIdr: string;
+  lines: RealizationLineSummary[];
+};
+
+export type RealizationItemInput = {
+  aidLineId: string;
+  beneficiaryId: string;
+  method: DisbursementMethod;
+  amountIdr: string;
+  reportedAt: number;
+  paymentRecipient: PaymentRecipient | null;
+  notes: string | null;
+};
+
+export type RecordRealizationInput = {
+  operationId: string;
+  expectedVersion: number;
+  batchGroupId: string | null;
+  items: RealizationItemInput[];
+};
+
+export type RealizationDocument = {
+  id: string;
+  proposalId: string;
+  realizationId: string;
+  batchGroupId: string | null;
+  institutionId: string;
+  documentType: RealizationDocumentType;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+  uploadedBy: string;
+  allocations: EvidenceAllocation[];
+  createdAt: number;
+};
+
+export type UploadRealizationDocumentInput = {
+  operationId: string;
+  documentType: RealizationDocumentType;
+  fileName: string;
+  mimeType: string;
+  contentBase64: string;
+  batchGroupId?: string | null;
+  allocations: EvidenceAllocation[];
+};
+
+export type RealizationOtpChallenge = { nonce: string; expiresAt: number; contactHint: string };
+
+export type DisputeExamination = {
+  id: string;
+  disputeId: string;
+  outcome: DisputeOutcome;
+  notes: string;
+  examinerOfficerId: string;
+  examinerAccount: string;
+  examinedAt: number;
+};
+
+export type RealizationDispute = {
+  id: string;
+  proposalId: string;
+  realizationId: string;
+  aidLineId: string;
+  institutionId: string;
+  complainantType: ComplainantType;
+  subject: DisputeSubject;
+  reason: string;
+  disputedAmountIdr: string;
+  status: DisputeStatus;
+  recordedByOfficerId: string;
+  createdAt: number;
+  examinations: DisputeExamination[];
+};
+
+export type RealizationAdvance = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  officerId: string;
+  officerAccount: string;
+  amountIdr: string;
+  purpose: string;
+  reference: string;
+  accountedIdr: string;
+  unaccountedIdr: string;
+  issuedAt: number;
+};
+
+export type RealizationExpense = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  advanceId: string | null;
+  amountIdr: string;
+  purpose: string;
+  payee: string;
+  documentRef: string;
+  recordedByOfficerId: string;
+  recordedAt: number;
+};
+
+export type IncompleteEvidenceQueueItem = {
+  proposalId: string;
+  purpose: string;
+  pendingCount: number;
+  totalPendingIdr: string;
+  oldestPendingReportedAt: number;
+};
+
+const realizationPath = (proposalId: string, realizationId: string) =>
+  `/api/workspace/proposals/${proposalId}/realizations/${realizationId}`;
+
+const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+export const recordRealizations = (requests: PrivateRequests, proposalId: string, input: RecordRealizationInput) =>
+  requests.json<{ records: DisbursementRealization[]; summary: ProposalRealizationSummary; notice: string }>(
+    `/api/workspace/proposals/${proposalId}/realizations`,
+    postJson(input)
+  );
+
+export const getProposalRealizations = (requests: PrivateRequests, proposalId: string) =>
+  requests
+    .json<{ realizations: DisbursementRealization[] }>(`/api/workspace/proposals/${proposalId}/realizations`)
+    .then((r) => r.realizations);
+
+export const getProposalRealizationSummary = (requests: PrivateRequests, proposalId: string) =>
+  requests.json<{ summary: ProposalRealizationSummary; notice: string }>(
+    `/api/workspace/proposals/${proposalId}/realization-summary`
+  );
+
+export const uploadRealizationDocument = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  input: UploadRealizationDocumentInput
+) =>
+  requests.json<{ document: RealizationDocument; realizations: DisbursementRealization[] }>(
+    `${realizationPath(proposalId, realizationId)}/documents`,
+    postJson(input)
+  );
+
+export const listRealizationDocuments = (requests: PrivateRequests, proposalId: string) =>
+  requests
+    .json<{ documents: RealizationDocument[] }>(`/api/workspace/proposals/${proposalId}/realization-documents`)
+    .then((r) => r.documents);
+
+export const downloadRealizationDocument = (requests: PrivateRequests, proposalId: string, documentId: string) =>
+  requests.blob(`/api/workspace/proposals/${proposalId}/realization-documents/${documentId}`);
+
+export const issueRealizationOtp = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  recipientContact: string
+) =>
+  requests.json<RealizationOtpChallenge>(`${realizationPath(proposalId, realizationId)}/otp-challenge`, postJson({ recipientContact }));
+
+export const verifyRealizationOtp = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  input: { nonce: string; otpCode: string }
+) =>
+  requests
+    .json<{ realization: DisbursementRealization }>(`${realizationPath(proposalId, realizationId)}/otp-verify`, postJson(input))
+    .then((r) => r.realization);
+
+export const verifyBastBySecondOfficer = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  input: { notes: string }
+) =>
+  requests
+    .json<{ realization: DisbursementRealization }>(`${realizationPath(proposalId, realizationId)}/bast-verify`, postJson(input))
+    .then((r) => r.realization);
+
+export const recordRealizationDispute = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  input: { operationId: string; complainantType: ComplainantType; subject: DisputeSubject; reason: string; disputedAmountIdr: string }
+) =>
+  requests.json<{ dispute: RealizationDispute; realization: DisbursementRealization }>(
+    `${realizationPath(proposalId, realizationId)}/disputes`,
+    postJson(input)
+  );
+
+export const examineRealizationDispute = (
+  requests: PrivateRequests,
+  proposalId: string,
+  realizationId: string,
+  disputeId: string,
+  input: { operationId: string; outcome: DisputeOutcome; notes: string }
+) =>
+  requests.json<{ dispute: RealizationDispute; realization: DisbursementRealization }>(
+    `${realizationPath(proposalId, realizationId)}/disputes/${disputeId}/examinations`,
+    postJson(input)
+  );
+
+export const listRealizationDisputes = (requests: PrivateRequests, proposalId: string, realizationId: string) =>
+  requests
+    .json<{ disputes: RealizationDispute[] }>(`${realizationPath(proposalId, realizationId)}/disputes`)
+    .then((r) => r.disputes);
+
+export const recordRealizationAdvance = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: { operationId: string; amountIdr: string; purpose: string; reference: string }
+) =>
+  requests
+    .json<{ advance: RealizationAdvance }>(`/api/workspace/proposals/${proposalId}/advances`, postJson(input))
+    .then((r) => r.advance);
+
+export const listRealizationAdvances = (requests: PrivateRequests, proposalId: string) =>
+  requests
+    .json<{ advances: RealizationAdvance[] }>(`/api/workspace/proposals/${proposalId}/advances`)
+    .then((r) => r.advances);
+
+export const recordRealizationExpense = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: { operationId: string; amountIdr: string; purpose: string; payee: string; documentRef: string; advanceId: string | null }
+) =>
+  requests
+    .json<{ expense: RealizationExpense }>(`/api/workspace/proposals/${proposalId}/expenses`, postJson(input))
+    .then((r) => r.expense);
+
+export const listRealizationExpenses = (requests: PrivateRequests, proposalId: string) =>
+  requests
+    .json<{ expenses: RealizationExpense[] }>(`/api/workspace/proposals/${proposalId}/expenses`)
+    .then((r) => r.expenses);
+
+export const listIncompleteEvidenceQueue = (requests: PrivateRequests) =>
+  requests
+    .json<{ queue: IncompleteEvidenceQueueItem[] }>(`/api/workspace/proposals/queue/incomplete-evidence`)
+    .then((r) => r.queue);

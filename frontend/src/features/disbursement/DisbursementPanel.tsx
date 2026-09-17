@@ -1,5 +1,6 @@
+import { RealizationQueryScope } from "./RealizationQueryScope";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ClipboardList, FileCheck, Layers } from "lucide-react";
+import { ClipboardList, FileCheck, FileClock, Layers } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import {
   archiveProgram,
@@ -16,12 +17,20 @@ import { ProposalDraftForm } from "./ProposalDraftForm";
 import { CreateProgramForm } from "./CreateProgramForm";
 import { ProgramDetails, ProposalList } from "./ProgramDetails";
 import { ExaminationQueuePanel } from "./ExaminationQueuePanel";
+import { IncompleteEvidenceQueuePanel } from "./IncompleteEvidenceQueuePanel";
 import type { EditorNavigation } from "./useProposalDraft";
 
 type OpenDraft = { draft: ProposalDraft; summary: ProposalTotals | null };
+type PanelTab = "programs" | "queues" | "evidence";
 
-export function DisbursementPanel({ requests, canManage }: { requests: PrivateRequests; canManage: boolean }) {
-  const [activeTab, setActiveTab] = useState<"programs" | "queues">("programs");
+const PANEL_TABS: Array<{ id: PanelTab; label: string; Icon: typeof Layers; tone: string }> = [
+  { id: "programs", label: "Program & Draf Pengajuan", Icon: Layers, tone: "text-stone-900" },
+  { id: "queues", label: "Antrean Pemeriksa & Revisi", Icon: FileCheck, tone: "text-emerald-900" },
+  { id: "evidence", label: "Bukti Belum Lengkap", Icon: FileClock, tone: "text-amber-900" },
+];
+
+function DisbursementPanelContent({ requests, canManage }: { requests: PrivateRequests; canManage: boolean }) {
+  const [activeTab, setActiveTab] = useState<PanelTab>("programs");
   const [programs, setPrograms] = useState<Program[]>([]);
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<ProposalDraftSummary[]>([]);
@@ -141,35 +150,29 @@ export function DisbursementPanel({ requests, canManage }: { requests: PrivateRe
         </div>
 
         {/* Panel Tabs */}
-        <div className="flex gap-1 rounded-lg bg-stone-100 p-1 text-xs font-medium">
-          <button
-            type="button"
-            onClick={() => {
-              if (canLeave()) setActiveTab("programs");
-            }}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors ${
-              activeTab === "programs" ? "bg-white text-stone-900 shadow-sm" : "text-stone-600 hover:text-stone-900"
-            }`}
-          >
-            <Layers className="h-3.5 w-3.5" />
-            Program & Draf Pengajuan
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (canLeave()) setActiveTab("queues");
-            }}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors ${
-              activeTab === "queues" ? "bg-white text-emerald-900 shadow-sm" : "text-stone-600 hover:text-stone-900"
-            }`}
-          >
-            <FileCheck className="h-3.5 w-3.5 text-emerald-700" />
-            Antrean Pemeriksa & Revisi
-          </button>
+        <div className="flex flex-wrap gap-1 rounded-lg bg-stone-100 p-1 text-xs font-medium">
+          {PANEL_TABS.map(({ id, label, Icon, tone }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={activeTab === id}
+              onClick={() => {
+                if (canLeave()) setActiveTab(id);
+              }}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors ${
+                activeTab === id ? `bg-white shadow-sm ${tone}` : "text-stone-600 hover:text-stone-900"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {activeTab === "queues" ? (
+      {activeTab === "evidence" ? (
+        <IncompleteEvidenceQueuePanel requests={requests} onOpenProposal={openFromQueue} />
+      ) : activeTab === "queues" ? (
         <ExaminationQueuePanel requests={requests} onOpenDraft={openFromQueue} />
       ) : (
         <>
@@ -223,4 +226,8 @@ export function DisbursementPanel({ requests, canManage }: { requests: PrivateRe
       )}
     </section>
   );
+}
+
+export function DisbursementPanel(props: { requests: PrivateRequests; canManage: boolean }) {
+  return <RealizationQueryScope key={props.requests.contextId}><DisbursementPanelContent {...props} /></RealizationQueryScope>;
 }

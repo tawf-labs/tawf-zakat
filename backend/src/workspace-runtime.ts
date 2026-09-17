@@ -23,6 +23,10 @@ import type { EvidenceStore } from "./evidence-store";
 import type { PrivateFileStore } from "./evidence-files";
 import type { DisbursementStore } from "./disbursement-store";
 
+export type RecipientMessageTransport = {
+  send(message: { to: string; body: string }): Promise<void>;
+};
+
 export type WorkspaceRuntime = {
   registry?: import("./registry-recording").RegistryRuntime;
   store: WorkspaceStore;
@@ -43,6 +47,13 @@ export type WorkspaceRuntime = {
    * upload instead of storing one.
    */
   files?: PrivateFileStore;
+  /**
+   * Delivers one-time confirmation codes to a recipient's contact (ticket #94).
+   * Optional, and absent means absent: OTP confirmation answers 503 and the
+   * officer falls back to a BAST examined by another officer. The code is never
+   * returned to the caller, so nothing else can stand in for this transport.
+   */
+  messages?: RecipientMessageTransport;
   reportAmilRules?: import("./report-package").AmilRule[];
   /**
    * This deployment's own deposit ledger and indexed events (ticket #79).

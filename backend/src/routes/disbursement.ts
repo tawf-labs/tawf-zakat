@@ -13,7 +13,7 @@
  * Submission, examination and restricted documents share this authenticated API.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { toHex, type Hex } from "viem";
 import { verifyAccountSignature } from "../account-signature";
@@ -42,6 +42,18 @@ import {
   type ProposalDocumentCategory,
   type ProposalDocumentRecord,
   type ProposalDraftInput,
+  REALIZATION_DISCLAIMER_NOTICE,
+  isComplainantType,
+  isDisputeOutcome,
+  isDisputeSubject,
+  isRealizationDocumentType,
+  isRecipientContact,
+  otpCodeHash,
+  parsePositiveIdr,
+  validateEvidenceAllocations,
+  validateRealizationItemInput,
+  type RealizationDocumentRecord,
+  type RealizationItemInput,
 } from "../disbursement";
 import { decodeTabular, type TabularFormat } from "../tabular-reader";
 import {
@@ -58,6 +70,13 @@ import {
   ProposalDraftConflictError,
   ProposalStateConflictError,
   ProposalSubmissionIncompleteError,
+  RealizationCapExceededError,
+  RealizationChallengeSpentError,
+  RealizationInputError,
+  RealizationNotFoundError,
+  RealizationOtpInvalidError,
+  RealizationSelfExaminationError,
+  RealizationStateError,
   type ProposalContributor,
   type StoredProposalDraft,
 } from "../disbursement-store";
@@ -66,6 +85,7 @@ import { authorize } from "../tenancy";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 import {
   assertCanApproveProposal,
+  type OperationalFunction,
 } from "../operational-mandate";
 import { MAX_EVIDENCE_FILE_BYTES, sha256Of } from "../evidence-files";
 import { createRestrictedDocuments, DocumentError } from "../restricted-documents";
@@ -83,6 +103,17 @@ const disbursementRoutes = new Hono();
 disbursementRoutes.onError((error, c) => {
   if (error instanceof OperationalAccessDenied) return c.json({ success: false, error: error.message }, 403);
   if (error instanceof DecisionChallengeSpentError) return refuse(c, 401, "replayed");
+  if (error instanceof RealizationNotFoundError) return c.json({ success: false, error: error.message }, 404);
+  if (error instanceof RealizationInputError || error instanceof RealizationOtpInvalidError) {
+    return c.json({ success: false, error: error.message }, 400);
+  }
+  if (error instanceof RealizationSelfExaminationError) return c.json({ success: false, error: error.message }, 403);
+  if (error instanceof RealizationCapExceededError || error instanceof RealizationStateError) {
+    return c.json({ success: false, error: error.message }, 409);
+  }
+  if (error instanceof RealizationChallengeSpentError) {
+    return c.json({ success: false, reason: "replayed", error: error.message }, 401);
+  }
   if (
     error instanceof ProposalDraftConflictError ||
     error instanceof DraftOperationConflictError ||
@@ -1621,6 +1652,470 @@ disbursementRoutes.get("/proposals/:id/decision", async (c) => {
   if (!decision) return refuse(c, 404, "not-found");
 
   return c.json({ success: true, decision });
+});
+
+// 17. Realisasi Penyaluran IDR bertahap, Bukti Pembayaran, dan Konfirmasi (Ticket #94)
+
+const OTP_TTL_SECONDS = 900;
+
+/** Officers who may examine a BAST or file a dispute besides the recorder's own function. */
+const EXAMINING_FUNCTIONS = ["EXAMINE_PROPOSALS", "APPROVE_DECISIONS", "HANDLE_REPORT_EXAMINATION"] as const;
+
+/** Resolves the proposal and the acting officer, and requires one of `functions` on its program. */
+async function realizationActor(
+  c: Context,
+  runtime: ReturnType<typeof runtimeOf>,
+  institutionId: string | undefined,
+  functions: readonly OperationalFunction[]
+) {
+  const auth = await authenticateWorkspace(c, runtime, institutionId);
+  if (!auth.ok) return { ok: false as const, response: auth.response };
+  if (!authorize(auth.session.role, "manageDisbursement")) return { ok: false as const, response: refuse(c, 403, "forbidden") };
+
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id")!);
+  if (!draft) return { ok: false as const, response: refuse(c, 404, "not-found") };
+
+  const actor = await operationalActor(runtime, auth.session);
+  const target = { programId: draft.programId };
+  if (!functions.some((fn) => actor.allows(fn, target))) actor.require(functions[0]!, target);
+  return { ok: true as const, session: auth.session, draft, officer: actor.officer, actor };
+}
+
+/** Readable by anyone who may read the proposal itself (see `GET /proposals/:id`). */
+async function realizationReader(c: Context, runtime: ReturnType<typeof runtimeOf>) {
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return { ok: false as const, response: auth.response };
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id")!);
+  if (!draft) return { ok: false as const, response: refuse(c, 404, "not-found") };
+  return { ok: true as const, session: auth.session, draft };
+}
+
+const institutionOf = (body: Record<string, unknown>) =>
+  typeof body.institutionId === "string" ? body.institutionId : undefined;
+
+/** The private locator never leaves the server. */
+const realizationDocumentView = ({ storageRef: _storageRef, ...document }: RealizationDocumentRecord) => document;
+
+/** Catat realisasi penyaluran IDR (tunai atau transfer), satu atau banyak baris dalam satu kelompok penyerahan. */
+disbursementRoutes.post("/proposals/:id/realizations", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return badRequest(c, "Daftar baris realisasi (items) wajib disertakan minimal satu.");
+  }
+  const items: RealizationItemInput[] = [];
+  for (const item of body.items) {
+    const validated = validateRealizationItemInput(item);
+    if (!validated.ok) return badRequest(c, validated.error);
+    items.push(validated.value);
+  }
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+  const expectedVersion = typeof body.expectedVersion === "number" ? body.expectedVersion : NaN;
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    return badRequest(c, "Versi pengajuan yang diharapkan tidak sah.");
+  }
+  const batchGroupId = text(body.batchGroupId) || null;
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+  const nominalAmount = items.reduce((total, item) => total + BigInt(item.amountIdr), 0n);
+  access.actor.require("RECORD_REALIZATION", { programId: access.draft.programId, nominalAmount });
+
+  const result = await runtime.disbursement.recordRealizations(
+    access.session.institutionId,
+    access.draft.id,
+    { items, batchGroupId, expectedVersion },
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) },
+    { account: access.session.account, officerId: access.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, ...result, notice: REALIZATION_DISCLAIMER_NOTICE }, 201);
+});
+
+disbursementRoutes.get("/proposals/:id/realizations", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const realizations = await runtime.disbursement.getProposalRealizations(access.session.institutionId, access.draft.id);
+  return c.json({ success: true, realizations });
+});
+
+/** Ringkasan realisasi: hak, tersalur, sisa, kelengkapan bukti, konfirmasi dan sengketa, masing-masing terpisah. */
+disbursementRoutes.get("/proposals/:id/realization-summary", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const summary = await runtime.disbursement.getProposalRealizationSummary(access.session.institutionId, access.draft.id);
+  if (!summary) return refuse(c, 404, "not-found");
+  return c.json({ success: true, summary, notice: REALIZATION_DISCLAIMER_NOTICE });
+});
+
+/** Unggah bukti realisasi beserta jumlah yang dibuktikan per realisasi (bukti kelompok menyebut setiap alokasi). */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/documents", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const fileName = text(body.fileName);
+  if (!fileName || fileName.length > 255) return badRequest(c, "Nama berkas tidak sah.");
+  if (!isRealizationDocumentType(body.documentType)) {
+    return badRequest(c, "Jenis dokumen bukti tidak sah ('PAYMENT_PROOF', 'RECEIPT_OR_BAST', atau 'SUPPORTING_PHOTO').");
+  }
+  const allocations = validateEvidenceAllocations(body.allocations);
+  if (!allocations.ok) return badRequest(c, allocations.error);
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+  if (typeof body.contentBase64 !== "string" || !body.contentBase64.trim()) {
+    return badRequest(c, "Isi berkas (base64) wajib diisi.");
+  }
+  const bytes = new Uint8Array(Buffer.from(body.contentBase64.trim(), "base64"));
+  if (bytes.byteLength === 0) return badRequest(c, "Berkas kosong tidak dapat disimpan.");
+  if (bytes.byteLength > MAX_EVIDENCE_FILE_BYTES) {
+    return badRequest(c, `Berkas melebihi batas ukuran ${MAX_EVIDENCE_FILE_BYTES} byte.`);
+  }
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  let stored;
+  try {
+    stored = await runtime.files.put({
+      institutionId: access.session.institutionId,
+      preparationId: access.draft.id,
+      fileId: crypto.randomUUID(),
+      bytes,
+    });
+  } catch {
+    throw new DocumentError("Berkas gagal disimpan. Coba lagi setelah penyimpanan tersedia.", "UNAVAILABLE");
+  }
+
+  const result = await runtime.disbursement.uploadRealizationDocument(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    {
+      documentType: body.documentType,
+      fileName,
+      mimeType: text(body.mimeType) || "application/octet-stream",
+      sizeBytes: stored.sizeBytes,
+      contentSha256: stored.contentSha256 as `0x${string}`,
+      storageRef: stored.storageRef,
+      batchGroupId: text(body.batchGroupId) || null,
+    },
+    allocations.value,
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, { ...body, contentBase64: sha256Of(bytes) }]) },
+    access.session.account,
+    runtime.now()
+  );
+
+  return c.json({ success: true, document: realizationDocumentView(result.document), realizations: result.realizations }, 201);
+});
+
+/** Riwayat bukti realisasi pengajuan, dapat dibuka ulang. */
+disbursementRoutes.get("/proposals/:id/realization-documents", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const documents = await runtime.disbursement.listRealizationDocuments(access.session.institutionId, access.draft.id);
+  return c.json({ success: true, documents: documents.map(realizationDocumentView) });
+});
+
+/** Realization evidence is readable by whoever prepares, examines, decides or records realizations for this proposal. */
+async function requireRealizationFileAccess(
+  runtime: ReturnType<typeof runtimeOf>,
+  session: { institutionId: string; account: string },
+  draft: StoredProposalDraft
+) {
+  const actor = await operationalActor(runtime, session);
+  const target = { programId: draft.programId };
+  const allowed = (["PREPARE_PROPOSALS", "EXAMINE_PROPOSALS", "APPROVE_DECISIONS", "RECORD_REALIZATION"] as const)
+    .some((fn) => actor.allows(fn, target));
+  if (!allowed) {
+    throw new OperationalAccessDenied("Akses bukti realisasi memerlukan mandat amil, pemeriksa, pemutus, atau pencatat realisasi.");
+  }
+}
+
+/** Unduh berkas bukti realisasi secara privat dengan pemeriksaan integritas SHA-256. */
+disbursementRoutes.get("/proposals/:id/realization-documents/:documentId", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  await requireRealizationFileAccess(runtime, access.session, access.draft);
+
+  const document = await runtime.disbursement.getRealizationDocument(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("documentId")
+  );
+  if (!document) return refuse(c, 404, "not-found");
+
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  const bytes = await runtime.files.get(document.storageRef);
+  if (!bytes) throw new DocumentError("Berkas bukti tidak ditemukan di penyimpanan.", "MISSING");
+  if (bytes.byteLength !== document.sizeBytes || sha256Of(bytes) !== document.contentSha256) {
+    throw new DocumentError("Berkas bukti tidak cocok dengan hash integritas yang tercatat.", "CORRUPT");
+  }
+
+  c.header("Content-Type", document.mimeType);
+  c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(document.fileName)}"`);
+  c.header("Content-Length", String(bytes.byteLength));
+  return c.body(new Uint8Array(bytes).buffer);
+});
+
+/**
+ * Kirim kode OTP ke kontak penerima. Kode hanya berjalan lewat transport pesan dan tidak pernah
+ * dikembalikan ke petugas; yang tersimpan hanya hash kode dan petunjuk kontak.
+ */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/otp-challenge", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const contact = text(body.recipientContact).replace(/[\s-]/g, "");
+  if (!isRecipientContact(contact)) {
+    return badRequest(c, "Kontak penerima harus nomor telepon (8-15 digit) atau alamat email yang sah.");
+  }
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+  if (!runtime.messages) {
+    return c.json({ success: false, error: "Layanan pengiriman OTP belum tersedia. Gunakan pemeriksaan BAST oleh petugas lain." }, 503);
+  }
+
+  const nonce = `otp-${crypto.randomUUID()}`;
+  const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+  const now = runtime.now();
+  const challenge = await runtime.disbursement.issueConfirmationOtp(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    { nonce, codeHash: otpCodeHash(nonce, code), recipientContact: contact, ttlSeconds: OTP_TTL_SECONDS },
+    now
+  );
+
+  try {
+    await runtime.messages.send({
+      to: contact,
+      body:
+        `Konfirmasi penerimaan ${challenge.aidType} sebesar Rp${BigInt(challenge.amountIdr).toLocaleString("id-ID")}. ` +
+        `Sebutkan kode ${code} kepada petugas hanya jika Anda sudah menerima bantuan tersebut. Berlaku 15 menit.`,
+    });
+  } catch {
+    await runtime.disbursement.voidConfirmationOtp(access.session.institutionId, nonce, runtime.now());
+    return c.json({ success: false, error: "Kode OTP gagal dikirim. Coba lagi atau gunakan pemeriksaan BAST." }, 503);
+  }
+
+  return c.json({ success: true, nonce, expiresAt: challenge.expiresAt, contactHint: challenge.contactHint }, 201);
+});
+
+/** Verifikasi kode OTP yang dibacakan penerima. */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/otp-verify", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const nonce = text(body.nonce);
+  const code = text(body.otpCode);
+  if (!nonce || !/^\d{6}$/.test(code)) return badRequest(c, "Nonce tantangan dan 6 digit kode OTP wajib disertakan.");
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+
+  const realization = await runtime.disbursement.verifyConfirmationOtp(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    nonce,
+    otpCodeHash(nonce, code),
+    runtime.now()
+  );
+  return c.json({ success: true, realization });
+});
+
+/** Pemeriksaan tanda terima/BAST oleh petugas selain pencatat, saat OTP tidak tersedia. */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/bast-verify", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const notes = text(body.notes);
+  if (!notes) return badRequest(c, "Catatan pemeriksaan BAST wajib diisi.");
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION", ...EXAMINING_FUNCTIONS]);
+  if (!access.ok) return access.response;
+
+  const result = await runtime.disbursement.verifyBastBySecondOfficer(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    notes,
+    { account: access.session.account, officerId: access.officer.id },
+    runtime.now()
+  );
+  return c.json({ success: true, ...result });
+});
+
+/** Catat keberatan atas penerimaan atau jumlah. Dokumen kurang bukan sengketa otomatis. */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/disputes", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  if (!isComplainantType(body.complainantType)) return badRequest(c, "Pihak pelapor sengketa tidak sah.");
+  if (!isDisputeSubject(body.subject)) return badRequest(c, "Bagian yang diperselisihkan harus 'RECEIPT' atau 'AMOUNT'.");
+  const reason = text(body.reason);
+  if (!reason) return badRequest(c, "Uraian sengketa/keberatan wajib diisi.");
+  const disputedAmountIdr = parsePositiveIdr(body.disputedAmountIdr);
+  if (!disputedAmountIdr) return badRequest(c, "Nominal yang diperselisihkan harus bilangan bulat rupiah lebih dari nol.");
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION", ...EXAMINING_FUNCTIONS]);
+  if (!access.ok) return access.response;
+
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+
+  const result = await runtime.disbursement.recordDispute(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    { complainantType: body.complainantType, subject: body.subject, reason, disputedAmountIdr },
+    { officerId: access.officer.id },
+    runtime.now(),
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
+  );
+  return c.json({ success: true, ...result }, 201);
+});
+
+/** Hasil pemeriksaan berwenang atas sengketa, dicatat sebagai riwayat. */
+disbursementRoutes.post("/proposals/:id/realizations/:realizationId/disputes/:disputeId/examinations", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  if (!isDisputeOutcome(body.outcome)) return badRequest(c, "Hasil pemeriksaan harus 'EXAMINED' atau 'RESOLVED'.");
+  const notes = text(body.notes);
+  if (!notes) return badRequest(c, "Catatan hasil pemeriksaan berwenang wajib diisi.");
+
+  const access = await realizationActor(c, runtime, institutionOf(body), EXAMINING_FUNCTIONS);
+  if (!access.ok) return access.response;
+
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+
+  const result = await runtime.disbursement.examineDispute(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId"),
+    c.req.param("disputeId"),
+    { outcome: body.outcome, notes },
+    { account: access.session.account, officerId: access.officer.id },
+    runtime.now(),
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
+  );
+  return c.json({ success: true, ...result });
+});
+
+disbursementRoutes.get("/proposals/:id/realizations/:realizationId/disputes", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const disputes = await runtime.disbursement.listDisputes(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("realizationId")
+  );
+  return c.json({ success: true, disputes });
+});
+
+/** Catat uang muka petugas, terpisah dari bantuan yang diterima. */
+disbursementRoutes.post("/proposals/:id/advances", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const amountIdr = parsePositiveIdr(body.amountIdr);
+  const purpose = text(body.purpose);
+  const reference = text(body.reference);
+  if (!amountIdr || !purpose || !reference) {
+    return badRequest(c, "Nominal uang muka (rupiah bulat lebih dari nol), tujuan, dan nomor referensi wajib diisi.");
+  }
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+
+  const advance = await runtime.disbursement.recordAdvance(
+    access.session.institutionId,
+    access.draft.id,
+    { amountIdr, purpose, reference },
+    { account: access.session.account, officerId: access.officer.id },
+    runtime.now(),
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
+  );
+  return c.json({ success: true, advance }, 201);
+});
+
+disbursementRoutes.get("/proposals/:id/advances", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const advances = await runtime.disbursement.listAdvances(access.session.institutionId, access.draft.id);
+  return c.json({ success: true, advances });
+});
+
+/** Catat biaya operasional: nominal, tujuan, payee dan dokumen rujukan. Tidak membuat pembayaran otomatis. */
+disbursementRoutes.post("/proposals/:id/expenses", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const amountIdr = parsePositiveIdr(body.amountIdr);
+  const purpose = text(body.purpose);
+  const payee = text(body.payee);
+  const documentRef = text(body.documentRef);
+  if (!amountIdr || !purpose || !payee || !documentRef) {
+    return badRequest(c, "Nominal biaya (rupiah bulat lebih dari nol), tujuan, payee, dan dokumen referensi wajib diisi.");
+  }
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
+
+  const expense = await runtime.disbursement.recordExpense(
+    access.session.institutionId,
+    access.draft.id,
+    { advanceId: text(body.advanceId) || null, amountIdr, purpose, payee, documentRef },
+    { officerId: access.officer.id },
+    runtime.now(),
+    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
+  );
+  return c.json({ success: true, expense }, 201);
+});
+
+disbursementRoutes.get("/proposals/:id/expenses", async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const expenses = await runtime.disbursement.listExpenses(access.session.institutionId, access.draft.id);
+  return c.json({ success: true, expenses });
+});
+
+/** Antrean pengajuan yang memiliki realisasi dengan bukti belum lengkap. */
+disbursementRoutes.get("/proposals/queue/incomplete-evidence", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const queue = await runtime.disbursement.listIncompleteEvidenceQueue(auth.session.institutionId);
+  return c.json({ success: true, queue });
 });
 
 disbursementRoutes.get("/fund-types", async (c) => c.json({ success: true, fundTypes: FUND_TYPES }));

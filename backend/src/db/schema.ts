@@ -717,3 +717,162 @@ export type NewContributionAllocationRow = typeof contributionAllocations.$infer
 
 export type AllocationHistoryRow = typeof allocationHistory.$inferSelect;
 export type NewAllocationHistoryRow = typeof allocationHistory.$inferInsert;
+
+// 15. Disbursement Realization and Payment Evidence (Spec #86, Ticket #94)
+// Append-only facts: nothing cascades on delete, and status changes bump `version`
+// alongside a history row (document, allocation, challenge, examination).
+export const disbursementRealizations = pgTable("disbursement_realizations", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  proposalVersion: integer("proposal_version").notNull(),
+  aidLineId: text("aid_line_id").notNull(),
+  beneficiaryId: text("beneficiary_id").notNull(),
+  batchGroupId: text("batch_group_id"),
+  paymentRecipientJson: text("payment_recipient_json"),
+  method: text("method").notNull(), // 'BANK_TRANSFER' | 'CASH'
+  amountIdr: text("amount_idr").notNull(),
+  reportedAt: bigint("reported_at", { mode: "number" }).notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  operatorAccount: text("operator_account").notNull(),
+  operatorOfficerId: text("operator_officer_id").notNull().references(() => officerProfiles.id),
+  notes: text("notes"),
+  evidenceStatus: text("evidence_status").notNull().default("EVIDENCE_PENDING"), // 'EVIDENCE_PENDING' | 'EVIDENCE_COMPLETE'
+  confirmationStatus: text("confirmation_status").notNull().default("UNCONFIRMED"), // 'UNCONFIRMED' | 'CONFIRMED' | 'DISPUTED'
+  confirmationMethod: text("confirmation_method"), // 'OTP' | 'BAST_EXAMINED'
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationDocuments = pgTable("disbursement_realization_documents", {
+  id: text("id").primaryKey(),
+  seq: bigint("seq", { mode: "number" }).generatedAlwaysAsIdentity(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
+  batchGroupId: text("batch_group_id"),
+  documentType: text("document_type").notNull(), // 'PAYMENT_PROOF' | 'RECEIPT_OR_BAST' | 'SUPPORTING_PHOTO'
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageRef: text("storage_ref").notNull(),
+  uploadedBy: text("uploaded_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+/** The explicit per-realization amount a (group) document evidences. */
+export const disbursementRealizationDocumentAllocations = pgTable("disbursement_realization_document_allocations", {
+  documentId: text("document_id").notNull().references(() => disbursementRealizationDocuments.id),
+  realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  amountIdr: text("amount_idr").notNull(),
+}, table => [primaryKey({ columns: [table.documentId, table.realizationId] })]);
+
+export const disbursementRealizationChallenges = pgTable("disbursement_realization_challenges", {
+  nonce: text("nonce").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  proposalVersion: integer("proposal_version").notNull(),
+  realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
+  realizationVersion: integer("realization_version").notNull(),
+  beneficiaryId: text("beneficiary_id").notNull(),
+  contactHint: text("contact_hint").notNull(),
+  confirmerJson: text("confirmer_json"),
+  aidType: text("aid_type").notNull(),
+  amountIdr: text("amount_idr").notNull(),
+  codeHash: text("code_hash").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  consumedAt: bigint("consumed_at", { mode: "number" }),
+});
+
+export const disbursementRealizationBastExaminations = pgTable("disbursement_realization_bast_examinations", {
+  id: text("id").primaryKey(),
+  realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  verifierOfficerId: text("verifier_officer_id").notNull().references(() => officerProfiles.id),
+  verifierAccount: text("verifier_account").notNull(),
+  notes: text("notes").notNull(),
+  verifiedAt: bigint("verified_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationDisputes = pgTable("disbursement_realization_disputes", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  realizationId: text("realization_id").notNull().references(() => disbursementRealizations.id),
+  aidLineId: text("aid_line_id").notNull(),
+  complainantType: text("complainant_type").notNull(), // 'BENEFICIARY' | 'OFFICER' | 'AUDITOR'
+  subject: text("subject").notNull(), // 'RECEIPT' | 'AMOUNT'
+  reason: text("reason").notNull(),
+  disputedAmountIdr: text("disputed_amount_idr").notNull(),
+  status: text("status").notNull().default("OPEN"), // 'OPEN' | 'EXAMINED' | 'RESOLVED'
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationDisputeExaminations = pgTable("disbursement_realization_dispute_examinations", {
+  id: text("id").primaryKey(),
+  seq: bigint("seq", { mode: "number" }).generatedAlwaysAsIdentity(),
+  disputeId: text("dispute_id").notNull().references(() => disbursementRealizationDisputes.id),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  outcome: text("outcome").notNull(), // 'EXAMINED' | 'RESOLVED'
+  notes: text("notes").notNull(),
+  examinerOfficerId: text("examiner_officer_id").notNull().references(() => officerProfiles.id),
+  examinerAccount: text("examiner_account").notNull(),
+  examinedAt: bigint("examined_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationAdvances = pgTable("disbursement_realization_advances", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  officerId: text("officer_id").notNull().references(() => officerProfiles.id),
+  officerAccount: text("officer_account").notNull(),
+  amountIdr: text("amount_idr").notNull(),
+  purpose: text("purpose").notNull(),
+  reference: text("reference").notNull(),
+  issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationExpenses = pgTable("disbursement_realization_expenses", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  advanceId: text("advance_id").references(() => disbursementRealizationAdvances.id),
+  amountIdr: text("amount_idr").notNull(),
+  purpose: text("purpose").notNull(),
+  payee: text("payee").notNull(),
+  documentRef: text("document_ref").notNull(),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+});
+
+export const disbursementRealizationOperations = pgTable("disbursement_realization_operations", {
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  account: text("account").notNull(),
+  operationId: text("operation_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resultJson: text("result_json"),
+}, table => [primaryKey({ columns: [table.institutionId, table.account, table.operationId] })]);
+
+export type DisbursementRealizationRow = typeof disbursementRealizations.$inferSelect;
+export type NewDisbursementRealizationRow = typeof disbursementRealizations.$inferInsert;
+
+export type DisbursementRealizationDocumentRow = typeof disbursementRealizationDocuments.$inferSelect;
+export type NewDisbursementRealizationDocumentRow = typeof disbursementRealizationDocuments.$inferInsert;
+
+export type DisbursementRealizationChallengeRow = typeof disbursementRealizationChallenges.$inferSelect;
+export type NewDisbursementRealizationChallengeRow = typeof disbursementRealizationChallenges.$inferInsert;
+
+export type DisbursementRealizationDisputeRow = typeof disbursementRealizationDisputes.$inferSelect;
+export type NewDisbursementRealizationDisputeRow = typeof disbursementRealizationDisputes.$inferInsert;
+
+export type DisbursementRealizationAdvanceRow = typeof disbursementRealizationAdvances.$inferSelect;
+export type NewDisbursementRealizationAdvanceRow = typeof disbursementRealizationAdvances.$inferInsert;
+
+export type DisbursementRealizationExpenseRow = typeof disbursementRealizationExpenses.$inferSelect;
+export type NewDisbursementRealizationExpenseRow = typeof disbursementRealizationExpenses.$inferInsert;

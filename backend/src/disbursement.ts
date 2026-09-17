@@ -988,3 +988,457 @@ export function validateProposalDecisionInput(input: unknown): { ok: true; value
 
   return { ok: true, value: { ...intent.value, signerAccount, mandateId, nonce, signature, expectedVersion } };
 }
+// 16. Realisasi Penyaluran, Bukti Pembayaran, dan Konfirmasi (Ticket #94, Spec #86 / #100)
+
+export const REALIZATION_DISCLAIMER_NOTICE =
+  "Aplikasi mencatat kejadian penyaluran di luar aplikasi, bukan mengirim dana atau memverifikasi transaksi bank.";
+
+export const DISBURSEMENT_METHODS = ["BANK_TRANSFER", "CASH"] as const;
+export type DisbursementMethod = (typeof DISBURSEMENT_METHODS)[number];
+export const isDisbursementMethod = (v: unknown): v is DisbursementMethod =>
+  typeof v === "string" && (DISBURSEMENT_METHODS as readonly string[]).includes(v);
+
+export const DISBURSEMENT_METHOD_LABELS: Record<DisbursementMethod, string> = {
+  BANK_TRANSFER: "Transfer Bank",
+  CASH: "Tunai",
+};
+
+export const REALIZATION_DOCUMENT_TYPES = [
+  "PAYMENT_PROOF",
+  "RECEIPT_OR_BAST",
+  "SUPPORTING_PHOTO",
+] as const;
+export type RealizationDocumentType = (typeof REALIZATION_DOCUMENT_TYPES)[number];
+export const isRealizationDocumentType = (v: unknown): v is RealizationDocumentType =>
+  typeof v === "string" && (REALIZATION_DOCUMENT_TYPES as readonly string[]).includes(v);
+
+export const REALIZATION_DOCUMENT_TYPE_LABELS: Record<RealizationDocumentType, string> = {
+  PAYMENT_PROOF: "Bukti Transfer / Pembayaran Bank",
+  RECEIPT_OR_BAST: "Tanda Terima / Berita Acara (BAST)",
+  SUPPORTING_PHOTO: "Foto Dokumentasi Penyerahan (Pendukung)",
+};
+
+/** The evidence a method needs. A photo only ever supports; it never completes evidence. */
+export const REQUIRED_EVIDENCE_BY_METHOD: Record<DisbursementMethod, RealizationDocumentType> = {
+  BANK_TRANSFER: "PAYMENT_PROOF",
+  CASH: "RECEIPT_OR_BAST",
+};
+
+export const REALIZATION_EVIDENCE_STATUSES = ["EVIDENCE_PENDING", "EVIDENCE_COMPLETE"] as const;
+export type RealizationEvidenceStatus = (typeof REALIZATION_EVIDENCE_STATUSES)[number];
+
+/** DISPUTED holds the final confirmation; only an authorized examination result releases it. */
+export const CONFIRMATION_STATUSES = ["UNCONFIRMED", "CONFIRMED", "DISPUTED"] as const;
+export type ConfirmationStatus = (typeof CONFIRMATION_STATUSES)[number];
+
+/** Only a cash handover is confirmed by the recipient; a transfer keeps its payment proof and no confirmation label. */
+export const CONFIRMATION_METHODS = ["OTP", "BAST_EXAMINED"] as const;
+export type ConfirmationMethod = (typeof CONFIRMATION_METHODS)[number];
+
+export const COMPLAINANT_TYPES = ["BENEFICIARY", "OFFICER", "AUDITOR"] as const;
+export type ComplainantType = (typeof COMPLAINANT_TYPES)[number];
+export const isComplainantType = (v: unknown): v is ComplainantType =>
+  typeof v === "string" && (COMPLAINANT_TYPES as readonly string[]).includes(v);
+
+/** What part of the event is contested: that it was received at all, or the amount received. */
+export const DISPUTE_SUBJECTS = ["RECEIPT", "AMOUNT"] as const;
+export type DisputeSubject = (typeof DISPUTE_SUBJECTS)[number];
+export const isDisputeSubject = (v: unknown): v is DisputeSubject =>
+  typeof v === "string" && (DISPUTE_SUBJECTS as readonly string[]).includes(v);
+
+export const DISPUTE_STATUSES = ["OPEN", "EXAMINED", "RESOLVED"] as const;
+export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
+
+/** An examination either records findings while the hold stays, or resolves the dispute. */
+export const DISPUTE_OUTCOMES = ["EXAMINED", "RESOLVED"] as const;
+export type DisputeOutcome = (typeof DISPUTE_OUTCOMES)[number];
+export const isDisputeOutcome = (v: unknown): v is DisputeOutcome =>
+  typeof v === "string" && (DISPUTE_OUTCOMES as readonly string[]).includes(v);
+
+export const REALIZATION_PROGRESS = ["NOT_REALIZED", "PARTIALLY_REALIZED", "FULLY_REALIZED"] as const;
+export type RealizationProgress = (typeof REALIZATION_PROGRESS)[number];
+
+/** Who the payment went to when it is not the beneficiary (a school, hospital, vendor). Absent means the beneficiary. */
+export type PaymentRecipient = { name: string; relation: string };
+
+export type EvidenceAllocation = { realizationId: string; amountIdr: string };
+
+export type RealizationItemInput = {
+  aidLineId: string;
+  beneficiaryId: string;
+  paymentRecipient: PaymentRecipient | null;
+  method: DisbursementMethod;
+  amountIdr: string;
+  reportedAt: number;
+  notes: string | null;
+};
+
+export type RealizationRecord = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  proposalVersion: number;
+  aidLineId: string;
+  beneficiaryId: string;
+  batchGroupId: string | null;
+  paymentRecipient: PaymentRecipient | null;
+  method: DisbursementMethod;
+  amountIdr: string;
+  reportedAt: number;
+  recordedAt: number;
+  operatorAccount: string;
+  operatorOfficerId: string;
+  notes: string | null;
+  evidenceStatus: RealizationEvidenceStatus;
+  confirmationStatus: ConfirmationStatus;
+  confirmationMethod: ConfirmationMethod | null;
+  /** Bumped by every status change, so a report source or an OTP binds the exact state it saw. */
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type RealizationDocumentRecord = {
+  id: string;
+  proposalId: string;
+  realizationId: string;
+  batchGroupId: string | null;
+  institutionId: string;
+  documentType: RealizationDocumentType;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: Hex32;
+  storageRef: string;
+  uploadedBy: string;
+  allocations: EvidenceAllocation[];
+  createdAt: number;
+};
+
+/** A stored OTP challenge. The code is kept only as a salted hash and the contact only as a hint. */
+export type RealizationChallenge = {
+  nonce: string;
+  institutionId: string;
+  proposalId: string;
+  proposalVersion: number;
+  realizationId: string;
+  realizationVersion: number;
+  beneficiaryId: string;
+  contactHint: string;
+  confirmer: { beneficiaryName: string; guardian: Guardian | null; contactRelation: string } | null;
+  aidType: string;
+  amountIdr: string;
+  codeHash: string;
+  attempts: number;
+  issuedAt: number;
+  expiresAt: number;
+  consumedAt: number | null;
+};
+
+export type BastExaminationRecord = {
+  id: string;
+  realizationId: string;
+  institutionId: string;
+  verifierOfficerId: string;
+  verifierAccount: string;
+  notes: string;
+  verifiedAt: number;
+};
+
+export type DisputeExaminationRecord = {
+  id: string;
+  disputeId: string;
+  outcome: DisputeOutcome;
+  notes: string;
+  examinerOfficerId: string;
+  examinerAccount: string;
+  examinedAt: number;
+};
+
+export type RealizationDisputeRecord = {
+  id: string;
+  proposalId: string;
+  realizationId: string;
+  aidLineId: string;
+  institutionId: string;
+  complainantType: ComplainantType;
+  subject: DisputeSubject;
+  reason: string;
+  disputedAmountIdr: string;
+  status: DisputeStatus;
+  recordedByOfficerId: string;
+  createdAt: number;
+  examinations: DisputeExaminationRecord[];
+};
+
+/** An officer's advance and how much of it linked expenses account for. Not an aid payment. */
+export type OperationalAdvanceRecord = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  officerId: string;
+  officerAccount: string;
+  amountIdr: string;
+  purpose: string;
+  reference: string;
+  accountedIdr: string;
+  unaccountedIdr: string;
+  issuedAt: number;
+};
+
+export type OperationalExpenseRecord = {
+  id: string;
+  institutionId: string;
+  proposalId: string;
+  advanceId: string | null;
+  amountIdr: string;
+  purpose: string;
+  payee: string;
+  documentRef: string;
+  recordedByOfficerId: string;
+  recordedAt: number;
+};
+
+export type RealizationLineSummary = {
+  aidLineId: string;
+  beneficiaryId: string;
+  beneficiaryName: string;
+  paymentRecipients: PaymentRecipient[];
+  amountApprovedIdr: string;
+  amountRealizedIdr: string;
+  amountRemainingIdr: string;
+  status: RealizationProgress;
+  isDisputed: boolean;
+};
+
+export type ProposalRealizationSummary = {
+  proposalId: string;
+  proposalVersion: number;
+  totalApprovedIdr: string;
+  totalRealizedIdr: string;
+  totalRemainingIdr: string;
+  approvedBeneficiaryCount: number;
+  realizedBeneficiaryCount: number;
+  paymentEventCount: number;
+  /** Disbursement progress only. It never implies complete evidence or an audit opinion. */
+  disbursementStatus: RealizationProgress;
+  evidenceCompleteness: RealizationEvidenceStatus;
+  pendingEvidenceCount: number;
+  completeEvidenceCount: number;
+  totalPendingEvidenceIdr: string;
+  confirmedCount: number;
+  disputedCount: number;
+  totalAdvancesIdr: string;
+  totalExpensesIdr: string;
+  lines: RealizationLineSummary[];
+};
+
+/** Rupiah amounts are whole, positive and bounded; anything else is refused before it reaches BigInt. */
+const MAX_IDR_DIGITS = 18;
+export function parsePositiveIdr(value: unknown): string | null {
+  const text = trimmed(value);
+  if (!isExactNonNegativeInteger(text) || text.length > MAX_IDR_DIGITS) return null;
+  const amount = BigInt(text);
+  return amount > 0n ? amount.toString() : null;
+}
+
+/** The IDR right a decision granted a line. Only a MONEY line has one; goods are realized elsewhere (#95). */
+export function approvedIdrOf(line: AidLine): bigint | null {
+  if (line.value.kind !== "MONEY") return null;
+  const approved = line.value.amountApprovedIdr;
+  return approved != null && isExactNonNegativeInteger(approved) ? BigInt(approved) : 0n;
+}
+
+export function realizationProgress(approved: bigint, realized: bigint): RealizationProgress {
+  if (approved > 0n && realized >= approved) return "FULLY_REALIZED";
+  return realized > 0n ? "PARTIALLY_REALIZED" : "NOT_REALIZED";
+}
+
+/** Evidence is complete once documents of the method's required type account for exactly the realized amount. */
+export function evidenceStatusOf(
+  realization: Pick<RealizationRecord, "method" | "amountIdr">,
+  documents: Array<{ documentType: RealizationDocumentType; amountIdr: string }>
+): RealizationEvidenceStatus {
+  const required = REQUIRED_EVIDENCE_BY_METHOD[realization.method];
+  const covered = documents
+    .filter((doc) => doc.documentType === required)
+    .reduce((total, doc) => total + BigInt(doc.amountIdr), 0n);
+  return covered === BigInt(realization.amountIdr) ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING";
+}
+
+/** Only the hint survives storage: enough for the officer to recognise which contact received the code. */
+export function contactHintOf(contact: string): string {
+  const visible = contact.slice(-3);
+  return `${"*".repeat(Math.max(3, contact.length - visible.length))}${visible}`;
+}
+
+export const isRecipientContact = (value: string): boolean =>
+  /^\+?\d{8,15}$/.test(value) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+/** Salted with the nonce so equal codes on different challenges never share a hash. */
+export const otpCodeHash = (nonce: string, code: string): string =>
+  createHash("sha256").update(`${nonce}:${code}`).digest("hex");
+
+function paymentRecipientOf(raw: unknown): { ok: true; value: PaymentRecipient | null } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: null };
+  if (typeof raw !== "object") return { ok: false, error: "Penerima pembayaran harus berupa objek nama dan hubungan." };
+  const name = trimmed((raw as Record<string, unknown>).name);
+  const relation = trimmed((raw as Record<string, unknown>).relation);
+  if (!name || !relation) {
+    return { ok: false, error: "Penerima pembayaran pihak lain wajib memuat nama dan hubungannya dengan penerima manfaat." };
+  }
+  return { ok: true, value: { name, relation } };
+}
+
+export function validateRealizationItemInput(item: unknown): { ok: true; value: RealizationItemInput } | { ok: false; error: string } {
+  if (typeof item !== "object" || item === null) {
+    return { ok: false, error: "Data realisasi harus berupa objek." };
+  }
+  const raw = item as Record<string, unknown>;
+  const aidLineId = trimmed(raw.aidLineId);
+  if (!aidLineId) return { ok: false, error: "ID rincian bantuan (aidLineId) wajib diisi." };
+
+  const beneficiaryId = trimmed(raw.beneficiaryId);
+  if (!beneficiaryId) return { ok: false, error: "ID penerima manfaat (beneficiaryId) wajib diisi." };
+
+  if (!isDisbursementMethod(raw.method)) {
+    return { ok: false, error: "Metode penyaluran harus 'BANK_TRANSFER' atau 'CASH'." };
+  }
+
+  const amountIdr = parsePositiveIdr(raw.amountIdr);
+  if (!amountIdr) {
+    return { ok: false, error: "Jumlah nominal IDR realisasi harus bilangan bulat rupiah lebih dari nol." };
+  }
+
+  const reportedAt = typeof raw.reportedAt === "number" ? raw.reportedAt : NaN;
+  if (!Number.isSafeInteger(reportedAt) || reportedAt <= 0) {
+    return { ok: false, error: "Waktu kejadian nyata (reportedAt) wajib diisi dengan timestamp yang sah." };
+  }
+
+  const paymentRecipient = paymentRecipientOf(raw.paymentRecipient);
+  if (!paymentRecipient.ok) return paymentRecipient;
+
+  return {
+    ok: true,
+    value: {
+      aidLineId,
+      beneficiaryId,
+      paymentRecipient: paymentRecipient.value,
+      method: raw.method,
+      amountIdr,
+      reportedAt,
+      notes: trimmed(raw.notes) || null,
+    },
+  };
+}
+
+export function validateEvidenceAllocations(raw: unknown): { ok: true; value: EvidenceAllocation[] } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: [] };
+  if (!Array.isArray(raw)) return { ok: false, error: "Alokasi bukti harus berupa daftar realisasi dan jumlahnya." };
+  const seen = new Set<string>();
+  const allocations: EvidenceAllocation[] = [];
+  for (const entry of raw) {
+    const fields = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+    const realizationId = trimmed(fields.realizationId);
+    const amountIdr = parsePositiveIdr(fields.amountIdr);
+    if (!realizationId || !amountIdr) {
+      return { ok: false, error: "Setiap alokasi bukti wajib menunjuk realisasi dan jumlah rupiah lebih dari nol." };
+    }
+    if (seen.has(realizationId)) return { ok: false, error: `Realisasi ${realizationId} dialokasikan lebih dari sekali.` };
+    seen.add(realizationId);
+    allocations.push({ realizationId, amountIdr });
+  }
+  return { ok: true, value: allocations };
+}
+
+export function calculateProposalRealizationSummary(
+  proposal: {
+    id: string;
+    version: number;
+    beneficiaries: Beneficiary[];
+    aidLines: AidLine[];
+  },
+  realizations: RealizationRecord[],
+  advances: Array<Pick<OperationalAdvanceRecord, "amountIdr">> = [],
+  expenses: Array<Pick<OperationalExpenseRecord, "amountIdr">> = []
+): ProposalRealizationSummary {
+  const beneficiaryMap = new Map(proposal.beneficiaries.map((b) => [b.id, b]));
+
+  const realizedByLine = new Map<string, bigint>();
+  const recipientsByLine = new Map<string, Map<string, PaymentRecipient>>();
+  const lineDisputed = new Set<string>();
+  const uniqueRealizedBeneficiaryIds = new Set<string>();
+
+  let pendingEvidenceCount = 0;
+  let completeEvidenceCount = 0;
+  let totalPendingEvidence = 0n;
+  let confirmedCount = 0;
+  let disputedCount = 0;
+
+  for (const rea of realizations) {
+    realizedByLine.set(rea.aidLineId, (realizedByLine.get(rea.aidLineId) ?? 0n) + BigInt(rea.amountIdr));
+    uniqueRealizedBeneficiaryIds.add(rea.beneficiaryId);
+    if (rea.paymentRecipient) {
+      const recipients = recipientsByLine.get(rea.aidLineId) ?? new Map<string, PaymentRecipient>();
+      recipients.set(JSON.stringify([rea.paymentRecipient.name, rea.paymentRecipient.relation]), rea.paymentRecipient);
+      recipientsByLine.set(rea.aidLineId, recipients);
+    }
+
+    if (rea.evidenceStatus === "EVIDENCE_COMPLETE") {
+      completeEvidenceCount++;
+    } else {
+      pendingEvidenceCount++;
+      totalPendingEvidence += BigInt(rea.amountIdr);
+    }
+
+    if (rea.confirmationStatus === "CONFIRMED") {
+      confirmedCount++;
+    } else if (rea.confirmationStatus === "DISPUTED") {
+      disputedCount++;
+      lineDisputed.add(rea.aidLineId);
+    }
+  }
+
+  let totalApproved = 0n;
+  let totalRealized = 0n;
+
+  const lines = proposal.aidLines.flatMap((line): RealizationLineSummary[] => {
+    const approved = approvedIdrOf(line);
+    if (approved === null) return [];
+    const realized = realizedByLine.get(line.id) ?? 0n;
+    totalApproved += approved;
+    totalRealized += realized;
+    return [{
+      aidLineId: line.id,
+      beneficiaryId: line.beneficiaryId,
+      beneficiaryName: beneficiaryMap.get(line.beneficiaryId)?.name ?? "Tidak dikenal",
+      paymentRecipients: [...(recipientsByLine.get(line.id)?.values() ?? [])],
+      amountApprovedIdr: approved.toString(),
+      amountRealizedIdr: realized.toString(),
+      amountRemainingIdr: (approved > realized ? approved - realized : 0n).toString(),
+      status: realizationProgress(approved, realized),
+      isDisputed: lineDisputed.has(line.id),
+    }];
+  });
+
+  return {
+    proposalId: proposal.id,
+    proposalVersion: proposal.version,
+    totalApprovedIdr: totalApproved.toString(),
+    totalRealizedIdr: totalRealized.toString(),
+    totalRemainingIdr: (totalApproved > totalRealized ? totalApproved - totalRealized : 0n).toString(),
+    approvedBeneficiaryCount: proposal.beneficiaries.length,
+    realizedBeneficiaryCount: uniqueRealizedBeneficiaryIds.size,
+    paymentEventCount: realizations.length,
+    disbursementStatus: realizationProgress(totalApproved, totalRealized),
+    evidenceCompleteness: pendingEvidenceCount === 0 && realizations.length > 0 ? "EVIDENCE_COMPLETE" : "EVIDENCE_PENDING",
+    pendingEvidenceCount,
+    completeEvidenceCount,
+    totalPendingEvidenceIdr: totalPendingEvidence.toString(),
+    confirmedCount,
+    disputedCount,
+    totalAdvancesIdr: advances.reduce((acc, a) => acc + BigInt(a.amountIdr), 0n).toString(),
+    totalExpensesIdr: expenses.reduce((acc, e) => acc + BigInt(e.amountIdr), 0n).toString(),
+    lines,
+  };
+}

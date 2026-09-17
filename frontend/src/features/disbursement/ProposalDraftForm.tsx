@@ -20,6 +20,7 @@ import { BeneficiaryImportNotice } from "./BeneficiaryImportNotice";
 import { useBeneficiaryImport } from "./useBeneficiaryImport";
 import { ProposalDecisionModal } from "./ProposalDecisionModal";
 import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
+import { ProposalRealizationBanner } from "./ProposalRealizationBanner";
 
 const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
   DRAFT: { variant: "neutral", label: "Draf Pengajuan" },
@@ -220,6 +221,7 @@ export function ProposalDraftForm({
       )}
 
       <ProposalDecisionBanner requests={requests} draft={draft} recorded={recordedDecision} />
+      <ProposalRealizationBanner requests={requests} draft={draft} />
 
       {/* Recurring aid warnings banner */}
       {recurringWarnings.length > 0 && (

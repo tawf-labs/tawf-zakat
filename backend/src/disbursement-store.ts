@@ -3,20 +3,38 @@
  * result, even after later edits; a new operation must use the current version.
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  approvedIdrOf,
+  calculateProposalRealizationSummary,
+  contactHintOf,
   DEFAULT_DISBURSEMENT_POLICY,
   evaluateRecurringAidWarnings,
+  evidenceStatusOf,
+  REQUIRED_EVIDENCE_BY_METHOD,
   validateProposalForSubmission,
   type AidLine,
+  type BastExaminationRecord,
   type Beneficiary,
+  type ComplainantType,
+  type ConfirmationMethod,
+  type ConfirmationStatus,
+  type DecisionBinding,
+  type DisbursementMethod,
   type DisbursementPolicy,
+  type DisputeExaminationRecord,
+  type DisputeOutcome,
+  type DisputeStatus,
+  type DisputeSubject,
+  type EvidenceAllocation,
   type ExaminationChecklist,
   type FundType,
+  type OperationalAdvanceRecord,
+  type OperationalExpenseRecord,
   type ProgramRecord,
   type ProgramStatus,
   type ProposalCompletenessIssue,
-  type DecisionBinding,
   type ProposalDecisionAction,
   type ProposalDecisionChallenge,
   type ProposalDecisionDocument,
@@ -27,7 +45,15 @@ import {
   type ProposalHistoryAction,
   type ProposalHistoryRecord,
   type ProposalIssue,
+  type ProposalRealizationSummary,
   type ProposalStatus,
+  type RealizationChallenge,
+  type RealizationDisputeRecord,
+  type RealizationDocumentRecord,
+  type RealizationDocumentType,
+  type RealizationEvidenceStatus,
+  type RealizationItemInput,
+  type RealizationRecord,
   type RecurringAidMatch,
   type RecurringAidWarning,
 } from "./disbursement";
@@ -114,6 +140,59 @@ export class DecisionChallengeSpentError extends Error {
   }
 }
 
+export class RealizationCapExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RealizationCapExceededError";
+  }
+}
+
+/** The realization, document, dispute or advance does not exist on this proposal of this institution. */
+export class RealizationNotFoundError extends Error {
+  constructor(message = "Realisasi tidak ditemukan pada pengajuan ini.") {
+    super(message);
+    this.name = "RealizationNotFoundError";
+  }
+}
+
+/** The request names something the event cannot accept: a foreign line, the wrong evidence type, an excess amount. */
+export class RealizationInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RealizationInputError";
+  }
+}
+
+/** The event's current state refuses the step: held by a dispute, already confirmed, or not a cash handover. */
+export class RealizationStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RealizationStateError";
+  }
+}
+
+export class RealizationChallengeSpentError extends Error {
+  constructor(message = "Tantangan konfirmasi sudah digunakan atau kedaluwarsa.") {
+    super(message);
+    this.name = "RealizationChallengeSpentError";
+  }
+}
+
+export class RealizationOtpInvalidError extends Error {
+  constructor(message = "Kode OTP salah atau tidak sah.") {
+    super(message);
+    this.name = "RealizationOtpInvalidError";
+  }
+}
+
+/** Separation of duties: whoever recorded an event neither examines its BAST nor rules on its dispute. */
+export class RealizationSelfExaminationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RealizationSelfExaminationError";
+  }
+}
+
 export type DraftOperation = { id: string; account: string; requestHash: string };
 export type ProposalContributor = { account: string; officerId: string | null; version: number };
 
@@ -129,18 +208,22 @@ export class DraftOperationConflictError extends Error {
   }
 }
 
+type OperationLedger = "proposal_draft_operations" | "disbursement_realization_operations";
+
 /** The unique insert waits for an in-flight retry before reading its committed result. */
 async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, operation: DraftOperation,
-  mutate: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>): Promise<T> {
+  mutate: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>,
+  ledger: OperationLedger = "proposal_draft_operations"): Promise<T> {
+  const table = sql.identifier(ledger);
   return db.transaction(async tx => {
     const inserted = rowsOf(await tx.execute(sql`
-      INSERT INTO proposal_draft_operations (institution_id, account, operation_id, request_hash)
+      INSERT INTO ${table} (institution_id, account, operation_id, request_hash)
       VALUES (${institutionId}, ${operation.account}, ${operation.id}, ${operation.requestHash})
       ON CONFLICT DO NOTHING RETURNING operation_id
     `));
     if (!inserted.length) {
       const previous = rowsOf(await tx.execute(sql`
-        SELECT request_hash, result_json FROM proposal_draft_operations
+        SELECT request_hash, result_json FROM ${table}
         WHERE institution_id = ${institutionId} AND account = ${operation.account} AND operation_id = ${operation.id}
       `))[0];
       if (!previous || previous.request_hash !== operation.requestHash) throw new DraftOperationConflictError();
@@ -148,7 +231,7 @@ async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, op
     }
     const result = await mutate(tx);
     await tx.execute(sql`
-      UPDATE proposal_draft_operations SET result_json = ${JSON.stringify(result)}
+      UPDATE ${table} SET result_json = ${JSON.stringify(result)}
       WHERE institution_id = ${institutionId} AND account = ${operation.account} AND operation_id = ${operation.id}
     `);
     return result;
@@ -318,6 +401,237 @@ const decisionDocumentFrom = (row: any): ProposalDecisionDocument => ({
   uploadedBy: row.uploaded_by,
   createdAt: asSeconds(row.created_at),
 });
+
+const realizationRecordFrom = (row: any): RealizationRecord => ({
+  id: row.id,
+  institutionId: row.institution_id,
+  proposalId: row.proposal_id,
+  proposalVersion: Number(row.proposal_version),
+  aidLineId: row.aid_line_id,
+  beneficiaryId: row.beneficiary_id,
+  batchGroupId: row.batch_group_id ?? null,
+  paymentRecipient: row.payment_recipient_json ? JSON.parse(row.payment_recipient_json) : null,
+  method: row.method as DisbursementMethod,
+  amountIdr: row.amount_idr,
+  reportedAt: asSeconds(row.reported_at),
+  recordedAt: asSeconds(row.recorded_at),
+  operatorAccount: row.operator_account,
+  operatorOfficerId: row.operator_officer_id,
+  notes: row.notes ?? null,
+  evidenceStatus: row.evidence_status as RealizationEvidenceStatus,
+  confirmationStatus: row.confirmation_status as ConfirmationStatus,
+  confirmationMethod: (row.confirmation_method as ConfirmationMethod | null) ?? null,
+  version: Number(row.version),
+  createdAt: asSeconds(row.created_at),
+  updatedAt: asSeconds(row.updated_at),
+});
+
+const realizationDocumentFrom = (row: any, allocations: EvidenceAllocation[]): RealizationDocumentRecord => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  realizationId: row.realization_id,
+  batchGroupId: row.batch_group_id ?? null,
+  institutionId: row.institution_id,
+  documentType: row.document_type as RealizationDocumentType,
+  fileName: row.file_name,
+  mimeType: row.mime_type,
+  sizeBytes: Number(row.size_bytes),
+  contentSha256: row.content_sha256 as `0x${string}`,
+  storageRef: row.storage_ref,
+  uploadedBy: row.uploaded_by,
+  allocations,
+  createdAt: asSeconds(row.created_at),
+});
+
+const realizationChallengeFrom = (row: any): RealizationChallenge => ({
+  nonce: row.nonce,
+  institutionId: row.institution_id,
+  proposalId: row.proposal_id,
+  proposalVersion: Number(row.proposal_version),
+  realizationId: row.realization_id,
+  realizationVersion: Number(row.realization_version),
+  beneficiaryId: row.beneficiary_id,
+  contactHint: row.contact_hint,
+  confirmer: row.confirmer_json ? JSON.parse(row.confirmer_json) : null,
+  aidType: row.aid_type,
+  amountIdr: row.amount_idr,
+  codeHash: row.code_hash,
+  attempts: Number(row.attempts),
+  issuedAt: asSeconds(row.issued_at),
+  expiresAt: asSeconds(row.expires_at),
+  consumedAt: row.consumed_at == null ? null : asSeconds(row.consumed_at),
+});
+
+const bastExaminationFrom = (row: any): BastExaminationRecord => ({
+  id: row.id,
+  realizationId: row.realization_id,
+  institutionId: row.institution_id,
+  verifierOfficerId: row.verifier_officer_id,
+  verifierAccount: row.verifier_account,
+  notes: row.notes,
+  verifiedAt: asSeconds(row.verified_at),
+});
+
+const disputeExaminationFrom = (row: any): DisputeExaminationRecord => ({
+  id: row.id,
+  disputeId: row.dispute_id,
+  outcome: row.outcome as DisputeOutcome,
+  notes: row.notes,
+  examinerOfficerId: row.examiner_officer_id,
+  examinerAccount: row.examiner_account,
+  examinedAt: asSeconds(row.examined_at),
+});
+
+const realizationDisputeFrom = (row: any, examinations: DisputeExaminationRecord[]): RealizationDisputeRecord => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  realizationId: row.realization_id,
+  aidLineId: row.aid_line_id,
+  institutionId: row.institution_id,
+  complainantType: row.complainant_type as ComplainantType,
+  subject: row.subject as DisputeSubject,
+  reason: row.reason,
+  disputedAmountIdr: row.disputed_amount_idr,
+  status: row.status as DisputeStatus,
+  recordedByOfficerId: row.recorded_by_officer_id,
+  createdAt: asSeconds(row.created_at),
+  examinations,
+});
+
+const advanceFrom = (row: any, accounted: bigint): OperationalAdvanceRecord => ({
+  id: row.id,
+  institutionId: row.institution_id,
+  proposalId: row.proposal_id,
+  officerId: row.officer_id,
+  officerAccount: row.officer_account,
+  amountIdr: row.amount_idr,
+  purpose: row.purpose,
+  reference: row.reference,
+  accountedIdr: accounted.toString(),
+  unaccountedIdr: (BigInt(row.amount_idr) - accounted).toString(),
+  issuedAt: asSeconds(row.issued_at),
+});
+
+const expenseFrom = (row: any): OperationalExpenseRecord => ({
+  id: row.id,
+  institutionId: row.institution_id,
+  proposalId: row.proposal_id,
+  advanceId: row.advance_id ?? null,
+  amountIdr: row.amount_idr,
+  purpose: row.purpose,
+  payee: row.payee,
+  documentRef: row.document_ref,
+  recordedByOfficerId: row.recorded_by_officer_id,
+  recordedAt: asSeconds(row.recorded_at),
+});
+
+type Executor = { execute: (query: any) => Promise<any> };
+
+async function lockRealization(tx: Executor, institutionId: string, proposalId: string, realizationId: string) {
+  const row = rowsOf(await tx.execute(sql`
+    SELECT * FROM disbursement_realizations
+    WHERE id = ${realizationId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+    FOR UPDATE
+  `))[0];
+  if (!row) throw new RealizationNotFoundError();
+  return realizationRecordFrom(row);
+}
+
+/** Every status change bumps the version, so whoever bound the earlier state (an OTP, a report source) sees it moved. */
+async function updateRealizationStatus(
+  tx: Executor,
+  current: RealizationRecord,
+  next: Pick<RealizationRecord, "evidenceStatus" | "confirmationStatus" | "confirmationMethod">,
+  now: number
+) {
+  const row = rowsOf(await tx.execute(sql`
+    UPDATE disbursement_realizations
+    SET evidence_status = ${next.evidenceStatus},
+        confirmation_status = ${next.confirmationStatus},
+        confirmation_method = ${next.confirmationMethod},
+        version = version + 1,
+        updated_at = ${now}
+    WHERE id = ${current.id} AND institution_id = ${current.institutionId} AND version = ${current.version}
+    RETURNING *
+  `))[0];
+  if (!row) throw new RealizationStateError("Realisasi sudah berubah. Muat ulang sebelum melanjutkan.");
+  return realizationRecordFrom(row);
+}
+
+/** Only a cash handover is confirmed by its recipient, once, and never while a dispute holds it. */
+function assertRecipientConfirmable(realization: RealizationRecord) {
+  if (realization.method !== "CASH") {
+    throw new RealizationStateError(
+      "Transfer atau pembayaran penyedia dibuktikan dengan bukti pembayaran, bukan konfirmasi penerima."
+    );
+  }
+  if (realization.confirmationStatus === "DISPUTED") {
+    throw new RealizationStateError("Konfirmasi ditahan karena realisasi ini sedang diperselisihkan.");
+  }
+  if (realization.confirmationStatus === "CONFIRMED") {
+    throw new RealizationStateError("Penerimaan realisasi ini sudah dikonfirmasi.");
+  }
+}
+
+async function evidenceAllocationsOf(tx: Executor, institutionId: string, realizationId: string) {
+  return rowsOf(await tx.execute(sql`
+    SELECT d.document_type, a.amount_idr
+    FROM disbursement_realization_document_allocations a
+    JOIN disbursement_realization_documents d ON d.id = a.document_id
+    WHERE a.realization_id = ${realizationId} AND a.institution_id = ${institutionId}
+  `)).map((row) => ({ documentType: row.document_type as RealizationDocumentType, amountIdr: row.amount_idr as string }));
+}
+
+async function allocationsByDocument(tx: Executor, institutionId: string, documentIds: string[]) {
+  const byDocument = new Map<string, EvidenceAllocation[]>();
+  if (!documentIds.length) return byDocument;
+  const rows = rowsOf(await tx.execute(sql`
+    SELECT document_id, realization_id, amount_idr FROM disbursement_realization_document_allocations
+    WHERE institution_id = ${institutionId} AND document_id IN (${sql.join(documentIds.map((id) => sql`${id}`), sql`, `)})
+    ORDER BY realization_id
+  `));
+  for (const row of rows) {
+    const list = byDocument.get(row.document_id) ?? [];
+    list.push({ realizationId: row.realization_id, amountIdr: row.amount_idr });
+    byDocument.set(row.document_id, list);
+  }
+  return byDocument;
+}
+
+async function disputesWithExaminations(tx: Executor, institutionId: string, disputeRows: any[]) {
+  if (!disputeRows.length) return [];
+  const ids = disputeRows.map((row) => row.id as string);
+  const examinationRows = rowsOf(await tx.execute(sql`
+    SELECT * FROM disbursement_realization_dispute_examinations
+    WHERE institution_id = ${institutionId} AND dispute_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    ORDER BY seq ASC
+  `));
+  return disputeRows.map((row) =>
+    realizationDisputeFrom(row, examinationRows.filter((exam) => exam.dispute_id === row.id).map(disputeExaminationFrom))
+  );
+}
+
+async function realizationSummaryOf(tx: Executor, institutionId: string, draft: StoredProposalDraft) {
+  const realizations = rowsOf(await tx.execute(sql`
+    SELECT * FROM disbursement_realizations
+    WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
+    ORDER BY recorded_at ASC, id ASC
+  `)).map(realizationRecordFrom);
+  const advances = rowsOf(await tx.execute(sql`
+    SELECT amount_idr FROM disbursement_realization_advances
+    WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
+  `)).map((row) => ({ amountIdr: row.amount_idr as string }));
+  const expenses = rowsOf(await tx.execute(sql`
+    SELECT amount_idr FROM disbursement_realization_expenses
+    WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
+  `)).map((row) => ({ amountIdr: row.amount_idr as string }));
+  return calculateProposalRealizationSummary(draft, realizations, advances, expenses);
+}
+
+const MAX_OTP_ATTEMPTS = 5;
+
+const sameHash = (a: string, b: string) =>
+  a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 const historyFrom = (row: any): ProposalHistoryRecord => ({
   id: Number(row.id),
@@ -524,6 +838,140 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      created_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS proposal_decision_challenges_by_proposal ON proposal_decision_challenges (institution_id, proposal_id, nonce);`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realizations (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     proposal_version INTEGER NOT NULL,
+     aid_line_id TEXT NOT NULL,
+     beneficiary_id TEXT NOT NULL,
+     batch_group_id TEXT,
+     payment_recipient_json TEXT,
+     method TEXT NOT NULL,
+     amount_idr TEXT NOT NULL,
+     reported_at BIGINT NOT NULL,
+     recorded_at BIGINT NOT NULL,
+     operator_account TEXT NOT NULL,
+     operator_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     notes TEXT,
+     evidence_status TEXT NOT NULL DEFAULT 'EVIDENCE_PENDING',
+     confirmation_status TEXT NOT NULL DEFAULT 'UNCONFIRMED',
+     confirmation_method TEXT,
+     version INTEGER NOT NULL DEFAULT 1,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS disbursement_realizations_by_proposal ON disbursement_realizations (institution_id, proposal_id, aid_line_id);`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_documents (
+     id TEXT PRIMARY KEY,
+     seq BIGINT GENERATED ALWAYS AS IDENTITY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+     batch_group_id TEXT,
+     document_type TEXT NOT NULL,
+     file_name TEXT NOT NULL,
+     mime_type TEXT NOT NULL,
+     size_bytes INTEGER NOT NULL,
+     content_sha256 TEXT NOT NULL,
+     storage_ref TEXT NOT NULL,
+     uploaded_by TEXT NOT NULL,
+     created_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS disbursement_realization_documents_by_proposal ON disbursement_realization_documents (institution_id, proposal_id);`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_document_allocations (
+     document_id TEXT NOT NULL REFERENCES disbursement_realization_documents (id),
+     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     amount_idr TEXT NOT NULL,
+     PRIMARY KEY (document_id, realization_id)
+   );`,
+  `CREATE INDEX IF NOT EXISTS disbursement_realization_allocations_by_realization ON disbursement_realization_document_allocations (institution_id, realization_id);`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_challenges (
+     nonce TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     proposal_version INTEGER NOT NULL,
+     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+     realization_version INTEGER NOT NULL,
+     beneficiary_id TEXT NOT NULL,
+     contact_hint TEXT NOT NULL,
+     confirmer_json TEXT,
+     aid_type TEXT NOT NULL,
+     amount_idr TEXT NOT NULL,
+     code_hash TEXT NOT NULL,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     issued_at BIGINT NOT NULL,
+     expires_at BIGINT NOT NULL,
+     consumed_at BIGINT
+   );`,
+  `ALTER TABLE disbursement_realization_challenges ADD COLUMN IF NOT EXISTS confirmer_json TEXT;`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_bast_examinations (
+     id TEXT PRIMARY KEY,
+     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     verifier_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     verifier_account TEXT NOT NULL,
+     notes TEXT NOT NULL,
+     verified_at BIGINT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_disputes (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     realization_id TEXT NOT NULL REFERENCES disbursement_realizations (id),
+     aid_line_id TEXT NOT NULL,
+     complainant_type TEXT NOT NULL,
+     subject TEXT NOT NULL,
+     reason TEXT NOT NULL,
+     disputed_amount_idr TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'OPEN',
+     recorded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     created_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS disbursement_realization_disputes_by_realization ON disbursement_realization_disputes (institution_id, realization_id);`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_dispute_examinations (
+     id TEXT PRIMARY KEY,
+     seq BIGINT GENERATED ALWAYS AS IDENTITY,
+     dispute_id TEXT NOT NULL REFERENCES disbursement_realization_disputes (id),
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     outcome TEXT NOT NULL,
+     notes TEXT NOT NULL,
+     examiner_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     examiner_account TEXT NOT NULL,
+     examined_at BIGINT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_advances (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     officer_account TEXT NOT NULL,
+     amount_idr TEXT NOT NULL,
+     purpose TEXT NOT NULL,
+     reference TEXT NOT NULL,
+     issued_at BIGINT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_expenses (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     advance_id TEXT REFERENCES disbursement_realization_advances (id),
+     amount_idr TEXT NOT NULL,
+     purpose TEXT NOT NULL,
+     payee TEXT NOT NULL,
+     document_ref TEXT NOT NULL,
+     recorded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     recorded_at BIGINT NOT NULL
+   );`,
+  `CREATE TABLE IF NOT EXISTS disbursement_realization_operations (
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     account TEXT NOT NULL,
+     operation_id TEXT NOT NULL,
+     request_hash TEXT NOT NULL,
+     result_json TEXT,
+     PRIMARY KEY (institution_id, account, operation_id)
+   );`,
 ] as const;
 
 export function createDisbursementStore(db: DisbursementDatabase) {
@@ -1558,6 +2006,632 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         requestHash: row.request_hash,
         resultJson: row.result_json,
       };
+    },
+
+    /**
+     * Records reported handovers against the approved version. The proposal row lock
+     * serialises concurrent recordings, and the retry identity replays a lost response
+     * instead of recording the payment twice.
+     */
+    async recordRealizations(
+      institutionId: string,
+      proposalId: string,
+      input: { items: RealizationItemInput[]; batchGroupId: string | null; expectedVersion: number },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ records: RealizationRecord[]; summary: ProposalRealizationSummary }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const proposalRow = rowsOf(await tx.execute(sql`
+          SELECT * FROM proposal_drafts
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `))[0];
+        if (!proposalRow) throw new RealizationNotFoundError("Pengajuan tidak ditemukan.");
+        const current = draftFrom(proposalRow);
+
+        if (current.status !== "APPROVED") {
+          throw new ProposalStateConflictError(
+            `Pengajuan belum disetujui (status: "${current.status}"). Realisasi hanya dapat dicatat setelah pengajuan disetujui.`
+          );
+        }
+        if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
+
+        const lineCumulative = new Map<string, bigint>();
+        for (const row of rowsOf(await tx.execute(sql`
+          SELECT aid_line_id, amount_idr FROM disbursement_realizations
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        `))) {
+          lineCumulative.set(row.aid_line_id, (lineCumulative.get(row.aid_line_id) ?? 0n) + BigInt(row.amount_idr));
+        }
+
+        const aidLineMap = new Map(current.aidLines.map((line) => [line.id, line]));
+        const records: RealizationRecord[] = [];
+
+        for (const item of input.items) {
+          const line = aidLineMap.get(item.aidLineId);
+          if (!line) {
+            throw new RealizationInputError(`Rincian bantuan '${item.aidLineId}' tidak ditemukan pada pengajuan ini.`);
+          }
+          if (line.beneficiaryId !== item.beneficiaryId) {
+            throw new RealizationInputError(`Penerima '${item.beneficiaryId}' tidak sesuai dengan rincian bantuan '${item.aidLineId}'.`);
+          }
+          const approvedIdr = approvedIdrOf(line);
+          if (approvedIdr === null) {
+            throw new RealizationInputError(`Rincian '${item.aidLineId}' berupa barang dan tidak dicatat sebagai realisasi IDR.`);
+          }
+
+          const realizedIdr = lineCumulative.get(item.aidLineId) ?? 0n;
+          const newTotal = realizedIdr + BigInt(item.amountIdr);
+          if (newTotal > approvedIdr) {
+            throw new RealizationCapExceededError(
+              `Realisasi sebesar Rp${item.amountIdr} melebihi sisa hak yang disetujui pada baris ${item.aidLineId} (Disetujui: Rp${approvedIdr}, Terealisasi: Rp${realizedIdr}).`
+            );
+          }
+          lineCumulative.set(item.aidLineId, newTotal);
+
+          const row = rowsOf(await tx.execute(sql`
+            INSERT INTO disbursement_realizations (
+              id, institution_id, proposal_id, proposal_version, aid_line_id, beneficiary_id,
+              batch_group_id, payment_recipient_json, method, amount_idr,
+              reported_at, recorded_at, operator_account, operator_officer_id, notes,
+              evidence_status, confirmation_status, confirmation_method, version,
+              created_at, updated_at
+            ) VALUES (
+              ${`rea-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${current.version}, ${item.aidLineId}, ${item.beneficiaryId},
+              ${input.batchGroupId}, ${item.paymentRecipient ? JSON.stringify(item.paymentRecipient) : null}, ${item.method}, ${item.amountIdr},
+              ${item.reportedAt}, ${now}, ${actor.account.toLowerCase()}, ${actor.officerId}, ${item.notes},
+              'EVIDENCE_PENDING', 'UNCONFIRMED', NULL, 1,
+              ${now}, ${now}
+            )
+            RETURNING *
+          `))[0];
+          records.push(realizationRecordFrom(row));
+        }
+
+        return { records, summary: await realizationSummaryOf(tx, institutionId, current) };
+      }, "disbursement_realization_operations");
+    },
+
+    async getProposalRealizations(institutionId: string, proposalId: string): Promise<RealizationRecord[]> {
+      return rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realizations
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        ORDER BY recorded_at ASC, id ASC
+      `)).map(realizationRecordFrom);
+    },
+
+    async getProposalRealizationSummary(institutionId: string, proposalId: string): Promise<ProposalRealizationSummary | null> {
+      const draftRow = rowsOf(await db.execute(sql`
+        SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId}
+      `))[0];
+      return draftRow ? realizationSummaryOf(db, institutionId, draftFrom(draftRow)) : null;
+    },
+
+    /**
+     * Keeps a private evidence file and the explicit amount it evidences for each realization.
+     * A group BAST allocates to every realization of its batch it covers; a photo allocates nothing.
+     * Evidence becomes complete only when the method's required documents account for the whole amount.
+     */
+    async uploadRealizationDocument(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      document: {
+        documentType: RealizationDocumentType;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        contentSha256: `0x${string}`;
+        storageRef: string;
+        batchGroupId: string | null;
+      },
+      allocations: EvidenceAllocation[],
+      operation: DraftOperation,
+      uploadedBy: string,
+      now: number
+    ): Promise<{ document: RealizationDocumentRecord; realizations: RealizationRecord[] }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const anchor = await lockRealization(tx, institutionId, proposalId, realizationId);
+        const batchGroupId = document.batchGroupId ?? anchor.batchGroupId;
+
+        if (document.documentType === "SUPPORTING_PHOTO") {
+          if (allocations.length) {
+            throw new RealizationInputError("Foto hanya pendukung dan tidak dialokasikan ke jumlah realisasi.");
+          }
+        } else {
+          if (!allocations.some((allocation) => allocation.realizationId === realizationId)) {
+            throw new RealizationInputError("Bukti wajib menyebut jumlah yang dibuktikan untuk realisasi ini.");
+          }
+          if (allocations.length > 1 && !batchGroupId) {
+            throw new RealizationInputError("Bukti kelompok hanya dapat dialokasikan ke realisasi dalam satu kelompok penyerahan.");
+          }
+        }
+
+        const allocated: RealizationRecord[] = [];
+        for (const allocation of [...allocations].sort((a, b) => a.realizationId.localeCompare(b.realizationId))) {
+          const target = allocation.realizationId === anchor.id
+            ? anchor
+            : await lockRealization(tx, institutionId, proposalId, allocation.realizationId);
+          if (allocations.length > 1 && target.batchGroupId !== batchGroupId) {
+            throw new RealizationInputError(`Realisasi ${target.id} bukan bagian dari kelompok penyerahan ${batchGroupId}.`);
+          }
+          const required = REQUIRED_EVIDENCE_BY_METHOD[target.method];
+          if (document.documentType !== required) {
+            throw new RealizationInputError(
+              target.method === "CASH"
+                ? `Realisasi tunai ${target.id} dibuktikan dengan tanda terima atau BAST.`
+                : `Realisasi transfer ${target.id} dibuktikan dengan bukti pembayaran.`
+            );
+          }
+          const covered = (await evidenceAllocationsOf(tx, institutionId, target.id))
+            .filter((existing) => existing.documentType === required)
+            .reduce((total, existing) => total + BigInt(existing.amountIdr), 0n);
+          if (covered + BigInt(allocation.amountIdr) > BigInt(target.amountIdr)) {
+            throw new RealizationInputError(
+              `Jumlah bukti untuk realisasi ${target.id} melebihi nominal realisasi (Rp${target.amountIdr}, sudah dibuktikan Rp${covered}).`
+            );
+          }
+          allocated.push(target);
+        }
+
+        const documentRow = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_documents (
+            id, institution_id, proposal_id, realization_id, batch_group_id,
+            document_type, file_name, mime_type, size_bytes,
+            content_sha256, storage_ref, uploaded_by, created_at
+          ) VALUES (
+            ${`doc-rea-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${realizationId}, ${batchGroupId},
+            ${document.documentType}, ${document.fileName}, ${document.mimeType}, ${document.sizeBytes},
+            ${document.contentSha256}, ${document.storageRef}, ${uploadedBy}, ${now}
+          )
+          RETURNING *
+        `))[0];
+
+        for (const allocation of allocations) {
+          await tx.execute(sql`
+            INSERT INTO disbursement_realization_document_allocations (document_id, realization_id, institution_id, amount_idr)
+            VALUES (${documentRow.id}, ${allocation.realizationId}, ${institutionId}, ${allocation.amountIdr})
+          `);
+        }
+
+        const realizations: RealizationRecord[] = [];
+        for (const target of allocated.length ? allocated : [anchor]) {
+          const evidenceStatus = evidenceStatusOf(target, await evidenceAllocationsOf(tx, institutionId, target.id));
+          realizations.push(evidenceStatus === target.evidenceStatus
+            ? target
+            : await updateRealizationStatus(tx, target, { ...target, evidenceStatus }, now));
+        }
+
+        const sortedAllocations = [...allocations].sort((a, b) => a.realizationId.localeCompare(b.realizationId));
+        return { document: realizationDocumentFrom(documentRow, sortedAllocations), realizations };
+      }, "disbursement_realization_operations");
+    },
+
+    async getRealizationDocument(
+      institutionId: string,
+      proposalId: string,
+      documentId: string
+    ): Promise<RealizationDocumentRecord | null> {
+      const row = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_documents
+        WHERE id = ${documentId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+      `))[0];
+      if (!row) return null;
+      const allocations = await allocationsByDocument(db, institutionId, [row.id]);
+      return realizationDocumentFrom(row, allocations.get(row.id) ?? []);
+    },
+
+    async listRealizationDocuments(institutionId: string, proposalId: string): Promise<RealizationDocumentRecord[]> {
+      const rows = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_documents
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        ORDER BY seq ASC
+      `));
+      const allocations = await allocationsByDocument(db, institutionId, rows.map((row) => row.id));
+      return rows.map((row) => realizationDocumentFrom(row, allocations.get(row.id) ?? []));
+    },
+
+    /**
+     * Opens an OTP challenge bound to the realization's exact version, amount and aid type.
+     * A newer challenge voids any earlier one still open for the same realization.
+     */
+    async issueConfirmationOtp(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      challenge: { nonce: string; codeHash: string; recipientContact: string; ttlSeconds: number },
+      now: number
+    ): Promise<RealizationChallenge> {
+      return db.transaction(async (tx) => {
+        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+        assertRecipientConfirmable(realization);
+
+        const versionRow = rowsOf(await tx.execute(sql`
+          SELECT data_json FROM proposal_versions
+          WHERE proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            AND version = ${realization.proposalVersion}
+        `))[0];
+        const snapshot = versionRow ? JSON.parse(versionRow.data_json) as StoredProposalDraft : null;
+        const beneficiary = snapshot?.beneficiaries.find((entry) => entry.id === realization.beneficiaryId);
+        const aidType = snapshot?.aidLines.find((line) => line.id === realization.aidLineId)?.aidType;
+        if (!beneficiary || !aidType) throw new RealizationNotFoundError("Versi penerima dan rincian bantuan tidak ditemukan.");
+        const normalize = (contact: string) => contact.trim().replace(/[\s-]/g, "");
+        const destination = [beneficiary.contact?.phone, beneficiary.contact?.email]
+          .find((contact) => contact && normalize(contact) === normalize(challenge.recipientContact));
+        if (!destination || !beneficiary.contact?.relation?.trim()) {
+          throw new RealizationInputError("Kontak dan hubungan penerima/perwakilan harus sesuai versi pengajuan yang disetujui. Gunakan pemeriksaan BAST bila kontak belum tersedia.");
+        }
+        const confirmer = {
+          beneficiaryName: beneficiary.name,
+          guardian: beneficiary.guardian,
+          contactRelation: beneficiary.contact.relation,
+        };
+
+        await tx.execute(sql`
+          UPDATE disbursement_realization_challenges SET consumed_at = ${now}
+          WHERE institution_id = ${institutionId} AND realization_id = ${realizationId} AND consumed_at IS NULL
+        `);
+
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_challenges (
+            nonce, institution_id, proposal_id, proposal_version, realization_id, realization_version,
+            beneficiary_id, contact_hint, confirmer_json, aid_type, amount_idr, code_hash, attempts,
+            issued_at, expires_at, consumed_at
+          ) VALUES (
+            ${challenge.nonce}, ${institutionId}, ${proposalId}, ${realization.proposalVersion}, ${realizationId}, ${realization.version},
+            ${realization.beneficiaryId}, ${contactHintOf(normalize(destination))}, ${JSON.stringify(confirmer)}, ${aidType}, ${realization.amountIdr}, ${challenge.codeHash}, 0,
+            ${now}, ${now + challenge.ttlSeconds}, NULL
+          )
+          RETURNING *
+        `))[0];
+        return realizationChallengeFrom(row);
+      });
+    },
+
+    /** A challenge whose message could not be delivered must not stay redeemable. */
+    async voidConfirmationOtp(institutionId: string, nonce: string, now: number): Promise<void> {
+      await db.execute(sql`
+        UPDATE disbursement_realization_challenges SET consumed_at = ${now}
+        WHERE nonce = ${nonce} AND institution_id = ${institutionId} AND consumed_at IS NULL
+      `);
+    },
+
+    /**
+     * Redeems the code the recipient read back. A wrong code costs an attempt that survives
+     * the refusal; the challenge dies after too many attempts, on expiry, on use, or when the
+     * realization changed after the code was sent.
+     */
+    async verifyConfirmationOtp(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      nonce: string,
+      codeHash: string,
+      now: number
+    ): Promise<RealizationRecord> {
+      const outcome = await db.transaction(async (tx): Promise<
+        { kind: "spent"; message: string } | { kind: "invalid"; remaining: number } | { kind: "confirmed"; realization: RealizationRecord }
+      > => {
+        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+        const row = rowsOf(await tx.execute(sql`
+          SELECT * FROM disbursement_realization_challenges
+          WHERE nonce = ${nonce} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `))[0];
+        if (!row) return { kind: "spent", message: "Tantangan OTP tidak ditemukan." };
+        const challenge = realizationChallengeFrom(row);
+        if (challenge.realizationId !== realizationId || challenge.proposalId !== proposalId) {
+          return { kind: "spent", message: "Tantangan OTP tidak sesuai dengan kejadian realisasi ini." };
+        }
+        if (!challenge.confirmer || challenge.consumedAt !== null || challenge.expiresAt <= now || challenge.attempts >= MAX_OTP_ATTEMPTS) {
+          return { kind: "spent", message: "Tantangan OTP sudah kedaluwarsa atau telah digunakan. Kirim kode baru." };
+        }
+
+        assertRecipientConfirmable(realization);
+        if (realization.version !== challenge.realizationVersion) {
+          return { kind: "spent", message: "Realisasi berubah setelah kode dikirim. Kirim kode baru." };
+        }
+
+        if (!sameHash(challenge.codeHash, codeHash)) {
+          const attempts = challenge.attempts + 1;
+          await tx.execute(sql`
+            UPDATE disbursement_realization_challenges
+            SET attempts = ${attempts}, consumed_at = ${attempts >= MAX_OTP_ATTEMPTS ? now : null}
+            WHERE nonce = ${nonce}
+          `);
+          return { kind: "invalid", remaining: MAX_OTP_ATTEMPTS - attempts };
+        }
+
+        await tx.execute(sql`UPDATE disbursement_realization_challenges SET consumed_at = ${now} WHERE nonce = ${nonce}`);
+        return {
+          kind: "confirmed",
+          realization: await updateRealizationStatus(tx, realization, {
+            ...realization,
+            confirmationStatus: "CONFIRMED",
+            confirmationMethod: "OTP",
+          }, now),
+        };
+      });
+
+      if (outcome.kind === "spent") throw new RealizationChallengeSpentError(outcome.message);
+      if (outcome.kind === "invalid") {
+        throw new RealizationOtpInvalidError(
+          outcome.remaining > 0 ? `Kode OTP salah. Sisa percobaan: ${outcome.remaining}.` : "Kode OTP salah. Kirim kode baru."
+        );
+      }
+      return outcome.realization;
+    },
+
+    /** When OTP is unavailable, an officer other than the recorder examines the uploaded receipt/BAST. */
+    async verifyBastBySecondOfficer(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      notes: string,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ examination: BastExaminationRecord; realization: RealizationRecord }> {
+      return db.transaction(async (tx) => {
+        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+        if (realization.operatorOfficerId === actor.officerId) {
+          throw new RealizationSelfExaminationError("Petugas pencatat tidak dapat memverifikasi BAST miliknya sendiri.");
+        }
+        assertRecipientConfirmable(realization);
+        const receipts = (await evidenceAllocationsOf(tx, institutionId, realizationId))
+          .filter((allocation) => allocation.documentType === "RECEIPT_OR_BAST");
+        if (receipts.reduce((total, receipt) => total + BigInt(receipt.amountIdr), 0n) !== BigInt(realization.amountIdr)) {
+          throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh nominal sebelum konfirmasi penuh.");
+        }
+
+        const examinationRow = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_bast_examinations (
+            id, realization_id, institution_id, verifier_officer_id, verifier_account, notes, verified_at
+          ) VALUES (
+            ${`bast-exam-${crypto.randomUUID()}`}, ${realizationId}, ${institutionId}, ${actor.officerId},
+            ${actor.account.toLowerCase()}, ${notes}, ${now}
+          )
+          RETURNING *
+        `))[0];
+
+        return {
+          examination: bastExaminationFrom(examinationRow),
+          realization: await updateRealizationStatus(tx, realization, {
+            ...realization,
+            confirmationStatus: "CONFIRMED",
+            confirmationMethod: "BAST_EXAMINED",
+          }, now),
+        };
+      });
+    },
+
+    /** Marks the contested part and holds final confirmation. The realized amount is never deleted or recounted. */
+    async recordDispute(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      dispute: { complainantType: ComplainantType; subject: DisputeSubject; reason: string; disputedAmountIdr: string },
+      actor: { officerId: string },
+      now: number,
+      operation: DraftOperation
+    ): Promise<{ dispute: RealizationDisputeRecord; realization: RealizationRecord }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+        if (BigInt(dispute.disputedAmountIdr) > BigInt(realization.amountIdr)) {
+          throw new RealizationInputError(
+            `Nominal yang diperselisihkan melebihi nominal realisasi (Rp${realization.amountIdr}).`
+          );
+        }
+
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_disputes (
+            id, institution_id, proposal_id, realization_id, aid_line_id, complainant_type, subject,
+            reason, disputed_amount_idr, status, recorded_by_officer_id, created_at
+          ) VALUES (
+            ${`disp-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${realizationId}, ${realization.aidLineId},
+            ${dispute.complainantType}, ${dispute.subject}, ${dispute.reason}, ${dispute.disputedAmountIdr}, 'OPEN',
+            ${actor.officerId}, ${now}
+          )
+          RETURNING *
+        `))[0];
+
+        return {
+          dispute: realizationDisputeFrom(row, []),
+          realization: realization.confirmationStatus === "DISPUTED"
+            ? realization
+            : await updateRealizationStatus(tx, realization, { ...realization, confirmationStatus: "DISPUTED" }, now),
+        };
+      }, "disbursement_realization_operations");
+    },
+
+    /**
+     * Appends an authorized examination result. EXAMINED keeps the hold; RESOLVED closes the
+     * dispute, and once no dispute on the realization stays open the hold lifts and the
+     * recipient confirmation must be obtained again.
+     */
+    async examineDispute(
+      institutionId: string,
+      proposalId: string,
+      realizationId: string,
+      disputeId: string,
+      examination: { outcome: DisputeOutcome; notes: string },
+      actor: { account: string; officerId: string },
+      now: number,
+      operation: DraftOperation
+    ): Promise<{ dispute: RealizationDisputeRecord; realization: RealizationRecord }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+        const disputeRow = rowsOf(await tx.execute(sql`
+          SELECT * FROM disbursement_realization_disputes
+          WHERE id = ${disputeId} AND institution_id = ${institutionId} AND realization_id = ${realizationId}
+          FOR UPDATE
+        `))[0];
+        if (!disputeRow) throw new RealizationNotFoundError("Sengketa tidak ditemukan pada realisasi ini.");
+        if (disputeRow.status === "RESOLVED") throw new RealizationStateError("Sengketa ini sudah diselesaikan.");
+        if (realization.operatorOfficerId === actor.officerId) {
+          throw new RealizationSelfExaminationError("Pencatat realisasi tidak dapat memeriksa sengketa atas kejadiannya sendiri.");
+        }
+
+        await tx.execute(sql`
+          INSERT INTO disbursement_realization_dispute_examinations (
+            id, dispute_id, institution_id, outcome, notes, examiner_officer_id, examiner_account, examined_at
+          ) VALUES (
+            ${`disp-exam-${crypto.randomUUID()}`}, ${disputeId}, ${institutionId}, ${examination.outcome}, ${examination.notes},
+            ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+        `);
+        const updatedRow = rowsOf(await tx.execute(sql`
+          UPDATE disbursement_realization_disputes SET status = ${examination.outcome}
+          WHERE id = ${disputeId} AND institution_id = ${institutionId}
+          RETURNING *
+        `))[0];
+
+        let updatedRealization = realization;
+        if (examination.outcome === "RESOLVED" && realization.confirmationStatus === "DISPUTED") {
+          const stillOpen = rowsOf(await tx.execute(sql`
+            SELECT id FROM disbursement_realization_disputes
+            WHERE institution_id = ${institutionId} AND realization_id = ${realizationId} AND status <> 'RESOLVED'
+          `));
+          if (!stillOpen.length) {
+            updatedRealization = await updateRealizationStatus(tx, realization, {
+              ...realization,
+              confirmationStatus: "UNCONFIRMED",
+              confirmationMethod: null,
+            }, now);
+          }
+        }
+
+        const [dispute] = await disputesWithExaminations(tx, institutionId, [updatedRow]);
+        return { dispute: dispute!, realization: updatedRealization };
+      }, "disbursement_realization_operations");
+    },
+
+    async listDisputes(institutionId: string, proposalId: string, realizationId: string): Promise<RealizationDisputeRecord[]> {
+      const rows = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_disputes
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND realization_id = ${realizationId}
+        ORDER BY created_at ASC, id ASC
+      `));
+      return disputesWithExaminations(db, institutionId, rows);
+    },
+
+    async recordAdvance(
+      institutionId: string,
+      proposalId: string,
+      input: { amountIdr: string; purpose: string; reference: string },
+      actor: { account: string; officerId: string },
+      now: number,
+      operation: DraftOperation
+    ): Promise<OperationalAdvanceRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_advances (
+            id, institution_id, proposal_id, officer_id, officer_account, amount_idr, purpose, reference, issued_at
+          ) VALUES (
+            ${`adv-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${actor.officerId}, ${actor.account.toLowerCase()},
+            ${input.amountIdr}, ${input.purpose}, ${input.reference}, ${now}
+          )
+          RETURNING *
+        `))[0];
+        return advanceFrom(row, 0n);
+      }, "disbursement_realization_operations");
+    },
+
+    async listAdvances(institutionId: string, proposalId: string): Promise<OperationalAdvanceRecord[]> {
+      const rows = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_advances
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        ORDER BY issued_at ASC, id ASC
+      `));
+      const accounted = new Map<string, bigint>();
+      for (const expense of rowsOf(await db.execute(sql`
+        SELECT advance_id, amount_idr FROM disbursement_realization_expenses
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND advance_id IS NOT NULL
+      `))) {
+        accounted.set(expense.advance_id, (accounted.get(expense.advance_id) ?? 0n) + BigInt(expense.amount_idr));
+      }
+      return rows.map((row) => advanceFrom(row, accounted.get(row.id) ?? 0n));
+    },
+
+    /** An expense may account for an advance of the same proposal, never beyond what the advance still leaves open. */
+    async recordExpense(
+      institutionId: string,
+      proposalId: string,
+      input: { advanceId: string | null; amountIdr: string; purpose: string; payee: string; documentRef: string },
+      actor: { officerId: string },
+      now: number,
+      operation: DraftOperation
+    ): Promise<OperationalExpenseRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        if (input.advanceId) {
+          const advance = rowsOf(await tx.execute(sql`
+            SELECT * FROM disbursement_realization_advances
+            WHERE id = ${input.advanceId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+            FOR UPDATE
+          `))[0];
+          if (!advance) throw new RealizationInputError("Uang muka yang dirujuk tidak ditemukan pada pengajuan ini.");
+          const accounted = rowsOf(await tx.execute(sql`
+            SELECT amount_idr FROM disbursement_realization_expenses
+            WHERE institution_id = ${institutionId} AND advance_id = ${input.advanceId}
+          `)).reduce((total, row) => total + BigInt(row.amount_idr), 0n);
+          if (accounted + BigInt(input.amountIdr) > BigInt(advance.amount_idr)) {
+            throw new RealizationInputError(
+              `Biaya melebihi sisa uang muka yang belum dipertanggungjawabkan (Rp${BigInt(advance.amount_idr) - accounted}).`
+            );
+          }
+        }
+
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO disbursement_realization_expenses (
+            id, institution_id, proposal_id, advance_id, amount_idr, purpose, payee, document_ref,
+            recorded_by_officer_id, recorded_at
+          ) VALUES (
+            ${`exp-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${input.advanceId},
+            ${input.amountIdr}, ${input.purpose}, ${input.payee}, ${input.documentRef},
+            ${actor.officerId}, ${now}
+          )
+          RETURNING *
+        `))[0];
+        return expenseFrom(row);
+      }, "disbursement_realization_operations");
+    },
+
+    async listExpenses(institutionId: string, proposalId: string): Promise<OperationalExpenseRecord[]> {
+      return rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_expenses
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        ORDER BY recorded_at ASC, id ASC
+      `)).map(expenseFrom);
+    },
+
+    async listIncompleteEvidenceQueue(institutionId: string): Promise<Array<{
+      proposalId: string;
+      purpose: string;
+      pendingCount: number;
+      totalPendingIdr: string;
+      oldestPendingReportedAt: number;
+    }>> {
+      const rows = rowsOf(await db.execute(sql`
+        SELECT r.proposal_id, p.purpose, r.amount_idr, r.reported_at
+        FROM disbursement_realizations r
+        JOIN proposal_drafts p ON p.id = r.proposal_id AND p.institution_id = r.institution_id
+        WHERE r.institution_id = ${institutionId} AND r.evidence_status = 'EVIDENCE_PENDING'
+        ORDER BY r.reported_at ASC, r.id ASC
+      `));
+      const queue = new Map<string, { proposalId: string; purpose: string; pendingCount: number; total: bigint; oldestPendingReportedAt: number }>();
+      for (const row of rows) {
+        const entry = queue.get(row.proposal_id) ?? {
+          proposalId: row.proposal_id,
+          purpose: row.purpose,
+          pendingCount: 0,
+          total: 0n,
+          oldestPendingReportedAt: asSeconds(row.reported_at),
+        };
+        entry.pendingCount++;
+        entry.total += BigInt(row.amount_idr);
+        queue.set(row.proposal_id, entry);
+      }
+      return [...queue.values()].map(({ total, ...entry }) => ({ ...entry, totalPendingIdr: total.toString() }));
     },
   };
 }
