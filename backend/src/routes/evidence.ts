@@ -653,11 +653,9 @@ evidenceRoutes.get("/:id/drill-down", async (c) => {
       provenances.push(JSON.parse(new TextDecoder().decode(document.bytes)) as RealizationProvenance);
     } catch (error) {
       if (error instanceof DocumentError) {
-        unreadable.push({
-          role,
-          status: error.storageStatus === "FAILED" ? "FAILED" : "UNAVAILABLE",
-          reason: error.message,
-        });
+        // Missing or altered bytes are a failed file, not one that is merely not reachable yet.
+        const failed = error.storageStatus === "FAILED" || error.reason === "MISSING" || error.reason === "CORRUPT";
+        unreadable.push({ role, status: failed ? "FAILED" : "UNAVAILABLE", reason: error.message });
       } else {
         unreadable.push({ role, status: "UNAVAILABLE", reason: "Berkas penelusuran realisasi belum dapat diperiksa." });
       }

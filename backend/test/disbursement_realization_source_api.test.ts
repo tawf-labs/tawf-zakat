@@ -15,7 +15,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hex } from "viem";
@@ -40,6 +40,8 @@ const BASE = "http://localhost:3001/api/workspace";
 const EVIDENCE = "http://localhost:3001/api/evidence";
 
 const SINAR = "lpz-sinar-amanah";
+const BAITUL = "lpz-baitul-maal";
+const outsider = privateKeyToAccount(`0x${"55".repeat(32)}` as Hex);
 const adminSinar = privateKeyToAccount(`0x${"11".repeat(32)}` as Hex);
 const amilSinar = privateKeyToAccount(`0x${"22".repeat(32)}` as Hex);
 const examinerSinar = privateKeyToAccount(`0x${"33".repeat(32)}` as Hex);
@@ -328,6 +330,134 @@ const pastedClaim = (amount: string) => ({
   status: "READ",
   rows: [{ key: "klaim-1", bucket: "ZAKAT", balanceSheet: "ON", value: { amount, unit: "IDR" } }],
 });
+
+/** Approves a proposal revision through the real examination and decision flow. */
+async function approveRevision(draft: { id: string; version: number }, revisionBody: Record<string, unknown>) {
+  const amilToken = await signIn(amilSinar);
+  const examinerToken = await signIn(examinerSinar);
+  const approverToken = await signIn(approverSinar);
+  const revRes = await post(`/proposals/${draft.id}/revisions`, { ...revisionBody, expectedVersion: draft.version }, amilToken);
+  expect(revRes.status).toBe(201);
+  const { revision } = await revRes.json();
+
+  // Jalankan alur persetujuan revisi hingga versi 2 disahkan
+  const startRevExam = await post(`/proposals/${draft.id}/revisions/${revision.id}/start-examination`, { operationId: crypto.randomUUID() }, examinerToken);
+  expect(startRevExam.status).toBe(200);
+
+  const readyRevRes = await post(
+    `/proposals/${draft.id}/revisions/${revision.id}/ready`,
+    {
+      notes: "Perubahan disetujui",
+      operationId: crypto.randomUUID(),
+      checklist: {
+        administrativeChecksOk: true,
+        eligibilityChecksOk: true,
+        alternativeIdReviewed: true,
+        recurringAidExceptions: [],
+        notes: "Telaah revisi disetujui",
+      },
+    },
+    examinerToken
+  );
+  expect(readyRevRes.status).toBe(200);
+  expect((await readyRevRes.json()).revision.status).toBe("READY_FOR_DECISION");
+  const docRevRes = await post(
+    `/proposals/${draft.id}/decision-documents`,
+    {
+      fileName: "sk-revisi.txt",
+      mimeType: "text/plain",
+      contentBase64: Buffer.from("SK Revisi Beasiswa").toString("base64"),
+      expectedVersion: draft.version,
+    },
+    approverToken
+  );
+  expect(docRevRes.status).toBe(201);
+  const revDocId = (await docRevRes.json()).document.id;
+
+  const chalRes = await post(
+    `/proposals/${draft.id}/revisions/${revision.id}/decision-challenge`,
+    {
+      action: "APPROVE",
+      decisionReference: "SK-REV-01",
+      decisionDate: "2024-04-01",
+      decisionDocumentId: revDocId,
+      notes: "Persetujuan revisi",
+    },
+    approverToken
+  );
+  expect(chalRes.status).toBe(201);
+  const chal = await chalRes.json();
+  const sig = await approverSinar.signTypedData(signable(chal.typedData));
+  const decideRevRes = await post(
+    `/proposals/${draft.id}/revisions/${revision.id}/decide`,
+    {
+      nonce: chal.challenge.nonce,
+      signature: sig,
+      operationId: crypto.randomUUID(),
+      notes: "Persetujuan revisi",
+    },
+    approverToken
+  );
+  expect(decideRevRes.status).toBe(200);
+}
+
+/** Records one money realization before cut-off and freezes a package from the realization stream. */
+async function freezeRealizationPackage(
+  draft: { id: string; version: number },
+  aidLineId: string,
+  beneficiaryId: string,
+  amountIdr: string,
+  label: string
+) {
+  clock = 1713000000;
+  let amilToken = await signIn(amilSinar);
+  const realRes = await post(
+    `/proposals/${draft.id}/realizations`,
+    { expectedVersion: draft.version, items: [{ aidLineId, beneficiaryId, method: "CASH", amountIdr, reportedAt: 1713000000 }] },
+    amilToken
+  );
+  expect(realRes.status).toBe(201);
+  clock = CUT_OFF_SECONDS;
+  amilToken = await signIn(amilSinar);
+  const res = await post(
+    EVIDENCE,
+    {
+      label,
+      period: { kind: "SEMESTER", year: 2024 },
+      currencyUnit: "IDR",
+      balanceSheetScope: "ON",
+      claim: pastedClaim(amountIdr),
+      source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: CUT_OFF_ISO } },
+    },
+    amilToken
+  );
+  expect(res.status).toBe(201);
+  return { preparation: (await res.json()).preparation, amilToken };
+}
+
+/** Drafts and freezes a report package version over a preparation, claiming the reviewed figures. */
+async function freezeReportVersion(preparationId: string, token: string, body: Record<string, unknown>) {
+  const base = `${EVIDENCE}/${preparationId}/reports`;
+  const review = await (await get(`${base}/review`, token)).json();
+  const draftRes = await post(
+    base,
+    {
+      mode: "HUMAN",
+      ...body,
+      disclosure: review.disclosure,
+      draft: {
+        narrative: "Realisasi dilaporkan sesuai sumber beku.",
+        claims: review.figures.map((f: any) => ({ name: f.name, amount: f.value.amount, unit: f.value.unit })),
+      },
+    },
+    token
+  );
+  expect(draftRes.status).toBe(201);
+  const draft = (await draftRes.json()).package;
+  const frozenRes = await post(`${base}/${draft.id}/freeze`, {}, token);
+  expect(frozenRes.status).toBe(201);
+  return (await frozenRes.json()).package;
+}
 
 beforeAll(async () => {
   database = await createTestWorkspaceDatabase();
@@ -744,109 +874,40 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
     const { preparation: prepV1 } = await freezeRes.json();
 
     // Sekarang, ajukan revisi pengajuan di masa depan (versi 2)
-    examinerToken = await signIn(examinerSinar);
-    approverToken = await signIn(approverSinar);
-    const revRes = await post(
-      `/proposals/${draft.id}/revisions`,
-      {
-        reason: "Penyesuaian nama santri dan penambahan kuota",
-        beneficiaries: [
-          {
-            id: "santri-1",
-            name: "Zaidan Akbar REVISI",
-            asnaf: "Fisabilillah",
-            identityBasis: { kind: "NIK", value: "3201999900000001" },
-            addressOrScope: "Bandung",
-            guardian: null,
-            contact: { phone: "081234567890", relation: "SELF" },
-            paymentRecipient: null,
-          },
-          {
-            id: "santri-2",
-            name: "Santri Tambahan",
-            asnaf: "Fisabilillah",
-            identityBasis: { kind: "NIK", value: "3201999900000002" },
-            addressOrScope: "Bandung",
-            guardian: null,
-            contact: { phone: "081234567891", relation: "SELF" },
-            paymentRecipient: null,
-          },
-        ],
-        aidLines: [
-          {
-            id: "line-scholarship",
-            beneficiaryId: "santri-1",
-            aidType: "Beasiswa SPP",
-            period: "2024-03",
-            value: { kind: "MONEY", amountRequestedIdr: "6000000" },
-          },
-        ],
-        expectedVersion: draft.version,
-      },
-      amilToken
-    );
-    expect(revRes.status).toBe(201);
-    const { revision } = await revRes.json();
-
-    // Jalankan alur persetujuan revisi hingga versi 2 disahkan
-    const startRevExam = await post(`/proposals/${draft.id}/revisions/${revision.id}/start-examination`, { operationId: crypto.randomUUID() }, examinerToken);
-    expect(startRevExam.status).toBe(200);
-
-    const readyRevRes = await post(
-      `/proposals/${draft.id}/revisions/${revision.id}/ready`,
-      {
-        notes: "Perubahan disetujui",
-        operationId: crypto.randomUUID(),
-        checklist: {
-          administrativeChecksOk: true,
-          eligibilityChecksOk: true,
-          alternativeIdReviewed: true,
-          recurringAidExceptions: [],
-          notes: "Telaah revisi disetujui",
+    await approveRevision(draft, {
+      reason: "Penyesuaian nama santri dan penambahan kuota",
+      beneficiaries: [
+        {
+          id: "santri-1",
+          name: "Zaidan Akbar REVISI",
+          asnaf: "Fisabilillah",
+          identityBasis: { kind: "NIK", value: "3201999900000001" },
+          addressOrScope: "Bandung",
+          guardian: null,
+          contact: { phone: "081234567890", relation: "SELF" },
+          paymentRecipient: null,
         },
-      },
-      examinerToken
-    );
-    expect(readyRevRes.status).toBe(200);
-    expect((await readyRevRes.json()).revision.status).toBe("READY_FOR_DECISION");
-    const docRevRes = await post(
-      `/proposals/${draft.id}/decision-documents`,
-      {
-        fileName: "sk-revisi.txt",
-        mimeType: "text/plain",
-        contentBase64: Buffer.from("SK Revisi Beasiswa").toString("base64"),
-        expectedVersion: draft.version,
-      },
-      approverToken
-    );
-    expect(docRevRes.status).toBe(201);
-    const revDocId = (await docRevRes.json()).document.id;
-
-    const chalRes = await post(
-      `/proposals/${draft.id}/revisions/${revision.id}/decision-challenge`,
-      {
-        action: "APPROVE",
-        decisionReference: "SK-REV-01",
-        decisionDate: "2024-04-01",
-        decisionDocumentId: revDocId,
-        notes: "Persetujuan revisi",
-      },
-      approverToken
-    );
-    expect(chalRes.status).toBe(201);
-    const chal = await chalRes.json();
-    const sig = await approverSinar.signTypedData(signable(chal.typedData));
-    const decideRevRes = await post(
-      `/proposals/${draft.id}/revisions/${revision.id}/decide`,
-      {
-        nonce: chal.challenge.nonce,
-        signature: sig,
-        operationId: crypto.randomUUID(),
-        notes: "Persetujuan revisi",
-      },
-      approverToken
-    );
-    expect(decideRevRes.status).toBe(200);
+        {
+          id: "santri-2",
+          name: "Santri Tambahan",
+          asnaf: "Fisabilillah",
+          identityBasis: { kind: "NIK", value: "3201999900000002" },
+          addressOrScope: "Bandung",
+          guardian: null,
+          contact: { phone: "081234567891", relation: "SELF" },
+          paymentRecipient: null,
+        },
+      ],
+      aidLines: [
+        {
+          id: "line-scholarship",
+          beneficiaryId: "santri-1",
+          aidType: "Beasiswa SPP",
+          period: "2024-03",
+          value: { kind: "MONEY", amountRequestedIdr: "6000000" },
+        },
+      ],
+    });
 
     // Buka kembali paket bukti lama melalui drill-down
     const drillRes = await get(`${EVIDENCE}/${prepV1.id}/drill-down`, amilToken);
@@ -1186,50 +1247,167 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
       configureRuntime(disbursement);
     }
   });
+  it("isolasi: lembaga lain tidak dapat membuka drill-down maupun berkas provenance", async () => {
+    const { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Terlindung", nik: "3201123456780021" }],
+      lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "200000" }],
+    });
+    const { preparation } = await freezeRealizationPackage(draft, "line-1", "ben-1", "200000", "Paket isolasi");
+    const provenanceFile = preparation.files.find((f: any) => f.fileName === PROVENANCE_FILE_NAMES.SOURCE);
+
+    await store.upsertMembership({ institutionId: BAITUL, account: outsider.address, role: "OFFICER" });
+    const outsiderToken = await signIn(outsider, BAITUL);
+    expect((await get(`${EVIDENCE}/${preparation.id}/drill-down`, outsiderToken)).status).toBe(404);
+    expect((await get(`${EVIDENCE}/${preparation.id}/files/${provenanceFile.id}`, outsiderToken)).status).toBe(404);
+    expect((await get(`${EVIDENCE}/${preparation.id}/drill-down`)).status).toBe(401);
+  });
+
+  it("integritas: berkas provenance yang hilang atau diubah dinyatakan gagal, bukan rincian kosong", async () => {
+    const { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Integritas", nik: "3201123456780031" }],
+      lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "300000" }],
+    });
+    const { preparation, amilToken } = await freezeRealizationPackage(draft, "line-1", "ben-1", "300000", "Paket integritas");
+    const stored = (await evidence.getPreparation(SINAR, preparation.id))!;
+    const file = stored.files.find((f) => f.fileName === PROVENANCE_FILE_NAMES.SOURCE)!;
+
+    const expectFailed = async () => {
+      const res = await get(`${EVIDENCE}/${preparation.id}/drill-down`, amilToken);
+      expect(res.status).toBe(200);
+      const drill = await res.json();
+      expect(drill.available).toBe(false);
+      expect(drill.provenances).toBeUndefined();
+      expect(drill.unreadable).toHaveLength(1);
+      expect(drill.unreadable[0].role).toBe("SOURCE");
+      expect(drill.unreadable[0].status).toBe("FAILED");
+      expect(drill.reason).toContain("tidak ditampilkan sebagai kosong");
+      return drill.unreadable[0].reason as string;
+    };
+
+    // Diubah: isi lain di lokasi yang sama.
+    await fileStore.put({
+      institutionId: SINAR,
+      preparationId: preparation.id,
+      fileId: file.id,
+      bytes: new TextEncoder().encode(JSON.stringify({ format: "tawf.realization.provenance", realizations: [] })),
+    });
+    expect(await expectFailed()).toContain("tidak cocok");
+
+    // Hilang.
+    await unlink(file.storageRef!);
+    expect(await expectFailed()).toContain("tidak ditemukan");
+  });
+
+  it("koreksi laporan dari sumber realisasi merujuk versi pendahulu; versi lama dan sumber bekunya tetap", async () => {
+    let { draft } = await prepareApprovedProposal({
+      beneficiaries: [
+        { id: "ben-a", name: "Pak Arif", nik: "3201123456780041" },
+        { id: "ben-b", name: "Bu Bunga", nik: "3201123456780042" },
+      ],
+      lines: [
+        { id: "line-a", beneficiaryId: "ben-a", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "500000" },
+        { id: "line-b", beneficiaryId: "ben-b", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "300000" },
+      ],
+    });
+    const first = await freezeRealizationPackage(draft, "line-a", "ben-a", "500000", "Laporan realisasi v1");
+    const v1 = await freezeReportVersion(first.preparation.id, first.amilToken, { reportId: "realisasi-2024", version: "1" });
+
+    // Sesudah laporan v1: realisasi baru dan revisi nama penerima pada pengajuan.
+    clock = AFTER_CUT_OFF_SECONDS;
+    let amilToken = await signIn(amilSinar);
+    draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+    const late = await post(
+      `/proposals/${draft.id}/realizations`,
+      {
+        expectedVersion: draft.version,
+        items: [{ aidLineId: "line-b", beneficiaryId: "ben-b", method: "CASH", amountIdr: "300000", reportedAt: AFTER_CUT_OFF_SECONDS }],
+      },
+      amilToken
+    );
+    expect(late.status).toBe(201);
+    draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+    await approveRevision(draft, {
+      reason: "Koreksi ejaan nama penerima",
+      beneficiaries: draft.beneficiaries.map((b: any) => (b.id === "ben-a" ? { ...b, name: "Pak Arif REVISI" } : b)),
+      aidLines: draft.aidLines.map((l: any) => ({ id: l.id, beneficiaryId: l.beneficiaryId, aidType: l.aidType, period: l.period, value: l.value })),
+    });
+
+    // Snapshot koreksi dengan cut-off baru.
+    const correctionCutOff = new Date((AFTER_CUT_OFF_SECONDS + 86400) * 1000).toISOString();
+    clock = AFTER_CUT_OFF_SECONDS + 86400;
+    amilToken = await signIn(amilSinar);
+    const secondRes = await post(
+      EVIDENCE,
+      {
+        label: "Laporan realisasi koreksi",
+        period: { kind: "SEMESTER", year: 2024 },
+        currencyUnit: "IDR",
+        balanceSheetScope: "ON",
+        claim: pastedClaim("800000"),
+        source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: correctionCutOff } },
+      },
+      amilToken
+    );
+    expect(secondRes.status).toBe(201);
+    const second = (await secondRes.json()).preparation;
+
+    const preview = (await (await get(`${EVIDENCE}/${second.id}/reports/correction?predecessor=${v1.id}`, amilToken)).json()).correction;
+    expect(preview.predecessor.digest).toBe(v1.digest);
+    expect(preview.samePreparation).toBe(false);
+    expect(preview.reasonRequired).toBe(true);
+
+    const v2 = await freezeReportVersion(second.id, amilToken, {
+      reportId: "realisasi-2024",
+      version: "2",
+      predecessor: v1.id,
+      correctionReason: "Realisasi susulan sesudah cut-off pertama.",
+    });
+    expect(v2.predecessor).toBe(v1.id);
+
+    // Versi lama tidak berubah, dan sumber bekunya tetap menunjuk data lama.
+    const old = (await (await get(`${EVIDENCE}/${first.preparation.id}/reports/${v1.id}`, amilToken)).json()).package;
+    expect(old.digest).toBe(v1.digest);
+    expect(old.figures).toEqual(v1.figures);
+    const oldDrill = await (await get(`${EVIDENCE}/${first.preparation.id}/drill-down`, amilToken)).json();
+    expect(oldDrill.provenances[0].realizations.map((r: any) => r.beneficiary.name)).toEqual(["Pak Arif"]);
+    expect(oldDrill.provenances[0].totals.totalRealizedIdr).toBe("500000");
+
+    // Versi koreksi memuat realisasi susulan; realisasi lama tetap terikat pada versi pengajuan saat dicatat.
+    const newDrill = await (await get(`${EVIDENCE}/${second.id}/drill-down`, amilToken)).json();
+    const names = newDrill.provenances[0].realizations.map((r: any) => `${r.beneficiary.name}@v${r.proposalVersion}`);
+    expect(names).toEqual(["Pak Arif@v1", "Bu Bunga@v1"]);
+    expect(newDrill.provenances[0].totals.totalRealizedIdr).toBe("800000");
+  });
+
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
-    "browser: petugas memilih mode realisasi penyaluran, menentukan cut-off, dan melihat drill-down rincian penerima",
+    "browser: realisasi → versi laporan → revisi pengajuan → drill-down sumber lama, pada laptop dan ponsel",
     async () => {
-      // Realisasi sebelum cut-off, lalu paket dibekukan; sengketa dicatat sesudah freeze.
-      const { draft } = await prepareApprovedProposal({
+      // Realisasi → paket bukti → versi laporan beku; lalu pengajuan direvisi dan sengketa dicatat.
+      let { draft } = await prepareApprovedProposal({
         beneficiaries: [{ id: "ben-1", name: "Ibu Smoke", nik: "3201123456780011" }],
         lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "450000" }],
       });
-      clock = 1713000000;
-      let amilToken = await signIn(amilSinar);
-      const realRes = await post(
-        `/proposals/${draft.id}/realizations`,
-        {
-          expectedVersion: draft.version,
-          items: [{ aidLineId: "line-1", beneficiaryId: "ben-1", method: "CASH", amountIdr: "450000", reportedAt: 1713000000 }],
-        },
-        amilToken
-      );
-      expect(realRes.status).toBe(201);
-      const realizationId = (await realRes.json()).records[0].id;
-      clock = CUT_OFF_SECONDS;
-      amilToken = await signIn(amilSinar);
-      const freezeRes = await post(
-        EVIDENCE,
-        {
-          label: "Paket Smoke Realisasi",
-          period: { kind: "SEMESTER", year: 2024 },
-          currencyUnit: "IDR",
-          balanceSheetScope: "ON",
-          claim: pastedClaim("450000"),
-          source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: CUT_OFF_ISO } },
-        },
-        amilToken
-      );
-      expect(freezeRes.status).toBe(201);
+      const { preparation, amilToken } = await freezeRealizationPackage(draft, "line-1", "ben-1", "450000", "Paket Smoke Realisasi");
+      const report = await freezeReportVersion(preparation.id, amilToken, { reportId: "realisasi-smoke", version: "1" });
+      const drillBefore = await (await get(`${EVIDENCE}/${preparation.id}/drill-down`, amilToken)).json();
+      const realizationId = drillBefore.provenances[0].realizations[0].realizationId;
+
+      draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+      await approveRevision(draft, {
+        reason: "Koreksi nama penerima",
+        beneficiaries: draft.beneficiaries.map((b: any) => ({ ...b, name: "Ibu Smoke REVISI" })),
+        aidLines: draft.aidLines.map((l: any) => ({ id: l.id, beneficiaryId: l.beneficiaryId, aidType: l.aidType, period: l.period, value: l.value })),
+      });
       expect(
         (
           await post(
             `/proposals/${draft.id}/realizations/${realizationId}/disputes`,
             { complainantType: "BENEFICIARY", subject: "AMOUNT", reason: "Sesudah freeze", disputedAmountIdr: "1000" },
-            amilToken
+            await signIn(amilSinar)
           )
         ).status
       ).toBe(201);
+
       // The browser checks session expiry against its own clock.
       clock = Math.floor(Date.now() / 1000);
 
@@ -1293,12 +1471,18 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
           await page.getByLabel(/Batas Akhir Cut-off Realisasi/).waitFor();
           expect(await page.getByText("Unggah ledger JSON").count()).toBe(0);
 
-          // Paket lama: drill-down ke versi pengajuan dan penerima yang dibekukan.
+          // Paket lama: versi laporan beku tersedia.
           await page.getByRole("button", { name: /Paket Smoke Realisasi/ }).click();
+          await page.getByLabel("Paket tersimpan").selectOption(report.id);
+          await page.getByText("realisasi-smoke · versi 1", { exact: false }).waitFor();
+
+          // Drill-down sumber lama sesudah revisi: nama dan versi pengajuan saat dibekukan.
           await page.getByRole("button", { name: "Buka Rincian Penelusuran" }).click();
           await page.getByRole("cell", { name: /Ibu Smoke/ }).first().waitFor();
+          expect(await page.getByRole("cell", { name: /Ibu Smoke REVISI/ }).count()).toBe(0);
           await page.getByRole("button", { name: "v1", exact: true }).click();
-          await page.getByText(/Penerima pada versi ini: Ibu Smoke/).waitFor();
+          await page.getByText("Penerima pada versi ini: Ibu Smoke (Fakir)").waitFor();
+
           // Sengketa sesudah freeze hanya muncul pada kolom status terkini, bukan pada snapshot lama.
           await page.getByText(/Kolom "Status terkini" dibaca dari data kerja/).waitFor();
           await page.getByText("Berubah sejak dibekukan").waitFor();
