@@ -102,4 +102,5 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
   - Unit mapper: jenis dana tak dikenal, nilai rusak, versi hilang, pemetaan INFAK, uang muka/beban di luar cut-off, dokumen sesudah cut-off.
   - Smoke browser laptop + ponsel: mode realisasi di form; realisasi → paket bukti → versi laporan beku ("realisasi-smoke · versi 1"); revisi nama penerima pada pengajuan; drill-down sumber lama tetap menampilkan nama dan versi pengajuan saat dibekukan; sengketa sesudah freeze hanya muncul di kolom status terkini.
 - Regresi: `registry_api` 47 (7 skip opt-in browser), `activity_allocation_api` 12, `contribution_api` 16, `disbursement_realization_api` 20, `disbursement_realization_goods_api` 18, `evidence_api` 58, `evidence_drafts_api` 20, `evidence_internal_usdc_api` 13, `evidence_source` 19, `period_report_api` 15 — semua pass.
+- Suite backend penuh `cd backend && bun test`: **946 pass, 21 skip (opt-in browser), 0 fail** di 73 berkas.
 - `cd frontend && bun run build`: berhasil.
