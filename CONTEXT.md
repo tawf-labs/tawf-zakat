@@ -119,6 +119,7 @@ _Avoid_: Program bantuan, untuk satu usulan penyaluran di dalam program.
 
 **Daftar penerima pengajuan**:
 Rincian calon penerima dan bantuan masing-masing yang menjadi cakupan satu [[Pengajuan penyaluran]].
+Nama teknis: `ProposalBeneficiaryList` / `beneficiary-list`. Pratinjau merupakan pembandingan daftar ini dengan versi dasar; penerapan setelah persetujuan tetap mengikuti [[Revisi pengajuan]].
 _Avoid_: Identitas penanggung jawab, sebagai pengganti seluruh identitas penerima; bukti bantuan telah diterima.
 
 **Penanggung jawab pengajuan**:

@@ -17,7 +17,7 @@ import { ProposalDocumentManager } from "./ProposalDocumentManager";
 import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
 import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
 import { BeneficiaryImportNotice } from "./BeneficiaryImportNotice";
-import { BeneficiaryRosterChangeModal } from "./BeneficiaryRosterChangeModal";
+import { ProposalBeneficiaryListModal } from "./ProposalBeneficiaryListModal";
 import { useBeneficiaryImport } from "./useBeneficiaryImport";
 import { ProposalDecisionModal } from "./ProposalDecisionModal";
 import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
@@ -64,7 +64,7 @@ export function ProposalDraftForm({
 
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [recordedDecision, setRecordedDecision] = useState<ProposalDecision | null>(null);
-  const [showReupload, setShowReupload] = useState(false);
+  const [showBeneficiaryList, setShowBeneficiaryList] = useState(false);
 
   const isReadOnly =
     draft.status === "SUBMITTED" ||
@@ -255,7 +255,7 @@ export function ProposalDraftForm({
           onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
         />
       </fieldset>
-      {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowReupload(true)}>
+      {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowBeneficiaryList(true)}>
         Perbarui daftar penerima dari berkas
       </Button>}
       <BeneficiaryImportNotice
@@ -390,18 +390,19 @@ export function ProposalDraftForm({
           onApply={rosterImport.apply}
         />
       )}
-      {showReupload && (
-        <BeneficiaryRosterChangeModal
+      {showBeneficiaryList && (
+        <ProposalBeneficiaryListModal
           requests={requests}
           proposal={draft}
-          isOpen={showReupload}
-          onClose={() => setShowReupload(false)}
+          isOpen={showBeneficiaryList}
+          onClose={() => setShowBeneficiaryList(false)}
           onAppliedDraft={(updatedDraft) => {
             acceptSaved(updatedDraft);
-            setShowReupload(false);
+            setShowBeneficiaryList(false);
           }}
-          onAppliedRevision={() => {
-            setShowReupload(false);
+          onAppliedRevision={(_revision, updatedDraft) => {
+            acceptSaved(updatedDraft);
+            setShowBeneficiaryList(false);
           }}
         />
       )}

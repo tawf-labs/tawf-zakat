@@ -24,6 +24,7 @@ import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { createWorkspaceStore } from "./tenancy-store";
 import { createEvidenceStore } from "./evidence-store";
+import { startProposalPreviewMaintenance } from "./proposal-preview-maintenance";
 import { createDisbursementStore } from "./disbursement-store";
 import { createContributionStore } from "./contribution-store";
 import { createActivityStore } from "./activity-store";
@@ -76,6 +77,9 @@ export function installWorkspaceRuntime(): void {
   // Server-only onboarding configuration; HTTP callers cannot supply policy flags.
   const reportAmilRules = AmilRulesSchema.parse(JSON.parse(process.env.REPORT_AMIL_RULES_JSON ?? "[]"));
   const registry = registryFromEnvironment(db);
+  const files = key
+    ? createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key })
+    : undefined;
   configureWorkspace({
     registry,
     reportAmilRules,
@@ -91,7 +95,7 @@ export function installWorkspaceRuntime(): void {
       contract: CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase(),
       indexerKey: `${CONTRACT_CONFIG.CHAIN_ID}:${CONTRACT_CONFIG.ZAKAT_PROTOCOL_L1_ADDRESS.toLowerCase()}`,
     }),
-    ...(key ? { files: createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key }) } : {}),
+    ...(files ? { files } : {}),
     // Institutional contract accounts are checked on the explicitly configured registry chain.
     ethCall: registry?.chain.accountSignatureCall ?? ethCall,
     now: nowInSeconds,
@@ -110,6 +114,8 @@ export function installWorkspaceRuntime(): void {
     .then(() => registry?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);
+      if (files)
+        startProposalPreviewMaintenance(disbursement, files, nowInSeconds);
       console.log("Workspace tenancy and evidence schema ready");
     })
     .catch((error) => console.error("Workspace schema failed:", error));

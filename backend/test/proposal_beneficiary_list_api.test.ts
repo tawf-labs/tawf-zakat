@@ -1,5 +1,5 @@
 /**
- * Beneficiary Re-upload with Change Preview & Revision API Tests
+ * Proposal beneficiary list comparison and revision API Tests
  * (Spec #86, Ticket #97, US-26, US-27, US-42, US-47, US-50; Skenario 7, 17, 19, 24, 25).
  *
  * Scenarios & Acceptance Criteria covered:
@@ -20,10 +20,11 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readdir, rename, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
+import { pruneProposalPreviews } from "../src/proposal-preview-maintenance";
 import { createEvidenceStore } from "../src/evidence-store";
 import * as XLSX from "xlsx";
 import type { Hex } from "viem";
@@ -388,7 +389,7 @@ async function prepareApprovedProposalWithRealization(tokens: {
   return { program, draft: updatedDraft };
 }
 
-describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", () => {
+describe("Proposal beneficiary list comparison and revision (Ticket #97)", () => {
   let adminBaitulToken: string;
   let amilToken: string;
   let examinerToken: string;
@@ -398,7 +399,7 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
   let rivalToken: string;
 
   beforeAll(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "zkt-reupload-files-"));
+    tempDir = await mkdtemp(join(tmpdir(), "zkt-beneficiary-list-files-"));
     files = createEncryptedFileStore({ directory: tempDir, key: FILE_KEY });
     database = await createTestWorkspaceDatabase();
     store = createWorkspaceStore(database.handle());
@@ -566,9 +567,9 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       // Re-upload the exact same xlsx file
       const identicalBase64 = buildXlsxBase64(initialRows);
       const previewRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
         { fileName: "daftar-awal.xlsx", contentBase64: identicalBase64 },
-        amilToken
+        amilToken,
       );
       expect(previewRes.status).toBe(200);
       const { diff } = await previewRes.json();
@@ -598,9 +599,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         }),
       ];
       const previewRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "daftar-revisi.xlsx", contentBase64: buildXlsxBase64(modifiedRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "daftar-revisi.xlsx",
+          contentBase64: buildXlsxBase64(modifiedRows),
+        },
+        amilToken,
       );
       const { preview } = await previewRes.json();
 
@@ -619,13 +623,21 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       };
 
       // 1. Initial Apply
-      const firstApply = await post(`${WORKSPACE}/proposals/${draft.id}/reupload/apply`, applyPayload, amilToken);
+      const firstApply = await post(
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
+        applyPayload,
+        amilToken,
+      );
       expect(firstApply.status).toBe(200);
       const firstJson = await firstApply.json();
       expect(firstJson.draft.version).toBe(draft.version + 1);
 
       // 2. Duplicate retry with same operationId & identical payload: replays saved result
-      const retryApply = await post(`${WORKSPACE}/proposals/${draft.id}/reupload/apply`, applyPayload, amilToken);
+      const retryApply = await post(
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
+        applyPayload,
+        amilToken,
+      );
       expect(retryApply.status).toBe(200);
       const retryJson = await retryApply.json();
       expect(retryJson.draft.version).toBe(firstJson.draft.version);
@@ -635,7 +647,11 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         ...applyPayload,
         beneficiaries: [],
       };
-      const collisionRes = await post(`${WORKSPACE}/proposals/${draft.id}/reupload/apply`, collisionPayload, amilToken);
+      const collisionRes = await post(
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
+        collisionPayload,
+        amilToken,
+      );
       expect(collisionRes.status).toBe(409);
     });
   });
@@ -686,9 +702,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       ];
 
       const previewRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "daftar-perubahan.xlsx", contentBase64: buildXlsxBase64(updatedRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "daftar-perubahan.xlsx",
+          contentBase64: buildXlsxBase64(updatedRows),
+        },
+        amilToken,
       );
       expect(previewRes.status).toBe(200);
       const { diff } = await previewRes.json();
@@ -749,14 +768,19 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         }),
       ];
       const prevRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "update.csv", contentBase64: Buffer.from(buildCsvString(updatedRows)).toString("base64") },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "update.csv",
+          contentBase64: Buffer.from(buildCsvString(updatedRows)).toString(
+            "base64",
+          ),
+        },
+        amilToken,
       );
       const { preview } = await prevRes.json();
 
       const applyRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version,
           operationId: crypto.randomUUID(),
@@ -766,10 +790,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
           file: {
             fileName: "update.csv",
             mimeType: "text/csv",
-            contentBase64: Buffer.from(buildCsvString(updatedRows)).toString("base64"),
+            contentBase64: Buffer.from(buildCsvString(updatedRows)).toString(
+              "base64",
+            ),
           },
         },
-        amilToken
+        amilToken,
       );
       expect(applyRes.status).toBe(200);
       const applyData = await applyRes.json();
@@ -792,14 +818,14 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
 
       // Provide stale expectedVersion (draft.version + 99)
       const applyRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version + 99,
           operationId: crypto.randomUUID(),
           beneficiaries: draft.beneficiaries,
           aidLines: draft.aidLines,
         },
-        amilToken
+        amilToken,
       );
       expect(applyRes.status).toBe(409);
     });
@@ -811,21 +837,24 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       const draft = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
 
       const rivalPreview = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "rival.xlsx", contentBase64: buildXlsxBase64([moneyRow()]) },
-        rivalToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "rival.xlsx",
+          contentBase64: buildXlsxBase64([moneyRow()]),
+        },
+        rivalToken,
       );
       expect(rivalPreview.status).toBe(404);
 
       const rivalApply = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version,
           operationId: crypto.randomUUID(),
           beneficiaries: draft.beneficiaries,
           aidLines: draft.aidLines,
         },
-        rivalToken
+        rivalToken,
       );
       expect(rivalApply.status).toBe(404);
     });
@@ -849,9 +878,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         }),
       ];
       const previewRes = await post(
-        `${WORKSPACE}/proposals/${sinarDraft.id}/reupload/preview`,
-        { fileName: "malicious.xlsx", contentBase64: buildXlsxBase64(maliciousRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${sinarDraft.id}/beneficiary-list/preview`,
+        {
+          fileName: "malicious.xlsx",
+          contentBase64: buildXlsxBase64(maliciousRows),
+        },
+        amilToken,
       );
       expect(previewRes.status).toBe(403);
       expect((await previewRes.json()).error).toContain("milik lembaga lain");
@@ -862,9 +894,9 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       const draft = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
 
       const readerPreview = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
         { fileName: "test.xlsx", contentBase64: buildXlsxBase64([moneyRow()]) },
-        readerToken
+        readerToken,
       );
       expect(readerPreview.status).toBe(403);
     });
@@ -890,9 +922,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
 
       // Preview should detect floor violation
       const prevRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "floor-violation.xlsx", contentBase64: buildXlsxBase64(belowFloorRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "floor-violation.xlsx",
+          contentBase64: buildXlsxBase64(belowFloorRows),
+        },
+        amilToken,
       );
       expect(prevRes.status).toBe(200);
       const { diff, preview } = await prevRes.json();
@@ -903,7 +938,7 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
 
       // Attempting to apply should be blocked with 409 Conflict
       const applyRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version,
           operationId: crypto.randomUUID(),
@@ -912,20 +947,22 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
           beneficiaries: preview.beneficiaries,
           aidLines: preview.aidLines,
         },
-        amilToken
+        amilToken,
       );
-      expect(applyRes.status).toBe(409);
-      const applyErr = await applyRes.json();
-      expect(applyErr.error).toContain("tidak boleh turun di bawah realisasi");
+      expect(applyRes.status).toBe(400);
+      expect(preview.previewId).toBe("");
 
       // Attempt B: Removing aid-2 entirely (which has 30 Kg realized)
       const removeRealizedRows = [
         moneyRow({ id_penerima: "ben-1", id_baris: "aid-1", nilai_idr: "1000000" }),
       ];
       const prevRemove = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "remove-realized.xlsx", contentBase64: buildXlsxBase64(removeRealizedRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "remove-realized.xlsx",
+          contentBase64: buildXlsxBase64(removeRealizedRows),
+        },
+        amilToken,
       );
       expect(prevRemove.status).toBe(200);
       const removeDiff = (await prevRemove.json()).diff;
@@ -954,9 +991,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       ];
 
       const prevRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "valid-revision.xlsx", contentBase64: buildXlsxBase64(validRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "valid-revision.xlsx",
+          contentBase64: buildXlsxBase64(validRows),
+        },
+        amilToken,
       );
       expect(prevRes.status).toBe(200);
       const { diff, preview } = await prevRes.json();
@@ -965,7 +1005,7 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
 
       // Re-upload on APPROVED proposal requires `reason`
       const noReasonRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version,
           operationId: crypto.randomUUID(),
@@ -973,7 +1013,7 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
           beneficiaries: preview.beneficiaries,
           aidLines: preview.aidLines,
         },
-        amilToken
+        amilToken,
       );
       expect(noReasonRes.status).toBe(400);
 
@@ -990,7 +1030,11 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
             contentBase64: buildXlsxBase64(validRows),
           },
         };
-      const validApply = await post(`${WORKSPACE}/proposals/${draft.id}/reupload/apply`, applyPayload, amilToken);
+      const validApply = await post(
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
+        applyPayload,
+        amilToken,
+      );
       expect(validApply.status).toBe(201);
       const appliedJson = await validApply.json();
       expect(appliedJson.revision).toBeDefined();
@@ -1005,7 +1049,11 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       // Verify roster document attached to revision version
       expect(appliedJson.document).toBeDefined();
       expect(appliedJson.document.version).toBe(appliedJson.revision.toVersion);
-      const retry = await post(`${WORKSPACE}/proposals/${draft.id}/reupload/apply`, applyPayload, amilToken);
+      const retry = await post(
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
+        applyPayload,
+        amilToken,
+      );
       expect(retry.status).toBe(201);
       expect((await retry.json()).document.id).toBe(appliedJson.document.id);
       const documents = await disbursement.listProposalDocuments(SINAR, draft.id);
@@ -1040,9 +1088,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       ];
 
       const prevRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/preview`,
-        { fileName: "kontak.xlsx", contentBase64: buildXlsxBase64(modifiedRows) },
-        amilToken
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "kontak.xlsx",
+          contentBase64: buildXlsxBase64(modifiedRows),
+        },
+        amilToken,
       );
       const { diff, preview } = await prevRes.json();
       const mod = diff.rowDetails.find((r: any) => r.status === "MODIFIED");
@@ -1050,7 +1101,7 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       expect(mod.changes.some((c: any) => c.field === "contact")).toBe(true);
 
       const applyRes = await post(
-        `${WORKSPACE}/proposals/${draft.id}/reupload/apply`,
+        `${WORKSPACE}/proposals/${draft.id}/beneficiary-list/apply`,
         {
           expectedVersion: draft.version,
           operationId: crypto.randomUUID(),
@@ -1059,11 +1110,12 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
           aidLines: preview.aidLines,
           file: {
             fileName: "kontak.xlsx",
-            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             contentBase64: buildXlsxBase64(modifiedRows),
           },
         },
-        amilToken
+        amilToken,
       );
       expect(applyRes.status).toBe(200);
 
@@ -1090,20 +1142,60 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
     const source = { fileName: "bound.csv", contentBase64: Buffer.from(buildCsvString([
       moneyRow({ id_penerima: draft.beneficiaries[0].id, id_baris: draft.aidLines[0].id, nilai_idr: "1200000" }),
     ])).toString("base64") };
-    const preview = await (await post(`/proposals/${draft.id}/reupload/preview`, source, amilToken)).json();
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        source,
+        amilToken,
+      )
+    ).json();
     const input = { previewId: preview.previewId, expectedVersion: draft.version, operationId: crypto.randomUUID() };
-    const resultPath = `/proposals/${draft.id}/reupload/result`;
+    const resultPath = `/proposals/${draft.id}/beneficiary-list/result`;
     expect((await (await post(resultPath, input, amilToken)).json()).pending).toBe(true);
-    expect((await post(`/proposals/${draft.id}/reupload/apply`, { ...input, beneficiaries: [] }, amilToken)).status).toBe(400);
-    expect((await post(`/proposals/${draft.id}/reupload/apply`, { ...input, file: { ...source, contentBase64: Buffer.from("tampered").toString("base64") } }, amilToken)).status).toBe(400);
+    expect(
+      (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/apply`,
+          { ...input, beneficiaries: [] },
+          amilToken,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/apply`,
+          {
+            ...input,
+            file: {
+              ...source,
+              contentBase64: Buffer.from("tampered").toString("base64"),
+            },
+          },
+          amilToken,
+        )
+      ).status,
+    ).toBe(400);
     const other = await prepareDraftProposal(amilToken, program.id, [goodsRow()]);
-    expect((await post(`/proposals/${other.id}/reupload/apply`, { ...input, expectedVersion: other.version }, amilToken)).status).toBe(400);
+    expect(
+      (
+        await post(
+          `/proposals/${other.id}/beneficiary-list/apply`,
+          { ...input, expectedVersion: other.version },
+          amilToken,
+        )
+      ).status,
+    ).toBe(400);
     await database.reopen();
     store = createWorkspaceStore(database.handle());
     disbursement = createDisbursementStore(database.handle() as never);
     activities = createActivityStore(database.handle() as never);
     configure();
-    const applied = await post(`/proposals/${draft.id}/reupload/apply`, input, amilToken);
+    const applied = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      input,
+      amilToken,
+    );
     expect(applied.status).toBe(200);
     const saved = await applied.json();
     expect(saved.draft.aidLines[0].value.amountRequestedIdr).toBe("1200000");
@@ -1112,7 +1204,15 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
     expect(JSON.stringify(durable)).not.toContain("storageRef");
     expect((await post(resultPath, input, rivalToken)).status).toBe(404);
     expect((await post(resultPath, { ...input, reason: "changed" }, amilToken)).status).toBe(409);
-    expect((await post(`/proposals/${draft.id}/reupload/apply`, { ...input, operationId: crypto.randomUUID() }, amilToken)).status).toBe(409);
+    expect(
+      (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/apply`,
+          { ...input, operationId: crypto.randomUUID() },
+          amilToken,
+        )
+      ).status,
+    ).toBe(409);
   });
 
   it("compares stable IDs independently of array order and notices payment recipient reassignment", async () => {
@@ -1122,9 +1222,19 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       goodsRow({ id_penerima: draft.beneficiaries[1].id, id_baris: draft.aidLines[1].id }),
       moneyRow({ id_penerima: draft.beneficiaries[0].id, id_baris: draft.aidLines[0].id }),
     ];
-    const preview = async (input: SheetRow[]) => (await (await post(`/proposals/${draft.id}/reupload/preview`, {
-      fileName: "rows.csv", contentBase64: Buffer.from(buildCsvString(input)).toString("base64"),
-    }, amilToken)).json());
+    const preview = async (input: SheetRow[]) =>
+      await (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/preview`,
+          {
+            fileName: "rows.csv",
+            contentBase64: Buffer.from(buildCsvString(input)).toString(
+              "base64",
+            ),
+          },
+          amilToken,
+        )
+      ).json();
     expect((await preview(rows)).diff.isIdentical).toBe(true);
     // Both aid lines now belong to the second beneficiary; only stable links decide this change.
     rows[1] = moneyRow({ ...goodsRow(), jenis_bantuan: "UANG", jumlah_barang: "", satuan_barang: "", nilai_idr_barang: "", dasar_valuasi_barang: "",
@@ -1133,9 +1243,15 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
     const changed = await preview(rows);
     expect(changed.diff.isIdentical).toBe(false);
     expect(changed.diff.rowDetails.find((row: any) => row.aidLineId === draft.aidLines[0].id).status).toBe("MODIFIED");
-    const applied = await post(`/proposals/${draft.id}/reupload/apply`, {
-      previewId: changed.previewId, expectedVersion: draft.version, operationId: crypto.randomUUID(),
-    }, amilToken);
+    const applied = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      {
+        previewId: changed.previewId,
+        expectedVersion: draft.version,
+        operationId: crypto.randomUUID(),
+      },
+      amilToken,
+    );
     expect(applied.status).toBe(200);
     expect((await applied.json()).draft.aidLines.find((line: any) => line.id === draft.aidLines[0].id).beneficiaryId).toBe(draft.beneficiaries[1].id);
   });
@@ -1143,19 +1259,44 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
   it("keeps invalid source rows visible without presenting parse failures as deletions, warns about missing IDs", async () => {
     const program = await createTestProgram(adminToken);
     const draft = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
-    const invalid = await (await post(`/proposals/${draft.id}/reupload/preview`, {
-      fileName: "invalid.csv", contentBase64: Buffer.from(buildCsvString([
-        moneyRow({ id_penerima: draft.beneficiaries[0].id, id_baris: draft.aidLines[0].id, nilai_idr: "wrong" }),
-      ])).toString("base64"),
-    }, amilToken)).json();
+    const invalid = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "invalid.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({
+                id_penerima: draft.beneficiaries[0].id,
+                id_baris: draft.aidLines[0].id,
+                nilai_idr: "wrong",
+              }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
     expect(invalid.diff.canApply).toBe(false);
     expect(invalid.diff.aidLineCounts.removed).toBe(0);
     expect(invalid.diff.rowDetails.some((row: any) => row.status === "REMOVED")).toBe(false);
     expect(invalid.preview.allRowsPreview).toHaveLength(1);
     expect(invalid.preview.issues.length).toBeGreaterThan(0);
     const source = { fileName: "missing.csv", contentBase64: Buffer.from(buildCsvString([moneyRow({ nilai_idr: "1500000" })])).toString("base64") };
-    const first = await (await post(`/proposals/${draft.id}/reupload/preview`, source, amilToken)).json();
-    const repeat = await (await post(`/proposals/${draft.id}/reupload/preview`, source, amilToken)).json();
+    const first = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        source,
+        amilToken,
+      )
+    ).json();
+    const repeat = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        source,
+        amilToken,
+      )
+    ).json();
     expect(first.warnings.join(" ")).toContain("tanpa id_baris/id_penerima");
     expect(first.preview.beneficiaries).toEqual(repeat.preview.beneficiaries);
     expect(first.preview.aidLines).toEqual(repeat.preview.aidLines);
@@ -1165,21 +1306,46 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
     const program = await createTestProgram(adminToken);
     const original = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
     const draft = await prepareDraftProposal(amilToken, program.id, [goodsRow()]);
-    const preview = (id: string) => post(`/proposals/${draft.id}/reupload/preview`, {
-      fileName: "ids.csv", contentBase64: Buffer.from(buildCsvString([moneyRow({ id_penerima: id, id_baris: "new-line" })])).toString("base64"),
-    }, amilToken);
+    const preview = (id: string) =>
+      post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "ids.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({ id_penerima: id, id_baris: "new-line" }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      );
     expect((await preview(original.beneficiaries[0].id)).status).toBe(403);
     expect((await preview(original.beneficiaries[0].name)).status).toBe(200);
   });
 
   it("does not inherit approvals when the identity or contact behind a stable line changes", async () => {
     const { draft } = await prepareApprovedProposalWithRealization({ amilToken, examinerToken, approverToken, adminToken });
-    const result = await (await post(`/proposals/${draft.id}/reupload/preview`, {
-      fileName: "identity.csv", contentBase64: Buffer.from(buildCsvString([
-        moneyRow({ id_penerima: "ben-1", id_baris: "aid-1", nama: "Penerima Pengganti", nik: "3201010101809999", kontak_telepon: "089999999999" }),
-        goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" }),
-      ])).toString("base64"),
-    }, amilToken)).json();
+    const result = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "identity.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({
+                id_penerima: "ben-1",
+                id_baris: "aid-1",
+                nama: "Penerima Pengganti",
+                nik: "3201010101809999",
+                kontak_telepon: "089999999999",
+              }),
+              goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
     expect(result.preview.aidLines[0].value.amountApprovedIdr).toBeNull();
     expect(result.diff.heldAidLineIds).toContain("aid-1");
     const rendered = JSON.stringify(result.diff.rowDetails);
@@ -1217,9 +1383,24 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       moneyRow({ id_penerima: "ben-1", id_baris: "aid-1", kontak_telepon: "089999999999" }),
       goodsRow({ id_penerima: "ben-2", id_baris: "aid-2", jumlah_barang: "60", dasar_valuasi_barang: "Penawaran baru" }),
     ])).toString("base64") };
-    const preview = await (await post(`/proposals/${draft.id}/reupload/preview`, source, amilToken)).json();
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        source,
+        amilToken,
+      )
+    ).json();
     expect(preview.diff.canApply).toBe(true);
-    const applied = await post(`/proposals/${draft.id}/reupload/apply`, { previewId: preview.previewId, expectedVersion: draft.version, operationId: crypto.randomUUID(), reason: "Kontak dan barang diperbaiki" }, amilToken);
+    const applied = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      {
+        previewId: preview.previewId,
+        expectedVersion: draft.version,
+        operationId: crypto.randomUUID(),
+        reason: "Kontak dan barang diperbaiki",
+      },
+      amilToken,
+    );
     expect(applied.status).toBe(201);
     const revision = (await applied.json()).revision;
     expect(revision.beneficiaries[0].contact.phone).toBe("089999999999");
@@ -1235,6 +1416,255 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
     expect((await post(`/proposals/${draft.id}/realizations/${cash.id}/otp-verify`, { nonce, otpCode }, amilToken)).status).toBe(401);
   });
 
+  it("restricts applied source downloads to authorized institution readers", async () => {
+    const program = await createTestProgram(adminToken);
+    const draft = await prepareDraftProposal(amilToken, program.id, [
+      moneyRow(),
+    ]);
+    const source = buildCsvString([
+      moneyRow({
+        id_penerima: draft.beneficiaries[0].id,
+        id_baris: draft.aidLines[0].id,
+        nilai_idr: "1600000",
+      }),
+    ]);
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "restricted.csv",
+          contentBase64: Buffer.from(source).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
+    expect(
+      (
+        await get(
+          `/proposals/${draft.id}/files/doc-${preview.previewId}`,
+          amilToken,
+        )
+      ).status,
+    ).toBe(404);
+    const response = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      {
+        previewId: preview.previewId,
+        expectedVersion: draft.version,
+        operationId: crypto.randomUUID(),
+      },
+      amilToken,
+    );
+    expect(response.status).toBe(200);
+    const { document } = await response.json();
+    for (const token of [amilToken, examinerToken, approverToken]) {
+      const download = await get(
+        `/proposals/${draft.id}/files/${document.id}`,
+        token,
+      );
+      expect(download.status).toBe(200);
+      expect(await download.text()).toBe(source);
+    }
+    expect(
+      (await get(`/proposals/${draft.id}/files/${document.id}`, readerToken))
+        .status,
+    ).toBe(403);
+    expect(
+      (await get(`/proposals/${draft.id}/files/${document.id}`)).status,
+    ).toBe(401);
+    expect(
+      (await get(`/proposals/${draft.id}/files/${document.id}`, rivalToken))
+        .status,
+    ).toBe(404);
+    expect(
+      await disbursement.getProposalBeneficiaryListPreview(
+        {
+          institutionId: SINAR,
+          proposalId: draft.id,
+          account: amilSinarAccount.address.toLowerCase(),
+        },
+        preview.previewId,
+        clock,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects identifiers that exist only in another proposal's revision", async () => {
+    const { draft } = await prepareApprovedProposalWithRealization({
+      amilToken,
+      examinerToken,
+      approverToken,
+      adminToken,
+    });
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "new-person.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({ id_penerima: "ben-1", id_baris: "aid-1" }),
+              goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" }),
+              moneyRow({
+                id_penerima: "revision-only-person",
+                id_baris: "revision-only-line",
+                nama: "Penerima Baru",
+                nik: "3201010101800003",
+              }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
+    expect(
+      (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/apply`,
+          {
+            previewId: preview.previewId,
+            expectedVersion: draft.version,
+            operationId: crypto.randomUUID(),
+            reason: "Tambahan penerima",
+          },
+          amilToken,
+        )
+      ).status,
+    ).toBe(201);
+    const program = await createTestProgram(adminToken);
+    const other = await prepareDraftProposal(amilToken, program.id, [
+      moneyRow(),
+    ]);
+    expect(
+      (
+        await post(
+          `/proposals/${other.id}/beneficiary-list/preview`,
+          {
+            fileName: "copied.csv",
+            contentBase64: Buffer.from(
+              buildCsvString([
+                moneyRow({
+                  id_penerima: "revision-only-person",
+                  id_baris: "revision-only-line",
+                  nama: "Penerima Baru",
+                  nik: "3201010101800003",
+                }),
+              ]),
+            ).toString("base64"),
+          },
+          amilToken,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
+  it("migrates legacy plaintext previews and prunes only uncommitted source files", async () => {
+    const program = await createTestProgram(adminToken);
+    const draft = await prepareDraftProposal(amilToken, program.id, [
+      moneyRow(),
+    ]);
+    const committed = (
+      await disbursement.listProposalDocuments(SINAR, draft.id)
+    )[0]!;
+    const original = await files.get(committed.storageRef!);
+    const abandoned = await files.put({
+      institutionId: SINAR,
+      preparationId: draft.id,
+      fileId: crypto.randomUUID(),
+      bytes: Buffer.from("abandoned private source"),
+    });
+    await database
+      .handle()
+      .execute(
+        sql`CREATE TABLE proposal_roster_previews (payload_json TEXT NOT NULL)`,
+      );
+    for (const storageRef of [committed.storageRef, abandoned.storageRef]) {
+      await database
+        .handle()
+        .execute(
+          sql`INSERT INTO proposal_roster_previews VALUES (${JSON.stringify({ document: { storageRef }, beneficiaries: [{ name: "Legacy private recipient" }] })})`,
+        );
+    }
+    await disbursement.ensureSchema();
+    await disbursement.ensureSchema();
+    await pruneProposalPreviews(disbursement, files, clock);
+    expect(await files.get(abandoned.storageRef)).toBeNull();
+    expect(await files.get(committed.storageRef!)).toEqual(original);
+    expect(await database.rowCount("proposal_preview_file_cleanup")).toBe(0);
+    const result: any = await database
+      .handle()
+      .execute(sql`SELECT to_regclass('proposal_roster_previews') AS legacy`);
+    expect((result.rows ?? result)[0].legacy).toBeNull();
+  });
+
+  it("cleans encrypted temporary files left by an interrupted source write", async () => {
+    const source = await files.put({ institutionId: SINAR, preparationId: "interrupted", fileId: crypto.randomUUID(), bytes: Buffer.from("private source") });
+    const temporary = `${source.storageRef}.${"ab".repeat(12)}.tmp`;
+    await disbursement.queueUncommittedProposalFile(source.storageRef, clock);
+    // Simulate a process dying after its encrypted temporary write, before rename.
+    await rename(source.storageRef, temporary);
+    clock += 1801;
+    await pruneProposalPreviews(disbursement, files, clock);
+    expect(await access(temporary).then(() => true, () => false)).toBe(false);
+    expect(await database.rowCount("proposal_preview_file_cleanup")).toBe(0);
+  });
+
+  it("expires abandoned previews without retaining plaintext recipients or creating source blobs", async () => {
+    const program = await createTestProgram(adminToken);
+    const draft = await prepareDraftProposal(amilToken, program.id, [
+      moneyRow(),
+    ]);
+    const beforeFiles = (await readdir(tempDir, { recursive: true })).sort();
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "private.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({
+                id_penerima: draft.beneficiaries[0].id,
+                id_baris: draft.aidLines[0].id,
+                nama: "Rahasia Pratinjau",
+                nilai_idr: "1500000",
+              }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
+    const rows: any = await database
+      .handle()
+      .execute(
+        sql`SELECT * FROM proposal_beneficiary_list_previews WHERE id = ${preview.previewId}`,
+      );
+    expect(JSON.stringify(rows.rows ?? rows)).not.toContain(
+      "Rahasia Pratinjau",
+    );
+    expect((await readdir(tempDir, { recursive: true })).sort()).toEqual(
+      beforeFiles,
+    );
+    clock += 1801;
+    const applied = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      {
+        previewId: preview.previewId,
+        expectedVersion: draft.version,
+        operationId: crypto.randomUUID(),
+      },
+      amilToken,
+    );
+    expect(applied.status).toBe(400);
+    await pruneProposalPreviews(disbursement, files, clock);
+    expect(await database.rowCount("proposal_beneficiary_list_previews")).toBe(
+      0,
+    );
+    expect(
+      (await disbursement.getProposalDraft(SINAR, draft.id))!.version,
+    ).toBe(draft.version);
+  });
+
   it("acknowledges identical files without new versions, revisions or source documents", async () => {
     const program = await createTestProgram(adminToken);
     const editable = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
@@ -1243,38 +1673,113 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       const documentsBefore = await disbursement.listProposalDocuments(SINAR, draft.id);
       const rows = draft.status === "APPROVED" ? [moneyRow({ id_penerima: "ben-1", id_baris: "aid-1" }), goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" })]
         : [moneyRow({ id_penerima: draft.beneficiaries[0].id, id_baris: draft.aidLines[0].id })];
-      const preview = await (await post(`/proposals/${draft.id}/reupload/preview`, { fileName: "unchanged.csv", contentBase64: Buffer.from(buildCsvString(rows)).toString("base64") }, amilToken)).json();
+      const preview = await (
+        await post(
+          `/proposals/${draft.id}/beneficiary-list/preview`,
+          {
+            fileName: "unchanged.csv",
+            contentBase64: Buffer.from(buildCsvString(rows)).toString("base64"),
+          },
+          amilToken,
+        )
+      ).json();
       expect(preview.diff.isIdentical).toBe(true);
       const input = { previewId: preview.previewId, expectedVersion: draft.version, operationId: crypto.randomUUID() };
-      const applied = await post(`/proposals/${draft.id}/reupload/apply`, input, amilToken);
+      const applied = await post(
+        `/proposals/${draft.id}/beneficiary-list/apply`,
+        input,
+        amilToken,
+      );
       expect(applied.status).toBe(200);
       const result = await applied.json();
       expect(result.draft).toEqual(draft);
       expect(result.revision).toBeUndefined();
       expect(await disbursement.listProposalDocuments(SINAR, draft.id)).toEqual(documentsBefore);
       expect(await disbursement.getProposalRevisions(SINAR, draft.id)).toHaveLength(0);
-      expect(await (await get(`/proposals/${draft.id}/reupload/result?operationId=${input.operationId}`, amilToken)).json()).toEqual(result);
-      expect((await get(`/proposals/${draft.id}/reupload/result?operationId=${input.operationId}`, readerToken)).status).toBe(403);
+      expect(
+        await (
+          await get(
+            `/proposals/${draft.id}/beneficiary-list/result?operationId=${input.operationId}`,
+            amilToken,
+          )
+        ).json(),
+      ).toEqual(result);
+      expect(
+        (
+          await get(
+            `/proposals/${draft.id}/beneficiary-list/result?operationId=${input.operationId}`,
+            readerToken,
+          )
+        ).status,
+      ).toBe(403);
     }
   });
 
   it("rolls back the revision and operation ledger when the source document cannot commit", async () => {
     const { draft } = await prepareApprovedProposalWithRealization({ amilToken, examinerToken, approverToken, adminToken });
-    const preview = await (await post(`/proposals/${draft.id}/reupload/preview`, { fileName: "rollback.csv", contentBase64: Buffer.from(buildCsvString([
-      moneyRow({ id_penerima: "ben-1", id_baris: "aid-1", nilai_idr: "1500000" }), goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" }),
-    ])).toString("base64") }, amilToken)).json();
+    const preview = await (
+      await post(
+        `/proposals/${draft.id}/beneficiary-list/preview`,
+        {
+          fileName: "rollback.csv",
+          contentBase64: Buffer.from(
+            buildCsvString([
+              moneyRow({
+                id_penerima: "ben-1",
+                id_baris: "aid-1",
+                nilai_idr: "1500000",
+              }),
+              goodsRow({ id_penerima: "ben-2", id_baris: "aid-2" }),
+            ]),
+          ).toString("base64"),
+        },
+        amilToken,
+      )
+    ).json();
     const input = { previewId: preview.previewId, expectedVersion: draft.version, operationId: crypto.randomUUID(), reason: "Atomic source" };
     // An actual SQL constraint failure at document insertion must undo all earlier writes.
     await database.handle().execute(sql.raw("ALTER TABLE proposal_documents ADD CONSTRAINT reject_test_source CHECK (file_name <> 'rollback.csv')"));
     try {
-      expect((await post(`/proposals/${draft.id}/reupload/apply`, input, amilToken)).status).toBe(500);
+      expect(
+        (
+          await post(
+            `/proposals/${draft.id}/beneficiary-list/apply`,
+            input,
+            amilToken,
+          )
+        ).status,
+      ).toBe(500);
       expect(await disbursement.getProposalRevisions(SINAR, draft.id)).toHaveLength(0);
       expect((await disbursement.getProposalDraft(SINAR, draft.id))!.activeRevisionId).toBeNull();
-      expect((await (await post(`/proposals/${draft.id}/reupload/result`, input, amilToken)).json()).pending).toBe(true);
+      expect(
+        (
+          await (
+            await post(
+              `/proposals/${draft.id}/beneficiary-list/result`,
+              input,
+              amilToken,
+            )
+          ).json()
+        ).pending,
+      ).toBe(true);
     } finally {
       await database.handle().execute(sql.raw("ALTER TABLE proposal_documents DROP CONSTRAINT reject_test_source"));
     }
-    expect((await post(`/proposals/${draft.id}/reupload/apply`, input, amilToken)).status).toBe(201);
+    const saved = await post(
+      `/proposals/${draft.id}/beneficiary-list/apply`,
+      input,
+      amilToken,
+    );
+    expect(saved.status).toBe(201);
+    const { document } = await saved.json();
+    expect(await database.rowCount("proposal_preview_file_cleanup")).toBe(1);
+    clock += 1801;
+    await pruneProposalPreviews(disbursement, files, clock);
+    expect(await database.rowCount("proposal_preview_file_cleanup")).toBe(0);
+    expect(
+      (await get(`/proposals/${draft.id}/files/${document.id}`, amilToken))
+        .status,
+    ).toBe(200);
   });
 
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
@@ -1284,12 +1789,29 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       const editable = await prepareDraftProposal(amilToken, program.id, [moneyRow()]);
       const approved = (await prepareApprovedProposalWithRealization({ amilToken, examinerToken, approverToken, adminToken })).draft;
       let selected = editable;
-      const build = Bun.spawn(["bun", "build", new URL("../../frontend/test/roster-change-smoke.tsx", import.meta.url).pathname, "--target", "browser"], { stdout: "pipe", stderr: "pipe" });
+      const build = Bun.spawn(["bun", "build", new URL("../../frontend/test/proposal-beneficiary-list-smoke.tsx", import.meta.url).pathname, "--target", "browser"], { stdout: "pipe", stderr: "pipe" });
       const bundle = await new Response(build.stdout).text();
       if (await build.exited !== 0) throw new Error(await new Response(build.stderr).text());
+      const cssBuild = Bun.spawn(
+        [
+          "bun",
+          new URL("../../frontend/test/build-smoke-css.ts", import.meta.url)
+            .pathname,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const css = await new Response(cssBuild.stdout).text();
+      if ((await cssBuild.exited) !== 0)
+        throw new Error(await new Response(cssBuild.stderr).text());
       const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
         const path = new URL(req.url).pathname;
-        if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+        if (path === "/")
+          return new Response(
+            '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/smoke.css"><div id="root"></div><script type="module" src="/smoke.js"></script>',
+            { headers: { "Content-Type": "text/html" } },
+          );
+        if (path === "/smoke.css")
+          return new Response(css, { headers: { "Content-Type": "text/css" } });
         if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
         if (path === "/bootstrap") return Response.json({ draft: selected, account: amilSinarAccount.address, otherAccount: rivalOfficerAccount.address, institutionId: SINAR, now: clock });
         if (path === "/sign") return Response.json({ signature: await amilSinarAccount.signTypedData(signable(await req.json())) });
@@ -1298,7 +1820,9 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
       const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
       const browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
       try {
-        const page = await browser.newPage();
+        const page = await browser.newPage({
+          viewport: { width: 390, height: 844 },
+        });
         page.setDefaultTimeout(10000);
         page.on("pageerror", (error: Error) => console.error(error));
         const open = async () => { await page.goto(server.url.toString()); await page.getByRole("button", { name: "Perbarui daftar penerima dari berkas" }).click(); };
@@ -1308,12 +1832,34 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         await upload(rows);
         await page.getByText("~1 Baris Diubah (0 Penerima)", { exact: true }).waitFor();
         expect((await disbursement.getProposalDraft(SINAR, editable.id))!.version).toBe(editable.version);
+        const dialogBox = await page.getByRole("dialog").boundingBox();
+        expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+        expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
+        expect(
+          await page
+            .getByRole("dialog")
+            .evaluate(
+              (node: HTMLElement) => node.scrollWidth <= node.clientWidth,
+            ),
+        ).toBe(true);
         // Let the real server commit, then lose the response at the transport boundary.
-        await page.route("**/reupload/apply", async (route: any) => { await route.fetch(); await route.abort("failed"); }, { times: 1 });
-        await page.getByRole("button", { name: "Terapkan Perubahan ke Draf" }).click();
+        await page.route(
+          "**/beneficiary-list/apply",
+          async (route: any) => {
+            await route.fetch();
+            await route.abort("failed");
+          },
+          { times: 1 },
+        );
+        await page
+          .getByRole("button", { name: "Terapkan Perubahan ke Draf" })
+          .focus();
+        await page.keyboard.press("Enter");
         await page.getByText(/Hasil penyimpanan belum diketahui/).waitFor();
         await page.getByRole("button", { name: "Batal", exact: true }).click();
-        const recovered = page.waitForResponse((response: any) => new URL(response.url()).pathname.endsWith("/reupload/result"));
+        const recovered = page.waitForResponse((response: any) =>
+          new URL(response.url()).pathname.endsWith("/beneficiary-list/result"),
+        );
         await page.getByRole("button", { name: "Perbarui daftar penerima dari berkas" }).click();
         expect((await recovered).status()).toBe(200);
         await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -1339,13 +1885,30 @@ describe("Beneficiary Re-upload with Change Preview & Revision (Ticket #97)", ()
         await page.getByRole("dialog").waitFor({ state: "detached" });
         await page.getByText("Menunggu Pemeriksaan", { exact: true }).waitFor();
         expect(await disbursement.getProposalRevisions(SINAR, approved.id)).toHaveLength(1);
+        await page
+          .locator("summary")
+          .filter({ hasText: "Riwayat revisi pengajuan" })
+          .focus();
+        await page.keyboard.press("Enter");
+        const history = page.getByRole("list", {
+          name: "Riwayat revisi pengajuan",
+        });
+        await history
+          .getByText("Penyesuaian dari berkas browser", { exact: true })
+          .waitFor();
+        expect(await history.getByRole("listitem").count()).toBe(1);
         // A response from the old access context may never reopen private UI.
         await page.getByRole("button", { name: "Perbarui daftar penerima dari berkas" }).click();
         let release!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
         let started!: () => void;
         const arrival = new Promise<void>(resolve => { started = resolve; });
-        await page.route("**/reupload/preview", async (route: any) => { const response = await route.fetch(); started(); await gate; await route.fulfill({ response }); });
+        await page.route("**/beneficiary-list/preview", async (route: any) => {
+          const response = await route.fetch();
+          started();
+          await gate;
+          await route.fulfill({ response });
+        });
         await upload(rows);
         await arrival;
         // Simulate the session owner's account event while the modal is open.

@@ -1,4 +1,4 @@
-import type { RosterChangeDiffResult } from "../../../../shared/beneficiary-roster-change";
+import type { ProposalBeneficiaryListDiff } from "../../../../shared/proposal-beneficiary-list";
 import type { PrivateRequests } from "../workspace/privateRequests";
 
 /**
@@ -1395,39 +1395,74 @@ export const getProposalClosure = (requests: PrivateRequests, proposalId: string
 export type {
   DiffStatus,
   FieldDiff,
-  RosterChangeCounts,
-  RosterChangeRowDetail,
-  RosterChangeDiffResult,
-} from "../../../../shared/beneficiary-roster-change";
+  ProposalBeneficiaryListCounts,
+  ProposalBeneficiaryListRow,
+  ProposalBeneficiaryListDiff,
+} from "../../../../shared/proposal-beneficiary-list";
 
 
-export type BeneficiaryRosterChangePreviewResponse = {
+export type ProposalBeneficiaryListPreviewResponse = {
   success: boolean;
   previewId: string;
   warnings: string[];
-  diff: RosterChangeDiffResult<Beneficiary, AidLine>;
+  diff: ProposalBeneficiaryListDiff<Beneficiary, AidLine>;
   preview: BeneficiaryImportPreviewResult;
 };
 
-export const previewBeneficiaryRosterChange = (
+export const previewProposalBeneficiaryList = (
   requests: PrivateRequests,
   proposalId: string,
-  input: { fileName: string; contentBase64: string }
+  input: { fileName: string; contentBase64: string },
 ) =>
-  requests.json<BeneficiaryRosterChangePreviewResponse>(`/api/workspace/proposals/${proposalId}/reupload/preview`, {
+  requests.json<ProposalBeneficiaryListPreviewResponse>(
+    `/api/workspace/proposals/${proposalId}/beneficiary-list/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+
+export type ApplyProposalBeneficiaryListInput = {
+  previewId: string;
+  expectedVersion: number;
+  operationId: string;
+  reason?: string;
+};
+export type ProposalBeneficiaryListResult = {
+  success: boolean;
+  draft: ProposalDraft;
+  document?: ProposalDocument;
+  revision?: ProposalRevisionRecord;
+};
+export const applyProposalBeneficiaryList = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ApplyProposalBeneficiaryListInput,
+) =>
+  requests.json<ProposalBeneficiaryListResult>(
+    `/api/workspace/proposals/${proposalId}/beneficiary-list/apply`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+
+export const readProposalBeneficiaryListResult = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ApplyProposalBeneficiaryListInput,
+) =>
+  requests.json<
+    ProposalBeneficiaryListResult | { pending: true; version: number }
+  >(`/api/workspace/proposals/${proposalId}/beneficiary-list/result`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 
-export type ApplyRosterChangeInput = { previewId: string; expectedVersion: number; operationId: string; reason?: string };
-export type RosterChangeResult = {
-  success: boolean; draft: ProposalDraft; document?: ProposalDocument; revision?: ProposalRevisionRecord;
-};
-export const applyBeneficiaryRosterChange = (requests: PrivateRequests, proposalId: string, input: ApplyRosterChangeInput) =>
-  requests.json<RosterChangeResult>(`/api/workspace/proposals/${proposalId}/reupload/apply`, { method: "POST", body: JSON.stringify(input) });
-
-export const readBeneficiaryRosterChangeResult = (requests: PrivateRequests, proposalId: string, input: ApplyRosterChangeInput) =>
-  requests.json<RosterChangeResult | { pending: true; version: number }>(`/api/workspace/proposals/${proposalId}/reupload/result`, { method: "POST", body: JSON.stringify(input) });
-
-export const recoverBeneficiaryRosterChange = (requests: PrivateRequests, proposalId: string, operationId: string) =>
-  requests.json<RosterChangeResult | { pending: true; version: number }>(`/api/workspace/proposals/${proposalId}/reupload/result?operationId=${encodeURIComponent(operationId)}`);
+export const recoverProposalBeneficiaryList = (
+  requests: PrivateRequests,
+  proposalId: string,
+  operationId: string,
+) =>
+  requests.json<
+    ProposalBeneficiaryListResult | { pending: true; version: number }
+  >(
+    `/api/workspace/proposals/${proposalId}/beneficiary-list/result?operationId=${encodeURIComponent(operationId)}`,
+  );

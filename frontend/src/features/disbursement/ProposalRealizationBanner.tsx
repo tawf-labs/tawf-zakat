@@ -24,13 +24,13 @@ import { ProposalRevisionModal } from "./ProposalRevisionModal";
 import { ProposalCancellationModal } from "./ProposalCancellationModal";
 import { ProposalClosureModal } from "./ProposalClosureModal";
 import { RevisionWorkflowBanner } from "./RevisionWorkflowBanner";
-import { BeneficiaryRosterChangeModal } from "./BeneficiaryRosterChangeModal";
+import { ProposalBeneficiaryListModal } from "./ProposalBeneficiaryListModal";
 
 type Open =
   | { kind: "record" }
   | { kind: "advances" }
   | { kind: "revision" }
-  | { kind: "reupload" }
+  | { kind: "beneficiary-list" }
   | { kind: "cancel" }
   | { kind: "closeRemainder" }
   | { kind: "evidence" | "confirm" | "dispute"; realization: DisbursementRealization }
@@ -104,7 +104,7 @@ export function ProposalRealizationBanner({
           <Edit3 className="h-4 w-4" /> Ajukan revisi
         </Button>
         <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-emerald-700 hover:text-emerald-800" disabled={!loaded || !!draft.activeRevisionId}
-          onClick={() => setOpen({ kind: "reupload" })}>
+          onClick={() => setOpen({ kind: "beneficiary-list" })}>
           <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Revisi pengajuan dari berkas
         </Button>
         {canCancel && (
@@ -226,8 +226,8 @@ export function ProposalRealizationBanner({
         }}
       />
     )}
-    {open?.kind === "reupload" && loaded && (
-      <BeneficiaryRosterChangeModal
+    {open?.kind === "beneficiary-list" && loaded && (
+      <ProposalBeneficiaryListModal
         requests={requests}
         proposal={draft}
         isOpen

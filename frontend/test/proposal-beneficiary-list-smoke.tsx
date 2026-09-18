@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { BeneficiaryRosterChangeModal } from "../src/features/disbursement/BeneficiaryRosterChangeModal";
+import { ProposalBeneficiaryListModal } from "../src/features/disbursement/ProposalBeneficiaryListModal";
 import { RevisionWorkflowBanner } from "../src/features/disbursement/RevisionWorkflowBanner";
 import { createWorkspaceAccess } from "../src/features/workspace/workspaceAccessController";
 import type { ProposalDraft } from "../src/features/disbursement/disbursementClient";
@@ -19,13 +19,32 @@ function Smoke() {
   const [open, setOpen] = useState(false);
   if (state.state !== "READY") return <p>Akun berganti{state.error ? `: ${state.error}` : ""}</p>;
   const { requests } = state;
-  return <>
-    <button onClick={() => setOpen(true)}>Perbarui daftar penerima dari berkas</button>
-    <button onClick={() => void access.connect(bootstrap.otherAccount)}>Ganti akun</button>
-    <p>Versi tersimpan: {draft.version}</p>
-    <RevisionWorkflowBanner requests={requests} proposal={draft} onDraftUpdated={setDraft} />
-    {open && <BeneficiaryRosterChangeModal key={requests.contextId} requests={requests} proposal={draft} isOpen onClose={() => setOpen(false)}
-      onAppliedDraft={setDraft} onAppliedRevision={(_revision, saved) => setDraft(saved)} />}
-  </>;
+  return (
+    <>
+      <button onClick={() => setOpen(true)}>
+        Perbarui daftar penerima dari berkas
+      </button>
+      <button onClick={() => void access.connect(bootstrap.otherAccount)}>
+        Ganti akun
+      </button>
+      <p>Versi tersimpan: {draft.version}</p>
+      <RevisionWorkflowBanner
+        requests={requests}
+        proposal={draft}
+        onDraftUpdated={setDraft}
+      />
+      {open && (
+        <ProposalBeneficiaryListModal
+          key={requests.contextId}
+          requests={requests}
+          proposal={draft}
+          isOpen
+          onClose={() => setOpen(false)}
+          onAppliedDraft={setDraft}
+          onAppliedRevision={(_revision, saved) => setDraft(saved)}
+        />
+      )}
+    </>
+  );
 }
 createRoot(document.getElementById("root")!).render(<Smoke />);

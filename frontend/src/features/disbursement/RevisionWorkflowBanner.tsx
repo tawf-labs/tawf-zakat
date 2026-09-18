@@ -376,6 +376,26 @@ export function RevisionWorkflowBanner({
         </div>
       )}
 
+      <details className="rounded-lg border border-stone-200 p-3">
+        <summary className="cursor-pointer font-semibold">
+          Riwayat revisi pengajuan
+        </summary>
+        <ol aria-label="Riwayat revisi pengajuan" className="mt-3 space-y-3">
+          {revisions.map((revision) => (
+            <li
+              key={revision.id}
+              className="break-words border-t border-stone-200 pt-2"
+            >
+              <p>
+                Versi {revision.fromVersion} → {revision.toVersion}:{" "}
+                {REVISION_STATUS_LABELS[revision.status].label}
+              </p>
+              <p>{revision.reason}</p>
+            </li>
+          ))}
+        </ol>
+      </details>
+
       {showDecisionModal && (
         <RevisionDecisionModal
           requests={requests}

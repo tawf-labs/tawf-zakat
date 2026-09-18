@@ -262,11 +262,26 @@ export class RealizationSelfExaminationError extends Error {
 export type DraftOperation = { id: string; account: string; requestHash: string };
 export type ProposalContributor = { account: string; officerId: string | null; version: number };
 
-export type RosterPreview = {
-  id: string; institutionId: string; proposalId: string; account: string; baseVersion: number; mappingVersion: string;
-  beneficiaries: Beneficiary[]; aidLines: AidLine[]; document: ProposalDocumentRecord;
-  canApply: boolean; error: string | null; isIdentical: boolean;
+export type ProposalAccessScope = {
+  institutionId: string;
+  proposalId: string;
+  account: string;
 };
+
+export type ProposalBeneficiaryListPreview = ProposalAccessScope & {
+  id: string;
+  baseVersion: number;
+  mappingVersion: string;
+  beneficiaries: Beneficiary[];
+  aidLines: AidLine[];
+  document: ProposalDocumentRecord;
+  contentBase64: string;
+  canApply: boolean;
+  error: string | null;
+  isIdentical: boolean;
+};
+
+export const BENEFICIARY_LIST_PREVIEW_TTL_SECONDS = 30 * 60;
 
 type DraftGuard = (draft: StoredProposalDraft) => void;
 const materialContents = (draft: Pick<StoredProposalDraft, "programId" | "originOfRequest" | "purpose" | "aidPeriod" | "personInCharge" | "beneficiaries" | "aidLines">) => JSON.stringify([
@@ -403,6 +418,40 @@ type QueueAccess = (target: Pick<StoredProposalDraft, "programId" | "aidLines">)
 const permittedRows = (rows: any[], allows: QueueAccess) => rows.filter(row => allows({
   programId: row.program_id ?? null, aidLines: JSON.parse(row.aid_lines_json || "[]"),
 }));
+
+async function consumeBeneficiaryListPreview(
+  tx: { execute: DisbursementDatabase["execute"] },
+  scope: ProposalAccessScope,
+  previewId: string,
+  now: number,
+  storageRef?: string | null,
+) {
+  const row = rowsOf(
+    await tx.execute(sql`SELECT id FROM proposal_beneficiary_list_previews
+    WHERE id = ${previewId} AND institution_id = ${scope.institutionId} AND proposal_id = ${scope.proposalId}
+      AND account = ${scope.account} AND expires_at > ${now} FOR UPDATE`),
+  )[0];
+  if (!row)
+    throw new ProposalStateConflictError(
+      "Pratinjau sudah kedaluwarsa atau telah digunakan. Baca ulang berkas.",
+    );
+  if (storageRef) {
+    const file = rowsOf(
+      await tx.execute(sql`SELECT storage_ref FROM proposal_preview_file_cleanup
+      WHERE storage_ref = ${storageRef} AND expires_at > ${now} FOR UPDATE`),
+    )[0];
+    if (!file)
+      throw new ProposalStateConflictError(
+        "Berkas pratinjau sudah kedaluwarsa. Baca ulang berkas.",
+      );
+    await tx.execute(
+      sql`DELETE FROM proposal_preview_file_cleanup WHERE storage_ref = ${storageRef}`,
+    );
+  }
+  await tx.execute(
+    sql`DELETE FROM proposal_beneficiary_list_previews WHERE id = ${previewId}`,
+  );
+}
 
 async function recordDraftContributors(tx: { execute: DisbursementDatabase["execute"] }, previous: StoredProposalDraft | null,
   saved: StoredProposalDraft, operation: DraftOperation) {
@@ -952,10 +1001,43 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      updated_at BIGINT NOT NULL,
      updated_by TEXT NOT NULL
    );`,
-  `CREATE TABLE IF NOT EXISTS proposal_roster_previews (
-    id text PRIMARY KEY, institution_id text NOT NULL, proposal_id text NOT NULL,
-    account text NOT NULL, payload_json text NOT NULL
-  )`,
+  `CREATE TABLE IF NOT EXISTS proposal_beneficiary_list_previews (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id) ON DELETE CASCADE,
+     account TEXT NOT NULL,
+     payload_ciphertext TEXT NOT NULL,
+     created_at BIGINT NOT NULL,
+     expires_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS proposal_beneficiary_list_preview_expiry
+     ON proposal_beneficiary_list_previews (expires_at);`,
+  `CREATE INDEX IF NOT EXISTS proposal_beneficiary_list_preview_owner
+     ON proposal_beneficiary_list_previews (institution_id, proposal_id, account);`,
+  `CREATE TABLE IF NOT EXISTS proposal_preview_file_cleanup (
+     storage_ref TEXT PRIMARY KEY,
+     created_at BIGINT NOT NULL,
+     expires_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS proposal_preview_file_cleanup_expiry ON proposal_preview_file_cleanup (expires_at);`,
+  `DO $$ BEGIN
+     IF to_regclass('proposal_roster_previews') IS NOT NULL THEN
+       INSERT INTO proposal_preview_file_cleanup (storage_ref, created_at, expires_at)
+       SELECT DISTINCT payload_json::jsonb->'document'->>'storageRef', 0, 0
+       FROM proposal_roster_previews
+       WHERE payload_json::jsonb->'document'->>'storageRef' IS NOT NULL
+       ON CONFLICT DO NOTHING;
+       DROP TABLE proposal_roster_previews;
+     END IF;
+   END $$;`,
+  `CREATE INDEX IF NOT EXISTS proposal_draft_beneficiary_ids
+     ON proposal_drafts USING GIN ((beneficiaries_json::jsonb) jsonb_path_ops);`,
+  `CREATE INDEX IF NOT EXISTS proposal_draft_aid_line_ids
+     ON proposal_drafts USING GIN ((aid_lines_json::jsonb) jsonb_path_ops);`,
+  `CREATE INDEX IF NOT EXISTS proposal_revision_beneficiary_ids
+     ON proposal_revisions USING GIN ((beneficiaries_json::jsonb) jsonb_path_ops);`,
+  `CREATE INDEX IF NOT EXISTS proposal_revision_aid_line_ids
+     ON proposal_revisions USING GIN ((aid_lines_json::jsonb) jsonb_path_ops);`,
   `CREATE TABLE IF NOT EXISTS proposal_draft_operations (
      institution_id TEXT NOT NULL REFERENCES institutions (id),
      account TEXT NOT NULL,
@@ -964,6 +1046,12 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      result_json TEXT,
      PRIMARY KEY (institution_id, account, operation_id)
    );`,
+  `UPDATE proposal_draft_operations SET result_json =
+     (result_json::jsonb || jsonb_build_object('kind', 'REVISION'))::TEXT
+     WHERE result_json IS NOT NULL AND result_json::jsonb ? 'fromVersion' AND NOT result_json::jsonb ? 'kind';`,
+  `UPDATE proposal_draft_operations SET result_json =
+     (result_json::jsonb || jsonb_build_object('kind', 'DRAFT'))::TEXT
+     WHERE result_json IS NOT NULL AND result_json::jsonb ? 'draft' AND NOT result_json::jsonb ? 'kind';`,
   `CREATE TABLE IF NOT EXISTS proposal_draft_contributors (
      draft_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
      version INTEGER NOT NULL,
@@ -1464,11 +1552,12 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       });
     },
 
-    async applyRosterChangeDraft(
+    async applyProposalBeneficiaryList(
       institutionId: string,
       proposalId: string,
       expectedVersion: number,
       data: {
+        previewId: string;
         beneficiaries: Beneficiary[];
         aidLines: AidLine[];
         issues: ProposalIssue[];
@@ -1483,22 +1572,39 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       },
       operation: DraftOperation,
       authorize: DraftGuard,
-      now: number
-    ): Promise<{ draft: StoredProposalDraft; document?: ProposalDocumentRecord }> {
+      now: number,
+    ): Promise<{
+      kind: "DRAFT";
+      draft: StoredProposalDraft;
+      document?: ProposalDocumentRecord;
+    }> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
-        const previous = await editableDocumentDraft(tx, institutionId, proposalId, expectedVersion, authorize);
+        await consumeBeneficiaryListPreview(
+          tx,
+          { institutionId, proposalId, account: operation.account },
+          data.previewId,
+          now,
+          data.file?.storageRef,
+        );
+        const previous = await editableDocumentDraft(
+          tx,
+          institutionId,
+          proposalId,
+          expectedVersion,
+          authorize,
+        );
 
         const written = rowsOf(
           await tx.execute(sql`
-            UPDATE proposal_drafts SET
-              beneficiaries_json = ${JSON.stringify(data.beneficiaries)},
-              aid_lines_json = ${JSON.stringify(data.aidLines)},
-              issues_json = ${JSON.stringify(data.issues)},
-              version = version + 1,
-              updated_at = ${now}
-            WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${expectedVersion}
-            RETURNING *
-          `)
+              UPDATE proposal_drafts SET
+                beneficiaries_json = ${JSON.stringify(data.beneficiaries)},
+                aid_lines_json = ${JSON.stringify(data.aidLines)},
+                issues_json = ${JSON.stringify(data.issues)},
+                version = version + 1,
+                updated_at = ${now}
+              WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${expectedVersion}
+              RETURNING *
+            `),
         );
         if (!written.length) throw new ProposalDraftConflictError(proposalId);
         const saved = draftFrom(written[0]);
@@ -1506,56 +1612,159 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         let docRecord: ProposalDocumentRecord | undefined;
         if (data.file) {
           docRecord = await insertProposalDocument(tx, {
-            ...data.file, proposalId, institutionId, beneficiaryId: null,
-            category: "BENEFICIARY_ROSTER", storageStatus: "STORED", version: saved.version,
-            createdBy: operation.account, createdAt: now,
+            ...data.file,
+            proposalId,
+            institutionId,
+            beneficiaryId: null,
+            category: "BENEFICIARY_ROSTER",
+            storageStatus: "STORED",
+            version: saved.version,
+            createdBy: operation.account,
+            createdAt: now,
           });
         }
 
         await recordDraftContributors(tx, previous, saved, operation);
 
-        return { draft: saved, document: docRecord };
+        return { kind: "DRAFT", draft: saved, document: docRecord };
       });
     },
 
-    async hasRosterIdsOutsideProposal(institutionId: string, proposalId: string, aidLineIds: string[], beneficiaryIds: string[]): Promise<boolean> {
-      const conflicts = rowsOf(await db.execute(sql`
-        SELECT 1 FROM proposal_drafts d
-        WHERE (d.institution_id <> ${institutionId} OR d.id <> ${proposalId}) AND (
-          EXISTS (SELECT 1 FROM jsonb_array_elements(d.aid_lines_json::jsonb) item
-            WHERE item->>'id' IN (SELECT jsonb_array_elements_text(${JSON.stringify(aidLineIds)}::jsonb))
-            AND NOT EXISTS (SELECT 1 FROM proposal_drafts own, jsonb_array_elements(own.aid_lines_json::jsonb) mine
-              WHERE own.id = ${proposalId} AND own.institution_id = ${institutionId} AND mine->>'id' = item->>'id'))
-          OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.beneficiaries_json::jsonb) item
-            WHERE item->>'id' IN (SELECT jsonb_array_elements_text(${JSON.stringify(beneficiaryIds)}::jsonb))
-            AND NOT EXISTS (SELECT 1 FROM proposal_drafts own, jsonb_array_elements(own.beneficiaries_json::jsonb) mine
-              WHERE own.id = ${proposalId} AND own.institution_id = ${institutionId} AND mine->>'id' = item->>'id'))
-        ) LIMIT 1
-      `));
-      return conflicts.length > 0;
+    async hasBeneficiaryListIdsOutsideProposal(
+      scope: ProposalAccessScope,
+      aidLineIds: string[],
+      beneficiaryIds: string[],
+    ): Promise<boolean> {
+      // Probe GIN containment indexes per candidate ID, including revision-only identities.
+      for (const [column, ids] of [
+        ["aid_lines_json", aidLineIds],
+        ["beneficiaries_json", beneficiaryIds],
+      ] as const) {
+        if (!ids.length) continue;
+        const field = sql.identifier(column);
+        const conflicts = rowsOf(
+          await db.execute(sql`
+            SELECT 1 FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) candidate(id)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM proposal_drafts own
+              WHERE own.id = ${scope.proposalId} AND own.institution_id = ${scope.institutionId}
+                AND ${field}::jsonb @> jsonb_build_array(jsonb_build_object('id', candidate.id))
+            ) AND (
+              EXISTS (SELECT 1 FROM proposal_drafts
+                WHERE id <> ${scope.proposalId}
+                  AND ${field}::jsonb @> jsonb_build_array(jsonb_build_object('id', candidate.id)))
+              OR EXISTS (SELECT 1 FROM proposal_revisions
+                WHERE proposal_id <> ${scope.proposalId}
+                  AND ${field}::jsonb @> jsonb_build_array(jsonb_build_object('id', candidate.id)))
+            ) LIMIT 1
+          `),
+        );
+        if (conflicts.length) return true;
+      }
+      return false;
     },
 
-    async acknowledgeUnchangedRoster(institutionId: string, proposalId: string, expectedVersion: number, operation: DraftOperation, guard: DraftGuard) {
-      return mutateOnce(db, institutionId, operation, async tx => {
-        const row = rowsOf(await tx.execute(sql`SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId} FOR UPDATE`))[0];
-        if (!row || Number(row.version) !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
+    async acknowledgeUnchangedBeneficiaryList(
+      institutionId: string,
+      proposalId: string,
+      expectedVersion: number,
+      operation: DraftOperation,
+      guard: DraftGuard,
+      previewId: string,
+      now: number,
+    ) {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await consumeBeneficiaryListPreview(
+          tx,
+          { institutionId, proposalId, account: operation.account },
+          previewId,
+          now,
+        );
+        const row = rowsOf(
+          await tx.execute(
+            sql`SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId} FOR UPDATE`,
+          ),
+        )[0];
+        if (!row || Number(row.version) !== expectedVersion)
+          throw new ProposalDraftConflictError(proposalId);
         const draft = draftFrom(row);
         guard(draft);
-        if (!["DRAFT", "REVISION_REQUIRED", "APPROVED"].includes(draft.status)) throw new ProposalStateConflictError("Daftar penerima tidak dapat diperbarui pada status ini.");
-        return { draft };
+        if (!["DRAFT", "REVISION_REQUIRED", "APPROVED"].includes(draft.status))
+          throw new ProposalStateConflictError(
+            "Daftar penerima tidak dapat diperbarui pada status ini.",
+          );
+        return { kind: "DRAFT" as const, draft };
       });
     },
 
-    async saveRosterPreview(input: RosterPreview): Promise<void> {
-      await db.execute(sql`INSERT INTO proposal_roster_previews (id, institution_id, proposal_id, account, payload_json)
-        VALUES (${input.id}, ${input.institutionId}, ${input.proposalId}, ${input.account}, ${JSON.stringify(input)})`);
+    async saveProposalBeneficiaryListPreview(
+      scope: ProposalAccessScope,
+      id: string,
+      payloadCiphertext: string,
+      now: number,
+    ): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`DELETE FROM proposal_beneficiary_list_previews WHERE expires_at <= ${now}`,
+        );
+        await tx.execute(sql`INSERT INTO proposal_beneficiary_list_previews
+            (id, institution_id, proposal_id, account, payload_ciphertext, created_at, expires_at)
+            VALUES (${id}, ${scope.institutionId}, ${scope.proposalId}, ${scope.account},
+              ${payloadCiphertext}, ${now}, ${now + BENEFICIARY_LIST_PREVIEW_TTL_SECONDS})`);
+      });
     },
 
-    async getRosterPreview(institutionId: string, proposalId: string, account: string, id: string): Promise<RosterPreview | null> {
-      const row = rowsOf(await db.execute(sql`SELECT payload_json FROM proposal_roster_previews
-        WHERE id = ${id} AND institution_id = ${institutionId} AND proposal_id = ${proposalId} AND account = ${account}`))[0];
-      return row ? JSON.parse(row.payload_json) : null;
+    async getProposalBeneficiaryListPreview(
+      scope: ProposalAccessScope,
+      id: string,
+      now: number,
+    ): Promise<string | null> {
+      const row = rowsOf(
+        await db.execute(sql`SELECT payload_ciphertext FROM proposal_beneficiary_list_previews
+          WHERE id = ${id} AND institution_id = ${scope.institutionId} AND proposal_id = ${scope.proposalId}
+            AND account = ${scope.account} AND expires_at > ${now}`),
+      )[0];
+      return row?.payload_ciphertext ?? null;
     },
+
+    async pruneProposalBeneficiaryListPreviews(now: number): Promise<void> {
+      await db.execute(
+        sql`DELETE FROM proposal_beneficiary_list_previews WHERE expires_at <= ${now}`,
+      );
+    },
+
+    async queueUncommittedProposalFile(
+      storageRef: string,
+      now: number,
+    ): Promise<void> {
+      await db.execute(sql`INSERT INTO proposal_preview_file_cleanup (storage_ref, created_at, expires_at)
+          VALUES (${storageRef}, ${now}, ${now + BENEFICIARY_LIST_PREVIEW_TTL_SECONDS}) ON CONFLICT DO NOTHING`);
+    },
+
+    async pruneUncommittedProposalFiles(
+      now: number,
+      remove: (storageRef: string) => Promise<void>,
+    ): Promise<void> {
+      await db.transaction(async (tx) => {
+        const pending = rowsOf(
+          await tx.execute(sql`SELECT storage_ref
+            FROM proposal_preview_file_cleanup WHERE expires_at <= ${now}
+            ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED`),
+        );
+        for (const row of pending) {
+          const referenced =
+            rowsOf(
+              await tx.execute(sql`SELECT 1 FROM proposal_documents
+              WHERE storage_ref = ${row.storage_ref} LIMIT 1`),
+            ).length > 0;
+          if (!referenced) await remove(row.storage_ref);
+          await tx.execute(
+            sql`DELETE FROM proposal_preview_file_cleanup WHERE storage_ref = ${row.storage_ref}`,
+          );
+        }
+      });
+    },
+
 
     async getProposalDraft(institutionId: string, id: string): Promise<StoredProposalDraft | null> {
       const row = rowsOf(
@@ -3203,9 +3412,22 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       operation: DraftOperation,
       actor: { account: string; officerId: string },
       now: number,
-      sourceDocument?: ProposalDocumentRecord
-    ): Promise<ProposalRevisionRecord & { document?: ProposalDocumentRecord }> {
+      sourceDocument?: ProposalDocumentRecord & { previewId: string },
+    ): Promise<
+      ProposalRevisionRecord & {
+        kind: "REVISION";
+        document?: ProposalDocumentRecord;
+      }> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
+        if (sourceDocument) {
+          await consumeBeneficiaryListPreview(
+            tx,
+            { institutionId, proposalId, account: operation.account },
+            sourceDocument.previewId,
+            now,
+            sourceDocument.storageRef,
+          );
+        }
         const proposalRow = rowsOf(
           await tx.execute(sql`
             SELECT * FROM proposal_drafts
@@ -3296,7 +3518,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           ...sourceDocument, proposalId, institutionId, version: targetVersion,
           createdBy: actor.account, createdAt: now,
         }) : undefined;
-        return { ...revisionFrom(revRow), ...(document ? { document } : {}) };
+        return { kind: "REVISION", ...revisionFrom(revRow), ...(document ? { document } : {}) };
       });
     },
 
