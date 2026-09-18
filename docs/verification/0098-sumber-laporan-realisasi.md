@@ -26,7 +26,7 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
   - Per uang muka dibekukan `accountedIdr` (beban tertaut hingga cut-off) dan `unaccountedIdr`, dengan konsep yang sama seperti modul realisasi #95. Beban tertaut yang melebihi uang muka tampil sebagai selisih negatif dan dinyatakan di catatan cakupan, bukan dinolkan.
   - Total yang belum dipertanggungjawabkan pada cut-off (`unaccountedAdvancesIdr`) tercantum di catatan cakupan.
   - Penyerahan barang membawa `aidLineValuation` dari versi pengajuan: satuan, estimasi nilai dan dasar valuasinya. Nilai diakui hanya bila dasarnya dinyatakan (`goodsValuationOf`). Estimasi ini ditampilkan dan tidak dijumlahkan ke realisasi rupiah.
-  - `quantityApproved` bernilai `null` bila snapshot versi tidak memuatnya. Keputusan persetujuan awal (#93) menulis jumlah disetujui ke draf aktif, bukan ke `proposal_versions`, dan draf aktif tidak dipakai sebagai sumber.
+  - `quantityApproved` berasal dari garis yang diputuskan pada catatan keputusan versi itu (`proposal_decisions.decided_aid_lines_json`), tidak pernah dari draf aktif. Nilainya `null` hanya untuk keputusan lama yang belum dapat dipulihkan (lihat di bawah).
 
 - **Kegiatan penyaluran dan penelusuran donatur (amandemen pilot, #102/#103)**
   - Setiap realisasi beku membawa `activityId`: kegiatan untuk pengajuan dan versi yang sama, yang sudah dibuat pada atau sebelum cut-off. Kegiatan versi lain atau yang dibuat sesudah cut-off tidak ditebak menjadi relasi.
@@ -68,7 +68,7 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
 
 - Pointer ke versi sertifikat NFT belum ada karena modul sertifikat/NFT belum ada di kode. Dependensi ke tiket sertifikat di bawah #100. Issue #98 menyatakan proof/mint bukan prasyarat sumber laporan.
 - Realokasi/pembatalan alokasi (#107) belum ada; saat ini hanya alokasi `ACTIVE` yang dibekukan.
-- Jumlah barang/rupiah yang disetujui pada keputusan awal tidak tersimpan di snapshot versi pengajuan (#93), sehingga `quantityApproved` pada provenance kosong untuk versi tersebut. Versi hasil revisi sudah memuatnya.
+- Keputusan persetujuan yang tercatat sebelum kolom `decided_aid_lines_json` ada dipulihkan dengan `bun run proposal:decisions:verify` / `proposal:decisions:apply`. Skrip ini hanya menulis garis yang mereproduksi `rights_digest` bertanda tangan, bersumber dari draf aktif (bila belum direvisi) atau delta revisi pertama. Keputusan yang tidak cocok dilaporkan dan tetap kosong.
 - Status konfirmasi/sengketa tidak direkonstruksi per cut-off, karena kolom status diperbarui di tempat. Status diambil saat pembekuan dan dinyatakan demikian.
 
 ## Pengujian yang dijalankan

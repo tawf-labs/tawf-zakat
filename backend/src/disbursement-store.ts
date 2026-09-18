@@ -335,6 +335,16 @@ async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, op
   });
 }
 
+/**
+ * A version's content with the aid lines its approval decided, when the decision
+ * recorded them. The submitted snapshot itself is never rewritten; versions
+ * approved before the decision carried its lines read as they were submitted.
+ */
+export function withDecidedAidLines<T extends { aidLines?: AidLine[] }>(snapshot: T, decidedJson: string | null): T {
+  if (!decidedJson) return snapshot;
+  return { ...snapshot, aidLines: JSON.parse(decidedJson) as AidLine[] };
+}
+
 const rowsOf = (result: any): any[] =>
   Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : [];
 
@@ -1113,6 +1123,9 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
   // Which actions may follow which is still enforced by the status guards, not by this index.
   `DROP INDEX IF EXISTS proposal_decisions_one_per_version;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS proposal_decisions_one_per_version_action ON proposal_decisions (proposal_id, proposal_version, action);`,
+  // The aid lines an approval fixed, exactly as its rights digest covers them. The version's
+  // data_json stays the submitted content; the decision carries what was decided on it.
+  `ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS decided_aid_lines_json TEXT;`,
   `CREATE TABLE IF NOT EXISTS proposal_decision_challenges (
      nonce TEXT PRIMARY KEY,
      proposal_id TEXT NOT NULL,
@@ -2437,10 +2450,17 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         `)
       )[0];
       if (!row) return null;
+      const approval = rowsOf(
+        await db.execute(sql`
+          SELECT decided_aid_lines_json FROM proposal_decisions
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+            AND proposal_version = ${version} AND action = 'APPROVE'
+        `)
+      )[0];
       return {
         version: Number(row.version),
         status: row.status as ProposalStatus,
-        data: JSON.parse(row.data_json),
+        data: withDecidedAidLines(JSON.parse(row.data_json), approval?.decided_aid_lines_json ?? null),
         documents: JSON.parse(row.documents_json),
         recurringWarnings: JSON.parse(row.recurring_warnings_json),
         submittedBy: row.submitted_by ?? null,
@@ -2583,13 +2603,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
               id, proposal_id, proposal_version, institution_id, action,
               decision_reference, decision_date, decision_document_id, decision_document_sha256,
               notes, rejection_reason, rights_digest, operator_officer_id, operator_account, signer_account,
-              mandate_id, signature, created_at
+              mandate_id, signature, created_at, decided_aid_lines_json
             ) VALUES (
               ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${current.version}, ${institutionId}, ${input.action},
               ${input.decisionReference}, ${input.decisionDate},
               ${challenge.decisionDocumentId}, ${challenge.decisionDocumentSha256},
               ${input.notes}, ${input.rejectionReason}, ${challenge.rightsDigest}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${input.signerAccount.toLowerCase()},
-              ${input.mandateId}, ${input.signature}, ${now}
+              ${input.mandateId}, ${input.signature}, ${now}, ${JSON.stringify(decidedLines)}
             )
             RETURNING *
           `)
@@ -4191,11 +4211,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
     async readRealizationSourceData(institutionId: string): Promise<RealizationSourceData> {
       const realizationRows = rowsOf(await db.execute(sql`
         SELECT r.*, p.program_id, pr.name AS program_name, pr.fund_type AS program_fund_type,
-               v.data_json AS version_data_json
+               v.data_json AS version_data_json, d.decided_aid_lines_json
         FROM disbursement_realizations r
         JOIN proposal_drafts p ON p.id = r.proposal_id AND p.institution_id = r.institution_id
         LEFT JOIN programs pr ON pr.id = p.program_id AND pr.institution_id = p.institution_id
         LEFT JOIN proposal_versions v ON v.proposal_id = r.proposal_id AND v.institution_id = r.institution_id AND v.version = r.proposal_version
+        LEFT JOIN proposal_decisions d ON d.proposal_id = r.proposal_id AND d.institution_id = r.institution_id
+          AND d.proposal_version = r.proposal_version AND d.action = 'APPROVE'
         WHERE r.institution_id = ${institutionId}
         ORDER BY r.recorded_at ASC, r.id ASC
       `));
@@ -4252,7 +4274,9 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       const realizations: RealizationItemData[] = realizationRows.map((row) => {
         let snapshot: any = null;
         try {
-          snapshot = row.version_data_json ? JSON.parse(row.version_data_json) : null;
+          snapshot = row.version_data_json
+            ? withDecidedAidLines(JSON.parse(row.version_data_json), row.decided_aid_lines_json ?? null)
+            : null;
         } catch {
           snapshot = null;
         }

@@ -27,6 +27,8 @@ import { createActivityStore, type ActivityStore } from "../src/activity-store";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { ERC1271_MAGIC_VALUE, type EthCall } from "../src/account-signature";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
+import { sql } from "drizzle-orm";
+import { recoverDecidedAidLines } from "../src/proposal-decision-lines";
 
 const BASE = "http://localhost:3001/api/workspace";
 
@@ -649,6 +651,42 @@ describe("Keputusan lembaga dan pengesahan pencatatan pengajuan (Ticket #93)", (
     expect((await (await get(`/proposals/${draft.id}/decision`, approverToken)).json()).decision.notes).toBe(
       "Disetujui sebagian sesuai hasil pleno."
     );
+  });
+
+  it("records the decided lines with the decision; a legacy decision is recovered only when it reproduces the signed digest", async () => {
+    const { draft } = await prepareReadyProposal();
+    const approverToken = await signIn(approverSinar, SINAR);
+    const intent = approval("SK-DIR-LINES", { approvedAidLines: [{ id: "aid-fixture", amountApprovedIdr: "300000" }] });
+    const signed = await signedChallenge(approverToken, draft, intent);
+    expect((await decide(approverToken, draft, intent, signed)).status).toBe(200);
+
+    const versionLine = async () =>
+      (await (await get(`/proposals/${draft.id}/versions/${draft.version}`, approverToken)).json()).version.data.aidLines[0].value;
+    // The version reads what its approval decided, without its submitted snapshot being rewritten.
+    expect((await versionLine()).amountApprovedIdr).toBe("300000");
+    const db = database.handle();
+    const snapshot = (await db.execute(sql`SELECT data_json FROM proposal_versions WHERE proposal_id = ${draft.id}`)) as any;
+    const snapshotRows = Array.isArray(snapshot) ? snapshot : snapshot.rows;
+    expect(JSON.parse(snapshotRows[0].data_json).aidLines[0].value.amountApprovedIdr).toBeNull();
+
+    // A decision recorded before the column existed reads as submitted, and verify writes nothing.
+    await db.execute(sql`UPDATE proposal_decisions SET decided_aid_lines_json = NULL WHERE proposal_id = ${draft.id}`);
+    expect((await versionLine()).amountApprovedIdr).toBeNull();
+    const verified = await recoverDecidedAidLines(db, { apply: false });
+    expect(verified.outcomes.find((o) => o.proposalId === draft.id)?.state).toBe("RECOVERED_FROM_DRAFT");
+    expect((await versionLine()).amountApprovedIdr).toBeNull();
+
+    // A candidate that does not reproduce the signed digest is never written.
+    const digest = (await (await get(`/proposals/${draft.id}/decision`, approverToken)).json()).decision.rightsDigest;
+    await db.execute(sql`UPDATE proposal_decisions SET rights_digest = ${`0x${"0".repeat(64)}`} WHERE proposal_id = ${draft.id}`);
+    const refused = await recoverDecidedAidLines(db, { apply: true });
+    expect(refused.outcomes.find((o) => o.proposalId === draft.id)?.state).toBe("UNRECOVERABLE");
+    expect((await versionLine()).amountApprovedIdr).toBeNull();
+
+    await db.execute(sql`UPDATE proposal_decisions SET rights_digest = ${digest} WHERE proposal_id = ${draft.id}`);
+    await recoverDecidedAidLines(db, { apply: true });
+    expect((await versionLine()).amountApprovedIdr).toBe("300000");
+    expect((await recoverDecidedAidLines(db, { apply: false })).outcomes.some((o) => o.proposalId === draft.id)).toBe(false);
   });
 
   it("refuses approved amounts that differ from what was signed or exceed the request", async () => {

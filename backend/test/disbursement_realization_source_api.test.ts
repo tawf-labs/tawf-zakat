@@ -37,6 +37,8 @@ import {
   type RealizationItemData,
 } from "../src/realization-source";
 import { PROVENANCE_FILE_NAMES } from "../../shared/realization-provenance";
+import { sql } from "drizzle-orm";
+import { recoverDecidedAidLines } from "../src/proposal-decision-lines";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
 import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
 import { createRegistryStore } from "../src/registry-store";
@@ -1630,13 +1632,46 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
     expect(provenance.advances).toEqual([
       expect.objectContaining({ id: advanceId, amountIdr: "500000", accountedIdr: "300000", unaccountedIdr: "200000" }),
     ]);
-    // Persetujuan awal tidak menulis jumlah disetujui ke snapshot versi; nilainya tidak diambil dari draf aktif.
+    // Jumlah disetujui berasal dari catatan keputusan versi itu, bukan dari draf aktif.
     expect(provenance.realizations[0].aidLineValuation).toEqual({
       unit: "kg",
-      quantityApproved: null,
+      quantityApproved: "25",
       valuedAmountIdr: "375000",
       valuationBasis: "Harga pasar beras medium Bandung April 2024, Rp15.000/kg",
     });
+  });
+
+  it("keputusan lama tanpa garis diputuskan dipulihkan dari delta revisi bila cocok dengan rights digest", async () => {
+    let { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Lama", nik: "3201123456780091" }],
+      lines: [
+        { id: "line-uang", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "250000" },
+        { id: "line-beras", beneficiaryId: "ben-1", aidType: "Beras", kind: "GOODS", unit: "kg", quantityRequested: "10" },
+      ],
+    });
+    const db = database.handle();
+    // Seperti keputusan yang tercatat sebelum kolom ini ada.
+    await db.execute(sql`UPDATE proposal_decisions SET decided_aid_lines_json = NULL WHERE proposal_id = ${draft.id}`);
+
+    const amilToken = await signIn(amilSinar);
+    draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+    await approveRevision(draft, {
+      reason: "Tambah jumlah beras",
+      beneficiaries: draft.beneficiaries,
+      aidLines: draft.aidLines.map((l: any) =>
+        l.id === "line-beras"
+          ? { id: l.id, beneficiaryId: l.beneficiaryId, aidType: l.aidType, period: l.period, value: { ...l.value, quantityRequested: "12", quantityApproved: null } }
+          : { id: l.id, beneficiaryId: l.beneficiaryId, aidType: l.aidType, period: l.period, value: l.value }
+      ),
+    });
+
+    const versionLines = async () =>
+      (await (await get(`/proposals/${draft.id}/versions/1`, amilToken)).json()).version.data.aidLines;
+    expect((await versionLines()).map((l: any) => l.value.amountApprovedIdr ?? l.value.quantityApproved ?? null)).toEqual([null, null]);
+
+    const report = await recoverDecidedAidLines(db, { apply: true });
+    expect(report.outcomes.find((o) => o.proposalId === draft.id && o.proposalVersion === 1)?.state).toBe("RECOVERED_FROM_REVISION");
+    expect((await versionLines()).map((l: any) => l.value.amountApprovedIdr ?? l.value.quantityApproved)).toEqual(["250000", "10"]);
   });
 
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(

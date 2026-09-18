@@ -13,7 +13,9 @@
     "usdc:verify": "bun src/scripts/usdc-deposit-identity.ts verify",
     "usdc:migrate": "bun src/scripts/usdc-deposit-identity.ts apply",
     "proposal:verify": "bun src/scripts/proposal-amount-precision.ts verify",
-    "proposal:migrate": "bun src/scripts/proposal-amount-precision.ts apply"
+    "proposal:migrate": "bun src/scripts/proposal-amount-precision.ts apply",
+    "proposal:decisions:verify": "bun src/scripts/proposal-decided-lines.ts verify",
+    "proposal:decisions:apply": "bun src/scripts/proposal-decided-lines.ts apply"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
