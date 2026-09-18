@@ -354,6 +354,11 @@ export const proposalDrafts = pgTable("proposal_drafts", {
   examinationChecklistJson: text("examination_checklist_json"),
   revisionReason: text("revision_reason"),
   withdrawalReason: text("withdrawal_reason"),
+  activeRevisionId: text("active_revision_id"),
+  heldAidLinesJson: text("held_aid_lines_json").notNull().default("[]"),
+  cancelReason: text("cancel_reason"),
+  closureReason: text("closure_reason"),
+  remainderClosedJson: text("remainder_closed_json"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
@@ -363,6 +368,34 @@ export type NewProgramRow = typeof programs.$inferInsert;
 
 export type ProposalDraftRow = typeof proposalDrafts.$inferSelect;
 export type NewProposalDraftRow = typeof proposalDrafts.$inferInsert;
+
+export const proposalRevisions = pgTable("proposal_revisions", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  revisionNumber: integer("revision_number").notNull(),
+  fromVersion: integer("from_version").notNull(),
+  toVersion: integer("to_version").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("SUBMITTED"),
+  beneficiariesJson: text("beneficiaries_json").notNull().default("[]"),
+  aidLinesJson: text("aid_lines_json").notNull().default("[]"),
+  deltaJson: text("delta_json").notNull().default("{}"),
+  heldAidLineIdsJson: text("held_aid_line_ids_json").notNull().default("[]"),
+  examinationNotes: text("examination_notes"),
+  examinationChecklistJson: text("examination_checklist_json"),
+  examinedBy: text("examined_by"),
+  examinedAt: bigint("examined_at", { mode: "number" }),
+  decisionReference: text("decision_reference"),
+  decisionDate: text("decision_date"),
+  rejectionReason: text("rejection_reason"),
+  createdBy: text("created_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export type ProposalRevisionRow = typeof proposalRevisions.$inferSelect;
+export type NewProposalRevisionRow = typeof proposalRevisions.$inferInsert;
 
 
 export const proposalDraftOperations = pgTable("proposal_draft_operations", {

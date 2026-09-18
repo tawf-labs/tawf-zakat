@@ -369,4 +369,101 @@ describe("disbursementClient Ticket #94 realization methods", () => {
     expect(calls[5]!.body).toEqual({ recipientContact: "080000000123" });
     expect(calls[9]!.body).toEqual({ operationId: "op-examineRealizationDispute", outcome: "RESOLVED", notes: "Selesai" });
   });
+
+  it("sends the revision, cancellation, and remainder closure requests Ticket #96 requires", async () => {
+    const client = await import("./disbursementClient");
+    const calls: { path: string; method: string; body?: unknown }[] = [];
+    const requests = {
+      institutionId: "sinar",
+      assertCurrent: () => {},
+      json: async (path: string, init?: RequestInit) => {
+        calls.push({
+          path,
+          method: init?.method ?? "GET",
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        if (path.endsWith("/revisions")) return { revisions: [{ id: "rev-1", revisionNumber: 1 }] };
+        if (path.includes("/revisions/rev-1/decision-challenge")) {
+          return { challenge: { nonce: "n-1" }, typedData: { domain: {}, types: {}, primaryType: "T", message: {} } };
+        }
+        if (path.includes("/cancel-challenge")) {
+          return { challenge: { nonce: "n-cancel" }, typedData: { domain: {}, types: {}, primaryType: "T", message: {} } };
+        }
+        if (path.includes("/close-remainder-challenge")) {
+          return { challenge: { nonce: "n-close" }, typedData: { domain: {}, types: {}, primaryType: "T", message: {} }, preview: {} };
+        }
+        return { revision: { id: "rev-1" }, draft: { id: "prop-1", version: 2 }, decision: { id: "dec-1" }, closure: { id: "cls-1" } };
+      },
+    } as unknown as PrivateRequests;
+
+    await client.listProposalRevisions(requests, "prop-1");
+    await client.getProposalRevision(requests, "prop-1", "rev-1");
+    await client.proposeRevision(requests, "prop-1", {
+      reason: "Perubahan mustahik",
+      beneficiaries: [],
+      aidLines: [],
+      expectedVersion: 1,
+    });
+    await client.withdrawRevision(requests, "prop-1", "rev-1", { reason: "Dibatalkan amil" });
+    await client.startRevisionExamination(requests, "prop-1", "rev-1");
+    await client.returnRevision(requests, "prop-1", "rev-1", { reason: "Perbaiki berkas" });
+    await client.markRevisionReady(requests, "prop-1", "rev-1", { notes: "Siap diputus" });
+    await client.createRevisionDecisionChallenge(requests, "prop-1", "rev-1", {
+      signerAccount: "0x123",
+      action: "APPROVE",
+      decisionReference: "SK-REV-1",
+      decisionDate: "2026-09-18",
+      decisionDocumentId: "doc-1",
+    });
+    await client.submitRevisionDecision(requests, "prop-1", "rev-1", {
+      nonce: "n-1",
+      signature: "0xsig",
+      operationId: "op-rev-decide",
+    });
+
+    await client.createCancelProposalChallenge(requests, "prop-1", {
+      signerAccount: "0x123",
+      decisionReference: "SK-BATAL-1",
+      decisionDate: "2026-09-18",
+      decisionDocumentId: "doc-cancel",
+    });
+    await client.cancelProposal(requests, "prop-1", {
+      nonce: "n-cancel",
+      signature: "0xsigcancel",
+      operationId: "op-cancel",
+    });
+
+    await client.createCloseRemainderChallenge(requests, "prop-1", {
+      signerAccount: "0x123",
+      decisionReference: "SK-TUTUP-1",
+      decisionDate: "2026-09-18",
+      decisionDocumentId: "doc-close",
+    });
+    await client.closeProposalRemainder(requests, "prop-1", {
+      nonce: "n-close",
+      signature: "0xsigclose",
+      operationId: "op-close",
+    });
+    await client.getProposalClosure(requests, "prop-1");
+
+    const base = "/api/workspace/proposals";
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      `GET ${base}/prop-1/revisions`,
+      `GET ${base}/prop-1/revisions/rev-1`,
+      `POST ${base}/prop-1/revisions`,
+      `POST ${base}/prop-1/revisions/rev-1/withdraw`,
+      `POST ${base}/prop-1/revisions/rev-1/start-examination`,
+      `POST ${base}/prop-1/revisions/rev-1/return`,
+      `POST ${base}/prop-1/revisions/rev-1/ready`,
+      `POST ${base}/prop-1/revisions/rev-1/decision-challenge`,
+      `POST ${base}/prop-1/revisions/rev-1/decide`,
+      `POST ${base}/prop-1/cancel-challenge`,
+      `POST ${base}/prop-1/decide`,
+      `POST ${base}/prop-1/close-remainder-challenge`,
+      `POST ${base}/prop-1/decide`,
+      `GET ${base}/prop-1/closure`,
+    ]);
+    expect(calls[10]!.body).toMatchObject({ action: "CANCEL", nonce: "n-cancel" });
+    expect(calls[12]!.body).toMatchObject({ action: "CLOSE_REMAINDER", nonce: "n-close" });
+  });
 });

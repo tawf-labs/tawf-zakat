@@ -45,10 +45,12 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
   onRecorded: (records: DisbursementRealization[], summary: ProposalRealizationSummary, addEvidence: boolean) => void;
 }) {
   const id = useId();
+  const heldSet = new Set(draft.heldAidLineIds ?? []);
   const open = summary.lines.filter((line) =>
-    line.kind === "GOODS"
+    !heldSet.has(line.aidLineId) &&
+    (line.kind === "GOODS"
       ? (line.quantityRemaining != null && compareDecimalStrings(line.quantityRemaining, "0") > 0)
-      : (BigInt(line.amountRemainingIdr ?? "0") > 0n)
+      : (BigInt(line.amountRemainingIdr ?? "0") > 0n))
   );
   const initialLine = open[0];
   const [rows, setRows] = useState<RealizationRow[]>(() => [

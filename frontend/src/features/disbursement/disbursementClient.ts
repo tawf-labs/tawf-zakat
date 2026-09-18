@@ -73,7 +73,9 @@ export type ProposalStatus =
   | "READY_FOR_DECISION"
   | "APPROVED"
   | "REJECTED"
-  | "WITHDRAWN";
+  | "WITHDRAWN"
+  | "CANCELLED"
+  | "REMAINDER_CLOSED";
 
 export type ProposalDocumentCategory =
   | "PROPOSAL_LETTER"
@@ -167,6 +169,8 @@ export type ProposalDraft = {
   examinationChecklist?: ExaminationChecklist | null;
   revisionReason?: string | null;
   withdrawalReason?: string | null;
+  activeRevisionId?: string | null;
+  heldAidLineIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -1080,3 +1084,305 @@ export const listIncompleteEvidenceQueue = (requests: PrivateRequests) =>
   requests
     .json<{ queue: IncompleteEvidenceQueueItem[] }>(`/api/workspace/proposals/queue/incomplete-evidence`)
     .then((r) => r.queue);
+
+// ---------------------------------------------------------------------------
+// Revisions, Cancellation, and Remainder Closure (Spec #86, Ticket #96)
+// ---------------------------------------------------------------------------
+
+export type ProposalRevisionStatus =
+  | "SUBMITTED"
+  | "UNDER_EXAMINATION"
+  | "REVISION_REQUIRED"
+  | "READY_FOR_DECISION"
+  | "APPROVED"
+  | "REJECTED"
+  | "WITHDRAWN";
+
+export type RevisionBeneficiaryDelta = {
+  added: Beneficiary[];
+  removed: Beneficiary[];
+  modified: Array<{ before: Beneficiary; after: Beneficiary }>;
+  unchanged: Beneficiary[];
+};
+
+export type RevisionAidLineDelta = {
+  added: AidLine[];
+  removed: AidLine[];
+  modified: Array<{ before: AidLine; after: AidLine }>;
+  unchanged: AidLine[];
+};
+
+export type ProposalRevisionDelta = {
+  beneficiaries: RevisionBeneficiaryDelta;
+  aidLines: RevisionAidLineDelta;
+  heldAidLineIds: string[];
+  unchangedAidLineIds: string[];
+};
+
+export type ProposalRevisionRecord = {
+  id: string;
+  proposalId: string;
+  institutionId: string;
+  revisionNumber: number;
+  fromVersion: number;
+  toVersion: number;
+  reason: string;
+  status: ProposalRevisionStatus;
+  beneficiaries: Beneficiary[];
+  aidLines: AidLine[];
+  delta: ProposalRevisionDelta;
+  heldAidLineIds: string[];
+  examinationNotes: string | null;
+  examinationChecklist: ExaminationChecklist | null;
+  examinedBy: string | null;
+  examinedAt: number | null;
+  decisionReference: string | null;
+  decisionDate: string | null;
+  rejectionReason: string | null;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ProposalClosureLineRemainder = {
+  aidLineId: string;
+  beneficiaryId: string;
+  beneficiaryName: string;
+  kind: "MONEY" | "GOODS";
+  aidType: string;
+  unit: string | null;
+  approved: string;
+  realized: string;
+  unrealizedRemainder: string;
+};
+
+export type ProposalClosureGoodsUnitRemainder = {
+  aidType: string;
+  unit: string;
+  totalApproved: string;
+  totalRealized: string;
+  totalUnrealizedRemainder: string;
+};
+
+export type ProposalClosureRecord = {
+  proposalId: string;
+  proposalVersion: number;
+  institutionId: string;
+  decisionReference: string;
+  decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: string;
+  reason: string;
+  closedAt: number;
+  operatorOfficerId: string;
+  operatorAccount: string;
+  signerAccount: string;
+  totalApprovedIdr: string;
+  totalRealizedIdr: string;
+  totalUnrealizedRemainderIdr: string;
+  lineRemainders: ProposalClosureLineRemainder[];
+  goodsUnitRemainders: ProposalClosureGoodsUnitRemainder[];
+};
+
+export const listProposalRevisions = (requests: PrivateRequests, proposalId: string) =>
+  requests.json<{ revisions: ProposalRevisionRecord[] }>(`/api/workspace/proposals/${proposalId}/revisions`).then((r) => r.revisions);
+
+export const getProposalRevision = (requests: PrivateRequests, proposalId: string, revisionId: string) =>
+  requests.json<{ revision: ProposalRevisionRecord }>(`/api/workspace/proposals/${proposalId}/revisions/${revisionId}`).then((r) => r.revision);
+
+export const proposeRevision = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: {
+    reason: string;
+    beneficiaries: Beneficiary[];
+    aidLines: AidLine[];
+    expectedVersion: number;
+    operationId: string;
+  }
+) =>
+  requests.json<{ revision: ProposalRevisionRecord; draft: ProposalDraft }>(`/api/workspace/proposals/${proposalId}/revisions`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const withdrawRevision = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: { reason: string; operationId: string }
+) =>
+  requests.json<{ revision: ProposalRevisionRecord; draft: ProposalDraft }>(
+    `/api/workspace/proposals/${proposalId}/revisions/${revisionId}/withdraw`,
+    { method: "POST", body: JSON.stringify(input) }
+  );
+
+export const startRevisionExamination = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: { operationId: string }
+) =>
+  requests
+    .json<{ revision: ProposalRevisionRecord }>(
+      `/api/workspace/proposals/${proposalId}/revisions/${revisionId}/start-examination`,
+      { method: "POST", body: JSON.stringify(input) }
+    )
+    .then((r) => r.revision);
+
+export const returnRevision = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: { reason: string; operationId: string }
+) =>
+  requests
+    .json<{ revision: ProposalRevisionRecord }>(
+      `/api/workspace/proposals/${proposalId}/revisions/${revisionId}/return`,
+      { method: "POST", body: JSON.stringify(input) }
+    )
+    .then((r) => r.revision);
+
+/** Resubmit a returned revision with corrected content; the in-force version is untouched. */
+export const amendRevision = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: {
+    reason: string;
+    beneficiaries: Beneficiary[];
+    aidLines: AidLine[];
+    operationId: string;
+  }
+) =>
+  requests
+    .json<{ revision: ProposalRevisionRecord }>(
+      `/api/workspace/proposals/${proposalId}/revisions/${revisionId}/amend`,
+      { method: "POST", body: JSON.stringify(input) }
+    )
+    .then((r) => r.revision);
+
+export const markRevisionReady = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: { notes?: string; checklist: ExaminationChecklist; operationId: string }
+) =>
+  requests
+    .json<{ revision: ProposalRevisionRecord }>(
+      `/api/workspace/proposals/${proposalId}/revisions/${revisionId}/ready`,
+      { method: "POST", body: JSON.stringify(input) }
+    )
+    .then((r) => r.revision);
+
+export const createRevisionDecisionChallenge = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: {
+    signerAccount: string;
+    action: "APPROVE" | "REJECT";
+    mandateId?: string | null;
+    decisionReference: string;
+    decisionDate: string;
+    decisionDocumentId: string;
+    rejectionReason?: string | null;
+  }
+) =>
+  requests.json<{
+    challenge: { nonce: string; mandateId: string; signerAccount: string; rightsDigest: string; expiresAt: number };
+    typedData: WireTypedData;
+  }>(`/api/workspace/proposals/${proposalId}/revisions/${revisionId}/decision-challenge`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const submitRevisionDecision = (
+  requests: PrivateRequests,
+  proposalId: string,
+  revisionId: string,
+  input: {
+    nonce: string;
+    signature: string;
+    operationId: string;
+    notes?: string | null;
+    rejectionReason?: string | null;
+  }
+) =>
+  requests.json<{
+    revision: ProposalRevisionRecord;
+    draft: ProposalDraft;
+    decision: ProposalDecision;
+  }>(`/api/workspace/proposals/${proposalId}/revisions/${revisionId}/decide`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+/** What both cancellation and remainder closure must state before a challenge is issued. */
+export type ProposalTerminationIntent = {
+  signerAccount: string;
+  mandateId?: string | null;
+  decisionReference: string;
+  decisionDate: string;
+  decisionDocumentId: string;
+  reason: string;
+  expectedVersion: number;
+  notes?: string | null;
+};
+
+/** The signed half, replayed back to `/decide` exactly as it was bound into the challenge. */
+export type ProposalTerminationDecision = ProposalTerminationIntent & {
+  nonce: string;
+  signature: string;
+  operationId: string;
+};
+
+export const createCancelProposalChallenge = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ProposalTerminationIntent
+) =>
+  requests.json<DecisionChallengeResponse>(`/api/workspace/proposals/${proposalId}/cancel-challenge`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const cancelProposal = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ProposalTerminationDecision
+) =>
+  requests.json<{
+    draft: ProposalDraft;
+    decision: ProposalDecision;
+  }>(`/api/workspace/proposals/${proposalId}/decide`, {
+    method: "POST",
+    body: JSON.stringify({ ...input, action: "CANCEL" }),
+  });
+
+export const createCloseRemainderChallenge = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ProposalTerminationIntent
+) =>
+  requests.json<DecisionChallengeResponse>(`/api/workspace/proposals/${proposalId}/close-remainder-challenge`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const closeProposalRemainder = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: ProposalTerminationDecision
+) =>
+  requests.json<{
+    draft: ProposalDraft;
+    decision: ProposalDecision;
+    closure: ProposalClosureRecord;
+  }>(`/api/workspace/proposals/${proposalId}/decide`, {
+    method: "POST",
+    body: JSON.stringify({ ...input, action: "CLOSE_REMAINDER" }),
+  });
+
+export const getProposalClosure = (requests: PrivateRequests, proposalId: string) =>
+  requests.json<{ closure: ProposalClosureRecord }>(`/api/workspace/proposals/${proposalId}/closure`).then((r) => r.closure);

@@ -24,7 +24,14 @@
 
 import { createHash } from "node:crypto";
 import { addDecimalStrings, compareDecimalStrings, subtractDecimalStrings, isExactNonNegativeDecimal } from "../../shared/exact-decimal";
+import type { RevisionDelta, RevisionDeltaResult } from "../../shared/proposal-revision";
 export { addDecimalStrings, compareDecimalStrings, subtractDecimalStrings, isExactNonNegativeDecimal } from "../../shared/exact-decimal";
+// Revision delta and the realization floor are one pure core shared with the browser (ADR-0017 §1).
+export {
+  accumulateRealizedPerLine,
+  calculateRevisionDelta,
+  validateRevisionFloor,
+} from "../../shared/proposal-revision";
 
 export type FundType = "ZAKAT" | "INFAK" | "SEDEKAH" | "LAINNYA";
 export const FUND_TYPES: FundType[] = ["ZAKAT", "INFAK", "SEDEKAH", "LAINNYA"];
@@ -325,7 +332,8 @@ export type ProposalStatus =
   | "WITHDRAWN"
   | "APPROVED"
   | "REJECTED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "REMAINDER_CLOSED";
 
 export const PROPOSAL_STATUSES: ProposalStatus[] = [
   "DRAFT",
@@ -337,6 +345,7 @@ export const PROPOSAL_STATUSES: ProposalStatus[] = [
   "APPROVED",
   "REJECTED",
   "CANCELLED",
+  "REMAINDER_CLOSED",
 ];
 
 export const isProposalStatus = (value: unknown): value is ProposalStatus =>
@@ -352,6 +361,7 @@ export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
   APPROVED: "Disetujui",
   REJECTED: "Ditolak",
   CANCELLED: "Dibatalkan",
+  REMAINDER_CLOSED: "Sisa ditutup",
 };
 
 export type ProposalDocumentCategory =
@@ -594,6 +604,51 @@ export type ExaminationChecklist = {
   notes: string;
 };
 
+/**
+ * One examination gate for every cycle: the original proposal and each revision of it.
+ * A proposal only becomes ready for a decision once both checks are affirmed outright.
+ */
+export function validateExaminationChecklist(
+  input: unknown
+): { ok: true; value: ExaminationChecklist } | { ok: false; error: string } {
+  if (typeof input !== "object" || input === null) {
+    return { ok: false, error: "Checklist pemeriksaan kelayakan wajib diisi." };
+  }
+  const raw = input as Record<string, unknown>;
+  if (raw.administrativeChecksOk !== true) {
+    return {
+      ok: false,
+      error: "Pemeriksaan administrasi harus dinyatakan lengkap dan sesuai sebelum pengajuan siap diputus.",
+    };
+  }
+  if (raw.eligibilityChecksOk !== true) {
+    return {
+      ok: false,
+      error: "Pemeriksaan kelayakan asnaf dan kebutuhan harus dinyatakan memenuhi syarat sebelum pengajuan siap diputus.",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      administrativeChecksOk: true,
+      eligibilityChecksOk: true,
+      alternativeIdReviewed: raw.alternativeIdReviewed === true,
+      recurringAidExceptions: Array.isArray(raw.recurringAidExceptions)
+        ? raw.recurringAidExceptions.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : [],
+      notes: trimmed(raw.notes),
+    },
+  };
+}
+
+/** A checklist an examiner may attach while returning work; absent is legitimate here. */
+export function validateOptionalExaminationChecklist(
+  input: unknown
+): { ok: true; value: ExaminationChecklist | null } | { ok: false; error: string } {
+  if (input === null || input === undefined) return { ok: true, value: null };
+  return validateExaminationChecklist(input);
+}
+
 export type ProposalHistoryAction =
   | "SUBMIT"
   | "WITHDRAW"
@@ -601,7 +656,13 @@ export type ProposalHistoryAction =
   | "RETURN_FOR_REVISION"
   | "MARK_READY"
   | "APPROVE"
-  | "REJECT";
+  | "REJECT"
+  | "CANCEL"
+  | "CLOSE_REMAINDER"
+  | "PROPOSE_REVISION"
+  | "WITHDRAW_REVISION"
+  | "APPROVE_REVISION"
+  | "REJECT_REVISION";
 
 export type ProposalHistoryRecord = {
   id: number;
@@ -620,13 +681,13 @@ export type ProposalHistoryRecord = {
 
 
 // ---------------------------------------------------------------------------
-// Keputusan lembaga (Spec #86, ticket #93)
+// Keputusan lembaga (Spec #86, ticket #93 & #96)
 // ---------------------------------------------------------------------------
 
-export type ProposalDecisionAction = "APPROVE" | "REJECT";
+export type ProposalDecisionAction = "APPROVE" | "REJECT" | "CANCEL" | "CLOSE_REMAINDER";
 
 export const isProposalDecisionAction = (value: unknown): value is ProposalDecisionAction =>
-  value === "APPROVE" || value === "REJECT";
+  value === "APPROVE" || value === "REJECT" || value === "CANCEL" || value === "CLOSE_REMAINDER";
 
 export const SOP_QUORUM_HELD_MESSAGE =
   "Konfigurasi SOP lembaga mewajibkan kuorum digital banyak pejabat yang belum didukung oleh sistem; pencatatan pengesahan digital ditahan.";
@@ -758,7 +819,7 @@ export function decidedAidLines(
   aidLines: AidLine[],
   intent: Pick<ProposalDecisionIntent, "action" | "approvedAidLines">
 ): { ok: true; lines: AidLine[] } | { ok: false; error: string } {
-  if (intent.action === "REJECT") return { ok: true, lines: aidLines };
+  if (intent.action !== "APPROVE") return { ok: true, lines: aidLines };
 
   const approved = new Map<string, ApprovedAidLineInput>();
   for (const item of intent.approvedAidLines) {
@@ -891,7 +952,7 @@ export function validateDecisionIntent(input: unknown): { ok: true; value: Propo
 
   const action = raw.action;
   if (!isProposalDecisionAction(action)) {
-    return { ok: false, error: "Tindakan keputusan harus 'APPROVE' atau 'REJECT'." };
+    return { ok: false, error: "Tindakan keputusan harus 'APPROVE', 'REJECT', 'CANCEL', atau 'CLOSE_REMAINDER'." };
   }
 
   const decisionReference = trimmed(raw.decisionReference);
@@ -909,9 +970,22 @@ export function validateDecisionIntent(input: unknown): { ok: true; value: Propo
     return { ok: false, error: "Berkas SK / berita acara keputusan wajib diunggah." };
   }
 
-  const rejectionReason = action === "REJECT" ? trimmed(raw.rejectionReason) : null;
-  if (rejectionReason === "") {
-    return { ok: false, error: "Alasan penolakan wajib diisi secara jelas bila pengajuan ditolak." };
+  let rejectionReason: string | null = null;
+  if (action === "REJECT") {
+    rejectionReason = trimmed(raw.rejectionReason);
+    if (!rejectionReason) {
+      return { ok: false, error: "Alasan penolakan wajib diisi secara jelas bila pengajuan ditolak." };
+    }
+  } else if (action === "CANCEL") {
+    rejectionReason = trimmed(raw.reason);
+    if (!rejectionReason) {
+      return { ok: false, error: "Alasan pembatalan wajib diisi bila pengajuan dibatalkan." };
+    }
+  } else if (action === "CLOSE_REMAINDER") {
+    rejectionReason = trimmed(raw.reason);
+    if (!rejectionReason) {
+      return { ok: false, error: "Alasan penutupan sisa bantuan wajib diisi bila sisa bantuan ditutup." };
+    }
   }
 
   const approvedAidLines: ApprovedAidLineInput[] = [];
@@ -1047,8 +1121,15 @@ export type DisputeOutcome = (typeof DISPUTE_OUTCOMES)[number];
 export const isDisputeOutcome = (v: unknown): v is DisputeOutcome =>
   typeof v === "string" && (DISPUTE_OUTCOMES as readonly string[]).includes(v);
 
-export const REALIZATION_PROGRESS = ["NOT_REALIZED", "PARTIALLY_REALIZED", "FULLY_REALIZED"] as const;
+export const REALIZATION_PROGRESS = ["NOT_REALIZED", "PARTIALLY_REALIZED", "FULLY_REALIZED", "REMAINDER_CLOSED"] as const;
 export type RealizationProgress = (typeof REALIZATION_PROGRESS)[number];
+
+export const REALIZATION_PROGRESS_LABELS: Record<RealizationProgress, string> = {
+  NOT_REALIZED: "Belum disalurkan",
+  PARTIALLY_REALIZED: "Tersalurkan sebagian",
+  FULLY_REALIZED: "Tersalurkan seluruhnya",
+  REMAINDER_CLOSED: "Sisa ditutup",
+};
 
 /** Who the payment went to when it is not the beneficiary (a school, hospital, vendor). Absent means the beneficiary. */
 export type PaymentRecipient = { name: string; relation: string };
@@ -1222,6 +1303,7 @@ export type RealizationLineSummary = {
   valuationBasis: string | null;
   status: RealizationProgress;
   isDisputed: boolean;
+  isHeldForRevision: boolean;
 };
 
 export type RealizationUnitSummary = {
@@ -1230,6 +1312,75 @@ export type RealizationUnitSummary = {
   approved: string;
   realized: string;
   remaining: string;
+};
+
+export type RevisionBeneficiaryDelta = RevisionDelta<Beneficiary>;
+export type RevisionAidLineDelta = RevisionDelta<AidLine>;
+export type ProposalRevisionDelta = RevisionDeltaResult<Beneficiary, AidLine>;
+
+export type ProposalRevisionRecord = {
+  id: string;
+  proposalId: string;
+  institutionId: string;
+  revisionNumber: number;
+  fromVersion: number;
+  toVersion: number;
+  reason: string;
+  status: "DRAFT" | "SUBMITTED" | "UNDER_EXAMINATION" | "REVISION_REQUIRED" | "READY_FOR_DECISION" | "APPROVED" | "REJECTED" | "WITHDRAWN";
+  beneficiaries: Beneficiary[];
+  aidLines: AidLine[];
+  delta: ProposalRevisionDelta;
+  heldAidLineIds: string[];
+  examinationNotes: string | null;
+  examinationChecklist: ExaminationChecklist | null;
+  examinedBy: string | null;
+  examinedByOfficerId: string | null;
+  examinedAt: number | null;
+  decisionReference: string | null;
+  decisionDate: string | null;
+  rejectionReason: string | null;
+  createdBy: string;
+  createdByOfficerId: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ProposalClosureLineRemainder = {
+  aidLineId: string;
+  beneficiaryId: string;
+  beneficiaryName: string;
+  kind: "MONEY" | "GOODS";
+  aidType: string;
+  unit: string | null;
+  approved: string;
+  realized: string;
+  unrealizedRemainder: string;
+};
+
+export type ProposalClosureRecord = {
+  proposalId: string;
+  proposalVersion: number;
+  institutionId: string;
+  decisionReference: string;
+  decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: string;
+  reason: string;
+  closedAt: number;
+  operatorOfficerId: string;
+  operatorAccount: string;
+  signerAccount: string;
+  totalApprovedIdr: string;
+  totalRealizedIdr: string;
+  totalUnrealizedRemainderIdr: string;
+  lineRemainders: ProposalClosureLineRemainder[];
+  goodsUnitRemainders: Array<{
+    aidType: string;
+    unit: string;
+    totalApproved: string;
+    totalRealized: string;
+    totalUnrealizedRemainder: string;
+  }>;
 };
 
 export type ProposalRealizationSummary = {
@@ -1256,6 +1407,8 @@ export type ProposalRealizationSummary = {
   hasUnvaluedGoods: boolean;
   totalValuedGoodsApprovedIdr: string | null;
   lines: RealizationLineSummary[];
+  activeRevisionId: string | null;
+  closure: ProposalClosureRecord | null;
 };
 
 /** Rupiah amounts are whole, positive and bounded; anything else is refused before it reaches BigInt. */
@@ -1450,12 +1603,130 @@ export function validateEvidenceAllocations(raw: unknown): { ok: true; value: Ev
   return { ok: true, value: allocations };
 }
 
+export function calculateRemainderClosure(
+  proposal: {
+    id: string;
+    version: number;
+    beneficiaries: Beneficiary[];
+    aidLines: AidLine[];
+  },
+  realizations: RealizationRecord[],
+  decisionInfo: {
+    institutionId: string;
+    decisionReference: string;
+    decisionDate: string;
+    decisionDocumentId: string;
+    decisionDocumentSha256: string;
+    reason: string;
+    operatorOfficerId: string;
+    operatorAccount: string;
+    signerAccount: string;
+    now: number;
+  }
+): ProposalClosureRecord {
+  const benMap = new Map(proposal.beneficiaries.map((b) => [b.id, b]));
+  const lineCumulativeIdr = new Map<string, bigint>();
+  const lineCumulativeQty = new Map<string, string>();
+  for (const r of realizations) {
+    if (r.amountIdr != null) {
+      lineCumulativeIdr.set(r.aidLineId, (lineCumulativeIdr.get(r.aidLineId) ?? 0n) + BigInt(r.amountIdr));
+    }
+    if (r.quantity != null) {
+      const prev = lineCumulativeQty.get(r.aidLineId) ?? "0";
+      lineCumulativeQty.set(r.aidLineId, addDecimalStrings(prev, r.quantity));
+    }
+  }
+
+  let totalApprovedIdr = 0n;
+  let totalRealizedIdr = 0n;
+  let totalUnrealizedRemainderIdr = 0n;
+
+  const goodsTotalsByUnit = new Map<string, { aidType: string; unit: string; totalApproved: string; totalRealized: string; totalUnrealizedRemainder: string }>();
+
+  const lineRemainders: ProposalClosureLineRemainder[] = proposal.aidLines.map((line) => {
+    const benName = benMap.get(line.beneficiaryId)?.name ?? "Penerima manfaat";
+    if (line.value.kind === "MONEY") {
+      const approved = approvedIdrOf(line) ?? 0n;
+      const realized = lineCumulativeIdr.get(line.id) ?? 0n;
+      const remainder = approved > realized ? approved - realized : 0n;
+      totalApprovedIdr += approved;
+      totalRealizedIdr += realized;
+      totalUnrealizedRemainderIdr += remainder;
+      return {
+        aidLineId: line.id,
+        beneficiaryId: line.beneficiaryId,
+        beneficiaryName: benName,
+        kind: "MONEY" as const,
+        aidType: line.aidType,
+        unit: null,
+        approved: approved.toString(),
+        realized: realized.toString(),
+        unrealizedRemainder: remainder.toString(),
+      };
+    } else {
+      const approvedQty = approvedQuantityOf(line) ?? "0";
+      const realizedQty = lineCumulativeQty.get(line.id) ?? "0";
+      const remainderQty = compareDecimalStrings(approvedQty, realizedQty) > 0 ? subtractDecimalStrings(approvedQty, realizedQty) : "0";
+      const unitKey = JSON.stringify([line.aidType, line.value.unit]);
+      const prevTotals = goodsTotalsByUnit.get(unitKey) ?? {
+        aidType: line.aidType,
+        unit: line.value.unit,
+        totalApproved: "0",
+        totalRealized: "0",
+        totalUnrealizedRemainder: "0",
+      };
+      goodsTotalsByUnit.set(unitKey, {
+        aidType: line.aidType,
+        unit: line.value.unit,
+        totalApproved: addDecimalStrings(prevTotals.totalApproved, approvedQty),
+        totalRealized: addDecimalStrings(prevTotals.totalRealized, realizedQty),
+        totalUnrealizedRemainder: addDecimalStrings(prevTotals.totalUnrealizedRemainder, remainderQty),
+      });
+      return {
+        aidLineId: line.id,
+        beneficiaryId: line.beneficiaryId,
+        beneficiaryName: benName,
+        kind: "GOODS" as const,
+        aidType: line.aidType,
+        unit: line.value.unit,
+        approved: approvedQty,
+        realized: realizedQty,
+        unrealizedRemainder: remainderQty,
+      };
+    }
+  });
+
+  return {
+    proposalId: proposal.id,
+    proposalVersion: proposal.version,
+    institutionId: decisionInfo.institutionId,
+    decisionReference: decisionInfo.decisionReference,
+    decisionDate: decisionInfo.decisionDate,
+    decisionDocumentId: decisionInfo.decisionDocumentId,
+    decisionDocumentSha256: decisionInfo.decisionDocumentSha256,
+    reason: decisionInfo.reason,
+    closedAt: decisionInfo.now,
+    operatorOfficerId: decisionInfo.operatorOfficerId,
+    operatorAccount: decisionInfo.operatorAccount.toLowerCase(),
+    signerAccount: decisionInfo.signerAccount.toLowerCase(),
+    totalApprovedIdr: totalApprovedIdr.toString(),
+    totalRealizedIdr: totalRealizedIdr.toString(),
+    totalUnrealizedRemainderIdr: totalUnrealizedRemainderIdr.toString(),
+    lineRemainders,
+    goodsUnitRemainders: Array.from(goodsTotalsByUnit.values()),
+  };
+}
+
 export function calculateProposalRealizationSummary(
   proposal: {
     id: string;
     version: number;
     beneficiaries: Beneficiary[];
     aidLines: AidLine[];
+    status?: ProposalStatus;
+    heldAidLineIds?: string[];
+    activeRevisionId?: string | null;
+    closure?: ProposalClosureRecord | null;
   },
   realizations: RealizationRecord[],
   advances: Array<Pick<OperationalAdvanceRecord, "amountIdr">> = [],
@@ -1519,6 +1790,7 @@ export function calculateProposalRealizationSummary(
     const beneficiaryName = beneficiaryMap.get(line.beneficiaryId)?.name ?? "Tidak dikenal";
     const paymentRecipients = [...(recipientsByLine.get(line.id)?.values() ?? [])];
     const isDisputed = lineDisputed.has(line.id);
+    const isHeldForRevision = proposal.heldAidLineIds?.includes(line.id) ?? false;
 
     if (line.value.kind === "MONEY") {
       const approved = approvedIdrOf(line) ?? 0n;
@@ -1545,6 +1817,7 @@ export function calculateProposalRealizationSummary(
         valuationBasis: null,
         status: realizationProgress(approved, realized),
         isDisputed,
+        isHeldForRevision,
       };
     }
 
@@ -1590,6 +1863,7 @@ export function calculateProposalRealizationSummary(
       valuationBasis: valuation !== null ? line.value.valuationBasis!.trim() : null,
       status: lineStatus,
       isDisputed,
+      isHeldForRevision,
     };
   });
 
@@ -1597,7 +1871,9 @@ export function calculateProposalRealizationSummary(
 
   // Overall disbursement status across all lines
   let disbursementStatus: RealizationProgress = "NOT_REALIZED";
-  if (lines.length > 0) {
+  if (proposal.status === "REMAINDER_CLOSED") {
+    disbursementStatus = "REMAINDER_CLOSED";
+  } else if (lines.length > 0) {
     const allFully = lines.every((l) => l.status === "FULLY_REALIZED");
     const anyProgress = lines.some((l) => l.status === "PARTIALLY_REALIZED" || l.status === "FULLY_REALIZED");
     if (allFully) {
@@ -1630,5 +1906,7 @@ export function calculateProposalRealizationSummary(
     hasUnvaluedGoods,
     totalValuedGoodsApprovedIdr: lines.some((line) => line.kind === "GOODS" && line.valuedAmountIdr !== null) ? totalValuedGoodsApproved.toString() : null,
     lines,
+    activeRevisionId: proposal.activeRevisionId ?? null,
+    closure: proposal.closure ?? null,
   };
 }

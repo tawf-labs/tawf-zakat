@@ -2,7 +2,7 @@ import { RealizationSummaryMetrics } from "./RealizationSummaryMetrics";
 import { compareDecimalStrings } from "../../../../shared/exact-decimal";
 import { useRealizationOverview, useInvalidateRealizations } from "./useRealizationQueries";
 import { useState } from "react";
-import { Banknote, Coins, PlusCircle } from "lucide-react";
+import { AlertTriangle, Banknote, Coins, Edit3, FileCheck, PlusCircle, XCircle } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { formatIdrAmount } from "../workspace/mandateLabels";
@@ -20,10 +20,17 @@ import { RealizationEvidenceModal, evidencedIdr } from "./RealizationEvidenceMod
 import { RecipientConfirmationModal } from "./RecipientConfirmationModal";
 import { RealizationDisputeModal } from "./RealizationDisputeModal";
 import { AdvancesAndExpensesModal } from "./AdvancesAndExpensesModal";
+import { ProposalRevisionModal } from "./ProposalRevisionModal";
+import { ProposalCancellationModal } from "./ProposalCancellationModal";
+import { ProposalClosureModal } from "./ProposalClosureModal";
+import { RevisionWorkflowBanner } from "./RevisionWorkflowBanner";
 
 type Open =
   | { kind: "record" }
   | { kind: "advances" }
+  | { kind: "revision" }
+  | { kind: "cancel" }
+  | { kind: "closeRemainder" }
   | { kind: "evidence" | "confirm" | "dispute"; realization: DisbursementRealization }
   | null;
 
@@ -33,12 +40,19 @@ const CONFIRMATION_TEXT: Record<ConfirmationStatus, string> = {
   DISPUTED: "Diperselisihkan, konfirmasi ditahan",
 };
 
-
 /**
  * Staged IDR realization of an approved proposal. Disbursement progress, evidence completeness
  * and recipient confirmation are shown separately; none of them implies the others or an audit opinion.
  */
-export function ProposalRealizationBanner({ requests, draft }: { requests: PrivateRequests; draft: ProposalDraft }) {
+export function ProposalRealizationBanner({
+  requests,
+  draft,
+  onDraftUpdated,
+}: {
+  requests: PrivateRequests;
+  draft: ProposalDraft;
+  onDraftUpdated?: (draft: ProposalDraft) => void;
+}) {
   const [downloadError, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Open>(null);
   const approved = draft.status === "APPROVED";
@@ -66,6 +80,8 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
   const summary = loaded?.summary;
   const hasRemainingGoods = summary?.lines.some((l) => l.kind === "GOODS" && l.quantityRemaining && compareDecimalStrings(l.quantityRemaining, "0") > 0);
   const canRecord = summary && (summary.totalRemainingIdr !== "0" || hasRemainingGoods);
+  const canCancel = loaded && loaded.realizations.length === 0;
+  const canCloseRemainder = loaded && loaded.realizations.length > 0 && canRecord;
 
   return <section aria-labelledby={`realization-${draft.id}`} className="space-y-4 rounded-2xl border border-emerald-200 bg-white p-4 text-sm text-stone-800 shadow-sm sm:p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -81,12 +97,37 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
           onClick={() => setOpen({ kind: "advances" })}>
           <Banknote className="h-4 w-4" /> Uang muka & biaya
         </Button>
+        <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-blue-700 hover:text-blue-800" disabled={!loaded || !!draft.activeRevisionId}
+          onClick={() => setOpen({ kind: "revision" })}>
+          <Edit3 className="h-4 w-4" /> Ajukan revisi
+        </Button>
+        {canCancel && (
+          <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-red-600 hover:text-red-700"
+            onClick={() => setOpen({ kind: "cancel" })}>
+            <XCircle className="h-4 w-4" /> Batalkan
+          </Button>
+        )}
+        {canCloseRemainder && (
+          <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-amber-700 hover:text-amber-800"
+            onClick={() => setOpen({ kind: "closeRemainder" })}>
+            <FileCheck className="h-4 w-4" /> Tutup sisa
+          </Button>
+        )}
         <Button type="button" size="sm" className="flex items-center gap-1.5" disabled={!canRecord}
           onClick={() => setOpen({ kind: "record" })}>
           <PlusCircle className="h-4 w-4" /> Catat realisasi
         </Button>
       </div>
     </div>
+
+    <RevisionWorkflowBanner requests={requests} proposal={draft} onDraftUpdated={(d) => { onDraftUpdated?.(d); reload(); }} />
+
+    {draft.heldAidLineIds && draft.heldAidLineIds.length > 0 && (
+      <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+        <p>Sebanyak {draft.heldAidLineIds.length} rincian bantuan sedang ditahan dari realisasi karena ada revisi aktif. Baris lainnya tetap dapat disalurkan.</p>
+      </div>
+    )}
 
     {error && <p role="alert" className="rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
 
@@ -166,5 +207,42 @@ export function ProposalRealizationBanner({ requests, draft }: { requests: Priva
       beneficiaryName={beneficiaryName(open.realization)} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {open?.kind === "advances" && <AdvancesAndExpensesModal requests={requests} proposalId={draft.id}
       isOpen onClose={() => setOpen(null)} onChanged={reload} />}
+    {loaded && open?.kind === "revision" && (
+      <ProposalRevisionModal
+        requests={requests}
+        proposal={draft}
+        realizations={loaded.realizations}
+        isOpen
+        onClose={() => setOpen(null)}
+        onProposed={(newDraft) => {
+          onDraftUpdated?.(newDraft);
+          reload();
+        }}
+      />
+    )}
+    {open?.kind === "cancel" && (
+      <ProposalCancellationModal
+        requests={requests}
+        proposal={draft}
+        isOpen
+        onClose={() => setOpen(null)}
+        onCancelled={(newDraft) => {
+          onDraftUpdated?.(newDraft);
+          reload();
+        }}
+      />
+    )}
+    {open?.kind === "closeRemainder" && (
+      <ProposalClosureModal
+        requests={requests}
+        proposal={draft}
+        isOpen
+        onClose={() => setOpen(null)}
+        onClosed={(newDraft) => {
+          onDraftUpdated?.(newDraft);
+          reload();
+        }}
+      />
+    )}
   </section>;
 }

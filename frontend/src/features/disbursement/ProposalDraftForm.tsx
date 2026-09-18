@@ -31,6 +31,8 @@ const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "
   APPROVED: { variant: "success", label: "Disetujui Lembaga" },
   REJECTED: { variant: "danger", label: "Ditolak Lembaga" },
   WITHDRAWN: { variant: "neutral", label: "Ditarik" },
+  CANCELLED: { variant: "neutral", label: "Dibatalkan" },
+  REMAINDER_CLOSED: { variant: "neutral", label: "Sisa Ditutup" },
 };
 
 export function ProposalDraftForm({
@@ -68,7 +70,9 @@ export function ProposalDraftForm({
     draft.status === "READY_FOR_DECISION" ||
     draft.status === "APPROVED" ||
     draft.status === "REJECTED" ||
-    draft.status === "WITHDRAWN";
+    draft.status === "WITHDRAWN" ||
+    draft.status === "CANCELLED" ||
+    draft.status === "REMAINDER_CLOSED";
 
   const rosterImport = useBeneficiaryImport({ requests, draft, setDraft, dirty, readOnly: isReadOnly });
 
@@ -221,7 +225,7 @@ export function ProposalDraftForm({
       )}
 
       <ProposalDecisionBanner requests={requests} draft={draft} recorded={recordedDecision} />
-      <ProposalRealizationBanner requests={requests} draft={draft} />
+      <ProposalRealizationBanner requests={requests} draft={draft} onDraftUpdated={setDraft} />
 
       {/* Recurring aid warnings banner */}
       {recurringWarnings.length > 0 && (

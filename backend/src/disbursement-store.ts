@@ -60,6 +60,12 @@ import {
   type RealizationRecord,
   type RecurringAidMatch,
   type RecurringAidWarning,
+  calculateRevisionDelta,
+  validateRevisionFloor,
+  calculateRemainderClosure,
+  type ProposalClosureRecord,
+  type ProposalRevisionRecord,
+  type ProposalRevisionDelta,
 } from "./disbursement";
 
 export type DisbursementDatabase = {
@@ -89,6 +95,11 @@ export type StoredProposalDraft = {
   examinationChecklist: ExaminationChecklist | null;
   revisionReason: string | null;
   withdrawalReason: string | null;
+  activeRevisionId: string | null;
+  heldAidLineIds: string[];
+  cancelReason: string | null;
+  closureReason: string | null;
+  remainderClosed: ProposalClosureRecord | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -104,6 +115,7 @@ export type ProposalDraftSummary = {
   status: ProposalStatus;
   submittedAt: number | null;
   examinedAt: number | null;
+  activeRevisionId: string | null;
   updatedAt: number;
 };
 
@@ -148,6 +160,56 @@ export class RealizationCapExceededError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RealizationCapExceededError";
+  }
+}
+
+export class RealizationHeldForRevisionError extends Error {
+  constructor(message = "Rincian bantuan sedang ditahan karena ada revisi pengajuan yang aktif.") {
+    super(message);
+    this.name = "RealizationHeldForRevisionError";
+  }
+}
+
+export class ProposalRevisionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProposalRevisionConflictError";
+  }
+}
+
+export class RevisionCapFloorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RevisionCapFloorError";
+  }
+}
+
+/** The revision's target version was already taken by another decision; re-read and decide again. */
+export class RevisionSupersededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RevisionSupersededError";
+  }
+}
+
+export class RevisionNotFoundError extends Error {
+  constructor(message = "Revisi pengajuan tidak ditemukan.") {
+    super(message);
+    this.name = "RevisionNotFoundError";
+  }
+}
+
+export class ProposalClosureConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProposalClosureConflictError";
+  }
+}
+
+export class ProposalCancellationConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProposalCancellationConflictError";
   }
 }
 
@@ -283,6 +345,11 @@ const draftFrom = (row: any): StoredProposalDraft => ({
   examinationChecklist: row.examination_checklist_json ? JSON.parse(row.examination_checklist_json) : null,
   revisionReason: row.revision_reason ?? null,
   withdrawalReason: row.withdrawal_reason ?? null,
+  activeRevisionId: row.active_revision_id ?? null,
+  heldAidLineIds: JSON.parse(row.held_aid_lines_json ?? "[]"),
+  cancelReason: row.cancel_reason ?? null,
+  closureReason: row.closure_reason ?? null,
+  remainderClosed: row.remainder_closed_json ? JSON.parse(row.remainder_closed_json) : null,
   createdAt: asSeconds(row.created_at),
   updatedAt: asSeconds(row.updated_at),
 });
@@ -295,6 +362,34 @@ const proposalSummaryFrom = (row: any): ProposalDraftSummary => ({
   version: Number(row.version), status: row.status || "DRAFT",
   submittedAt: row.submitted_at == null ? null : asSeconds(row.submitted_at),
   examinedAt: row.examined_at == null ? null : asSeconds(row.examined_at),
+  activeRevisionId: row.active_revision_id ?? null,
+  updatedAt: asSeconds(row.updated_at),
+});
+
+const revisionFrom = (row: any): ProposalRevisionRecord => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  institutionId: row.institution_id,
+  revisionNumber: Number(row.revision_number),
+  fromVersion: Number(row.from_version),
+  toVersion: Number(row.to_version),
+  reason: row.reason,
+  status: row.status as ProposalRevisionRecord["status"],
+  beneficiaries: JSON.parse(row.beneficiaries_json || "[]"),
+  aidLines: JSON.parse(row.aid_lines_json || "[]"),
+  delta: JSON.parse(row.delta_json || "{}"),
+  heldAidLineIds: JSON.parse(row.held_aid_line_ids_json || "[]"),
+  examinationNotes: row.examination_notes ?? null,
+  examinationChecklist: row.examination_checklist_json ? JSON.parse(row.examination_checklist_json) : null,
+  examinedBy: row.examined_by ?? null,
+  examinedByOfficerId: row.examined_by_officer_id ?? null,
+  examinedAt: row.examined_at ? asSeconds(row.examined_at) : null,
+  decisionReference: row.decision_reference ?? null,
+  decisionDate: row.decision_date ?? null,
+  rejectionReason: row.rejection_reason ?? null,
+  createdBy: row.created_by,
+  createdByOfficerId: row.created_by_officer_id ?? null,
+  createdAt: asSeconds(row.created_at),
   updatedAt: asSeconds(row.updated_at),
 });
 
@@ -646,7 +741,18 @@ async function realizationSummaryOf(tx: Executor, institutionId: string, draft: 
     SELECT amount_idr FROM disbursement_realization_expenses
     WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
   `)).map((row) => ({ amountIdr: row.amount_idr as string }));
-  return calculateProposalRealizationSummary(draft, realizations, advances, expenses);
+  return calculateProposalRealizationSummary(
+    {
+      ...draft,
+      status: draft.status,
+      heldAidLineIds: draft.heldAidLineIds,
+      activeRevisionId: draft.activeRevisionId,
+      closure: draft.remainderClosed,
+    },
+    realizations,
+    advances,
+    expenses
+  );
 }
 
 const MAX_OTP_ATTEMPTS = 5;
@@ -712,6 +818,39 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
   `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS examination_checklist_json TEXT;`,
   `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS revision_reason TEXT;`,
   `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS withdrawal_reason TEXT;`,
+  `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS active_revision_id TEXT;`,
+  `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS held_aid_lines_json TEXT NOT NULL DEFAULT '[]';`,
+  `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS cancel_reason TEXT;`,
+  `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS closure_reason TEXT;`,
+  `ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS remainder_closed_json TEXT;`,
+  `CREATE TABLE IF NOT EXISTS proposal_revisions (
+     id TEXT PRIMARY KEY,
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     revision_number INTEGER NOT NULL,
+     from_version INTEGER NOT NULL,
+     to_version INTEGER NOT NULL,
+     reason TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'SUBMITTED',
+     beneficiaries_json TEXT NOT NULL DEFAULT '[]',
+     aid_lines_json TEXT NOT NULL DEFAULT '[]',
+     delta_json TEXT NOT NULL DEFAULT '{}',
+     held_aid_line_ids_json TEXT NOT NULL DEFAULT '[]',
+     examination_notes TEXT,
+     examination_checklist_json TEXT,
+     examined_by TEXT,
+     examined_at BIGINT,
+     decision_reference TEXT,
+     decision_date TEXT,
+     rejection_reason TEXT,
+     created_by TEXT NOT NULL,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL
+   );`,
+  // Who materially composed a revised version, so a decision on it can refuse its own authors.
+  `ALTER TABLE proposal_revisions ADD COLUMN IF NOT EXISTS created_by_officer_id TEXT;`,
+  `ALTER TABLE proposal_revisions ADD COLUMN IF NOT EXISTS examined_by_officer_id TEXT;`,
+  `CREATE INDEX IF NOT EXISTS proposal_revisions_by_proposal ON proposal_revisions (institution_id, proposal_id, created_at DESC);`,
   `CREATE INDEX IF NOT EXISTS proposal_drafts_by_status ON proposal_drafts (institution_id, status, updated_at DESC);`,
   `CREATE TABLE IF NOT EXISTS proposal_documents (
      id TEXT PRIMARY KEY,
@@ -824,7 +963,11 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      created_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS proposal_decisions_by_proposal ON proposal_decisions (institution_id, proposal_id, created_at DESC);`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS proposal_decisions_one_per_version ON proposal_decisions (proposal_id, proposal_version);`,
+  // #93 allowed one decision per version. Cancellation and remainder closure are decided on the
+  // version their approval already occupies, so the invariant widens to one decision per action.
+  // Which actions may follow which is still enforced by the status guards, not by this index.
+  `DROP INDEX IF EXISTS proposal_decisions_one_per_version;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS proposal_decisions_one_per_version_action ON proposal_decisions (proposal_id, proposal_version, action);`,
   `CREATE TABLE IF NOT EXISTS proposal_decision_challenges (
      nonce TEXT PRIMARY KEY,
      proposal_id TEXT NOT NULL,
@@ -1015,6 +1158,147 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
    );`,
 ] as const;
 
+/** What cancellation and remainder closure both carry: a signed institutional decision. */
+export type ProposalTerminationInput = {
+  decisionReference: string;
+  decisionDate: string;
+  decisionDocumentId: string;
+  decisionDocumentSha256: `0x${string}`;
+  mandateId: string;
+  signature: string;
+  signerAccount: string;
+  reason: string;
+  /** An optional free-text note, kept apart from the stated reason. */
+  notes?: string | null;
+  expectedVersion: number;
+  challenge: ProposalDecisionChallenge;
+};
+
+/**
+ * Spend the challenge, then lock the proposal and confirm it is the approved version that
+ * was signed. Shared by cancellation and remainder closure, which differ only in what they
+ * then require of the realizations.
+ */
+async function lockApprovedProposalForTermination(
+  tx: { execute: (query: any) => Promise<any> },
+  institutionId: string,
+  proposalId: string,
+  input: ProposalTerminationInput,
+  now: number,
+  verb: string
+): Promise<StoredProposalDraft> {
+  const spent = rowsOf(
+    await tx.execute(sql`
+      UPDATE proposal_decision_challenges SET consumed_at = ${now}
+      WHERE nonce = ${input.challenge.nonce.toLowerCase()} AND consumed_at IS NULL
+      RETURNING nonce
+    `)
+  )[0];
+  if (!spent) throw new DecisionChallengeSpentError();
+
+  const currentRaw = rowsOf(
+    await tx.execute(sql`
+      SELECT * FROM proposal_drafts
+      WHERE id = ${proposalId} AND institution_id = ${institutionId}
+      FOR UPDATE
+    `)
+  )[0];
+  if (!currentRaw) throw new ProposalDraftConflictError(proposalId);
+  const current = draftFrom(currentRaw);
+  if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
+  if (current.status !== "APPROVED") {
+    throw new ProposalStateConflictError(
+      `Pengajuan berstatus "${current.status}". Hanya pengajuan disetujui (APPROVED) yang dapat ${verb}.`
+    );
+  }
+  return current;
+}
+
+/** The durable trail both terminations leave: draft, frozen version status, decision, history. */
+async function writeTermination(
+  tx: { execute: (query: any) => Promise<any> },
+  institutionId: string,
+  proposalId: string,
+  current: StoredProposalDraft,
+  input: ProposalTerminationInput,
+  actor: { account: string; officerId: string },
+  now: number,
+  kind: {
+    action: "CANCEL" | "CLOSE_REMAINDER";
+    nextStatus: "CANCELLED" | "REMAINDER_CLOSED";
+    revisionWithdrawalReason: string;
+    historyNote: string;
+    extraDraftColumns: any;
+  }
+): Promise<{ draft: StoredProposalDraft; decision: ProposalDecisionRecord; summary: ProposalRealizationSummary }> {
+  if (current.activeRevisionId) {
+    await tx.execute(sql`
+      UPDATE proposal_revisions SET
+        status = 'WITHDRAWN',
+        rejection_reason = ${kind.revisionWithdrawalReason},
+        updated_at = ${now}
+      WHERE id = ${current.activeRevisionId}
+    `);
+  }
+
+  const updatedRaw = rowsOf(
+    await tx.execute(sql`
+      UPDATE proposal_drafts SET
+        status = ${kind.nextStatus},
+        active_revision_id = NULL,
+        held_aid_lines_json = '[]',
+        ${kind.extraDraftColumns}
+        updated_at = ${now}
+      WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${input.expectedVersion}
+      RETURNING *
+    `)
+  )[0];
+
+  // Only the version's lifecycle status moves; its frozen data_json is never rewritten.
+  await tx.execute(sql`
+    UPDATE proposal_versions SET status = ${kind.nextStatus}
+    WHERE proposal_id = ${proposalId} AND version = ${current.version}
+  `);
+
+  const decisionRow = rowsOf(
+    await tx.execute(sql`
+      INSERT INTO proposal_decisions (
+        id, proposal_id, proposal_version, institution_id, action,
+        decision_reference, decision_date, decision_document_id, decision_document_sha256,
+        notes, rejection_reason, rights_digest, operator_officer_id, operator_account, signer_account,
+        mandate_id, signature, created_at
+      ) VALUES (
+        ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${current.version}, ${institutionId}, ${kind.action},
+        ${input.decisionReference}, ${input.decisionDate},
+        ${input.decisionDocumentId}, ${input.decisionDocumentSha256},
+        ${input.notes ?? null}, ${input.reason}, ${input.challenge.rightsDigest}, ${actor.officerId},
+        ${actor.account.toLowerCase()}, ${input.signerAccount.toLowerCase()},
+        ${input.mandateId}, ${input.signature}, ${now}
+      )
+      RETURNING *
+    `)
+  )[0];
+
+  await tx.execute(sql`
+    INSERT INTO proposal_history (
+      proposal_id, institution_id, version, from_status, to_status, action,
+      actor_account, actor_officer_id, reason, notes, occurred_at
+    ) VALUES (
+      ${proposalId}, ${institutionId}, ${current.version}, ${current.status},
+      ${kind.nextStatus}, ${kind.action}, ${actor.account.toLowerCase()}, ${actor.officerId},
+      ${input.reason}, ${kind.historyNote},
+      ${now}
+    )
+  `);
+
+  const updatedDraft = draftFrom(updatedRaw);
+  return {
+    draft: updatedDraft,
+    decision: decisionRecordFrom(decisionRow),
+    summary: await realizationSummaryOf(tx, institutionId, updatedDraft),
+  };
+}
+
 export function createDisbursementStore(db: DisbursementDatabase) {
   return {
     async ensureSchema(): Promise<void> {
@@ -1166,29 +1450,17 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       const rows = rowsOf(
         programId
           ? await db.execute(sql`
-              SELECT id, program_id, origin_of_request, purpose, beneficiaries_json, issues_json, version, status, submitted_at, examined_at, updated_at
+              SELECT id, program_id, origin_of_request, purpose, beneficiaries_json, issues_json, version, status, submitted_at, examined_at, active_revision_id, updated_at
               FROM proposal_drafts WHERE institution_id = ${institutionId} AND program_id = ${programId}
               ORDER BY updated_at DESC, id DESC
             `)
           : await db.execute(sql`
-              SELECT id, program_id, origin_of_request, purpose, beneficiaries_json, issues_json, version, status, submitted_at, examined_at, updated_at
+              SELECT id, program_id, origin_of_request, purpose, beneficiaries_json, issues_json, version, status, submitted_at, examined_at, active_revision_id, updated_at
               FROM proposal_drafts WHERE institution_id = ${institutionId}
               ORDER BY updated_at DESC, id DESC
             `)
       );
-      return rows.map((row) => ({
-        id: row.id,
-        programId: row.program_id ?? null,
-        originOfRequest: row.origin_of_request,
-        purpose: row.purpose,
-        beneficiaryCount: (JSON.parse(row.beneficiaries_json || "[]") as unknown[]).length,
-        issueCount: (JSON.parse(row.issues_json || "[]") as unknown[]).length,
-        version: Number(row.version),
-        status: (row.status as ProposalStatus) || "DRAFT",
-        submittedAt: row.submitted_at ? asSeconds(row.submitted_at) : null,
-        examinedAt: row.examined_at ? asSeconds(row.examined_at) : null,
-        updatedAt: asSeconds(row.updated_at),
-      }));
+      return rows.map(proposalSummaryFrom);
     },
 
     async deleteProposalDraft(institutionId: string, id: string, expectedVersion: number,
@@ -2016,11 +2288,16 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       institutionId: string,
       proposalId: string
     ): Promise<ProposalDecisionRecord | null> {
+      // A cancelled or remainder-closed proposal carries two decisions on the same version:
+      // the approval it rests on and the termination that ended it. The termination is the
+      // later one, and timestamps alone cannot order them when both land in the same second.
       const row = rowsOf(
         await db.execute(sql`
           SELECT * FROM proposal_decisions
           WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
-          ORDER BY created_at DESC
+          ORDER BY proposal_version DESC,
+                   CASE WHEN action IN ('CANCEL', 'CLOSE_REMAINDER') THEN 1 ELSE 0 END DESC,
+                   created_at DESC
           LIMIT 1
         `)
       )[0];
@@ -2077,6 +2354,15 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           );
         }
         if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
+
+        const heldSet = new Set(current.heldAidLineIds ?? []);
+        for (const item of input.items) {
+          if (heldSet.has(item.aidLineId)) {
+            throw new RealizationHeldForRevisionError(
+              `Rincian bantuan '${item.aidLineId}' sedang ditahan karena ada revisi pengajuan yang aktif.`
+            );
+          }
+        }
 
         const lineCumulativeIdr = new Map<string, bigint>();
         const lineCumulativeQty = new Map<string, string>();
@@ -2787,6 +3073,762 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         totalPendingIdr: total?.toString() ?? null,
         goods: [...goods.values()].sort((a, b) => a.aidType.localeCompare(b.aidType) || a.unit.localeCompare(b.unit)),
       }));
+    },
+
+    // -----------------------------------------------------------------------
+    // Revisi pengajuan (ticket #96)
+    // -----------------------------------------------------------------------
+
+    async proposeRevision(
+      institutionId: string,
+      proposalId: string,
+      input: {
+        reason: string;
+        beneficiaries: Beneficiary[];
+        aidLines: AidLine[];
+        expectedVersion: number;
+      },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const proposalRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!proposalRow) throw new ProposalDraftConflictError(proposalId);
+        const current = draftFrom(proposalRow);
+
+        if (current.version !== input.expectedVersion) throw new ProposalDraftConflictError(proposalId);
+        if (current.status !== "APPROVED") {
+          throw new ProposalStateConflictError(
+            `Pengajuan berstatus "${current.status}". Revisi hanya dapat diajukan pada pengajuan yang telah disetujui (APPROVED).`
+          );
+        }
+
+        if (current.activeRevisionId) {
+          throw new ProposalRevisionConflictError(
+            "Terdapat revisi yang sedang aktif pada pengajuan ini. Selesaikan atau tarik revisi tersebut sebelum mengajukan revisi baru."
+          );
+        }
+
+        const realizations = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM disbursement_realizations
+            WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          `)
+        ).map(realizationRecordFrom);
+
+        const floorValidation = validateRevisionFloor(current.aidLines, input.aidLines, realizations);
+        if (!floorValidation.ok) {
+          throw new RevisionCapFloorError(floorValidation.error);
+        }
+
+        const delta = calculateRevisionDelta(
+          { beneficiaries: current.beneficiaries, aidLines: current.aidLines },
+          { beneficiaries: input.beneficiaries, aidLines: input.aidLines }
+        );
+
+        const countRow = rowsOf(
+          await tx.execute(sql`
+            SELECT COUNT(*)::integer as count FROM proposal_revisions
+            WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          `)
+        )[0];
+        const revisionNumber = Number(countRow?.count ?? 0) + 1;
+        const revisionId = `rev-${crypto.randomUUID()}`;
+        const targetVersion = current.version + 1;
+
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO proposal_revisions (
+              id, proposal_id, institution_id, revision_number, from_version, to_version,
+              reason, status, beneficiaries_json, aid_lines_json, delta_json, held_aid_line_ids_json,
+              created_by, created_by_officer_id, created_at, updated_at
+            ) VALUES (
+              ${revisionId}, ${proposalId}, ${institutionId}, ${revisionNumber}, ${current.version}, ${targetVersion},
+              ${input.reason}, 'SUBMITTED', ${JSON.stringify(input.beneficiaries)}, ${JSON.stringify(input.aidLines)},
+              ${JSON.stringify(delta)}, ${JSON.stringify(delta.heldAidLineIds)},
+              ${actor.account.toLowerCase()}, ${actor.officerId}, ${now}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          UPDATE proposal_drafts SET
+            active_revision_id = ${revisionId},
+            held_aid_lines_json = ${JSON.stringify(delta.heldAidLineIds)},
+            updated_at = ${now}
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO proposal_history (
+            proposal_id, institution_id, version, from_status, to_status, action,
+            actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${proposalId}, ${institutionId}, ${current.version}, ${current.status},
+            ${current.status}, 'PROPOSE_REVISION', ${actor.account.toLowerCase()}, ${actor.officerId},
+            ${input.reason}, ${`Pengajuan revisi diajukan (target versi: ${targetVersion})`},
+            ${now}
+          )
+        `);
+
+        return revisionFrom(revRow);
+      });
+    },
+
+    async getProposalRevisions(institutionId: string, proposalId: string): Promise<ProposalRevisionRecord[]> {
+      const rows = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM proposal_revisions
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          ORDER BY revision_number ASC, created_at ASC
+        `)
+      );
+      return rows.map(revisionFrom);
+    },
+
+    async getProposalRevision(institutionId: string, proposalId: string, revisionId: string): Promise<ProposalRevisionRecord | null> {
+      const row = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM proposal_revisions
+          WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND id = ${revisionId}
+        `)
+      )[0];
+      return row ? revisionFrom(row) : null;
+    },
+
+    async getActiveProposalRevision(institutionId: string, proposalId: string): Promise<ProposalRevisionRecord | null> {
+      const draftRow = rowsOf(
+        await db.execute(sql`
+          SELECT active_revision_id FROM proposal_drafts
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+        `)
+      )[0];
+      if (!draftRow || !draftRow.active_revision_id) return null;
+      return this.getProposalRevision(institutionId, proposalId, draftRow.active_revision_id);
+    },
+
+    async withdrawRevision(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      reason: string,
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const proposalRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!proposalRow) throw new ProposalDraftConflictError(proposalId);
+        const currentDraft = draftFrom(proposalRow);
+
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+
+        if (rev.status === "APPROVED" || rev.status === "REJECTED" || rev.status === "WITHDRAWN") {
+          throw new ProposalStateConflictError(`Revisi dengan status "${rev.status}" tidak dapat ditarik.`);
+        }
+
+        const updatedRevRow = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_revisions SET
+              status = 'WITHDRAWN',
+              rejection_reason = ${reason},
+              updated_at = ${now}
+            WHERE id = ${revisionId}
+            RETURNING *
+          `)
+        )[0];
+
+        if (currentDraft.activeRevisionId === revisionId) {
+          await tx.execute(sql`
+            UPDATE proposal_drafts SET
+              active_revision_id = NULL,
+              held_aid_lines_json = '[]',
+              updated_at = ${now}
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+          `);
+        }
+
+        await tx.execute(sql`
+          INSERT INTO proposal_history (
+            proposal_id, institution_id, version, from_status, to_status, action,
+            actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${proposalId}, ${institutionId}, ${currentDraft.version}, ${currentDraft.status},
+            ${currentDraft.status}, 'WITHDRAW_REVISION', ${actor.account.toLowerCase()}, ${actor.officerId},
+            ${reason}, ${`Revisi ditarik (${revisionId})`},
+            ${now}
+          )
+        `);
+
+        return revisionFrom(updatedRevRow);
+      });
+    },
+
+    async startRevisionExamination(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+        if (rev.status !== "SUBMITTED" && rev.status !== "REVISION_REQUIRED") {
+          throw new ProposalStateConflictError(`Revisi berstatus "${rev.status}" tidak dapat diperiksa.`);
+        }
+
+        const updated = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_revisions SET
+              status = 'UNDER_EXAMINATION',
+              examined_by = ${actor.account.toLowerCase()},
+              examined_by_officer_id = ${actor.officerId},
+              examined_at = ${now},
+              updated_at = ${now}
+            WHERE id = ${revisionId}
+            RETURNING *
+          `)
+        )[0];
+        return revisionFrom(updated);
+      });
+    },
+
+    async returnRevisionForRevision(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      input: { reason: string; notes?: string | null; checklist?: ExaminationChecklist | null },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+        if (rev.status !== "UNDER_EXAMINATION") {
+          throw new ProposalStateConflictError(`Revisi berstatus "${rev.status}" tidak sedang diperiksa.`);
+        }
+
+        const updated = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_revisions SET
+              status = 'REVISION_REQUIRED',
+              rejection_reason = ${input.reason},
+              examination_notes = ${input.notes ?? null},
+              examination_checklist_json = ${input.checklist ? JSON.stringify(input.checklist) : null},
+              updated_at = ${now}
+            WHERE id = ${revisionId}
+            RETURNING *
+          `)
+        )[0];
+        return revisionFrom(updated);
+      });
+    },
+
+    /**
+     * The amil's answer to a returned revision: corrected content on the same revision,
+     * back in the examiner's queue. The proposal's in-force version is never touched here.
+     */
+    async amendRevision(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      input: { reason: string; beneficiaries: Beneficiary[]; aidLines: AidLine[] },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const proposalRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!proposalRow) throw new ProposalDraftConflictError(proposalId);
+        const current = draftFrom(proposalRow);
+
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+        if (rev.status !== "REVISION_REQUIRED") {
+          throw new ProposalStateConflictError(
+            `Revisi berstatus "${rev.status}"; hanya revisi yang dikembalikan (REVISION_REQUIRED) yang dapat diperbaiki.`
+          );
+        }
+
+        const realizations = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM disbursement_realizations
+            WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          `)
+        ).map(realizationRecordFrom);
+
+        const floorValidation = validateRevisionFloor(current.aidLines, input.aidLines, realizations);
+        if (!floorValidation.ok) throw new RevisionCapFloorError(floorValidation.error);
+
+        const delta = calculateRevisionDelta(
+          { beneficiaries: current.beneficiaries, aidLines: current.aidLines },
+          { beneficiaries: input.beneficiaries, aidLines: input.aidLines }
+        );
+
+        const updated = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_revisions SET
+              status = 'SUBMITTED',
+              reason = ${input.reason},
+              beneficiaries_json = ${JSON.stringify(input.beneficiaries)},
+              aid_lines_json = ${JSON.stringify(input.aidLines)},
+              delta_json = ${JSON.stringify(delta)},
+              held_aid_line_ids_json = ${JSON.stringify(delta.heldAidLineIds)},
+              examination_notes = NULL,
+              examination_checklist_json = NULL,
+              examined_by = NULL,
+              examined_by_officer_id = NULL,
+              examined_at = NULL,
+              updated_at = ${now}
+            WHERE id = ${revisionId}
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          UPDATE proposal_drafts SET
+            held_aid_lines_json = ${JSON.stringify(delta.heldAidLineIds)},
+            updated_at = ${now}
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO proposal_history (
+            proposal_id, institution_id, version, from_status, to_status, action,
+            actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${proposalId}, ${institutionId}, ${current.version}, ${current.status},
+            ${current.status}, 'AMEND_REVISION', ${actor.account.toLowerCase()}, ${actor.officerId},
+            ${input.reason}, ${`Perbaikan revisi #${rev.revisionNumber} setelah dikembalikan`},
+            ${now}
+          )
+        `);
+
+        return revisionFrom(updated);
+      });
+    },
+
+    async markRevisionReadyForApproval(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      input: { notes?: string | null; checklist?: ExaminationChecklist | null },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<ProposalRevisionRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+        if (rev.status !== "UNDER_EXAMINATION") {
+          throw new ProposalStateConflictError(`Revisi berstatus "${rev.status}" tidak sedang diperiksa.`);
+        }
+
+        const updated = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_revisions SET
+              status = 'READY_FOR_DECISION',
+              examination_notes = ${input.notes ?? null},
+              examination_checklist_json = ${input.checklist ? JSON.stringify(input.checklist) : null},
+              updated_at = ${now}
+            WHERE id = ${revisionId}
+            RETURNING *
+          `)
+        )[0];
+        return revisionFrom(updated);
+      });
+    },
+
+    async recordRevisionDecision(
+      institutionId: string,
+      proposalId: string,
+      revisionId: string,
+      decision: {
+        action: "APPROVE" | "REJECT";
+        decisionReference: string;
+        decisionDate: string;
+        decisionDocumentId: string;
+        decisionDocumentSha256: `0x${string}`;
+        notes?: string | null;
+        rejectionReason?: string | null;
+        mandateId: string;
+        signature: string;
+        signerAccount: string;
+        challenge: ProposalDecisionChallenge;
+      },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ revision: ProposalRevisionRecord; draft: StoredProposalDraft }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const spent = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_decision_challenges SET consumed_at = ${now}
+            WHERE nonce = ${decision.challenge.nonce.toLowerCase()} AND consumed_at IS NULL
+            RETURNING nonce
+          `)
+        )[0];
+        if (!spent) throw new DecisionChallengeSpentError();
+
+        const proposalRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!proposalRow) throw new ProposalDraftConflictError(proposalId);
+        const current = draftFrom(proposalRow);
+
+        const revRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM proposal_revisions
+            WHERE id = ${revisionId} AND proposal_id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!revRow) throw new RevisionNotFoundError();
+        const rev = revisionFrom(revRow);
+
+        if (rev.status !== "READY_FOR_DECISION") {
+          throw new ProposalStateConflictError(`Revisi berstatus "${rev.status}" belum siap disahkan.`);
+        }
+
+        if (decision.action === "APPROVE") {
+          const realizations = rowsOf(
+            await tx.execute(sql`
+              SELECT * FROM disbursement_realizations
+              WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+            `)
+          ).map(realizationRecordFrom);
+          const floorCheck = validateRevisionFloor(current.aidLines, rev.aidLines, realizations);
+          if (!floorCheck.ok) {
+            throw new RevisionCapFloorError(floorCheck.error);
+          }
+
+          const targetVersion = rev.toVersion;
+
+          // A frozen version snapshot is never rewritten. If this target already exists, another
+          // revision reached it first; the caller re-reads and decides again against the new version.
+          const occupied = rowsOf(
+            await tx.execute(sql`
+              SELECT 1 FROM proposal_versions
+              WHERE proposal_id = ${proposalId} AND version = ${targetVersion}
+            `)
+          )[0];
+          if (occupied) {
+            throw new RevisionSupersededError(
+              `Versi ${targetVersion} sudah terisi oleh keputusan lain. Baca ulang pengajuan sebelum mengesahkan revisi ini.`
+            );
+          }
+
+          const updatedRev = rowsOf(
+            await tx.execute(sql`
+              UPDATE proposal_revisions SET
+                status = 'APPROVED',
+                decision_reference = ${decision.decisionReference},
+                decision_date = ${decision.decisionDate},
+                updated_at = ${now}
+              WHERE id = ${revisionId}
+              RETURNING *
+            `)
+          )[0];
+
+          const resolvedAidLines: AidLine[] = rev.aidLines.map((line) => {
+            if (line.value.kind === "MONEY") {
+              const value = line.value.amountApprovedIdr ?? line.value.amountRequestedIdr;
+              return { ...line, value: { ...line.value, amountApprovedIdr: value } };
+            } else {
+              const value = line.value.quantityApproved ?? line.value.quantityRequested;
+              return { ...line, value: { ...line.value, quantityApproved: value } };
+            }
+          });
+
+          const updatedDraftRaw = rowsOf(
+            await tx.execute(sql`
+              UPDATE proposal_drafts SET
+                version = ${targetVersion},
+                beneficiaries_json = ${JSON.stringify(rev.beneficiaries)},
+                aid_lines_json = ${JSON.stringify(resolvedAidLines)},
+                active_revision_id = NULL,
+                held_aid_lines_json = '[]',
+                updated_at = ${now}
+              WHERE id = ${proposalId} AND institution_id = ${institutionId}
+              RETURNING *
+            `)
+          )[0];
+
+          await tx.execute(sql`
+            INSERT INTO proposal_versions (
+              proposal_id, version, institution_id, status, data_json,
+              documents_json, recurring_warnings_json, submitted_by, submitted_at,
+              examination_json, created_at
+            ) VALUES (
+              ${proposalId}, ${targetVersion}, ${institutionId}, 'APPROVED',
+              ${JSON.stringify({
+                beneficiaries: rev.beneficiaries,
+                aidLines: resolvedAidLines,
+                programId: current.programId,
+                originOfRequest: current.originOfRequest,
+                purpose: current.purpose,
+                aidPeriod: current.aidPeriod,
+                personInCharge: current.personInCharge,
+              })},
+              '[]', '[]', ${rev.createdBy}, ${rev.createdAt},
+              ${JSON.stringify({
+                examinedBy: rev.examinedBy,
+                examinedAt: rev.examinedAt,
+                examinationNotes: rev.examinationNotes,
+                checklist: rev.examinationChecklist,
+              })},
+              ${now}
+            )
+          `);
+
+          await tx.execute(sql`
+            INSERT INTO proposal_decisions (
+              id, proposal_id, proposal_version, institution_id, action,
+              decision_reference, decision_date, decision_document_id, decision_document_sha256,
+              notes, rejection_reason, rights_digest, operator_officer_id, operator_account, signer_account,
+              mandate_id, signature, created_at
+            ) VALUES (
+              ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${targetVersion}, ${institutionId}, 'APPROVE',
+              ${decision.decisionReference}, ${decision.decisionDate},
+              ${decision.decisionDocumentId}, ${decision.decisionDocumentSha256},
+              ${decision.notes ?? null}, NULL, ${decision.challenge.rightsDigest},
+              ${actor.officerId}, ${actor.account.toLowerCase()}, ${decision.signerAccount.toLowerCase()},
+              ${decision.mandateId}, ${decision.signature}, ${now}
+            )
+          `);
+
+          await tx.execute(sql`
+            INSERT INTO proposal_history (
+              proposal_id, institution_id, version, from_status, to_status, action,
+              actor_account, actor_officer_id, reason, notes, occurred_at
+            ) VALUES (
+              ${proposalId}, ${institutionId}, ${targetVersion}, 'APPROVED',
+              'APPROVED', 'APPROVE_REVISION', ${actor.account.toLowerCase()}, ${actor.officerId},
+              ${decision.notes ?? "Revisi disetujui"},
+              ${`Revisi #${rev.revisionNumber} disetujui (SK: ${decision.decisionReference})`},
+              ${now}
+            )
+          `);
+
+          return {
+            revision: revisionFrom(updatedRev),
+            draft: draftFrom(updatedDraftRaw),
+          };
+        } else {
+          const updatedRev = rowsOf(
+            await tx.execute(sql`
+              UPDATE proposal_revisions SET
+                status = 'REJECTED',
+                rejection_reason = ${decision.rejectionReason ?? "Ditolak"},
+                decision_reference = ${decision.decisionReference},
+                decision_date = ${decision.decisionDate},
+                updated_at = ${now}
+              WHERE id = ${revisionId}
+              RETURNING *
+            `)
+          )[0];
+
+          const updatedDraftRaw = rowsOf(
+            await tx.execute(sql`
+              UPDATE proposal_drafts SET
+                active_revision_id = NULL,
+                held_aid_lines_json = '[]',
+                updated_at = ${now}
+              WHERE id = ${proposalId} AND institution_id = ${institutionId}
+              RETURNING *
+            `)
+          )[0];
+
+          await tx.execute(sql`
+            INSERT INTO proposal_history (
+              proposal_id, institution_id, version, from_status, to_status, action,
+              actor_account, actor_officer_id, reason, notes, occurred_at
+            ) VALUES (
+              ${proposalId}, ${institutionId}, ${current.version}, 'APPROVED',
+              'APPROVED', 'REJECT_REVISION', ${actor.account.toLowerCase()}, ${actor.officerId},
+              ${decision.rejectionReason ?? "Revisi ditolak"},
+              ${`Revisi #${rev.revisionNumber} ditolak (SK: ${decision.decisionReference})`},
+              ${now}
+            )
+          `);
+
+          return {
+            revision: revisionFrom(updatedRev),
+            draft: draftFrom(updatedDraftRaw),
+          };
+        }
+      });
+    },
+
+    // -----------------------------------------------------------------------
+    // Pembatalan pengajuan sebelum realisasi (ticket #96)
+    // -----------------------------------------------------------------------
+
+    async cancelProposal(
+      institutionId: string,
+      proposalId: string,
+      input: ProposalTerminationInput,
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ draft: StoredProposalDraft; decision: ProposalDecisionRecord; summary: ProposalRealizationSummary }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const current = await lockApprovedProposalForTermination(tx, institutionId, proposalId, input, now, "dibatalkan");
+
+        const realizationCount = rowsOf(
+          await tx.execute(sql`
+            SELECT COUNT(*)::integer as count FROM disbursement_realizations
+            WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          `)
+        )[0];
+        if (Number(realizationCount?.count ?? 0) > 0) {
+          throw new ProposalCancellationConflictError(
+            "Pengajuan yang sudah memiliki realisasi tidak dapat dibatalkan. Gunakan penutupan sisa pengajuan."
+          );
+        }
+
+        return writeTermination(tx, institutionId, proposalId, current, input, actor, now, {
+          action: "CANCEL",
+          nextStatus: "CANCELLED",
+          revisionWithdrawalReason: "Pengajuan induk dibatalkan.",
+          historyNote: `Pengajuan dibatalkan (SK: ${input.decisionReference})`,
+          extraDraftColumns: sql`cancel_reason = ${input.reason},`,
+        });
+      });
+    },
+
+    // -----------------------------------------------------------------------
+    // Penutupan sisa pengajuan setelah realisasi (ticket #96)
+    // -----------------------------------------------------------------------
+
+    async closeProposalRemainder(
+      institutionId: string,
+      proposalId: string,
+      input: ProposalTerminationInput,
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{
+      draft: StoredProposalDraft;
+      decision: ProposalDecisionRecord;
+      closure: ProposalClosureRecord;
+      summary: ProposalRealizationSummary;
+    }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const current = await lockApprovedProposalForTermination(tx, institutionId, proposalId, input, now, "ditutup sisanya");
+
+        const realizations = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM disbursement_realizations
+            WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+            ORDER BY recorded_at ASC, id ASC
+          `)
+        ).map(realizationRecordFrom);
+
+        if (realizations.length === 0) {
+          throw new ProposalClosureConflictError(
+            "Pengajuan belum memiliki realisasi. Gunakan pembatalan pengajuan, bukan penutupan sisa."
+          );
+        }
+
+        const closure = calculateRemainderClosure(current, realizations, {
+          institutionId,
+          decisionReference: input.decisionReference,
+          decisionDate: input.decisionDate,
+          decisionDocumentId: input.decisionDocumentId,
+          decisionDocumentSha256: input.decisionDocumentSha256,
+          reason: input.reason,
+          operatorOfficerId: actor.officerId,
+          operatorAccount: actor.account.toLowerCase(),
+          signerAccount: input.signerAccount.toLowerCase(),
+          now,
+        });
+
+        const hasRemaining =
+          BigInt(closure.totalUnrealizedRemainderIdr) > 0n ||
+          closure.goodsUnitRemainders.some((g) => compareDecimalStrings(g.totalUnrealizedRemainder, "0") > 0);
+        if (!hasRemaining) {
+          throw new ProposalClosureConflictError(
+            "Pengajuan tidak memiliki sisa bantuan yang dapat ditutup karena seluruh hak telah terealisasi penuh."
+          );
+        }
+
+        const written = await writeTermination(tx, institutionId, proposalId, current, input, actor, now, {
+          action: "CLOSE_REMAINDER",
+          nextStatus: "REMAINDER_CLOSED",
+          revisionWithdrawalReason: "Pengajuan induk ditutup sisanya.",
+          historyNote: `Penutupan sisa bantuan (SK: ${input.decisionReference})`,
+          extraDraftColumns: sql`
+            closure_reason = ${input.reason},
+            remainder_closed_json = ${JSON.stringify(closure)},
+          `,
+        });
+
+        return { ...written, closure };
+      });
     },
   };
 }

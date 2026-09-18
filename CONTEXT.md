@@ -137,9 +137,13 @@ _Avoid_: Mustahik, hanya karena menerima transfer.
 Perubahan penerima atau rincian hak bantuan setelah pengajuan disetujui, dengan alasan dan persetujuan kembali serta riwayat sebelumnya yang tetap tersimpan.
 _Avoid_: Menimpa realisasi yang sudah terjadi; koreksi laporan periode.
 
+**Pembatalan pengajuan**:
+Keputusan lembaga beserta alasan untuk mengakhiri pengajuan yang telah disetujui tetapi belum memiliki realisasi sama sekali.
+_Avoid_: [[Penutupan sisa bantuan]] pada pengajuan yang sudah sebagian tersalur; penarikan revisi oleh amil.
+
 **Penutupan sisa bantuan**:
 Keputusan lembaga beserta alasan untuk mengakhiri bagian bantuan yang disetujui tetapi tidak jadi disalurkan.
-_Avoid_: Bukti penyaluran; pemindahan bantuan ke penerima lain tanpa persetujuan.
+_Avoid_: Bukti penyaluran; pemindahan bantuan ke penerima lain tanpa persetujuan; refund atau pengalihan alokasi, yang mengikuti siklus kontribusi.
 
 **Persetujuan DPS**:
 Persetujuan syariah atas pengajuan penyaluran oleh DPS yang berwenang.
