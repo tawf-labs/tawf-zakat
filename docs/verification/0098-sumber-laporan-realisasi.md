@@ -52,14 +52,13 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
 
 ## Batas yang belum dikerjakan pada tiket ini
 
-- Integrasi registry (pencatatan/penerbitan onchain dan atestasi versi lama) untuk paket bersumber realisasi belum diuji dengan harness Anvil lokal. Jalur koreksi-atestasinya generik dan diuji di `registry_api.test.ts`.
 - Hubungan realisasi ke kegiatan penyaluran (#103) belum dibekukan dalam provenance.
 - Penelusuran donatur dan pointer ke versi sertifikat NFT (amandemen pilot) belum ada.
 - Status konfirmasi/sengketa tidak direkonstruksi per cut-off, karena kolom status diperbarui di tempat. Status diambil saat pembekuan dan dinyatakan demikian.
 
 ## Pengujian yang dijalankan
 
-- `bun test test/disbursement_realization_source_api.test.ts` dengan `REGISTRY_BROWSER_MODULE`/`REGISTRY_BROWSER_EXECUTABLE`: **16 pass, 0 fail**. Cakupan:
+- `bun test test/disbursement_realization_source_api.test.ts` dengan `REGISTRY_BROWSER_MODULE`/`REGISTRY_BROWSER_EXECUTABLE`: **17 pass, 0 fail**. Membutuhkan `anvil` dan artefak `sc/out` (port 18582). Cakupan:
   - Cut-off → belum terperiksa.
   - Revisi pengajuan sesudah freeze.
   - Rekap `NOT_AVAILABLE`.
@@ -71,7 +70,12 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
   - Isolasi: officer lembaga lain mendapat 404 untuk drill-down dan berkas provenance; tanpa sesi mendapat 401.
   - Integritas: berkas provenance yang isinya diganti atau dihapus dari penyimpanan terenkripsi dinyatakan `FAILED` di `unreadable`, bukan rincian kosong.
   - Koreksi laporan: paket laporan v2 dari snapshot baru merujuk v1 sebagai pendahulu (preview koreksi menampilkan digest v1). Digest/angka v1 tidak berubah, dan drill-down sumber v1 tetap memuat data sebelum realisasi susulan dan revisi nama.
+  - Registry lokal (Anvil + `ReportEvidenceRegistry`, ABI tidak diubah):
+    - Laporan v1 dari sumber realisasi terbit dengan dua pengesahan (lembaga + validator) dan diatestasi auditor bermandat.
+    - Sesudah realisasi susulan dan revisi nama penerima, koreksi v2 dari snapshot realisasi baru terbit dengan v1 sebagai pendahulu.
+    - v1 tetap `PUBLISHED`, `DIGANTIKAN_KOREKSI`, dan atestasinya tetap satu entri miliknya. v2 `NOT_EXAMINED`.
+    - Paket pemeriksaan v1 lolos `verifyExamination` terhadap chain lokal, dan berkas provenance realisasi di dalamnya `AVAILABLE` dengan isi lama ("Pak Arif").
   - Unit mapper: jenis dana tak dikenal, nilai rusak, versi hilang, pemetaan INFAK, uang muka/beban di luar cut-off, dokumen sesudah cut-off.
   - Smoke browser laptop + ponsel: mode realisasi di form; realisasi → paket bukti → versi laporan beku ("realisasi-smoke · versi 1"); revisi nama penerima pada pengajuan; drill-down sumber lama tetap menampilkan nama dan versi pengajuan saat dibekukan; sengketa sesudah freeze hanya muncul di kolom status terkini.
-- Regresi: `disbursement_realization_api` 20, `disbursement_realization_goods_api` 18, `evidence_api` 58, `evidence_drafts_api` 20, `evidence_internal_usdc_api` 13, `evidence_source` 19, `period_report_api` 15 — semua pass.
+- Regresi: `registry_api` 47 (7 skip opt-in browser), `disbursement_realization_api` 20, `disbursement_realization_goods_api` 18, `evidence_api` 58, `evidence_drafts_api` 20, `evidence_internal_usdc_api` 13, `evidence_source` 19, `period_report_api` 15 — semua pass.
 - `cd frontend && bun run build`: berhasil.

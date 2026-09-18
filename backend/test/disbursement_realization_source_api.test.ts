@@ -18,7 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Hex } from "viem";
+import { createPublicClient, createWalletClient, http, type Hex } from "viem";
+import { foundry } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
@@ -35,6 +36,11 @@ import {
   type RealizationItemData,
 } from "../src/realization-source";
 import { PROVENANCE_FILE_NAMES } from "../../shared/realization-provenance";
+import { reportRegistryAbi } from "../../shared/report-registry-abi";
+import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
+import { createRegistryStore } from "../src/registry-store";
+import { createRegistryChain } from "../src/registry-chain";
+import { createReportEndorsement } from "../src/report-endorsement";
 
 const BASE = "http://localhost:3001/api/workspace";
 const EVIDENCE = "http://localhost:3001/api/evidence";
@@ -299,7 +305,10 @@ async function prepareApprovedProposal(options?: {
   return { draft: approvedDraft, programId, amilToken, examinerToken, approverToken, adminToken };
 }
 
-function configureRuntime(disbursementStore: DisbursementStore) {
+function configureRuntime(
+  disbursementStore: DisbursementStore,
+  registry?: NonNullable<Parameters<typeof configureWorkspace>[0]["registry"]>
+) {
   configureWorkspace({
     store,
     disbursement: disbursementStore,
@@ -308,11 +317,12 @@ function configureRuntime(disbursementStore: DisbursementStore) {
     now: () => clock,
     sessionTtlSeconds: 7200,
     challengeTtlSeconds: 300,
-    ethCall: async () => "0x",
+    ethCall: registry ? registry.chain.accountSignatureCall : async () => "0x",
+    ...(registry ? { registry } : {}),
   });
 }
 
-const pastedClaim = (amount: string) => ({
+const pastedClaim = (amount: string, scope: { scopeUnit: string; scopeLevel: string; cutOff: string } | null = null) => ({
   manifest: {
     label: "Klaim Buku Besar",
     origin: "PASTE",
@@ -326,6 +336,7 @@ const pastedClaim = (amount: string) => ({
     format: "baris-ledger",
     mappingVersion: "1",
     transactionDetail: "PRESENT",
+    ...(scope ?? {}),
   },
   status: "READ",
   rows: [{ key: "klaim-1", bucket: "ZAKAT", balanceSheet: "ON", value: { amount, unit: "IDR" } }],
@@ -1588,4 +1599,220 @@ describe("buildDisbursementRealizationSide (Issue #98)", () => {
     });
     expect(provenance.realizations[0]!.documents.map((d) => d.id)).toEqual(["early"]);
   });
+});
+
+// ---- Registry lokal: laporan dari sumber realisasi diterbitkan, diatestasi, lalu dikoreksi ----
+
+describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
+  // Published local Anvil keys. This suite never accepts a network URL from the environment.
+  const deployer = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
+  const relayerKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
+  const validatorKey = `0x${"0".repeat(60)}5678` as Hex;
+  const validator = privateKeyToAccount(validatorKey);
+  const auditor = privateKeyToAccount(`0x${"0".repeat(60)}9abc` as Hex);
+  const rpcUrl = "http://127.0.0.1:18582";
+  const rpc = createPublicClient({ chain: foundry, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
+  const wallet = createWalletClient({ account: deployer, chain: foundry, transport: http(rpcUrl) });
+  let node: ReturnType<typeof Bun.spawn> | null = null;
+  let registry: Hex;
+  let chain: ReturnType<typeof createRegistryChain>;
+
+  const api = (path: string) => `http://localhost:3001/api/${path}`;
+  const write = async (functionName: string, args: readonly unknown[]) =>
+    rpc.waitForTransactionReceipt({
+      hash: await wallet.writeContract({ address: registry, abi: reportRegistryAbi, functionName, args } as any),
+    });
+
+  beforeAll(async () => {
+    let occupied = false;
+    try {
+      await rpc.getChainId();
+      occupied = true;
+    } catch {
+      /* The isolated fixture must own this port. */
+    }
+    if (occupied) throw new Error("Port 18582 sudah digunakan; hentikan fixture Anvil lama sebelum menjalankan suite.");
+    node = Bun.spawn(["anvil", "--host", "127.0.0.1", "--port", "18582", "--silent"], { stdout: "ignore", stderr: "pipe" });
+    for (let i = 0; i < 50; i++) {
+      try {
+        await rpc.getChainId();
+        break;
+      } catch {
+        await Bun.sleep(100);
+      }
+    }
+    const artifact = await Bun.file(new URL("../../sc/out/ReportEvidenceRegistry.sol/ReportEvidenceRegistry.json", import.meta.url)).json();
+    const deployment = await wallet.deployContract({ abi: reportRegistryAbi, bytecode: artifact.bytecode.object, args: [deployer.address] });
+    registry = (await rpc.waitForTransactionReceipt({ hash: deployment })).contractAddress!;
+    await write("setValidator", [validator.address, true]);
+    await write("enrollInstitution", [SINAR, deployer.address]);
+    await write("setSignatory", [SINAR, amilSinar.address, true]);
+    await write("setAuditor", [SINAR, auditor.address, true, "Surat penugasan audit realisasi 2024"]);
+    chain = createRegistryChain({ rpcUrl, chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: relayerKey });
+    // Chain time is wall-clock time; signed authorizations expire against it.
+    clock = Math.floor(Date.now() / 1000);
+  }, 30000);
+
+  // Runs after the suite-wide reset, which drops the registry tables with everything else.
+  beforeEach(async () => {
+    const registryStore = createRegistryStore(database.handle());
+    await registryStore.ensureSchema();
+    configureRuntime(disbursement, { store: registryStore, chain, endorsement: createReportEndorsement(validatorKey) });
+  });
+
+  afterAll(async () => {
+    configureRuntime(disbursement);
+    if (node && node.exitCode === null) {
+      node.kill();
+      await node.exited;
+    }
+  });
+
+  const recordAt = async (draft: any, token: string, aidLineId: string, beneficiaryId: string, amountIdr: string, reportedAt: number) => {
+    const res = await post(
+      `/proposals/${draft.id}/realizations`,
+      { expectedVersion: draft.version, items: [{ aidLineId, beneficiaryId, method: "CASH", amountIdr, reportedAt }] },
+      token
+    );
+    expect(res.status).toBe(201);
+  };
+  const freezeFromRealizations = async (label: string, claimed: string, token: string) => {
+    const cutOff = new Date(clock * 1000).toISOString();
+    const institution = (await store.getInstitution(SINAR))!;
+    const res = await post(
+      EVIDENCE,
+      {
+        label,
+        period: { kind: "SEMESTER", year: 2024 },
+        currencyUnit: "IDR",
+        balanceSheetScope: "ON",
+        // One scope and cut-off on both sides, as the report package requires.
+        claim: pastedClaim(claimed, { scopeUnit: institution.scopeUnit, scopeLevel: institution.scopeLevel, cutOff }),
+        source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff } },
+      },
+      token
+    );
+    expect(res.status).toBe(201);
+    return (await res.json()).preparation;
+  };
+  const versionPath = (saved: any) => `evidence/${saved.preparationId}/reports/${saved.id}`;
+  const publish = async (saved: any, token: string, retryId: string) => {
+    const path = api(`${versionPath(saved)}/publication`);
+    const prepared = await post(path, { retryId, digest: saved.digest }, token);
+    expect(prepared.status).toBe(201);
+    const { intent } = await prepared.json();
+    const signature = await amilSinar.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+    const sent = await post(`${path}/${intent.id}/submit`, { signature }, token);
+    expect(sent.status).toBe(200);
+    await rpc.request({ method: "evm_mine" as any });
+    await rpc.request({ method: "evm_mine" as any });
+  };
+  const versionOf = async (saved: any, token: string) =>
+    (await (await get(api(`${versionPath(saved)}/publication/version`), token)).json()).version;
+
+  it("koreksi terbit merujuk versi pendahulu; atestasi auditor versi lama dan sumber bekunya tetap di tempatnya", async () => {
+    let { draft } = await prepareApprovedProposal({
+      beneficiaries: [
+        { id: "ben-a", name: "Pak Arif", nik: "3201123456780051" },
+        { id: "ben-b", name: "Bu Bunga", nik: "3201123456780052" },
+      ],
+      lines: [
+        { id: "line-a", beneficiaryId: "ben-a", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "500000" },
+        { id: "line-b", beneficiaryId: "ben-b", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "300000" },
+      ],
+    });
+    let amilToken = await signIn(amilSinar);
+
+    // Versi 1: realisasi A, dibekukan, diterbitkan dengan dua pengesahan, lalu diatestasi auditor.
+    await recordAt(draft, amilToken, "line-a", "ben-a", "500000", 1713000000);
+    const first = await freezeFromRealizations("Laporan realisasi v1", "500000", amilToken);
+    const v1 = await freezeReportVersion(first.id, amilToken, { reportId: "realisasi-registry-2024", version: "1" });
+    expect(v1.verdict.outcome).toBe("LOLOS");
+    await publish(v1, amilToken, "realisasi-v1");
+    expect((await versionOf(v1, amilToken)).versionState).toBe("VERSI_RESMI_TERKINI");
+
+    await store.upsertMembership({ institutionId: SINAR, account: auditor.address, role: "READER" });
+    const auditorToken = await signIn(auditor);
+    const attestationPath = api(`${versionPath(v1)}/attestation`);
+    const attestRes = await post(
+      attestationPath,
+      {
+        retryId: "atestasi-realisasi-v1",
+        packageDigest: v1.digest,
+        scope: "REKONSILIASI_PERIODE",
+        conclusion: "WAJAR_DENGAN_PENGECUALIAN",
+        evidence: [{ fileName: "kertas-kerja.txt", mimeType: "text/plain", contentBase64: Buffer.from("kertas kerja").toString("base64") }],
+      },
+      auditorToken
+    );
+    expect(attestRes.status).toBe(201);
+    const { intent: attestation } = await attestRes.json();
+    const attestationSignature = await auditor.signTypedData(attestationTypedData(attestation.domain, attestation.statement));
+    expect((await post(`${attestationPath}/${attestation.id}/submit`, { signature: attestationSignature }, auditorToken)).status).toBe(200);
+    await rpc.request({ method: "evm_mine" as any });
+    expect((await versionOf(v1, amilToken)).attestations.state).toBe("ATTESTED");
+
+    // Sesudah terbit: realisasi susulan dan revisi nama penerima.
+    amilToken = await signIn(amilSinar);
+    draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+    await recordAt(draft, amilToken, "line-b", "ben-b", "300000", 1717200000);
+    draft = (await (await get(`/proposals/${draft.id}`, amilToken)).json()).draft;
+    await approveRevision(draft, {
+      reason: "Koreksi ejaan nama penerima",
+      beneficiaries: draft.beneficiaries.map((b: any) => (b.id === "ben-a" ? { ...b, name: "Pak Arif REVISI" } : b)),
+      aidLines: draft.aidLines.map((l: any) => ({ id: l.id, beneficiaryId: l.beneficiaryId, aidType: l.aidType, period: l.period, value: l.value })),
+    });
+
+    // Versi 2: snapshot realisasi baru sebagai koreksi atas versi 1, diterbitkan.
+    amilToken = await signIn(amilSinar);
+    const second = await freezeFromRealizations("Laporan realisasi koreksi", "800000", amilToken);
+    const v2 = await freezeReportVersion(second.id, amilToken, {
+      reportId: "realisasi-registry-2024",
+      version: "2",
+      predecessor: v1.id,
+      correctionReason: "Realisasi susulan sesudah versi pertama terbit.",
+    });
+    await publish(v2, amilToken, "realisasi-v2");
+
+    const now = await versionOf(v2, amilToken);
+    expect(now.publication).toBe("PUBLISHED");
+    expect(now.versionState).toBe("VERSI_RESMI_TERKINI");
+    expect(now.predecessor).toBe(v1.id);
+    expect(now.attestations.state).toBe("NOT_EXAMINED");
+    expect(now.attestations.entries).toEqual([]);
+
+    // Versi lama: tetap terbit, ditandai digantikan, dan atestasinya tetap miliknya.
+    const old = await versionOf(v1, amilToken);
+    expect(old.publication).toBe("PUBLISHED");
+    expect(old.versionState).toBe("DIGANTIKAN_KOREKSI");
+    expect(old.officialPackageId).toBe(v2.id);
+    expect(old.digest).toBe(v1.digest);
+    expect(old.attestations.state).toBe("ATTESTED");
+    expect(old.attestations.entries).toHaveLength(1);
+    expect(old.attestations.entries[0].conclusion).toBe("WAJAR_DENGAN_PENGECUALIAN");
+    expect(old.attestations.subject.packageId).toBe(v1.id);
+
+    const history = (await (await get(api(`${versionPath(v2)}/publication/history`), amilToken)).json()).history;
+    expect(history.map((e: any) => e.version)).toEqual(["2", "1"]);
+    expect(history.filter((e: any) => e.attestations.entries.length > 0).map((e: any) => e.version)).toEqual(["1"]);
+
+    // Paket pemeriksaan versi lama tetap terverifikasi, termasuk berkas provenance realisasi yang dibekukan.
+    const bundleRes = await get(api(`${versionPath(v1)}/examination`), amilToken);
+    expect(bundleRes.status).toBe(200);
+    const bundle = await bundleRes.json();
+    const { verifyExamination } = await import("../src/report-verifier");
+    const checked = await verifyExamination(bundle, { rpcUrl, chainId: 31337, registry });
+    expect(checked.ok).toBe(true);
+    expect(checked.version.superseded).toBe(true);
+    const provenanceFileId = first.files.find((f: any) => f.fileName === PROVENANCE_FILE_NAMES.SOURCE).id;
+    const provenanceEntry = bundle.files.find((f: any) => f.id === provenanceFileId);
+    expect(provenanceEntry.state).toBe("AVAILABLE");
+    const bundled = JSON.parse(Buffer.from(provenanceEntry.contentBase64, "base64").toString("utf8"));
+    expect(bundled.realizations.map((r: any) => r.beneficiary.name)).toEqual(["Pak Arif"]);
+
+    // Sumber beku versi lama tidak ikut revisi maupun realisasi susulan.
+    const oldDrill = await (await get(`${EVIDENCE}/${first.id}/drill-down`, amilToken)).json();
+    expect(oldDrill.provenances[0].realizations.map((r: any) => r.beneficiary.name)).toEqual(["Pak Arif"]);
+    expect(oldDrill.provenances[0].totals.totalRealizedIdr).toBe("500000");
+  }, 60000);
 });
