@@ -1,6 +1,6 @@
 import type { PrivateRequests } from "./privateRequests";
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Download, FileText, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Download, FileText, HandCoins, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import {
   DISPUTE_STATUS_LABELS,
@@ -9,7 +9,11 @@ import {
   type DisputeStatus,
   type ProposalVersion,
 } from "../disbursement/disbursementClient";
-import type { RealizationCurrentStatus, RealizationCurrentView } from "../../../../shared/realization-provenance";
+import type {
+  ProvenanceActivityTrace,
+  RealizationCurrentStatus,
+  RealizationCurrentView,
+} from "../../../../shared/realization-provenance";
 import {
   fetchRealizationDrillDown,
   type RealizationDrillDown,
@@ -153,6 +157,9 @@ function ProvenanceView({
   const live = new Map(
     current.available ? current.realizations.map((status) => [status.realizationId, status] as const) : []
   );
+  const activityNames = new Map(
+    provenance.activityTrace.available ? provenance.activityTrace.activities.map((a) => [a.activityId, a.name] as const) : []
+  );
   return (
     <div className="space-y-3">
       <div className="text-xs text-stone-600">
@@ -191,10 +198,25 @@ function ProvenanceView({
           Uang muka petugas (Rp {formatRupiah(totals.advancesIdr)}) dan beban pengadaan (Rp {formatRupiah(totals.expensesIdr)})
           tidak dijumlahkan ke bantuan yang diterima penerima.
         </p>
+        {provenance.advances.length > 0 && (
+          <ul className="mt-1 space-y-0.5 text-emerald-900">
+            {provenance.advances.map((advance) => (
+              <li key={advance.id}>
+                Uang muka {advance.reference}: Rp {formatRupiah(advance.amountIdr)} · dipertanggungjawabkan Rp{" "}
+                {formatRupiah(advance.accountedIdr)} ·{" "}
+                {advance.unaccountedIdr.startsWith("-")
+                  ? `beban melebihi uang muka Rp ${formatRupiah(advance.unaccountedIdr.slice(1))}`
+                  : `belum dipertanggungjawabkan Rp ${formatRupiah(advance.unaccountedIdr)}`}
+              </li>
+            ))}
+          </ul>
+        )}
         <p className="mt-1 text-[11px] italic text-stone-500">
           Pembayaran dan penyerahan barang dicatat oleh lembaga; bukan mutasi bank independen atau transaksi onchain.
         </p>
       </div>
+
+      <ActivityTraceView trace={provenance.activityTrace} />
 
       <div className="overflow-x-auto rounded-lg border border-stone-200">
         <table className="min-w-full divide-y divide-stone-200 text-left text-xs">
@@ -213,6 +235,7 @@ function ProvenanceView({
               <RealizationRow
                 key={item.realizationId}
                 item={item}
+                activityName={activityNames.get(item.activityId ?? "") ?? null}
                 live={current.available ? live.get(item.realizationId) ?? null : undefined}
                 requests={requests}
               />
@@ -235,10 +258,12 @@ function Figure({ label, value, mono = false }: { label: string; value: string; 
 
 function RealizationRow({
   item,
+  activityName,
   live,
   requests,
 }: {
   item: ProvenanceRealization;
+  activityName: string | null;
   /** `undefined` when no live status column is shown at all. */
   live: RealizationCurrentStatus | null | undefined;
   requests: PrivateRequests;
@@ -289,6 +314,9 @@ function RealizationRow({
             v{item.proposalVersion}
           </button>
         </div>
+        <div className="mt-0.5 text-[11px] text-stone-500">
+          {activityName ? `Kegiatan: ${activityName}` : "Belum terhubung ke kegiatan penyaluran"}
+        </div>
         {item.purpose && (
           <div className="mt-0.5 max-w-xs truncate text-[11px] text-stone-600" title={item.purpose}>
             {item.purpose}
@@ -327,6 +355,13 @@ function RealizationRow({
           </span>
         ) : (
           <span className="text-stone-400">-</span>
+        )}
+        {item.aidLineValuation && (
+          <div className="mt-0.5 max-w-xs text-[11px] text-stone-500">
+            {item.aidLineValuation.valuedAmountIdr !== null
+              ? `Estimasi rincian bantuan: Rp ${formatRupiah(item.aidLineValuation.valuedAmountIdr)} (dasar: ${item.aidLineValuation.valuationBasis}); tidak dijumlahkan ke realisasi rupiah.`
+              : "Rincian bantuan tanpa dasar valuasi rupiah."}
+          </div>
         )}
       </td>
       <td className="px-3 py-2 align-top">
@@ -419,5 +454,57 @@ function LiveStatus({ item, live }: { item: ProvenanceRealization; live: Realiza
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The activities and contribution allocations frozen with the source. Allocations
+ * are pooled funding commitments; nothing here pairs a donor with a recipient.
+ */
+function ActivityTraceView({ trace }: { trace: ProvenanceActivityTrace }) {
+  if (!trace.available) {
+    return (
+      <p className="flex items-start gap-1.5 rounded bg-amber-50 p-2 text-xs text-amber-900">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+        Penelusuran kegiatan dan kontribusi tidak dibekukan: {trace.reason}
+      </p>
+    );
+  }
+  return (
+    <section aria-label="Kegiatan penyaluran dan alokasi kontribusi" className="space-y-2 rounded-lg border border-stone-200 p-3 text-xs text-stone-700">
+      <p className="flex items-center gap-1.5 font-semibold text-stone-800">
+        <HandCoins className="h-4 w-4 text-[#0F3D30]" aria-hidden />
+        Kegiatan penyaluran & alokasi kontribusi hingga cut-off
+      </p>
+      {trace.activities.length === 0 ? (
+        <p>Tidak ada realisasi yang terhubung ke kegiatan penyaluran pada cut-off.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {trace.activities.map((activity) => (
+            <li key={activity.activityId} className="rounded bg-stone-50 p-2">
+              <p className="font-medium text-stone-900">
+                {activity.name} · pengajuan v{activity.proposalVersion}
+              </p>
+              <p>
+                Teralokasi {Object.entries(activity.allocatedByUnit).map(([unit, amount]) =>
+                  unit === "IDR" ? `Rp ${formatRupiah(amount)}` : `${amount} ${unit}`
+                ).join(", ") || "belum ada"} dari target Rp {formatRupiah(activity.targetAmount)}
+                {activity.targetIsPartial ? " (target belum mencakup barang tanpa valuasi)" : ""} ·{" "}
+                {activity.allocations.length} alokasi · {activity.realizationIds.length} realisasi
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {trace.realizationsWithoutActivity.length > 0 && (
+        <p>{trace.realizationsWithoutActivity.length} realisasi belum terhubung ke kegiatan penyaluran pada cut-off.</p>
+      )}
+      {trace.contributionsWithoutDonor > 0 && (
+        <p>{trace.contributionsWithoutDonor} kontribusi teralokasi tidak memuat detail donatur; sumber donor tidak lengkap.</p>
+      )}
+      <p className="text-[11px] italic text-stone-500">
+        {trace.coverage} {trace.disclaimer}
+      </p>
+    </section>
   );
 }

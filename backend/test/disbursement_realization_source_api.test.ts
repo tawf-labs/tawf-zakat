@@ -27,6 +27,7 @@ import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store"
 import { createDisbursementStore, type DisbursementStore } from "../src/disbursement-store";
 import { createEvidenceStore, type EvidenceStore } from "../src/evidence-store";
 import { createActivityStore, type ActivityStore } from "../src/activity-store";
+import { createContributionStore, type ContributionStore } from "../src/contribution-store";
 import { createEncryptedFileStore, type PrivateFileStore } from "../src/evidence-files";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
@@ -68,6 +69,7 @@ let store: WorkspaceStore;
 let disbursement: DisbursementStore;
 let evidence: EvidenceStore;
 let activities: ActivityStore;
+let contributions: ContributionStore;
 let fileStore: PrivateFileStore;
 let tempDir: string;
 let clock = CUT_OFF_SECONDS;
@@ -142,6 +144,8 @@ async function prepareApprovedProposal(options?: {
     amountRequestedIdr?: string;
     unit?: string;
     quantityRequested?: string;
+    valuedAmountIdr?: string;
+    valuationBasis?: string;
   }>;
 }) {
   const amilToken = await signIn(amilSinar);
@@ -198,8 +202,8 @@ async function prepareApprovedProposal(options?: {
           kind: "GOODS",
           unit: l.unit ?? "kg",
           quantityRequested: l.quantityRequested ?? "10",
-          valuedAmountIdr: null,
-          valuationBasis: null,
+          valuedAmountIdr: l.valuedAmountIdr ?? null,
+          valuationBasis: l.valuationBasis ?? null,
         }
       : {
           kind: "MONEY",
@@ -307,11 +311,14 @@ async function prepareApprovedProposal(options?: {
 
 function configureRuntime(
   disbursementStore: DisbursementStore,
-  registry?: NonNullable<Parameters<typeof configureWorkspace>[0]["registry"]>
+  registry?: NonNullable<Parameters<typeof configureWorkspace>[0]["registry"]>,
+  activityStore: ActivityStore = activities
 ) {
   configureWorkspace({
     store,
     disbursement: disbursementStore,
+    contributions,
+    activities: activityStore,
     evidence,
     files: fileStore,
     now: () => clock,
@@ -477,12 +484,15 @@ beforeAll(async () => {
   disbursement = createDisbursementStore(db);
   evidence = createEvidenceStore(db);
   activities = createActivityStore(db);
+  contributions = createContributionStore(db);
   tempDir = await mkdtemp(join(tmpdir(), "zkt-realization-source-test-"));
   fileStore = createEncryptedFileStore({ directory: tempDir, key: FILE_KEY });
 
   await store.ensureSchema();
   await disbursement.ensureSchema();
   await evidence.ensureSchema();
+  await contributions.ensureSchema();
+  await activities.ensureSchema();
 
   configureRuntime(disbursement);
 });
@@ -492,6 +502,8 @@ beforeEach(async () => {
   await store.ensureSchema();
   await disbursement.ensureSchema();
   await evidence.ensureSchema();
+  await contributions.ensureSchema();
+  await activities.ensureSchema();
 
   for (const inst of SYNTHETIC_INSTITUTIONS) {
     await store.upsertInstitution(institutionRecordOf(inst));
@@ -525,6 +537,8 @@ beforeEach(async () => {
     ["off-amil-sinar", "MANAGE_PROGRAMS", "SK-001/PROGRAM"],
     ["off-amil-sinar", "PREPARE_PROPOSALS", "SK-001/AMIL"],
     ["off-amil-sinar", "RECORD_REALIZATION", "SK-001/REALISASI"],
+    ["off-amil-sinar", "RECORD_CONTRIBUTIONS", "SK-001/KONTRIBUSI"],
+    ["off-approver-sinar", "ENDORSE_CONTRIBUTIONS", "SK-003/PENGESAHAN"],
     ["off-examiner-sinar", "EXAMINE_PROPOSALS", "SK-002/EXAMINER"],
     ["off-approver-sinar", "APPROVE_DECISIONS", "SK-003/DIREKTUR"],
   ] as const;
@@ -1390,6 +1404,241 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
     expect(newDrill.provenances[0].totals.totalRealizedIdr).toBe("800000");
   });
 
+  it("realisasi terhubung ke kegiatan dan alokasi kontribusi hingga cut-off; donatur tanpa detail dinyatakan tidak lengkap", async () => {
+    const { draft, programId } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Kegiatan", nik: "3201123456780061" }],
+      lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "400000" }],
+    });
+    // Pengajuan kedua tanpa kegiatan penyaluran.
+    const { draft: loose } = await prepareApprovedProposal({
+      name: "Program Tanpa Kegiatan",
+      beneficiaries: [{ id: "ben-2", name: "Penerima Lepas", nik: "3201123456780062" }],
+      lines: [{ id: "line-2", beneficiaryId: "ben-2", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "100000" }],
+    });
+    expect(programId).toBeString();
+
+    clock = 1713000000;
+    let amilToken = await signIn(amilSinar);
+    let approverToken = await signIn(approverSinar);
+    const mutate = (path: string, body: Record<string, unknown>, token: string) =>
+      post(path, { operationId: crypto.randomUUID(), ...body }, token);
+    const activityRes = await mutate("/activities", { id: "act-realisasi", proposalId: draft.id, name: "Santunan tahap I" }, amilToken);
+    expect(activityRes.status).toBe(201);
+
+    const contribute = async (id: string, amount: string, donorName: string | null) => {
+      const recorded = await mutate(
+        "/contributions",
+        { id, sourceChannel: "BANK_TRANSFER", sourceReference: `TRX-${id}`, currencyUnit: "IDR", amountExact: amount,
+          fundType: "ZAKAT", purpose: "Santunan", receivedAt: clock - 100, donorName },
+        amilToken
+      );
+      expect(recorded.status).toBe(201);
+      expect((await mutate(`/contributions/${id}/reconcile`, { expectedVersion: 1, proofRef: `Mutasi ${id}` }, amilToken)).status).toBe(200);
+      const endorsed = await mutate(`/contributions/${id}/endorse`, { expectedVersion: 2, notes: "Disahkan" }, approverToken);
+      expect(endorsed.status).toBe(200);
+      const version = (await endorsed.json()).contribution.version;
+      const allocated = await mutate(
+        `/contributions/${id}/allocate`,
+        { activityId: "act-realisasi", amountExact: amount, expectedVersion: version, reason: "Alokasi tahap I" },
+        amilToken
+      );
+      expect(allocated.status).toBe(200);
+    };
+    await contribute("c-bernama", "300000", "Donatur Rahasia");
+    await contribute("c-anonim", "200000", null);
+
+    const realize = async (proposal: any, aidLineId: string, beneficiaryId: string, amountIdr: string) => {
+      const res = await post(
+        `/proposals/${proposal.id}/realizations`,
+        { expectedVersion: proposal.version, items: [{ aidLineId, beneficiaryId, method: "CASH", amountIdr, reportedAt: clock }] },
+        amilToken
+      );
+      expect(res.status).toBe(201);
+      return (await res.json()).records[0].id as string;
+    };
+    const linkedId = await realize(draft, "line-1", "ben-1", "400000");
+    const looseId = await realize(loose, "line-2", "ben-2", "100000");
+
+    // Alokasi sesudah cut-off tidak ikut dibekukan.
+    clock = CUT_OFF_SECONDS + 3600;
+    amilToken = await signIn(amilSinar);
+    approverToken = await signIn(approverSinar);
+    await contribute("c-telat", "50000", "Donatur Telat");
+
+    const freezeRes = await post(
+      EVIDENCE,
+      {
+        label: "Paket kegiatan",
+        period: { kind: "SEMESTER", year: 2024 },
+        currencyUnit: "IDR",
+        balanceSheetScope: "ON",
+        claim: pastedClaim("500000"),
+        source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: CUT_OFF_ISO } },
+      },
+      amilToken
+    );
+    expect(freezeRes.status).toBe(201);
+    const preparation = (await freezeRes.json()).preparation;
+
+    // Baris sumber hanya realisasi: alokasi kontribusi tidak dijumlahkan sebagai penyaluran.
+    const sourceSide = preparation.sources.find((s: any) => s.role === "SOURCE");
+    expect(sourceSide.rows.map((r: any) => r.amount).sort()).toEqual(["100000", "400000"]);
+    const notes: string[] = preparation.snapshot.coverageNotes;
+    expect(notes.some((n) => n.includes("1 realisasi belum terhubung ke kegiatan penyaluran"))).toBe(true);
+    expect(notes.some((n) => n.includes("1 kontribusi teralokasi tidak memuat detail donatur"))).toBe(true);
+
+    const drillRes = await get(`${EVIDENCE}/${preparation.id}/drill-down`, amilToken);
+    const drillText = await drillRes.text();
+    // Nama dan kontak donatur tidak pernah dibekukan ke provenance.
+    expect(drillText).not.toContain("Donatur Rahasia");
+    const provenance = JSON.parse(drillText).provenances[0];
+    const trace = provenance.activityTrace;
+    expect(trace.available).toBe(true);
+    expect(trace.coverage).toContain("tidak ditampilkan sebagai kontribusi donatur");
+    expect(trace.disclaimer).toContain("bukan saldo bank terverifikasi");
+    expect(trace.realizationsWithoutActivity).toEqual([looseId]);
+    expect(trace.contributionsWithoutDonor).toBe(1);
+    expect(trace.activities).toHaveLength(1);
+    const activity = trace.activities[0];
+    expect(activity.activityId).toBe("act-realisasi");
+    expect(activity.proposalVersion).toBe(1);
+    expect(activity.realizationIds).toEqual([linkedId]);
+    expect(activity.allocatedByUnit).toEqual({ IDR: "500000" });
+    expect(activity.allocations.map((a: any) => [a.contributionId, a.donorRecorded]).sort()).toEqual([
+      ["c-anonim", false],
+      ["c-bernama", true],
+    ]);
+    expect(provenance.realizations.find((r: any) => r.realizationId === linkedId).activityId).toBe("act-realisasi");
+    expect(provenance.realizations.find((r: any) => r.realizationId === looseId).activityId).toBeNull();
+    // Total realisasi tidak berubah oleh alokasi.
+    expect(provenance.totals.totalRealizedIdr).toBe("500000");
+
+    // AC15: proyeksi publik tidak memuat identitas donatur, kontribusi, penerima, locator atau salt.
+    const publicRes = await get(`${EVIDENCE}/${preparation.id}/public`);
+    expect(publicRes.status).toBe(200);
+    const publicText = await publicRes.text();
+    for (const secret of [
+      "Donatur Rahasia", "Donatur Telat", "c-bernama", "c-anonim", "TRX-c-bernama",
+      "Penerima Kegiatan", "Penerima Lepas", "3201123456780061", "3201123456780062", "3201********61",
+      PROVENANCE_FILE_NAMES.SOURCE, "storageRef", preparation.commitmentSalt ?? "salt-tidak-ada",
+    ]) {
+      expect(publicText).not.toContain(secret);
+    }
+    const publicSummary = JSON.parse(publicText).summary;
+    expect(publicSummary.salt).toBeUndefined();
+    expect(publicSummary.sides.every((side: any) => side.rows === undefined)).toBe(true);
+  });
+
+  it("kegiatan yang gagal dibaca tidak menggagalkan sumber realisasi; ketiadaannya dinyatakan", async () => {
+    const { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima", nik: "3201123456780071" }],
+      lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "100000" }],
+    });
+    configureRuntime(disbursement, undefined, {
+      ...activities,
+      readActivityTrace: async () => {
+        throw new Error("koneksi terputus");
+      },
+    });
+    try {
+      const { preparation, amilToken } = await freezeRealizationPackage(draft, "line-1", "ben-1", "100000", "Paket kegiatan gagal");
+      expect(preparation.sources.find((s: any) => s.role === "SOURCE").status).toBe("READ");
+      expect(preparation.snapshot.coverageNotes.some((n: string) => n.includes("Penelusuran kegiatan dan kontribusi tidak dibekukan"))).toBe(true);
+      const drill = await (await get(`${EVIDENCE}/${preparation.id}/drill-down`, amilToken)).json();
+      expect(drill.provenances[0].activityTrace).toEqual({
+        available: false,
+        reason: "Kegiatan penyaluran dan alokasi kontribusi tidak dapat dibaca dari penyimpanan.",
+      });
+      expect(drill.provenances[0].realizations[0].activityId).toBeNull();
+    } finally {
+      configureRuntime(disbursement);
+    }
+  });
+
+  it("AC07: sisa uang muka dan dasar valuasi barang terbaca tanpa dijumlahkan ke realisasi", async () => {
+    const { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Beras", nik: "3201123456780081" }],
+      lines: [
+        {
+          id: "line-beras",
+          beneficiaryId: "ben-1",
+          aidType: "Beras",
+          kind: "GOODS",
+          unit: "kg",
+          quantityRequested: "25",
+          valuedAmountIdr: "375000",
+          valuationBasis: "Harga pasar beras medium Bandung April 2024, Rp15.000/kg",
+        },
+      ],
+    });
+
+    clock = 1713000000;
+    let amilToken = await signIn(amilSinar);
+    const realRes = await post(
+      `/proposals/${draft.id}/realizations`,
+      {
+        expectedVersion: draft.version,
+        items: [{ aidLineId: "line-beras", beneficiaryId: "ben-1", method: "GOODS_HANDOVER", quantity: "25", unit: "kg", reportedAt: clock }],
+      },
+      amilToken
+    );
+    expect(realRes.status).toBe(201);
+    const advRes = await post(`/proposals/${draft.id}/advances`, { amountIdr: "500000", purpose: "Pembelian beras", reference: "ADV-BERAS" }, amilToken);
+    expect(advRes.status).toBe(201);
+    const advanceId = (await advRes.json()).advance.id;
+    const expense = async (amountIdr: string, linked: boolean, ref: string) =>
+      expect(
+        (
+          await post(
+            `/proposals/${draft.id}/expenses`,
+            { advanceId: linked ? advanceId : null, amountIdr, purpose: "Pengadaan", payee: "Toko Beras", documentRef: ref },
+            amilToken
+          )
+        ).status
+      ).toBe(201);
+    await expense("300000", true, "NOTA-1");
+    await expense("50000", false, "NOTA-2");
+
+    // Pertanggungjawaban sesudah cut-off belum mengurangi sisa pada snapshot.
+    clock = CUT_OFF_SECONDS + 3600;
+    amilToken = await signIn(amilSinar);
+    await expense("100000", true, "NOTA-3");
+
+    const freezeRes = await post(
+      EVIDENCE,
+      {
+        label: "Paket AC07",
+        period: { kind: "SEMESTER", year: 2024 },
+        currencyUnit: "IDR",
+        balanceSheetScope: "ON",
+        claim: pastedClaim("0"),
+        source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: CUT_OFF_ISO } },
+      },
+      amilToken
+    );
+    expect(freezeRes.status).toBe(201);
+    const preparation = (await freezeRes.json()).preparation;
+    expect(preparation.sources.find((s: any) => s.role === "SOURCE").rows).toEqual([]);
+    const notes: string[] = preparation.snapshot.coverageNotes;
+    expect(notes.some((n) => n.includes("belum dipertanggungjawabkan pada cut-off: Rp 200.000"))).toBe(true);
+    expect(notes.some((n) => n.includes("tidak dijumlahkan ke realisasi rupiah"))).toBe(true);
+
+    const provenance = (await (await get(`${EVIDENCE}/${preparation.id}/drill-down`, amilToken)).json()).provenances[0];
+    expect(provenance.totals.totalRealizedIdr).toBe("0");
+    expect(provenance.totals.expensesIdr).toBe("350000");
+    expect(provenance.totals.unaccountedAdvancesIdr).toBe("200000");
+    expect(provenance.advances).toEqual([
+      expect.objectContaining({ id: advanceId, amountIdr: "500000", accountedIdr: "300000", unaccountedIdr: "200000" }),
+    ]);
+    // Persetujuan awal tidak menulis jumlah disetujui ke snapshot versi; nilainya tidak diambil dari draf aktif.
+    expect(provenance.realizations[0].aidLineValuation).toEqual({
+      unit: "kg",
+      quantityApproved: null,
+      valuedAmountIdr: "375000",
+      valuationBasis: "Harga pasar beras medium Bandung April 2024, Rp15.000/kg",
+    });
+  });
+
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
     "browser: realisasi → versi laporan → revisi pengajuan → drill-down sumber lama, pada laptop dan ponsel",
     async () => {
@@ -1493,6 +1742,9 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
           expect(await page.getByRole("cell", { name: /Ibu Smoke REVISI/ }).count()).toBe(0);
           await page.getByRole("button", { name: "v1", exact: true }).click();
           await page.getByText("Penerima pada versi ini: Ibu Smoke (Fakir)").waitFor();
+          // Tanpa kegiatan penyaluran, penelusuran kontribusi dinyatakan tidak tersedia.
+          await page.getByText("Kegiatan penyaluran & alokasi kontribusi hingga cut-off").waitFor();
+          await page.getByText("Belum terhubung ke kegiatan penyaluran").first().waitFor();
 
           // Sengketa sesudah freeze hanya muncul pada kolom status terkini, bukan pada snapshot lama.
           await page.getByText(/Kolom "Status terkini" dibaca dari data kerja/).waitFor();
@@ -1539,6 +1791,7 @@ describe("buildDisbursementRealizationSide (Issue #98)", () => {
     confirmationMethod: null,
     documents: [],
     disputes: [],
+    aidLineValuation: null,
     ...overrides,
   });
   const build = (input: Partial<Parameters<typeof buildDisbursementRealizationSide>[0]>) =>
@@ -1598,6 +1851,40 @@ describe("buildDisbursementRealizationSide (Issue #98)", () => {
       realizations: [realization({ documents: [doc("early", 1713000000), doc("late", AFTER_CUT_OFF_SECONDS)] })],
     });
     expect(provenance.realizations[0]!.documents.map((d) => d.id)).toEqual(["early"]);
+  });
+
+  it("uang muka dengan beban melebihi nominal menampilkan selisih negatif, bukan nol", () => {
+    const { provenance, coverageNotes } = build({
+      advances: [{ id: "adv-1", proposalId: "p", amountIdr: "100", purpose: "x", reference: "r", issuedAt: 1713000000 }],
+      expenses: [{ id: "exp-1", proposalId: "p", advanceId: "adv-1", amountIdr: "150", purpose: "x", payee: "y", recordedAt: 1713000000 }],
+    });
+    expect(provenance.advances[0]).toMatchObject({ accountedIdr: "150", unaccountedIdr: "-50" });
+    expect(provenance.totals.unaccountedAdvancesIdr).toBe("0");
+    expect(coverageNotes.some((n) => n.includes("melebihi nominalnya"))).toBe(true);
+  });
+
+  it("kegiatan yang dibuat sesudah cut-off tidak menjadi relasi beku; tanpa penyimpanan kegiatan dinyatakan", () => {
+    const activity = (createdAt: number) => ({
+      id: "act-1", proposalId: "prop-1", proposalVersion: 1, name: "Kegiatan", programFundType: "ZAKAT",
+      targetAmount: "100000", targetIsPartial: false, createdAt, allocations: [],
+    });
+    const late = build({
+      realizations: [realization()],
+      activityTrace: { coverage: "c", disclaimer: "d", activities: [activity(AFTER_CUT_OFF_SECONDS)] },
+    }).provenance.activityTrace;
+    expect(late.available && late.activities).toEqual([]);
+    expect(late.available && late.realizationsWithoutActivity).toEqual(["real-1"]);
+
+    const otherVersion = build({
+      realizations: [realization({ proposalVersion: 2 })],
+      activityTrace: { coverage: "c", disclaimer: "d", activities: [activity(1713000000)] },
+    }).provenance.activityTrace;
+    expect(otherVersion.available && otherVersion.realizationsWithoutActivity).toEqual(["real-1"]);
+
+    expect(build({ realizations: [realization()] }).provenance.activityTrace).toEqual({
+      available: false,
+      reason: "Kegiatan penyaluran belum dikonfigurasi pada deployment ini.",
+    });
   });
 });
 

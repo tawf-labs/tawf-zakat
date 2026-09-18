@@ -31,6 +31,9 @@ import { canonicalJson } from "../../shared/canonical-json";
 import { addDecimalStrings } from "../../shared/exact-decimal";
 import {
   PROVENANCE_FILE_NAMES,
+  type ProvenanceActivity,
+  type ProvenanceActivityTrace,
+  type ProvenanceGoodsValuation,
   type RealizationCurrentStatus,
   type ProvenanceDispute,
   type ProvenanceDocument,
@@ -92,6 +95,8 @@ export type RealizationItemData = {
   confirmationMethod: string | null;
   documents: RealizationDocumentRef[];
   disputes: RealizationDisputeRef[];
+  /** Goods lines only, from the proposal version the realization was recorded against. */
+  aidLineValuation: ProvenanceGoodsValuation | null;
 };
 
 export type RealizationAdvanceItem = {
@@ -119,6 +124,36 @@ export type RealizationSourceData = {
   expenses: RealizationExpenseItem[];
 };
 
+/**
+ * Activities and their active contribution allocations as the activity store
+ * reads them (ticket #103). Donor detail is reduced to whether one was recorded.
+ */
+export type ActivityTraceData = {
+  coverage: string;
+  disclaimer: string;
+  activities: Array<{
+    id: string;
+    proposalId: string;
+    proposalVersion: number;
+    name: string;
+    programFundType: string;
+    targetAmount: string;
+    targetIsPartial: boolean;
+    createdAt: number;
+    allocations: Array<{
+      id: string;
+      contributionId: string;
+      contributionVersion: number;
+      amountExact: string;
+      currencyUnit: string;
+      fundType: string;
+      allocatedAt: number;
+      contributionStatus: string;
+      donorRecorded: boolean;
+    }>;
+  }>;
+};
+
 export type RealizationScope = {
   institution: {
     id: string;
@@ -132,7 +167,11 @@ export type RealizationScope = {
   balanceSheetScope?: ManifestPosition;
 };
 
-export type RealizationSourceInput = RealizationScope & RealizationSourceData;
+export type RealizationSourceInput = RealizationScope &
+  RealizationSourceData & {
+    /** The activity trace, or why it could not be read. Omitted: no activity store on this deployment. */
+    activityTrace?: ActivityTraceData | { unavailable: string };
+  };
 
 const PROGRAM_FUND_TO_JENIS_DANA: Record<string, (typeof JENIS_DANA)[number]> = {
   ZAKAT: "ZAKAT",
@@ -322,9 +361,30 @@ export function buildDisbursementRealizationSide(input: RealizationSourceInput):
   };
   const totalAdvances = sumIdr(advances);
   const totalExpenses = sumIdr(expenses);
+  const accountedFor = (advanceId: string) =>
+    expenses
+      .filter((e) => e.advanceId === advanceId && isExactIdr(e.amountIdr))
+      .reduce((total, e) => total + BigInt(e.amountIdr), 0n);
+  const advanceAccounts = advances.map((a) => {
+    const accounted = accountedFor(a.id);
+    const amount = isExactIdr(a.amountIdr) ? BigInt(a.amountIdr) : 0n;
+    return { advance: a, accounted, unaccounted: amount - accounted };
+  });
+  const totalUnaccounted = advanceAccounts.reduce(
+    (total, { unaccounted }) => total + (unaccounted > 0n ? unaccounted : 0n),
+    0n
+  );
 
   // An empty read covered every fund type and found nothing in any of them.
   const manifestFundTypes = fundTypes.size > 0 ? [...fundTypes].sort() : [...JENIS_DANA];
+
+  const activityTrace = traceActivities(input.activityTrace, includedRealizations, byCutOff);
+  const activityOf = new Map<string, string>();
+  if (activityTrace.available) {
+    for (const activity of activityTrace.activities) {
+      for (const realizationId of activity.realizationIds) activityOf.set(realizationId, activity.activityId);
+    }
+  }
 
   const coverageNotes: string[] = [];
 
@@ -363,9 +423,23 @@ export function buildDisbursementRealizationSide(input: RealizationSourceInput):
   if (totalAdvances > 0n || totalExpenses > 0n) {
     coverageNotes.push(
       `Uang muka operasional (${rupiah(totalAdvances)}) dan beban pengadaan/pelaksanaan (${rupiah(totalExpenses)}) ` +
-        `dicatat terpisah dan tidak dijumlahkan sebagai penyaluran ganda kepada penerima.`
+        `dicatat terpisah dan tidak dijumlahkan sebagai penyaluran ganda kepada penerima. ` +
+        `Uang muka yang belum dipertanggungjawabkan pada cut-off: ${rupiah(totalUnaccounted)}.`
     );
   }
+  const overspent = advanceAccounts.filter(({ unaccounted }) => unaccounted < 0n).length;
+  if (overspent > 0) {
+    coverageNotes.push(`${overspent} uang muka memiliki beban tertaut melebihi nominalnya; selisih ditampilkan, bukan dinolkan.`);
+  }
+  const valuedGoods = includedRealizations.filter((r) => r.aidLineValuation?.valuedAmountIdr != null).length;
+  if (valuedGoods > 0) {
+    coverageNotes.push(
+      `${valuedGoods} penyerahan barang berasal dari rincian bantuan yang memiliki estimasi nilai dengan dasar valuasi ` +
+        `pada versi pengajuan; estimasi itu ditampilkan sebagai konteks dan tidak dijumlahkan ke realisasi rupiah.`
+    );
+  }
+
+  coverageNotes.push(...activityCoverageNotes(activityTrace, input.cutOff));
 
   if (excludedAfterCutOff.length > 0) {
     coverageNotes.push(
@@ -394,9 +468,11 @@ export function buildDisbursementRealizationSide(input: RealizationSourceInput):
       })),
       advancesIdr: totalAdvances.toString(),
       expensesIdr: totalExpenses.toString(),
+      unaccountedAdvancesIdr: totalUnaccounted.toString(),
     },
     realizations: includedRealizations.map((item) => ({
       realizationId: item.id,
+      activityId: activityOf.get(item.id) ?? null,
       proposalId: item.proposalId,
       proposalVersion: item.proposalVersion,
       programId: item.programId,
@@ -438,14 +514,18 @@ export function buildDisbursementRealizationSide(input: RealizationSourceInput):
           reason: dsp.reason,
           createdAt: dsp.createdAt,
         })),
+      aidLineValuation: item.aidLineValuation,
     })),
+    activityTrace,
     excludedAfterCutOff,
-    advances: advances.map((a) => ({
+    advances: advanceAccounts.map(({ advance: a, accounted, unaccounted }) => ({
       id: a.id,
       amountIdr: a.amountIdr,
       purpose: a.purpose,
       reference: a.reference,
       issuedAt: a.issuedAt,
+      accountedIdr: accounted.toString(),
+      unaccountedIdr: unaccounted.toString(),
     })),
     expenses: expenses.map((e) => ({
       id: e.id,
@@ -510,4 +590,112 @@ export function currentStatusOf(
       disputes: item.disputes.map((d) => ({ id: d.id, subject: d.subject, status: d.status, createdAt: d.createdAt })),
     };
   });
+}
+
+/**
+ * The activities the included realizations belong to, as they stood at the cut-off.
+ *
+ * A realization belongs to the activity created for its own proposal version; an
+ * activity created after the cut-off, or an allocation made after it, is not part
+ * of the frozen relations. Allocations are never added to the realization rows.
+ */
+function traceActivities(
+  trace: RealizationSourceInput["activityTrace"],
+  included: readonly RealizationItemData[],
+  byCutOff: (at: number) => boolean
+): ProvenanceActivityTrace {
+  if (trace === undefined) {
+    return { available: false, reason: "Kegiatan penyaluran belum dikonfigurasi pada deployment ini." };
+  }
+  if ("unavailable" in trace) return { available: false, reason: trace.unavailable };
+
+  const key = (proposalId: string, version: number) => `${proposalId}#${version}`;
+  const activityFor = new Map(
+    trace.activities.filter((a) => byCutOff(a.createdAt)).map((a) => [key(a.proposalId, a.proposalVersion), a])
+  );
+  const realizationsOf = new Map<string, string[]>();
+  const withoutActivity: string[] = [];
+  for (const item of included) {
+    const activity = activityFor.get(key(item.proposalId, item.proposalVersion));
+    if (!activity) {
+      withoutActivity.push(item.id);
+      continue;
+    }
+    realizationsOf.set(activity.id, [...(realizationsOf.get(activity.id) ?? []), item.id]);
+  }
+
+  const withoutDonor = new Set<string>();
+  const activities: ProvenanceActivity[] = [];
+  for (const activity of trace.activities) {
+    const realizationIds = realizationsOf.get(activity.id);
+    if (!realizationIds) continue;
+    const allocations = activity.allocations.filter((a) => byCutOff(a.allocatedAt));
+    const allocatedByUnit: Record<string, string> = {};
+    for (const allocation of allocations) {
+      allocatedByUnit[allocation.currencyUnit] = addDecimalStrings(
+        allocatedByUnit[allocation.currencyUnit] ?? "0",
+        allocation.amountExact
+      );
+      if (!allocation.donorRecorded) withoutDonor.add(allocation.contributionId);
+    }
+    activities.push({
+      activityId: activity.id,
+      proposalId: activity.proposalId,
+      proposalVersion: activity.proposalVersion,
+      name: activity.name,
+      programFundType: activity.programFundType,
+      targetAmount: activity.targetAmount,
+      targetIsPartial: activity.targetIsPartial,
+      createdAt: activity.createdAt,
+      realizationIds,
+      allocatedByUnit,
+      allocations: allocations.map((a) => ({
+        allocationId: a.id,
+        contributionId: a.contributionId,
+        contributionVersion: a.contributionVersion,
+        amountExact: a.amountExact,
+        currencyUnit: a.currencyUnit,
+        fundType: a.fundType,
+        allocatedAt: a.allocatedAt,
+        contributionStatus: a.contributionStatus,
+        donorRecorded: a.donorRecorded,
+      })),
+    });
+  }
+
+  return {
+    available: true,
+    coverage: trace.coverage,
+    disclaimer: trace.disclaimer,
+    activities,
+    realizationsWithoutActivity: withoutActivity,
+    contributionsWithoutDonor: withoutDonor.size,
+  };
+}
+
+function activityCoverageNotes(trace: ProvenanceActivityTrace, cutOff: string): string[] {
+  if (!trace.available) {
+    return [`Penelusuran kegiatan dan kontribusi tidak dibekukan: ${trace.reason}`];
+  }
+  const notes: string[] = [];
+  if (trace.activities.length > 0) {
+    const allocations = trace.activities.reduce((n, a) => n + a.allocations.length, 0);
+    notes.push(
+      `Realisasi terhubung ke ${trace.activities.length} kegiatan penyaluran dengan ${allocations} alokasi kontribusi ` +
+        `hingga cut-off ${cutOff}. Alokasi adalah komitmen pendanaan gabungan, tidak dijumlahkan ke realisasi dan ` +
+        `tidak menyatakan donatur tertentu membiayai penerima tertentu.`
+    );
+  }
+  if (trace.realizationsWithoutActivity.length > 0) {
+    notes.push(
+      `${trace.realizationsWithoutActivity.length} realisasi belum terhubung ke kegiatan penyaluran pada cut-off ${cutOff}; ` +
+        `penelusuran kontribusinya tidak tersedia.`
+    );
+  }
+  if (trace.contributionsWithoutDonor > 0) {
+    notes.push(
+      `${trace.contributionsWithoutDonor} kontribusi teralokasi tidak memuat detail donatur; sumber donor dinyatakan tidak lengkap, bukan ditebak.`
+    );
+  }
+  return notes;
 }

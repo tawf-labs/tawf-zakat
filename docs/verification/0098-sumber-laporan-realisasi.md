@@ -22,7 +22,20 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
 
 - **Jenis dana manifest**: hanya jenis dana yang benar-benar tercakup (INFAK/SEDEKAH → `INFAK_SEDEKAH`, LAINNYA → `DSKL`). Sumber kosong mencakup seluruh jenis dana dengan hasil nol.
 
-- **AC07**: uang muka dan beban dicatat terpisah dan tidak dijumlahkan ke bantuan penerima.
+- **AC07 (#100)**: uang muka dan beban dicatat terpisah dan tidak dijumlahkan ke bantuan penerima.
+  - Per uang muka dibekukan `accountedIdr` (beban tertaut hingga cut-off) dan `unaccountedIdr`, dengan konsep yang sama seperti modul realisasi #95. Beban tertaut yang melebihi uang muka tampil sebagai selisih negatif dan dinyatakan di catatan cakupan, bukan dinolkan.
+  - Total yang belum dipertanggungjawabkan pada cut-off (`unaccountedAdvancesIdr`) tercantum di catatan cakupan.
+  - Penyerahan barang membawa `aidLineValuation` dari versi pengajuan: satuan, estimasi nilai dan dasar valuasinya. Nilai diakui hanya bila dasarnya dinyatakan (`goodsValuationOf`). Estimasi ini ditampilkan dan tidak dijumlahkan ke realisasi rupiah.
+  - `quantityApproved` bernilai `null` bila snapshot versi tidak memuatnya. Keputusan persetujuan awal (#93) menulis jumlah disetujui ke draf aktif, bukan ke `proposal_versions`, dan draf aktif tidak dipakai sebagai sumber.
+
+- **Kegiatan penyaluran dan penelusuran donatur (amandemen pilot, #102/#103)**
+  - Setiap realisasi beku membawa `activityId`: kegiatan untuk pengajuan dan versi yang sama, yang sudah dibuat pada atau sebelum cut-off. Kegiatan versi lain atau yang dibuat sesudah cut-off tidak ditebak menjadi relasi.
+  - `activityTrace` membekukan kegiatan terkait beserta alokasi kontribusi aktif hingga cut-off. Isinya: id kontribusi, versi kontribusi yang dialokasikan, nominal/unit, jenis dana, status kontribusi saat freeze, dan penanda `donorRecorded`. Juga total teralokasi per unit, teks cakupan penelusuran, dan disclaimer pendanaan dari modul kegiatan.
+  - Nama dan kontak donatur tidak pernah dibekukan.
+  - Kontribusi tanpa detail donatur dihitung sebagai `contributionsWithoutDonor` dan dinyatakan di catatan cakupan sebagai sumber donor tidak lengkap.
+  - Realisasi tanpa kegiatan disebut di `realizationsWithoutActivity`.
+  - Alokasi tidak dijumlahkan ke baris realisasi dan tidak menyatakan donatur tertentu membiayai penerima tertentu.
+  - Jika store kegiatan tidak ada atau gagal dibaca, realisasi tetap dibekukan dan `activityTrace.available: false` menyebut alasannya.
 
 - **Sumber kosong vs gagal**
   - Sumber kosong: `READ` tanpa baris, dengan catatan "terbaca penuh dan tidak memuat realisasi". Tidak ada klaim "Rp 0 untuk 0 penerima".
@@ -49,16 +62,18 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
     - Setiap dokumen dapat diunduh lewat rute dokumen realisasi yang memeriksa hash.
     - Sengketa ditampilkan sebagai "Penerimaan diperselisihkan".
     - Kolom "Status terkini" dengan waktu bacanya, ditandai "Berubah sejak dibekukan" atau "Sama dengan snapshot".
+    - Bagian "Kegiatan penyaluran & alokasi kontribusi hingga cut-off", serta nama kegiatan (atau "Belum terhubung ke kegiatan penyaluran") per realisasi.
 
 ## Batas yang belum dikerjakan pada tiket ini
 
-- Hubungan realisasi ke kegiatan penyaluran (#103) belum dibekukan dalam provenance.
-- Penelusuran donatur dan pointer ke versi sertifikat NFT (amandemen pilot) belum ada.
+- Pointer ke versi sertifikat NFT belum ada karena modul sertifikat/NFT belum ada di kode. Dependensi ke tiket sertifikat di bawah #100. Issue #98 menyatakan proof/mint bukan prasyarat sumber laporan.
+- Realokasi/pembatalan alokasi (#107) belum ada; saat ini hanya alokasi `ACTIVE` yang dibekukan.
+- Jumlah barang/rupiah yang disetujui pada keputusan awal tidak tersimpan di snapshot versi pengajuan (#93), sehingga `quantityApproved` pada provenance kosong untuk versi tersebut. Versi hasil revisi sudah memuatnya.
 - Status konfirmasi/sengketa tidak direkonstruksi per cut-off, karena kolom status diperbarui di tempat. Status diambil saat pembekuan dan dinyatakan demikian.
 
 ## Pengujian yang dijalankan
 
-- `bun test test/disbursement_realization_source_api.test.ts` dengan `REGISTRY_BROWSER_MODULE`/`REGISTRY_BROWSER_EXECUTABLE`: **17 pass, 0 fail**. Membutuhkan `anvil` dan artefak `sc/out` (port 18582). Cakupan:
+- `bun test test/disbursement_realization_source_api.test.ts` dengan `REGISTRY_BROWSER_MODULE`/`REGISTRY_BROWSER_EXECUTABLE`: **22 pass, 0 fail**. Membutuhkan `anvil` dan artefak `sc/out` (port 18582). Cakupan:
   - Cut-off → belum terperiksa.
   - Revisi pengajuan sesudah freeze.
   - Rekap `NOT_AVAILABLE`.
@@ -70,6 +85,15 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
   - Isolasi: officer lembaga lain mendapat 404 untuk drill-down dan berkas provenance; tanpa sesi mendapat 401.
   - Integritas: berkas provenance yang isinya diganti atau dihapus dari penyimpanan terenkripsi dinyatakan `FAILED` di `unreadable`, bukan rincian kosong.
   - Koreksi laporan: paket laporan v2 dari snapshot baru merujuk v1 sebagai pendahulu (preview koreksi menampilkan digest v1). Digest/angka v1 tidak berubah, dan drill-down sumber v1 tetap memuat data sebelum realisasi susulan dan revisi nama.
+  - AC07: sisa uang muka pada cut-off (beban sesudah cut-off tidak mengurangi), beban tanpa uang muka tetap terpisah, estimasi nilai dan dasar valuasi barang terbaca tanpa masuk baris/total rupiah. Unit: beban melebihi uang muka menjadi selisih negatif beserta catatannya.
+  - AC15: ringkasan publik paket dengan kegiatan dan kontribusi tidak memuat nama donatur, id/referensi kontribusi, nama/NIK penerima, nama berkas provenance, locator, atau salt.
+  - Kegiatan dan donatur:
+    - Realisasi terhubung ke kegiatan; realisasi dari pengajuan tanpa kegiatan dinyatakan.
+    - Alokasi sesudah cut-off tidak dibekukan.
+    - Kontribusi tanpa donatur terhitung; nama donatur tidak muncul di provenance.
+    - Baris dan total realisasi tidak berubah oleh alokasi.
+    - Store kegiatan yang gagal tidak menggagalkan sumber.
+    - Unit: kegiatan sesudah cut-off atau versi lain tidak ditautkan; tanpa store dinyatakan.
   - Registry lokal (Anvil + `ReportEvidenceRegistry`, ABI tidak diubah):
     - Laporan v1 dari sumber realisasi terbit dengan dua pengesahan (lembaga + validator) dan diatestasi auditor bermandat.
     - Sesudah realisasi susulan dan revisi nama penerima, koreksi v2 dari snapshot realisasi baru terbit dengan v1 sebagai pendahulu.
@@ -77,5 +101,5 @@ Acuan: issue #98, spec #86, amandemen pilot #100, ADR-0027/0028/0029.
     - Paket pemeriksaan v1 lolos `verifyExamination` terhadap chain lokal, dan berkas provenance realisasi di dalamnya `AVAILABLE` dengan isi lama ("Pak Arif").
   - Unit mapper: jenis dana tak dikenal, nilai rusak, versi hilang, pemetaan INFAK, uang muka/beban di luar cut-off, dokumen sesudah cut-off.
   - Smoke browser laptop + ponsel: mode realisasi di form; realisasi → paket bukti → versi laporan beku ("realisasi-smoke · versi 1"); revisi nama penerima pada pengajuan; drill-down sumber lama tetap menampilkan nama dan versi pengajuan saat dibekukan; sengketa sesudah freeze hanya muncul di kolom status terkini.
-- Regresi: `registry_api` 47 (7 skip opt-in browser), `disbursement_realization_api` 20, `disbursement_realization_goods_api` 18, `evidence_api` 58, `evidence_drafts_api` 20, `evidence_internal_usdc_api` 13, `evidence_source` 19, `period_report_api` 15 — semua pass.
+- Regresi: `registry_api` 47 (7 skip opt-in browser), `activity_allocation_api` 12, `contribution_api` 16, `disbursement_realization_api` 20, `disbursement_realization_goods_api` 18, `evidence_api` 58, `evidence_drafts_api` 20, `evidence_internal_usdc_api` 13, `evidence_source` 19, `period_report_api` 15 — semua pass.
 - `cd frontend && bun run build`: berhasil.

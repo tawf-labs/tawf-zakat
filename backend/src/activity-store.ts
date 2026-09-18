@@ -25,6 +25,7 @@ import {
   type DistributionActivityRecord,
 } from "./activity";
 import type { FundType } from "./disbursement";
+import type { ActivityTraceData } from "./realization-source";
 
 type Executor = { execute: (query: SQL) => Promise<unknown> };
 
@@ -577,6 +578,66 @@ export function createActivityStore(db: ActivityDatabase) {
       return {
         allocations: allocationRows.map((row) => ({ ...allocationFrom(row), activityName: row.activity_name })),
         history: historyRows.map(historyFrom),
+      };
+    },
+
+    /**
+     * Every activity with its active allocations and the allocated contributions'
+     * status and whether they carry donor detail (Spec #86, ticket #98). The donor's
+     * name and contact never leave this query; a frozen report source records only
+     * that a donor was or was not recorded.
+     */
+    async readActivityTrace(institutionId: string): Promise<ActivityTraceData> {
+      const activityRows = rowsOf(
+        await db.execute(sql`
+          SELECT * FROM distribution_activities
+          WHERE institution_id = ${institutionId}
+          ORDER BY created_at, id
+        `)
+      );
+      const allocationRows = rowsOf(
+        await db.execute(sql`
+          SELECT ca.*, c.status AS contribution_status, (c.donor_name IS NOT NULL AND c.donor_name <> '') AS donor_recorded
+          FROM contribution_allocations ca
+          JOIN contributions c ON c.id = ca.contribution_id AND c.institution_id = ca.institution_id
+          WHERE ca.institution_id = ${institutionId} AND ca.status = 'ACTIVE'
+          ORDER BY ca.allocated_at, ca.id
+        `)
+      );
+      const byActivity = new Map<string, ActivityTraceData["activities"][number]["allocations"]>();
+      for (const row of allocationRows) {
+        const allocation = allocationFrom(row);
+        const list = byActivity.get(allocation.activityId) ?? [];
+        list.push({
+          id: allocation.id,
+          contributionId: allocation.contributionId,
+          contributionVersion: allocation.contributionVersion,
+          amountExact: allocation.amountExact,
+          currencyUnit: allocation.currencyUnit,
+          fundType: allocation.fundType,
+          allocatedAt: allocation.allocatedAt,
+          contributionStatus: row.contribution_status,
+          donorRecorded: Boolean(row.donor_recorded),
+        });
+        byActivity.set(allocation.activityId, list);
+      }
+      return {
+        coverage: TRACING_COVERAGE,
+        disclaimer: FUNDING_RECORD_DISCLAIMER,
+        activities: activityRows.map((row) => {
+          const activity = activityFrom(row);
+          return {
+            id: activity.id,
+            proposalId: activity.proposalId,
+            proposalVersion: activity.proposalVersion,
+            name: activity.name,
+            programFundType: activity.programFundType,
+            targetAmount: activity.targetAmount,
+            targetIsPartial: activity.targetIsPartial,
+            createdAt: activity.createdAt,
+            allocations: byActivity.get(activity.id) ?? [],
+          };
+        }),
       };
     },
 

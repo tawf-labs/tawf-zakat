@@ -16,6 +16,7 @@ import {
   DEFAULT_DISBURSEMENT_POLICY,
   evaluateRecurringAidWarnings,
   evidenceStatusOf,
+  goodsValuationOf,
   REQUIRED_EVIDENCE_BY_METHOD,
   validateProposalForSubmission,
   type AidLine,
@@ -4257,6 +4258,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         }
         const beneficiaries: Beneficiary[] = snapshot?.beneficiaries ?? [];
         const beneficiary = beneficiaries.find((b) => b.id === row.beneficiary_id);
+        const aidLine = (snapshot?.aidLines as AidLine[] | undefined)?.find((l) => l.id === row.aid_line_id);
         const nik = beneficiary?.identityBasis?.kind === "NIK" ? beneficiary.identityBasis.value : null;
 
         return {
@@ -4288,6 +4290,16 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           confirmationMethod: row.confirmation_method ?? null,
           documents: Array.from(docsByRealization.get(row.id)?.values() ?? []),
           disputes: disputesByRealization.get(row.id) ?? [],
+          aidLineValuation:
+            aidLine?.value.kind === "GOODS"
+              ? {
+                  unit: aidLine.value.unit,
+                  quantityApproved: aidLine.value.quantityApproved ?? null,
+                  // Only a value the institution stated a basis for is carried; see goodsValuationOf.
+                  valuedAmountIdr: goodsValuationOf(aidLine.value),
+                  valuationBasis: goodsValuationOf(aidLine.value) === null ? null : (aidLine.value.valuationBasis ?? null),
+                }
+              : null,
         };
       });
 

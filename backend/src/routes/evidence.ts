@@ -50,9 +50,11 @@ import {
   buildDisbursementRealizationSide,
   currentStatusOf,
   failedRealizationSide,
+  type ActivityTraceData,
   type RealizationProvenance,
   type RealizationScope,
 } from "../realization-source";
+import type { ActivityStore } from "../activity-store";
 import {
   PROVENANCE_FILE_NAMES,
   type RealizationCurrentView,
@@ -241,6 +243,7 @@ const describeSide = (side: SubmittedSide) => ({
  */
 async function readRealizationSide(
   disbursement: DisbursementStore,
+  activities: ActivityStore | undefined,
   scope: RealizationScope
 ): Promise<{ side: SubmittedSide; provenanceFile: SubmittedFile | null; coverageNotes: string[] }> {
   let data;
@@ -254,7 +257,18 @@ async function readRealizationSide(
       coverageNotes: [],
     };
   }
-  return buildDisbursementRealizationSide({ ...scope, ...data });
+  // The activity trace is a relation of the source, not the source itself: when it
+  // cannot be read the realizations still freeze, and the provenance says why the trace is absent.
+  let activityTrace: ActivityTraceData | { unavailable: string } | undefined;
+  if (activities) {
+    try {
+      activityTrace = await activities.readActivityTrace(scope.institution.id);
+    } catch (error) {
+      console.error("[evidence] activity trace read failed", error);
+      activityTrace = { unavailable: "Kegiatan penyaluran dan alokasi kontribusi tidak dapat dibaca dari penyimpanan." };
+    }
+  }
+  return buildDisbursementRealizationSide({ ...scope, ...data, activityTrace });
 }
 
 /**
@@ -360,7 +374,7 @@ evidenceRoutes.post("/", async (c) => {
     for (const role of ["CLAIM", "SOURCE"] as const) {
       const asked = internalAsked[role];
       if (asked?.stream !== DISBURSEMENT_REALIZATION_STREAM) continue;
-      realization[role] = await readRealizationSide(runtime.disbursement!, {
+      realization[role] = await readRealizationSide(runtime.disbursement!, runtime.activities, {
         institution: {
           id: auth.session.institutionId,
           legalName: institution.legalName,
@@ -574,7 +588,7 @@ evidenceRoutes.get("/internal-sources", async (c) => {
     });
   } else {
     const cutOff = new Date(runtime.now() * 1000).toISOString();
-    const built = await readRealizationSide(runtime.disbursement, {
+    const built = await readRealizationSide(runtime.disbursement, runtime.activities, {
       institution: {
         id: auth.session.institutionId,
         legalName: institution.legalName,
