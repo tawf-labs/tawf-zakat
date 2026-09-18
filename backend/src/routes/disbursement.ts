@@ -13,6 +13,8 @@
  * Submission, examination and restricted documents share this authenticated API.
  */
 
+import { canonicalJson } from "../../../shared/canonical-json";
+import { preserveRosterApprovals } from "../../../shared/beneficiary-roster-change";
 import { createHash, randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { toHex, type Hex } from "viem";
@@ -58,9 +60,13 @@ import {
   validateRealizationItemInput,
   type RealizationDocumentRecord,
   type RealizationItemInput,
+  type RealizationRecord,
+  calculateRosterChangeDiff,
+  type RosterChangeDiffResult,
 } from "../disbursement";
 import { decodeTabular, type TabularFormat } from "../tabular-reader";
 import {
+  BENEFICIARY_TEMPLATE_VERSION,
   beneficiaryExportFileName,
   beneficiaryTemplateFileName,
   generateBeneficiaryExport,
@@ -152,6 +158,10 @@ disbursementRoutes.onError((error, c) => {
         ? 409
         : 503;
     return c.json({ success: false, error: error.message, reason: error.reason }, status);
+  }
+  if (c.req.path.includes("/reupload/")) {
+    // Database/file errors may embed private source values; never forward them to generic logging.
+    return c.json({ success: false, error: "Perubahan daftar penerima belum dapat dipastikan. Periksa hasil tersimpan sebelum mencoba kembali." }, 500);
   }
   throw error;
 });
@@ -727,6 +737,233 @@ disbursementRoutes.get("/proposals/:id/documents/:docId/import-preview", async (
     return c.json({ success: false, error: result.issues[0]?.message ?? "Gagal membaca berkas tabular.", issues: result.issues }, 400);
   }
   return c.json({ success: true, preview: { ...result.preview, documentId: document.id } });
+});
+
+disbursementRoutes.post("/proposals/:id/reupload/preview", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(c, runtime, institutionOf(body));
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+
+  const fileName = text(body.fileName);
+  const contentBase64 = text(body.contentBase64);
+  if (!fileName || !contentBase64) {
+    return badRequest(c, "Nama berkas dan isi berkas (base64) wajib diisi.");
+  }
+
+  const bytes = new Uint8Array(Buffer.from(contentBase64, "base64"));
+  const fileSha256 = sha256Of(bytes);
+  const decoded = decodeTabular(bytes, fileName);
+  if (!decoded.table) {
+    return c.json(
+      { success: false, error: decoded.issues[0]?.message ?? "Gagal membaca berkas tabular.", issues: decoded.issues },
+      400
+    );
+  }
+
+  let sequence = 0;
+  const mapping = mapBeneficiaryTabular(decoded.table, {
+    sharedAidPeriod: draft.aidPeriod ? `${draft.aidPeriod.start} s/d ${draft.aidPeriod.end}` : undefined,
+    generateId: () => `roster-${requestHash([proposalId, fileSha256, sequence++])}`,
+  });
+  const foreignConflict = await runtime.disbursement.hasRosterIdsOutsideProposal(
+    auth.session.institutionId, proposalId,
+    mapping.allRowsPreview.map(row => row.cells.id_baris).filter(Boolean),
+    mapping.allRowsPreview.map(row => row.cells.id_penerima).filter(Boolean)
+  );
+  if (foreignConflict) return c.json({ success: false, error: "ID baris atau penerima milik lembaga lain atau pengajuan lain tidak dapat dipakai." }, 403);
+
+  let mappedBeneficiaries = mapping.beneficiaries;
+  let mappedAidLines = mapping.aidLines;
+  const warnings: string[] = [];
+  const missingIds = mapping.allRowsPreview.some(row => !row.cells.id_baris || !row.cells.id_penerima);
+  if (missingIds) {
+    // Only the exact source attached to this version may recover omitted IDs by source order.
+    // Full contents and beneficiary relationships must still agree with that source.
+    const documents = await runtime.disbursement.listProposalDocuments(auth.session.institutionId, proposalId);
+    const exactSource = documents.some(doc => doc.category === "BENEFICIARY_ROSTER" && doc.version === draft.version && doc.contentSha256 === fileSha256);
+    const idMap = new Map(mapping.beneficiaries.map((person, index) => [person.id, draft.beneficiaries[index]?.id]));
+    const recovered = {
+      beneficiaries: mapping.beneficiaries.map((person, index) => ({ ...person, id: draft.beneficiaries[index]?.id ?? person.id })),
+      aidLines: mapping.aidLines.map((line, index) => ({ ...line, id: draft.aidLines[index]?.id ?? line.id, beneficiaryId: idMap.get(line.beneficiaryId) ?? line.beneficiaryId })),
+    };
+    const recoveredLines = preserveRosterApprovals(draft, recovered);
+    if (exactSource && canonicalJson(recovered.beneficiaries) === canonicalJson(draft.beneficiaries)
+      && canonicalJson(recoveredLines) === canonicalJson(draft.aidLines)) {
+      mappedBeneficiaries = draft.beneficiaries;
+      mappedAidLines = draft.aidLines;
+    } else {
+      warnings.push("Baris tanpa id_baris/id_penerima dianggap baru, bukan pengganti penerima lama. Gunakan ekspor daftar penerima agar identitas tetap; periksa seluruh penambahan dan penghapusan sebelum menerapkan.");
+    }
+  }
+  if (draft.status === "APPROVED") mappedAidLines = preserveRosterApprovals(draft, { beneficiaries: mappedBeneficiaries, aidLines: mappedAidLines });
+
+  const policy = await runtime.disbursement.getInstitutionPolicy(auth.session.institutionId);
+  if (policy.warnRecurringAid && mappedBeneficiaries.length > 0) {
+    const matches = await runtime.disbursement.findRecurringAidMatches(
+      auth.session.institutionId,
+      proposalId,
+      mappedBeneficiaries
+    );
+    attachRecurringAidWarnings(mapping, evaluateRecurringAidWarnings(mappedBeneficiaries, matches));
+  }
+
+  let realizations: RealizationRecord[] | undefined;
+  if (draft.status === "APPROVED") {
+    realizations = await runtime.disbursement.getProposalRealizations(auth.session.institutionId, proposalId);
+  }
+
+  const diff = calculateRosterChangeDiff({
+    proposalId,
+    baseVersion: draft.version,
+    fileInfo: { fileName, fileSha256, format: decoded.format },
+    previous: { beneficiaries: draft.beneficiaries, aidLines: draft.aidLines },
+    revised: { beneficiaries: mappedBeneficiaries, aidLines: mappedAidLines },
+    realizations: realizations?.map((r) => ({
+      aidLineId: r.aidLineId,
+      amountIdr: r.amountIdr,
+      quantity: r.quantity,
+    })),
+    isApproved: draft.status === "APPROVED",
+    hasFileIssues: mapping.issues.some((i) => i.scope === "file" || (i.scope === "row" && !i.isWarning)),
+  });
+
+  const hasErrors = mapping.issues.some(issue => issue.scope === "file" || !issue.isWarning);
+  if (hasErrors) {
+    warnings.push("Perbandingan belum lengkap. Perbaiki baris bermasalah sebelum menilai penghapusan atau menerapkan perubahan.");
+  }
+  const previewId = crypto.randomUUID();
+  const docId = `doc-${previewId}`;
+  if (!runtime.files) return badRequest(c, "Penyimpanan dokumen terbatas belum tersedia.");
+  const storage = await runtime.files.put({ institutionId: auth.session.institutionId, preparationId: proposalId, fileId: docId, bytes });
+  await runtime.disbursement.saveRosterPreview({
+    id: previewId, institutionId: auth.session.institutionId, proposalId, account: auth.session.account,
+    baseVersion: draft.version, mappingVersion: BENEFICIARY_TEMPLATE_VERSION, beneficiaries: mappedBeneficiaries, aidLines: mappedAidLines,
+    canApply: diff.canApply, isIdentical: diff.isIdentical,
+    error: diff.floorVerdict && !diff.floorVerdict.ok ? diff.floorVerdict.error : hasErrors ? "Perbaiki kesalahan berkas sebelum menerapkan." : null,
+    document: { id: docId, proposalId, institutionId: auth.session.institutionId, beneficiaryId: null,
+      category: "BENEFICIARY_ROSTER", fileName, mimeType: decoded.format === "csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      sizeBytes: bytes.length, contentSha256: fileSha256, storageStatus: "STORED", storageRef: storage.storageRef,
+      version: draft.version, createdBy: auth.session.account, createdAt: runtime.now() },
+  });
+  return c.json({
+    success: true,
+    previewId,
+    warnings,
+    diff,
+    preview: {
+      previewId,
+      fileName,
+      format: decoded.format,
+      sharedContext: { programName: null, aidPeriod: mapping.sharedAidPeriod },
+      ...mapping,
+      beneficiaries: mappedBeneficiaries,
+      aidLines: mappedAidLines,
+    },
+  });
+});
+
+disbursementRoutes.post("/proposals/:id/reupload/apply", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(c, runtime, institutionOf(body));
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const actor = await operationalActor(runtime, auth.session);
+  actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+
+  const expectedVersion = Number(body.expectedVersion);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return badRequest(c, "Versi draf rujukan (expectedVersion) wajib disertakan.");
+  }
+  const operationId = text(body.operationId);
+  if (!operationId) return badRequest(c, "ID operasi wajib diisi.");
+
+  const operation = revisionOperation(c, auth.session.account, operationId, body);
+  const committed = await runtime.disbursement.getProposalDraftOperation(auth.session.institutionId, operation.account, operationId);
+  if (committed) {
+    if (committed.requestHash !== operation.requestHash) throw new DraftOperationConflictError();
+    return rosterOperationResponse(c, JSON.parse(committed.resultJson), draft);
+  }
+  if (draft.version !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
+  const preview = await runtime.disbursement.getRosterPreview(auth.session.institutionId, proposalId, auth.session.account, text(body.previewId));
+  if (!preview) return badRequest(c, "Pratinjau tersimpan wajib disertakan. Baca ulang berkas terlebih dahulu.");
+  if (preview.baseVersion !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
+  if (!preview.canApply) throw new ProposalStateConflictError(preview.error ?? "Pratinjau tidak dapat diterapkan.");
+  const suppliedFile = body.file as { fileName?: string; contentBase64?: string } | undefined;
+  // No client rows or replacement file may alter the reviewed, server-owned material.
+  if ((body.beneficiaries && canonicalJson(body.beneficiaries) !== canonicalJson(preview.beneficiaries))
+    || (body.aidLines && canonicalJson(body.aidLines) !== canonicalJson(preview.aidLines))
+    || (suppliedFile && (suppliedFile.fileName !== preview.document.fileName || sha256Of(Buffer.from(suppliedFile.contentBase64 ?? "", "base64")) !== preview.document.contentSha256))) {
+    return badRequest(c, "Isi penerapan berbeda dari pratinjau tersimpan.");
+  }
+  const { beneficiaries, aidLines } = preview;
+  actor.require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(aidLines) });
+  if (preview.isIdentical) {
+    const result = await runtime.disbursement.acknowledgeUnchangedRoster(auth.session.institutionId, proposalId, expectedVersion, operation,
+      d => actor.require("PREPARE_PROPOSALS", { programId: d.programId, nominalAmount: requestedIdr(d.aidLines) }));
+    return rosterOperationResponse(c, result, draft);
+  }
+  if (draft.status === "APPROVED") {
+    const reason = text(body.reason);
+    if (!reason) return badRequest(c, "Alasan pengajuan revisi wajib diisi untuk pengajuan yang telah disetujui.");
+    const revision = await runtime.disbursement.proposeRevision(
+      auth.session.institutionId, proposalId, { reason, beneficiaries, aidLines, expectedVersion },
+      operation, { account: auth.session.account, officerId: actor.officer.id }, runtime.now(), preview.document
+    );
+    return rosterOperationResponse(c, revision, await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId));
+  }
+  const result = await runtime.disbursement.applyRosterChangeDraft(
+    auth.session.institutionId, proposalId, expectedVersion,
+    { beneficiaries, aidLines, issues: validateProposalDraft({ ...draft, beneficiaries, aidLines }),
+      file: { ...preview.document, storageRef: preview.document.storageRef! } }, operation,
+    d => actor.require("PREPARE_PROPOSALS", { programId: d.programId, nominalAmount: requestedIdr(d.aidLines) }), runtime.now()
+  );
+  return rosterOperationResponse(c, result, draft);
+});
+
+function rosterOperationResponse(c: Context, result: { draft?: StoredProposalDraft; document?: ProposalDocumentRecord } | (ProposalRevisionRecord & { document?: ProposalDocumentRecord }), draft: StoredProposalDraft | null) {
+  if ("fromVersion" in result) {
+    const { document, ...revision } = result;
+    return c.json({ success: true, revision, draft, document: document ? docView(document) : undefined }, 201);
+  }
+  return c.json({ success: true, draft: result.draft, document: result.document ? docView(result.document) : undefined });
+}
+
+// Recovery reads are account-scoped and bound to the same proposal and exact request.
+disbursementRoutes.on(["GET", "POST"], "/proposals/:id/reupload/result", async c => {
+  const runtime = runtimeOf();
+  const body = c.req.method === "GET" ? { operationId: c.req.query("operationId") } : await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const auth = await authenticateWorkspace(c, runtime, institutionOf(body));
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, c.req.param("id"));
+  if (!draft) return refuse(c, 404, "not-found");
+  (await operationalActor(runtime, auth.session)).require("PREPARE_PROPOSALS", { programId: draft.programId, nominalAmount: requestedIdr(draft.aidLines) });
+  const result = await runtime.disbursement.getProposalDraftOperation(auth.session.institutionId, auth.session.account, text(body.operationId));
+  if (!result) return c.json({ success: true, pending: true, version: draft.version });
+  if (c.req.method === "POST" && result.requestHash !== requestHash([c.req.path.replace(/result$/, "apply"), body])) throw new DraftOperationConflictError();
+  const saved = JSON.parse(result.resultJson);
+  if ((saved.draft?.id ?? saved.proposalId) !== draft.id) return refuse(c, 404, "not-found");
+  return rosterOperationResponse(c, saved, draft);
 });
 
 disbursementRoutes.delete("/proposals/:id", async (c) => {

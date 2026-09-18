@@ -1,3 +1,4 @@
+import type { RosterChangeDiffResult } from "../../../../shared/beneficiary-roster-change";
 import type { PrivateRequests } from "../workspace/privateRequests";
 
 /**
@@ -1386,3 +1387,47 @@ export const closeProposalRemainder = (
 
 export const getProposalClosure = (requests: PrivateRequests, proposalId: string) =>
   requests.json<{ closure: ProposalClosureRecord }>(`/api/workspace/proposals/${proposalId}/closure`).then((r) => r.closure);
+
+// ---------------------------------------------------------------------------
+// Beneficiary Re-upload (Spec #86, Ticket #97)
+// ---------------------------------------------------------------------------
+
+export type {
+  DiffStatus,
+  FieldDiff,
+  RosterChangeCounts,
+  RosterChangeRowDetail,
+  RosterChangeDiffResult,
+} from "../../../../shared/beneficiary-roster-change";
+
+
+export type BeneficiaryRosterChangePreviewResponse = {
+  success: boolean;
+  previewId: string;
+  warnings: string[];
+  diff: RosterChangeDiffResult<Beneficiary, AidLine>;
+  preview: BeneficiaryImportPreviewResult;
+};
+
+export const previewBeneficiaryRosterChange = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: { fileName: string; contentBase64: string }
+) =>
+  requests.json<BeneficiaryRosterChangePreviewResponse>(`/api/workspace/proposals/${proposalId}/reupload/preview`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export type ApplyRosterChangeInput = { previewId: string; expectedVersion: number; operationId: string; reason?: string };
+export type RosterChangeResult = {
+  success: boolean; draft: ProposalDraft; document?: ProposalDocument; revision?: ProposalRevisionRecord;
+};
+export const applyBeneficiaryRosterChange = (requests: PrivateRequests, proposalId: string, input: ApplyRosterChangeInput) =>
+  requests.json<RosterChangeResult>(`/api/workspace/proposals/${proposalId}/reupload/apply`, { method: "POST", body: JSON.stringify(input) });
+
+export const readBeneficiaryRosterChangeResult = (requests: PrivateRequests, proposalId: string, input: ApplyRosterChangeInput) =>
+  requests.json<RosterChangeResult | { pending: true; version: number }>(`/api/workspace/proposals/${proposalId}/reupload/result`, { method: "POST", body: JSON.stringify(input) });
+
+export const recoverBeneficiaryRosterChange = (requests: PrivateRequests, proposalId: string, operationId: string) =>
+  requests.json<RosterChangeResult | { pending: true; version: number }>(`/api/workspace/proposals/${proposalId}/reupload/result?operationId=${encodeURIComponent(operationId)}`);

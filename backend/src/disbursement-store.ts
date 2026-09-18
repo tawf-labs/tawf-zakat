@@ -262,6 +262,12 @@ export class RealizationSelfExaminationError extends Error {
 export type DraftOperation = { id: string; account: string; requestHash: string };
 export type ProposalContributor = { account: string; officerId: string | null; version: number };
 
+export type RosterPreview = {
+  id: string; institutionId: string; proposalId: string; account: string; baseVersion: number; mappingVersion: string;
+  beneficiaries: Beneficiary[]; aidLines: AidLine[]; document: ProposalDocumentRecord;
+  canApply: boolean; error: string | null; isIdentical: boolean;
+};
+
 type DraftGuard = (draft: StoredProposalDraft) => void;
 const materialContents = (draft: Pick<StoredProposalDraft, "programId" | "originOfRequest" | "purpose" | "aidPeriod" | "personInCharge" | "beneficiaries" | "aidLines">) => JSON.stringify([
   draft.programId, draft.originOfRequest, draft.purpose, draft.aidPeriod,
@@ -398,6 +404,25 @@ const permittedRows = (rows: any[], allows: QueueAccess) => rows.filter(row => a
   programId: row.program_id ?? null, aidLines: JSON.parse(row.aid_lines_json || "[]"),
 }));
 
+async function recordDraftContributors(tx: { execute: DisbursementDatabase["execute"] }, previous: StoredProposalDraft | null,
+  saved: StoredProposalDraft, operation: DraftOperation) {
+  if (previous && materialContents(previous) === materialContents(saved)) {
+    await tx.execute(sql`
+      INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+      SELECT draft_id, ${saved.version}, account, officer_id FROM proposal_draft_contributors
+      WHERE draft_id = ${saved.id} AND version = ${previous.version}
+    `);
+  } else {
+    // Attribution is committed with the actual version; it never depends on an active membership later.
+    await tx.execute(sql`
+      INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+      VALUES (${saved.id}, ${saved.version}, ${operation.account.toLowerCase()},
+        (SELECT officer_id FROM institution_memberships WHERE institution_id = ${saved.institutionId}
+          AND account_address = ${operation.account.toLowerCase()}))
+    `);
+  }
+}
+
 async function editableDocumentDraft(tx: { execute: DisbursementDatabase["execute"] },
   institutionId: string, proposalId: string, expectedVersion: number, guard: DraftGuard) {
   const row = rowsOf(await tx.execute(sql`
@@ -428,6 +453,24 @@ const documentFrom = (row: any): ProposalDocumentRecord => ({
   createdBy: row.created_by,
   createdAt: asSeconds(row.created_at),
 });
+
+async function insertProposalDocument(tx: { execute: DisbursementDatabase["execute"] }, doc: ProposalDocumentRecord): Promise<ProposalDocumentRecord> {
+  const row = rowsOf(
+    await tx.execute(sql`
+      INSERT INTO proposal_documents (
+        id, proposal_id, institution_id, beneficiary_id, category, file_name,
+        mime_type, size_bytes, content_sha256, storage_status, storage_ref,
+        version, created_by, created_at
+      ) VALUES (
+        ${doc.id}, ${doc.proposalId}, ${doc.institutionId}, ${doc.beneficiaryId},
+        ${doc.category}, ${doc.fileName}, ${doc.mimeType}, ${doc.sizeBytes},
+        ${doc.contentSha256}, ${doc.storageStatus}, ${doc.storageRef},
+        ${doc.version}, ${doc.createdBy}, ${doc.createdAt}
+      ) RETURNING *
+    `)
+  )[0];
+  return documentFrom(row);
+}
 
 const policyFrom = (row: any, institutionId: string): DisbursementPolicy => {
   if (!row) return DEFAULT_DISBURSEMENT_POLICY(institutionId);
@@ -909,6 +952,10 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      updated_at BIGINT NOT NULL,
      updated_by TEXT NOT NULL
    );`,
+  `CREATE TABLE IF NOT EXISTS proposal_roster_previews (
+    id text PRIMARY KEY, institution_id text NOT NULL, proposal_id text NOT NULL,
+    account text NOT NULL, payload_json text NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS proposal_draft_operations (
      institution_id TEXT NOT NULL REFERENCES institutions (id),
      account TEXT NOT NULL,
@@ -1412,23 +1459,102 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         `));
         if (!written.length) throw new ProposalDraftConflictError(draft.id);
         const saved = draftFrom(written[0]);
-        if (current && materialContents(draftFrom(current)) === materialContents(draft)) {
-          await tx.execute(sql`
-            INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
-            SELECT draft_id, ${saved.version}, account, officer_id FROM proposal_draft_contributors
-            WHERE draft_id = ${saved.id} AND version = ${expectedVersion}
-          `);
-        } else {
-          // Attribution is committed with the actual version; it never depends on an active membership later.
-          await tx.execute(sql`
-            INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
-            VALUES (${saved.id}, ${saved.version}, ${operation.account.toLowerCase()},
-              (SELECT officer_id FROM institution_memberships WHERE institution_id = ${draft.institutionId}
-                AND account_address = ${operation.account.toLowerCase()}))
-          `);
-        }
+        await recordDraftContributors(tx, current ? draftFrom(current) : null, saved, operation);
         return saved;
       });
+    },
+
+    async applyRosterChangeDraft(
+      institutionId: string,
+      proposalId: string,
+      expectedVersion: number,
+      data: {
+        beneficiaries: Beneficiary[];
+        aidLines: AidLine[];
+        issues: ProposalIssue[];
+        file?: {
+          id: string;
+          fileName: string;
+          mimeType: string;
+          sizeBytes: number;
+          contentSha256: string;
+          storageRef: string;
+        };
+      },
+      operation: DraftOperation,
+      authorize: DraftGuard,
+      now: number
+    ): Promise<{ draft: StoredProposalDraft; document?: ProposalDocumentRecord }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        const previous = await editableDocumentDraft(tx, institutionId, proposalId, expectedVersion, authorize);
+
+        const written = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_drafts SET
+              beneficiaries_json = ${JSON.stringify(data.beneficiaries)},
+              aid_lines_json = ${JSON.stringify(data.aidLines)},
+              issues_json = ${JSON.stringify(data.issues)},
+              version = version + 1,
+              updated_at = ${now}
+            WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${expectedVersion}
+            RETURNING *
+          `)
+        );
+        if (!written.length) throw new ProposalDraftConflictError(proposalId);
+        const saved = draftFrom(written[0]);
+
+        let docRecord: ProposalDocumentRecord | undefined;
+        if (data.file) {
+          docRecord = await insertProposalDocument(tx, {
+            ...data.file, proposalId, institutionId, beneficiaryId: null,
+            category: "BENEFICIARY_ROSTER", storageStatus: "STORED", version: saved.version,
+            createdBy: operation.account, createdAt: now,
+          });
+        }
+
+        await recordDraftContributors(tx, previous, saved, operation);
+
+        return { draft: saved, document: docRecord };
+      });
+    },
+
+    async hasRosterIdsOutsideProposal(institutionId: string, proposalId: string, aidLineIds: string[], beneficiaryIds: string[]): Promise<boolean> {
+      const conflicts = rowsOf(await db.execute(sql`
+        SELECT 1 FROM proposal_drafts d
+        WHERE (d.institution_id <> ${institutionId} OR d.id <> ${proposalId}) AND (
+          EXISTS (SELECT 1 FROM jsonb_array_elements(d.aid_lines_json::jsonb) item
+            WHERE item->>'id' IN (SELECT jsonb_array_elements_text(${JSON.stringify(aidLineIds)}::jsonb))
+            AND NOT EXISTS (SELECT 1 FROM proposal_drafts own, jsonb_array_elements(own.aid_lines_json::jsonb) mine
+              WHERE own.id = ${proposalId} AND own.institution_id = ${institutionId} AND mine->>'id' = item->>'id'))
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements(d.beneficiaries_json::jsonb) item
+            WHERE item->>'id' IN (SELECT jsonb_array_elements_text(${JSON.stringify(beneficiaryIds)}::jsonb))
+            AND NOT EXISTS (SELECT 1 FROM proposal_drafts own, jsonb_array_elements(own.beneficiaries_json::jsonb) mine
+              WHERE own.id = ${proposalId} AND own.institution_id = ${institutionId} AND mine->>'id' = item->>'id'))
+        ) LIMIT 1
+      `));
+      return conflicts.length > 0;
+    },
+
+    async acknowledgeUnchangedRoster(institutionId: string, proposalId: string, expectedVersion: number, operation: DraftOperation, guard: DraftGuard) {
+      return mutateOnce(db, institutionId, operation, async tx => {
+        const row = rowsOf(await tx.execute(sql`SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId} FOR UPDATE`))[0];
+        if (!row || Number(row.version) !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
+        const draft = draftFrom(row);
+        guard(draft);
+        if (!["DRAFT", "REVISION_REQUIRED", "APPROVED"].includes(draft.status)) throw new ProposalStateConflictError("Daftar penerima tidak dapat diperbarui pada status ini.");
+        return { draft };
+      });
+    },
+
+    async saveRosterPreview(input: RosterPreview): Promise<void> {
+      await db.execute(sql`INSERT INTO proposal_roster_previews (id, institution_id, proposal_id, account, payload_json)
+        VALUES (${input.id}, ${input.institutionId}, ${input.proposalId}, ${input.account}, ${JSON.stringify(input)})`);
+    },
+
+    async getRosterPreview(institutionId: string, proposalId: string, account: string, id: string): Promise<RosterPreview | null> {
+      const row = rowsOf(await db.execute(sql`SELECT payload_json FROM proposal_roster_previews
+        WHERE id = ${id} AND institution_id = ${institutionId} AND proposal_id = ${proposalId} AND account = ${account}`))[0];
+      return row ? JSON.parse(row.payload_json) : null;
     },
 
     async getProposalDraft(institutionId: string, id: string): Promise<StoredProposalDraft | null> {
@@ -1554,21 +1680,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         if (doc.beneficiaryId && !draft.beneficiaries.some(b => b.id === doc.beneficiaryId)) {
           throw new ProposalStateConflictError("Penerima lampiran sudah berubah. Muat ulang pengajuan.");
         }
-        const row = rowsOf(
-          await tx.execute(sql`
-            INSERT INTO proposal_documents (
-              id, proposal_id, institution_id, beneficiary_id, category, file_name,
-              mime_type, size_bytes, content_sha256, storage_status, storage_ref,
-              version, created_by, created_at
-            ) VALUES (
-              ${doc.id}, ${doc.proposalId}, ${doc.institutionId}, ${doc.beneficiaryId},
-              ${doc.category}, ${doc.fileName}, ${doc.mimeType}, ${doc.sizeBytes},
-              ${doc.contentSha256}, ${doc.storageStatus}, ${doc.storageRef},
-              ${doc.version}, ${doc.createdBy}, ${doc.createdAt}
-            ) RETURNING *
-          `)
-        )[0];
-        return documentFrom(row);
+        return insertProposalDocument(tx, doc);
       });
     },
 
@@ -3090,8 +3202,9 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       },
       operation: DraftOperation,
       actor: { account: string; officerId: string },
-      now: number
-    ): Promise<ProposalRevisionRecord> {
+      now: number,
+      sourceDocument?: ProposalDocumentRecord
+    ): Promise<ProposalRevisionRecord & { document?: ProposalDocumentRecord }> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
         const proposalRow = rowsOf(
           await tx.execute(sql`
@@ -3179,7 +3292,11 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           )
         `);
 
-        return revisionFrom(revRow);
+        const document = sourceDocument ? await insertProposalDocument(tx, {
+          ...sourceDocument, proposalId, institutionId, version: targetVersion,
+          createdBy: actor.account, createdAt: now,
+        }) : undefined;
+        return { ...revisionFrom(revRow), ...(document ? { document } : {}) };
       });
     },
 

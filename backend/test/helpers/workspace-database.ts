@@ -65,6 +65,7 @@ const WORKSPACE_TABLES = [
   "proposal_draft_contributors",
   "operational_mandates",
   "institutional_endorsement_accounts",
+  "proposal_roster_previews",
   "proposal_draft_operations",
   "proposal_drafts",
   "programs",

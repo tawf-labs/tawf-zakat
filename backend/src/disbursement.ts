@@ -32,6 +32,17 @@ export {
   calculateRevisionDelta,
   validateRevisionFloor,
 } from "../../shared/proposal-revision";
+export {
+  calculateRosterChangeDiff,
+  calculateTotalsByUnit,
+  describeBeneficiaryChanges,
+  describeAidLineChanges,
+  type DiffStatus,
+  type FieldDiff,
+  type RosterChangeCounts,
+  type RosterChangeRowDetail,
+  type RosterChangeDiffResult,
+} from "../../shared/beneficiary-roster-change";
 
 export type FundType = "ZAKAT" | "INFAK" | "SEDEKAH" | "LAINNYA";
 export const FUND_TYPES: FundType[] = ["ZAKAT", "INFAK", "SEDEKAH", "LAINNYA"];

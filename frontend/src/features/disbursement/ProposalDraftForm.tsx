@@ -17,6 +17,7 @@ import { ProposalDocumentManager } from "./ProposalDocumentManager";
 import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
 import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
 import { BeneficiaryImportNotice } from "./BeneficiaryImportNotice";
+import { BeneficiaryRosterChangeModal } from "./BeneficiaryRosterChangeModal";
 import { useBeneficiaryImport } from "./useBeneficiaryImport";
 import { ProposalDecisionModal } from "./ProposalDecisionModal";
 import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
@@ -63,6 +64,7 @@ export function ProposalDraftForm({
 
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [recordedDecision, setRecordedDecision] = useState<ProposalDecision | null>(null);
+  const [showReupload, setShowReupload] = useState(false);
 
   const isReadOnly =
     draft.status === "SUBMITTED" ||
@@ -253,6 +255,9 @@ export function ProposalDraftForm({
           onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
         />
       </fieldset>
+      {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowReupload(true)}>
+        Perbarui daftar penerima dari berkas
+      </Button>}
       <BeneficiaryImportNotice
         pendingSource={rosterImport.pendingSource}
         storedRoster={rosterImport.storedRoster}
@@ -383,6 +388,21 @@ export function ProposalDraftForm({
           initialPreview={rosterImport.dialog.initialPreview}
           onClose={rosterImport.close}
           onApply={rosterImport.apply}
+        />
+      )}
+      {showReupload && (
+        <BeneficiaryRosterChangeModal
+          requests={requests}
+          proposal={draft}
+          isOpen={showReupload}
+          onClose={() => setShowReupload(false)}
+          onAppliedDraft={(updatedDraft) => {
+            acceptSaved(updatedDraft);
+            setShowReupload(false);
+          }}
+          onAppliedRevision={() => {
+            setShowReupload(false);
+          }}
         />
       )}
     </div>

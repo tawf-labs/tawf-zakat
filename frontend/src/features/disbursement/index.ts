@@ -18,4 +18,5 @@ export { RevisionWorkflowBanner } from "./RevisionWorkflowBanner";
 export { RevisionDecisionModal } from "./RevisionDecisionModal";
 export { ProposalCancellationModal } from "./ProposalCancellationModal";
 export { ProposalClosureModal } from "./ProposalClosureModal";
+export { BeneficiaryRosterChangeModal } from "./BeneficiaryRosterChangeModal";
 export * from "./disbursementClient";

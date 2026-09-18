@@ -2,7 +2,7 @@ import { RealizationSummaryMetrics } from "./RealizationSummaryMetrics";
 import { compareDecimalStrings } from "../../../../shared/exact-decimal";
 import { useRealizationOverview, useInvalidateRealizations } from "./useRealizationQueries";
 import { useState } from "react";
-import { AlertTriangle, Banknote, Coins, Edit3, FileCheck, PlusCircle, XCircle } from "lucide-react";
+import { AlertTriangle, Banknote, Coins, Edit3, FileCheck, FileSpreadsheet, PlusCircle, XCircle } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { formatIdrAmount } from "../workspace/mandateLabels";
@@ -24,11 +24,13 @@ import { ProposalRevisionModal } from "./ProposalRevisionModal";
 import { ProposalCancellationModal } from "./ProposalCancellationModal";
 import { ProposalClosureModal } from "./ProposalClosureModal";
 import { RevisionWorkflowBanner } from "./RevisionWorkflowBanner";
+import { BeneficiaryRosterChangeModal } from "./BeneficiaryRosterChangeModal";
 
 type Open =
   | { kind: "record" }
   | { kind: "advances" }
   | { kind: "revision" }
+  | { kind: "reupload" }
   | { kind: "cancel" }
   | { kind: "closeRemainder" }
   | { kind: "evidence" | "confirm" | "dispute"; realization: DisbursementRealization }
@@ -100,6 +102,10 @@ export function ProposalRealizationBanner({
         <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-blue-700 hover:text-blue-800" disabled={!loaded || !!draft.activeRevisionId}
           onClick={() => setOpen({ kind: "revision" })}>
           <Edit3 className="h-4 w-4" /> Ajukan revisi
+        </Button>
+        <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-emerald-700 hover:text-emerald-800" disabled={!loaded || !!draft.activeRevisionId}
+          onClick={() => setOpen({ kind: "reupload" })}>
+          <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Revisi pengajuan dari berkas
         </Button>
         {canCancel && (
           <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-red-600 hover:text-red-700"
@@ -215,6 +221,22 @@ export function ProposalRealizationBanner({
         isOpen
         onClose={() => setOpen(null)}
         onProposed={(newDraft) => {
+          onDraftUpdated?.(newDraft);
+          reload();
+        }}
+      />
+    )}
+    {open?.kind === "reupload" && loaded && (
+      <BeneficiaryRosterChangeModal
+        requests={requests}
+        proposal={draft}
+        isOpen
+        onClose={() => setOpen(null)}
+        onAppliedDraft={(newDraft) => {
+          onDraftUpdated?.(newDraft);
+          reload();
+        }}
+        onAppliedRevision={(_rev, newDraft) => {
           onDraftUpdated?.(newDraft);
           reload();
         }}
