@@ -5,6 +5,7 @@
  *   GET  /api/evidence                  what this institution has prepared
  *   GET  /api/evidence/:id              reopen one, exactly as it was examined
  *   GET  /api/evidence/:id/public       the summary a public reader may see
+ *   GET  /api/evidence/:id/drill-down   the frozen realization provenance, per side
  *   GET  /api/evidence/:id/files/:file  a restricted document, if you may have it
  *
  * Bringing a source in - the template, the preview, the private drafts - is
@@ -43,6 +44,21 @@ import {
   type InternalLedgerReader,
   type InternalManifestBase,
 } from "../internal-usdc-source";
+import {
+  DISBURSEMENT_REALIZATION_FORMAT,
+  DISBURSEMENT_REALIZATION_STREAM,
+  buildDisbursementRealizationSide,
+  currentStatusOf,
+  failedRealizationSide,
+  type RealizationProvenance,
+  type RealizationScope,
+} from "../realization-source";
+import {
+  PROVENANCE_FILE_NAMES,
+  type RealizationCurrentView,
+  type RealizationDrillDown,
+} from "../../../shared/realization-provenance";
+import type { DisbursementStore } from "../disbursement-store";
 import { readTabularSource, readUpload } from "../source-import";
 import draftRoutes from "./evidence-drafts";
 import {
@@ -103,12 +119,23 @@ async function readInternalUsdc(
   };
 }
 
+type InternalRequest =
+  | {
+      stream: typeof USDC_DEPOSIT_STREAM;
+      fromBlock: number | null;
+      toBlock: number | null;
+    }
+  | {
+      stream: typeof DISBURSEMENT_REALIZATION_STREAM;
+      cutOff: string | null;
+    };
+
 /** The internal source a side asked for, or `null` when it asked for none. */
 function readInternalRequest(
   raw: unknown,
   role: "CLAIM" | "SOURCE",
   issues: SourceIssue[]
-): { fromBlock: number | null; toBlock: number | null } | null {
+): InternalRequest | null {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : null;
   const internal = record?.internal;
   if (internal === undefined || internal === null) return null;
@@ -122,54 +149,143 @@ function readInternalRequest(
     return null;
   }
 
-  if (text(asked.stream) !== USDC_DEPOSIT_STREAM) {
-    issues.push(
-      issue(
-        `${where}.stream`,
-        `Sumber internal yang tersedia hanya "${USDC_DEPOSIT_STREAM}". ` +
-          `Diterima: ${JSON.stringify(asked.stream)}.`
-      )
-    );
-    return null;
+  const stream = text(asked.stream);
+  if (stream === USDC_DEPOSIT_STREAM) {
+    const bound = (field: "fromBlock" | "toBlock"): number | null => {
+      const value = asked[field];
+      if (value === undefined || value === null) return null;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        issues.push(issue(`${where}.${field}`, "Batas blok harus bilangan bulat tidak negatif."));
+        return null;
+      }
+      return value;
+    };
+    return { stream: USDC_DEPOSIT_STREAM, fromBlock: bound("fromBlock"), toBlock: bound("toBlock") };
   }
 
-  const bound = (field: "fromBlock" | "toBlock"): number | null => {
-    const value = asked[field];
-    if (value === undefined || value === null) return null;
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      issues.push(issue(`${where}.${field}`, "Batas blok harus bilangan bulat tidak negatif."));
+  if (stream === DISBURSEMENT_REALIZATION_STREAM) {
+    const cutOff = typeof asked.cutOff === "string" ? asked.cutOff : null;
+    if (cutOff !== null && isNaN(Date.parse(cutOff))) {
+      issues.push(issue(`${where}.cutOff`, "Batas cut-off harus berupa string ISO 8601 yang sah."));
       return null;
     }
-    return value;
-  };
+    return { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff };
+  }
 
-  return { fromBlock: bound("fromBlock"), toBlock: bound("toBlock") };
+  issues.push(
+    issue(
+      `${where}.stream`,
+      `Sumber internal yang tersedia adalah "${USDC_DEPOSIT_STREAM}" dan "${DISBURSEMENT_REALIZATION_STREAM}". ` +
+        `Diterima: ${JSON.stringify(asked.stream)}.`
+    )
+  );
+  return null;
 }
 
-/** The header a deposit source can be examined under, checked before any read. */
-function checkInternalHeader(header: Header, issues: SourceIssue[]): void {
-  if (header.currencyUnit !== "USDC_6DP") {
-    issues.push(
-      issue(
-        "currencyUnit",
-        `Sumber internal deposit USDC hanya dapat diperiksa dalam unit USDC_6DP; persiapan ini ` +
-          `memakai ${header.currencyUnit}. Rupiah dan USDC tidak pernah dikonversi.`
-      )
-    );
-  }
-  if (header.balanceSheetScope !== "ON") {
-    issues.push(
-      issue(
-        "balanceSheetScope",
-        "Deposit USDC tercatat on balance sheet, sehingga cakupan pemeriksaannya harus \"ON\"."
-      )
-    );
+/** The header an internal source can be examined under, checked before any read. */
+function checkInternalHeader(
+  header: Header,
+  stream: typeof USDC_DEPOSIT_STREAM | typeof DISBURSEMENT_REALIZATION_STREAM,
+  issues: SourceIssue[]
+): void {
+  if (stream === USDC_DEPOSIT_STREAM) {
+    if (header.currencyUnit !== "USDC_6DP") {
+      issues.push(
+        issue(
+          "currencyUnit",
+          `Sumber internal deposit USDC hanya dapat diperiksa dalam unit USDC_6DP; persiapan ini ` +
+            `memakai ${header.currencyUnit}. Rupiah dan USDC tidak pernah dikonversi.`
+        )
+      );
+    }
+    if (header.balanceSheetScope !== "ON") {
+      issues.push(
+        issue(
+          "balanceSheetScope",
+          "Deposit USDC tercatat on balance sheet, sehingga cakupan pemeriksaannya harus \"ON\"."
+        )
+      );
+    }
+  } else if (stream === DISBURSEMENT_REALIZATION_STREAM) {
+    if (header.currencyUnit !== "IDR") {
+      issues.push(
+        issue(
+          "currencyUnit",
+          `Sumber internal realisasi penyaluran dicatat dalam satuan IDR (rupiah); persiapan ini ` +
+            `memakai ${header.currencyUnit}.`
+        )
+      );
+    }
   }
 }
 
 // Bringing a source in and keeping a draft is its own router, mounted here rather
 // than further down: Hono matches in registration order, and "/:id" below would
 // otherwise answer for "/template", "/preview" and "/drafts".
+/** How one side of an internal stream is offered on `/internal-sources`. */
+const describeSide = (side: SubmittedSide) => ({
+  role: side.manifest.role,
+  label: side.manifest.label,
+  status: side.status,
+  detail: side.status === "READ" ? null : side.detail,
+  rowCount: side.status === "READ" ? side.rows.length : null,
+  unverified: side.unverified ?? [],
+  manifest: side.manifest,
+});
+
+/**
+ * One side read from the institution's recorded realizations.
+ *
+ * A read that throws becomes a FAILED side with no provenance file, so the
+ * package says the scope was not examined instead of reporting an empty source.
+ */
+async function readRealizationSide(
+  disbursement: DisbursementStore,
+  scope: RealizationScope
+): Promise<{ side: SubmittedSide; provenanceFile: SubmittedFile | null; coverageNotes: string[] }> {
+  let data;
+  try {
+    data = await disbursement.readRealizationSourceData(scope.institution.id);
+  } catch (error) {
+    console.error("[evidence] realization source read failed", error);
+    return {
+      side: failedRealizationSide(scope, "Catatan realisasi penyaluran tidak dapat dibaca dari penyimpanan"),
+      provenanceFile: null,
+      coverageNotes: [],
+    };
+  }
+  return buildDisbursementRealizationSide({ ...scope, ...data });
+}
+
+/**
+ * What the working data says now about the realizations a package froze.
+ *
+ * Read beside the snapshot with the instant it was read at, and never written
+ * into it. A failed read is stated as such; the frozen drill-down still answers.
+ */
+async function currentRealizationView(
+  disbursement: DisbursementStore | undefined,
+  institutionId: string,
+  now: number,
+  provenances: readonly RealizationProvenance[]
+): Promise<RealizationCurrentView> {
+  if (!disbursement) {
+    return { available: false, observedAt: now, reason: "Penyimpanan realisasi penyaluran belum dikonfigurasi pada deployment ini." };
+  }
+  const ids = [...new Set(provenances.flatMap((p) => p.realizations.map((r) => r.realizationId)))];
+  try {
+    const data = await disbursement.readRealizationSourceData(institutionId);
+    return { available: true, observedAt: now, realizations: currentStatusOf(ids, data) };
+  } catch (error) {
+    console.error("[evidence] current realization status read failed", error);
+    return {
+      available: false,
+      observedAt: now,
+      reason: "Status operasional terkini tidak dapat dibaca; rincian beku di bawah tetap berlaku.",
+    };
+  }
+}
+
 evidenceRoutes.route("/", draftRoutes);
 
 // --------------------------------------------------------------------------
@@ -198,19 +314,32 @@ evidenceRoutes.post("/", async (c) => {
     CLAIM: readInternalRequest(body.claim, "CLAIM", issues),
     SOURCE: readInternalRequest(body.source, "SOURCE", issues),
   };
-  const wantsInternal = internalAsked.CLAIM !== null || internalAsked.SOURCE !== null;
-  if (wantsInternal && header) checkInternalHeader(header, issues);
-  if (wantsInternal && !runtime.internalLedger) {
+  const wantsInternalUsdc =
+    internalAsked.CLAIM?.stream === USDC_DEPOSIT_STREAM ||
+    internalAsked.SOURCE?.stream === USDC_DEPOSIT_STREAM;
+  const wantsInternalRealization =
+    internalAsked.CLAIM?.stream === DISBURSEMENT_REALIZATION_STREAM ||
+    internalAsked.SOURCE?.stream === DISBURSEMENT_REALIZATION_STREAM;
+
+  if (wantsInternalUsdc && header) checkInternalHeader(header, USDC_DEPOSIT_STREAM, issues);
+  if (wantsInternalRealization && header) checkInternalHeader(header, DISBURSEMENT_REALIZATION_STREAM, issues);
+
+  if (wantsInternalUsdc && !runtime.internalLedger) {
     return unconfigured(c, "Ledger internal dan event terindeks deployment ini");
   }
+  if (wantsInternalRealization && !runtime.disbursement) {
+    return unconfigured(c, "Penyimpanan realisasi penyaluran deployment ini");
+  }
 
-  let internal: Awaited<ReturnType<typeof readInternalUsdc>> | null = null;
-  if (wantsInternal && header && issues.length === 0) {
+  let internalUsdc: Awaited<ReturnType<typeof readInternalUsdc>> | null = null;
+  if (wantsInternalUsdc && header && issues.length === 0) {
     const institution = await runtime.store.getInstitution(auth.session.institutionId);
     if (!institution) return refuse(c, 404, "not-found");
+    const claimReq = internalAsked.CLAIM?.stream === USDC_DEPOSIT_STREAM ? internalAsked.CLAIM : null;
+    const sourceReq = internalAsked.SOURCE?.stream === USDC_DEPOSIT_STREAM ? internalAsked.SOURCE : null;
     const window = {
-      fromBlock: internalAsked.CLAIM?.fromBlock ?? internalAsked.SOURCE?.fromBlock ?? null,
-      toBlock: internalAsked.CLAIM?.toBlock ?? internalAsked.SOURCE?.toBlock ?? null,
+      fromBlock: claimReq?.fromBlock ?? sourceReq?.fromBlock ?? null,
+      toBlock: claimReq?.toBlock ?? sourceReq?.toBlock ?? null,
     };
     const base: InternalManifestBase = {
       institutionId: auth.session.institutionId,
@@ -219,12 +348,39 @@ evidenceRoutes.post("/", async (c) => {
       period: header.period,
       cutOff: new Date(runtime.now() * 1000).toISOString(),
     };
-    internal = await readInternalUsdc(runtime.internalLedger!, base, window);
+    internalUsdc = await readInternalUsdc(runtime.internalLedger!, base, window);
   }
 
-  const claim = internalAsked.CLAIM
-    ? { side: internal?.claim ?? null, issues: [] as SourceIssue[] }
-    : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
+  const realization: Partial<Record<"CLAIM" | "SOURCE", Awaited<ReturnType<typeof readRealizationSide>>>> = {};
+
+  if (wantsInternalRealization && header && issues.length === 0) {
+    const institution = await runtime.store.getInstitution(auth.session.institutionId);
+    if (!institution) return refuse(c, 404, "not-found");
+
+    for (const role of ["CLAIM", "SOURCE"] as const) {
+      const asked = internalAsked[role];
+      if (asked?.stream !== DISBURSEMENT_REALIZATION_STREAM) continue;
+      realization[role] = await readRealizationSide(runtime.disbursement!, {
+        institution: {
+          id: auth.session.institutionId,
+          legalName: institution.legalName,
+          scopeUnit: institution.scopeUnit,
+          scopeLevel: institution.scopeLevel,
+        },
+        period: header.period,
+        cutOff: asked.cutOff ?? new Date(runtime.now() * 1000).toISOString(),
+        role,
+        balanceSheetScope: header.balanceSheetScope,
+      });
+    }
+  }
+
+  const claim =
+    internalAsked.CLAIM?.stream === USDC_DEPOSIT_STREAM
+      ? { side: internalUsdc?.claim ?? null, issues: [] as SourceIssue[] }
+      : internalAsked.CLAIM?.stream === DISBURSEMENT_REALIZATION_STREAM
+      ? { side: realization.CLAIM?.side ?? null, issues: [] as SourceIssue[] }
+      : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
 
   const declaredSource =
     typeof body.source === "object" && body.source !== null
@@ -236,8 +392,10 @@ evidenceRoutes.post("/", async (c) => {
   let sourceWorkbook: SubmittedFile | null = null;
 
   const upload = readUpload(body.sourceTable) ?? readUpload(declaredSource?.tabular);
-  if (internalAsked.SOURCE) {
-    source = { side: internal?.source ?? null, issues: [] };
+  if (internalAsked.SOURCE?.stream === USDC_DEPOSIT_STREAM) {
+    source = { side: internalUsdc?.source ?? null, issues: [] };
+  } else if (internalAsked.SOURCE?.stream === DISBURSEMENT_REALIZATION_STREAM) {
+    source = { side: realization.SOURCE?.side ?? null, issues: [] };
   } else if (upload) {
     const tabularIssues: SourceIssue[] = [];
     const read = header
@@ -281,6 +439,9 @@ evidenceRoutes.post("/", async (c) => {
 
   const files = readFiles(body.files, issues);
   if (sourceWorkbook) files.push(sourceWorkbook);
+  for (const read of [realization.CLAIM, realization.SOURCE]) {
+    if (read?.provenanceFile) files.push(read.provenanceFile);
+  }
 
   if (issues.length > 0 || !header || !claim.side || !source.side) {
     // Every issue at once. A person fixing a pasted table wants the whole list,
@@ -295,7 +456,17 @@ evidenceRoutes.post("/", async (c) => {
     );
   }
 
-  return executeFreezeAndStorePreparation(c, runtime, auth, header, claim.side, source.side, files, internal);
+  return executeFreezeAndStorePreparation(
+    c,
+    runtime,
+    auth,
+    header,
+    claim.side,
+    source.side,
+    files,
+    internalUsdc,
+    [...(realization.CLAIM?.coverageNotes ?? []), ...(realization.SOURCE?.coverageNotes ?? [])]
+  );
 });
 
 evidenceRoutes.get("/", async (c) => {
@@ -334,26 +505,6 @@ evidenceRoutes.get("/internal-sources", async (c) => {
   const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
   if (!auth.ok) return auth.response;
 
-  if (!runtime.internalLedger) {
-    return c.json({
-      success: true,
-      streams: [
-        {
-          stream: USDC_DEPOSIT_STREAM,
-          bucket: USDC_DEPOSIT_BUCKET,
-          currencyUnit: "USDC_6DP",
-          balanceSheetScope: "ON",
-          available: false,
-          reason:
-            "Deployment ini tidak memiliki ledger internal dan event terindeks yang dapat dibaca, " +
-            "sehingga sumber internal USDC belum didukung. Sumber terstruktur lain tetap dapat dipakai.",
-          chainScope: null,
-          sides: [],
-        },
-      ],
-    });
-  }
-
   const institution = await runtime.store.getInstitution(auth.session.institutionId);
   if (!institution) return refuse(c, 404, "not-found");
 
@@ -363,48 +514,190 @@ evidenceRoutes.get("/internal-sources", async (c) => {
     return badRequest(c, "Tahun periode harus bilangan bulat antara 2000 dan 2100.");
   }
 
-  const base: InternalManifestBase = {
-    institutionId: auth.session.institutionId,
-    scopeUnit: institution.scopeUnit,
-    scopeLevel: institution.scopeLevel,
-    period: { kind, year },
-    cutOff: new Date(runtime.now() * 1000).toISOString(),
-  };
+  const streams: Array<Record<string, unknown>> = [];
 
-  const internal = await readInternalUsdc(runtime.internalLedger, base, {
-    fromBlock: null,
-    toBlock: null,
-  });
+  // Stream 1: USDC Deposits
+  if (!runtime.internalLedger) {
+    streams.push({
+      stream: USDC_DEPOSIT_STREAM,
+      bucket: USDC_DEPOSIT_BUCKET,
+      currencyUnit: "USDC_6DP",
+      balanceSheetScope: "ON",
+      available: false,
+      reason:
+        "Deployment ini tidak memiliki ledger internal dan event terindeks yang dapat dibaca, " +
+        "sehingga sumber internal USDC belum didukung. Sumber terstruktur lain tetap dapat dipakai.",
+      chainScope: null,
+      sides: [],
+      coverageNotes: [],
+    });
+  } else {
+    const base: InternalManifestBase = {
+      institutionId: auth.session.institutionId,
+      scopeUnit: institution.scopeUnit,
+      scopeLevel: institution.scopeLevel,
+      period: { kind, year },
+      cutOff: new Date(runtime.now() * 1000).toISOString(),
+    };
 
-  const describe = (side: SubmittedSide) => ({
-    role: side.manifest.role,
-    label: side.manifest.label,
-    status: side.status,
-    detail: side.status === "READ" ? null : side.detail,
-    rowCount: side.status === "READ" ? side.rows.length : null,
-    unverified: side.unverified ?? [],
-    manifest: side.manifest,
-  });
+    const internal = await readInternalUsdc(runtime.internalLedger, base, {
+      fromBlock: null,
+      toBlock: null,
+    });
 
-  const sides = [internal.claim, internal.source];
+    const sides = [internal.claim, internal.source];
+    streams.push({
+      stream: USDC_DEPOSIT_STREAM,
+      bucket: USDC_DEPOSIT_BUCKET,
+      currencyUnit: "USDC_6DP",
+      balanceSheetScope: "ON",
+      available: sides.some((side) => side.status === "READ"),
+      reason: null,
+      chainScope: internal.source.manifest.chainScope ?? internal.chainScope,
+      sides: sides.map(describeSide),
+      coverageNotes: depositCoverageNotes(internal.chainScope, sides),
+    });
+  }
+
+  // Stream 2: Disbursement Realizations
+  if (!runtime.disbursement) {
+    streams.push({
+      stream: DISBURSEMENT_REALIZATION_STREAM,
+      bucket: "PENYALURAN",
+      currencyUnit: "IDR",
+      balanceSheetScope: "ON",
+      available: false,
+      reason: "Penyimpanan realisasi penyaluran belum dikonfigurasi pada deployment ini.",
+      chainScope: null,
+      sides: [],
+      coverageNotes: [],
+    });
+  } else {
+    const cutOff = new Date(runtime.now() * 1000).toISOString();
+    const built = await readRealizationSide(runtime.disbursement, {
+      institution: {
+        id: auth.session.institutionId,
+        legalName: institution.legalName,
+        scopeUnit: institution.scopeUnit,
+        scopeLevel: institution.scopeLevel,
+      },
+      period: { kind, year },
+      cutOff,
+      role: "SOURCE",
+      balanceSheetScope: "ON",
+    });
+
+    streams.push({
+      stream: DISBURSEMENT_REALIZATION_STREAM,
+      bucket: "PENYALURAN",
+      currencyUnit: "IDR",
+      balanceSheetScope: "ON",
+      available: built.side.status === "READ",
+      reason: built.side.status === "READ" ? null : built.side.detail,
+      chainScope: null,
+      cutOff,
+      sides: [describeSide(built.side)],
+      coverageNotes: built.coverageNotes,
+    });
+  }
+
   return c.json({
     success: true,
-    streams: [
-      {
-        stream: USDC_DEPOSIT_STREAM,
-        bucket: USDC_DEPOSIT_BUCKET,
-        currencyUnit: "USDC_6DP",
-        balanceSheetScope: "ON",
-        // A stream is offered while any side of it can be read. A side that
-        // cannot says so on its own row, rather than hiding the whole stream.
-        available: sides.some((side) => side.status === "READ"),
-        reason: null,
-        chainScope: internal.source.manifest.chainScope ?? internal.chainScope,
-        sides: sides.map(describe),
-        coverageNotes: depositCoverageNotes(internal.chainScope, sides),
-      },
-    ],
+    streams,
   });
+});
+
+/**
+ * Realization drill-down (Spec #86, Ticket #98).
+ *
+ * Answers, for each side prepared from the internal realization stream, the
+ * provenance frozen with the package: proposal version, recipients, handovers,
+ * documents and the separated advances and expenses. A provenance file is only
+ * trusted when its side was built by the server from that stream and it sits
+ * under the reserved name for that side; attachments cannot take those names.
+ *
+ * A side whose file cannot be read is named in `unreadable` with the reason,
+ * never answered as an empty breakdown.
+ */
+evidenceRoutes.get("/:id/drill-down", async (c) => {
+  const runtime = runtimeWithStore(c);
+  if (runtime instanceof Response) return runtime;
+
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+
+  const preparationId = c.req.param("id");
+  const stored = await runtime.evidence.getPreparation(auth.session.institutionId, preparationId);
+  if (!stored) return refuse(c, 404, "not-found");
+
+  const realizationSides = stored.sides.filter(
+    (side) => side.manifest.origin === "INTERNAL_LEDGER" && side.manifest.format === DISBURSEMENT_REALIZATION_FORMAT
+  );
+
+  const provenances: RealizationProvenance[] = [];
+  const unreadable: RealizationDrillDown["unreadable"] = [];
+  const documents = createRestrictedDocuments(runtime.evidence, runtime.files);
+
+  for (const side of realizationSides) {
+    const role = side.manifest.role;
+    const file = stored.files.find((f) => f.role === role && f.fileName === PROVENANCE_FILE_NAMES[role]);
+    if (!file) {
+      // A side that was never read has no provenance to lose; that is not a failure of the file.
+      if (side.status === "READ") {
+        unreadable.push({ role, status: "FAILED", reason: "Berkas penelusuran realisasi tidak ada dalam paket ini." });
+      }
+      continue;
+    }
+    try {
+      const document = await documents.read({ institutionId: auth.session.institutionId, preparationId }, file.id);
+      provenances.push(JSON.parse(new TextDecoder().decode(document.bytes)) as RealizationProvenance);
+    } catch (error) {
+      if (error instanceof DocumentError) {
+        unreadable.push({
+          role,
+          status: error.storageStatus === "FAILED" ? "FAILED" : "UNAVAILABLE",
+          reason: error.message,
+        });
+      } else {
+        unreadable.push({ role, status: "UNAVAILABLE", reason: "Berkas penelusuran realisasi belum dapat diperiksa." });
+      }
+    }
+  }
+
+  let drillDown: RealizationDrillDown;
+  if (provenances.length > 0) {
+    drillDown = {
+      available: true,
+      transactionDetail: "PRESENT",
+      provenances,
+      current: await currentRealizationView(runtime.disbursement, auth.session.institutionId, runtime.now(), provenances),
+      unreadable,
+    };
+  } else if (realizationSides.length > 0) {
+    drillDown = {
+      available: false,
+      transactionDetail: "NO_REALIZATION_SOURCE",
+      reason:
+        unreadable.length > 0
+          ? "Berkas penelusuran realisasi paket ini tidak dapat dibaca; rincian tidak ditampilkan sebagai kosong."
+          : "Sumber realisasi penyaluran paket ini tidak terbaca saat dibekukan, sehingga tidak ada rincian yang dapat ditelusuri.",
+      unreadable,
+    };
+  } else {
+    const isRecap = stored.sides.some((side) => side.manifest.transactionDetail === "NOT_AVAILABLE");
+    drillDown = {
+      available: false,
+      transactionDetail: isRecap ? "NOT_AVAILABLE" : "NO_REALIZATION_SOURCE",
+      reason: isRecap
+        ? "Paket bukti ini dibuat dari rekapitulasi tanpa rincian transaksi, sehingga penelusuran ke versi " +
+          "pengajuan, rincian penerima, dan dokumen serah terima tidak tersedia."
+        : "Paket bukti ini tidak dibuat dari sumber realisasi penyaluran internal, sehingga penelusuran ke versi " +
+          "pengajuan, rincian penerima, dan dokumen serah terima tidak tersedia.",
+      unreadable,
+    };
+  }
+
+  return c.json({ success: true, ...drillDown });
 });
 
 /**

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, FileWarning, FileText, Lock, RefreshCw, ScrollText } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
 import { EvidencePreparationForm } from "./EvidencePreparationForm";
+import { RealizationDrillDownCard } from "./RealizationDrillDownCard";
 import { WorkspaceRequestError } from "./workspaceClient";
 import { Button } from "../../components/ui/Button";
 import { formatQuantity } from "../../lib/reporting";
@@ -330,6 +331,8 @@ function PreparationDetail({
           </ul>
         </section>
       )}
+
+      <RealizationDrillDownCard preparationId={preparation.id} requests={requests} />
 
       {preparation.files.length > 0 && (
         <section>

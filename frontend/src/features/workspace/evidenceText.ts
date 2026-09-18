@@ -253,3 +253,12 @@ export const conclusionLabel = (value: string) =>
   `${ATTESTATION_CONCLUSIONS.find(item => item.value === value)?.label ?? "Kesimpulan lain"} (${value})`;
 export const scopeLabel = (value: string) =>
   `${ATTESTATION_SCOPES.find(item => item.value === value)?.label ?? "Lingkup lain"} (${value})`;
+
+/** An exact rupiah amount (decimal integer string) with Indonesian grouping, without the "Rp" prefix. */
+export function formatRupiah(amount: string): string {
+  try {
+    return new Intl.NumberFormat("id-ID").format(BigInt(amount || "0"));
+  } catch {
+    return amount;
+  }
+}

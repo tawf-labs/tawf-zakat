@@ -56,6 +56,7 @@ import { EvidenceFileError, MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
 import { serializeReport } from "./reconciliation";
 import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
 import type { StoredFile, StoredFinding, StoredPreparation } from "../evidence-store";
+import { isReservedProvenanceFileName } from "../../../shared/realization-provenance";
 
 export { issue, text };
 
@@ -232,6 +233,15 @@ export function readFiles(raw: unknown, issues: SourceIssue[]): SubmittedFile[] 
       issues.push(issue(`${where}.fileName`, "Berkas harus menyebut nama aslinya."));
       continue;
     }
+    if (isReservedProvenanceFileName(fileName)) {
+      issues.push(
+        issue(
+          `${where}.fileName`,
+          `Nama berkas "${fileName}" dicadangkan untuk penelusuran realisasi yang dibekukan server; ganti nama lampiran.`
+        )
+      );
+      continue;
+    }
 
     let bytes: Uint8Array;
     try {
@@ -362,7 +372,8 @@ export async function executeFreezeAndStorePreparation(
   claimSide: SubmittedSide,
   sourceSide: SubmittedSide,
   files: SubmittedFile[],
-  internal: { chainScope: ChainScope } | null
+  internal: { chainScope: ChainScope } | null,
+  extraCoverageNotes?: string[]
 ): Promise<Response> {
   const sides = [claimSide, sourceSide];
   const preparationId = newId("prep");
@@ -410,6 +421,9 @@ export async function executeFreezeAndStorePreparation(
   }
 
   const coverageNotes = coverageNotesFor(sides);
+  if (extraCoverageNotes && extraCoverageNotes.length > 0) {
+    coverageNotes.push(...extraCoverageNotes);
+  }
   if (internal) {
     coverageNotes.push(
       ...depositCoverageNotes(

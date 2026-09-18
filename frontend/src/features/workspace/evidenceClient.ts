@@ -19,6 +19,9 @@ import type {
   FileStorageStatus,
   SourceStatus,
 } from "./evidenceText";
+import type { RealizationDrillDown } from "../../../../shared/realization-provenance";
+
+export type { RealizationDrillDown, RealizationProvenance } from "../../../../shared/realization-provenance";
 
 export type WireQuantity = { amount: string; unit: "IDR" | "USDC_6DP" };
 
@@ -215,6 +218,11 @@ export const fetchEvidencePreparation = (
   id: string,
   requests: PrivateRequests
 ): Promise<{ preparation: EvidencePreparation; commitmentVerified: boolean }> => call(`/${id}`, requests);
+
+export const fetchRealizationDrillDown = (
+  id: string,
+  requests: PrivateRequests
+): Promise<RealizationDrillDown> => call(`/${id}/drill-down`, requests);
 
 /**
  * Downloads a restricted document through the authorized request, then hands

@@ -1,5 +1,6 @@
 import type { PrivateRequests } from "./privateRequests";
 import { useEffect, useState, type FormEvent } from "react";
+import { ClipboardList, FileJson, Sheet } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import {
   EvidenceRequestError,
@@ -20,7 +21,7 @@ import {
   type SourceScope,
   type TabularUpload,
 } from "./evidenceClient";
-import { describeChainScope, describeSourceStatus, roleLabel } from "./evidenceText";
+import { describeChainScope, describeSourceStatus, formatRupiah, roleLabel } from "./evidenceText";
 
 type Side = "CLAIM" | "SOURCE";
 const SIDES: Side[] = ["CLAIM", "SOURCE"];
@@ -29,15 +30,7 @@ const inputClass = "mt-1 w-full rounded-lg border border-stone-300 bg-white p-2 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 const USDC_DEPOSIT_STREAM = "USDC_DEPOSITS";
-
-function formatRupiah(amountStr: string): string {
-  try {
-    const n = BigInt(amountStr || "0");
-    return new Intl.NumberFormat("id-ID").format(n);
-  } catch {
-    return amountStr;
-  }
-}
+const DISBURSEMENT_REALIZATION_STREAM = "DISBURSEMENT_REALIZATIONS";
 
 function example(side: Side, scopeUnit: string, scopeLevel: string) {
   return JSON.stringify({
@@ -131,11 +124,20 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState<Side | null>(null);
   const [internal, setInternal] = useState<Record<Side, boolean>>({ CLAIM: false, SOURCE: false });
+  const [availableStreams, setAvailableStreams] = useState<InternalSourceStream[]>([]);
   const [stream, setStream] = useState<InternalSourceStream | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
 
-  // Tabular Source Import & Drafts State (Spec #86, Ticket #88)
-  const [sourceImportMode, setSourceImportMode] = useState<"TABULAR" | "MANUAL_JSON">("TABULAR");
+  // Tabular Source Import, Realization Source & Drafts State (Spec #86, Ticket #88, Ticket #98)
+  const [sourceImportMode, setSourceImportMode] = useState<"TABULAR" | "REALIZATIONS" | "MANUAL_JSON">("TABULAR");
+  const [realizationCutOff, setRealizationCutOff] = useState<string>("");
+  // `datetime-local` gives a local wall-clock time; the server takes an instant.
+  const realizationSource = () => ({
+    internal: {
+      stream: DISBURSEMENT_REALIZATION_STREAM,
+      cutOff: (realizationCutOff ? new Date(realizationCutOff) : new Date()).toISOString(),
+    },
+  });
   const [tabularFile, setTabularFile] = useState<TabularUpload | null>(null);
   const [tabularPreview, setTabularPreview] = useState<TabularPreviewResult | null>(null);
   const [tabularLoading, setTabularLoading] = useState(false);
@@ -165,11 +167,16 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
     setStreamError(null);
     fetchInternalSources(requests, { kind: periodKind, year: parsedYear })
       .then((payload) => {
-        if (current) setStream(payload.streams[0] ?? null);
+        if (current) {
+          setAvailableStreams(payload.streams);
+          const usdc = payload.streams.find((s) => s.stream === USDC_DEPOSIT_STREAM);
+          setStream(usdc ?? payload.streams[0] ?? null);
+        }
       })
       .catch((caught) => {
         if (!current) return;
         setStream(null);
+        setAvailableStreams([]);
         setStreamError(
           caught instanceof Error
             ? `Sumber internal tidak dapat dibaca: ${caught.message}`
@@ -268,7 +275,9 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
         currencyUnit: unit,
         balanceSheetScope: position,
         claim: claimPayload,
-        source: sourceImportMode === "MANUAL_JSON" && editors.SOURCE.trim()
+        source: sourceImportMode === "REALIZATIONS"
+          ? realizationSource()
+          : sourceImportMode === "MANUAL_JSON" && editors.SOURCE.trim()
           ? (function() { try { return JSON.parse(editors.SOURCE); } catch { return { raw: editors.SOURCE }; } })()
           : undefined,
         sourceTable: sourceImportMode === "TABULAR" && tabularFile ? tabularFile : undefined,
@@ -419,7 +428,9 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
       }
 
       // Source side resolution
-      if (sourceImportMode === "MANUAL_JSON") {
+      if (sourceImportMode === "REALIZATIONS") {
+        parsed.SOURCE = realizationSource();
+      } else if (sourceImportMode === "MANUAL_JSON") {
         if (internal.SOURCE) {
           parsed.SOURCE = { internal: { stream: USDC_DEPOSIT_STREAM } };
         } else {
@@ -638,13 +649,25 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
             )}
           </div>
 
-          {/* SISI SUMBER (XLSX/CSV Tabular Import & Manual JSON) */}
+          {/* SISI SUMBER (XLSX/CSV Tabular Import, Realisasi Internal & Manual JSON) */}
           <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2">
               <h5 className="font-semibold text-stone-800">2. Sisi Sumber Laporan (Evidence Source)</h5>
               
               {/* Mode switch */}
               <div className="flex rounded-lg bg-stone-100 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSourceImportMode("REALIZATIONS")}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    sourceImportMode === "REALIZATIONS"
+                      ? "bg-white text-[#0F3D30] shadow-sm"
+                      : "text-stone-600 hover:text-stone-900"
+                  }`}
+                >
+                  <ClipboardList className="mr-1 inline h-3.5 w-3.5" aria-hidden />
+                  Realisasi Penyaluran
+                </button>
                 <button
                   type="button"
                   onClick={() => setSourceImportMode("TABULAR")}
@@ -654,7 +677,8 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
                       : "text-stone-600 hover:text-stone-900"
                   }`}
                 >
-                  📊 Impor Spreadsheet
+                  <Sheet className="mr-1 inline h-3.5 w-3.5" aria-hidden />
+                  Impor Spreadsheet
                 </button>
                 <button
                   type="button"
@@ -665,10 +689,61 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
                       : "text-stone-600 hover:text-stone-900"
                   }`}
                 >
-                  📝 Tempel JSON Manual
+                  <FileJson className="mr-1 inline h-3.5 w-3.5" aria-hidden />
+                  Tempel JSON Manual
                 </button>
               </div>
             </div>
+
+            {sourceImportMode === "REALIZATIONS" && (
+              <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/30 p-4 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h6 className="font-semibold text-emerald-950">Sumber Realisasi Penyaluran Lembaga (Spec #86 / Ticket #98)</h6>
+                    <p className="mt-0.5 text-stone-600">
+                      Membekukan seluruh realisasi uang & barang yang dicatat hingga batas cut-off beserta versi pengajuan,
+                      penerima, dan dokumen serah terima ke dalam berkas penelusuran terenkripsi yang ikut dibekukan dalam paket.
+                    </p>
+                  </div>
+                  <span className="rounded bg-emerald-100 px-2 py-0.5 font-mono text-[11px] font-medium text-emerald-800">
+                    DISBURSEMENT_REALIZATIONS
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="block font-medium text-stone-800">
+                      Batas Akhir Cut-off Realisasi
+                      <input
+                        type="datetime-local"
+                        value={realizationCutOff}
+                        onChange={(e) => setRealizationCutOff(e.target.value)}
+                        className={`${inputClass} text-xs`}
+                      />
+                    </label>
+                    <p className="mt-1 text-[11px] text-stone-500">
+                      Kosongkan untuk memakai batas waktu penyiapan sekarang. Realisasi yang dicatat setelah batas cut-off
+                      dinyatakan belum terperiksa pada snapshot ini, bukan tidak ada.
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-stone-200 bg-white p-2.5">
+                    <p className="font-medium text-stone-800">Prinsip Integritas & Audit:</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] text-stone-600">
+                      <li><strong>AC07:</strong> Uang muka petugas & biaya pengadaan dipisahkan tanpa double-counting.</li>
+                      <li><strong>Barang Terpisah:</strong> Kuantitas barang tidak dikonversi ke Rp0.</li>
+                      <li><strong>Snapshot Permanen:</strong> Revisi pengajuan di masa depan tidak mengubah snapshot yang telah dibekukan.</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Candidate stream preview */}
+                {(() => {
+                  const relStream = availableStreams.find((s) => s.stream === DISBURSEMENT_REALIZATION_STREAM);
+                  if (!relStream) return null;
+                  return <InternalSourcePanel stream={relStream} />;
+                })()}
+              </div>
+            )}
 
             {sourceImportMode === "TABULAR" ? (
               <div className="space-y-3">
@@ -817,7 +892,7 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
                   </div>
                 )}
               </div>
-            ) : (
+            ) : sourceImportMode === "MANUAL_JSON" ? (
               /* Manual JSON Editor (Fallback / Advanced) */
               <div className="space-y-3">
                 <details className="text-xs text-stone-600">
@@ -851,7 +926,7 @@ export function EvidencePreparationForm({ requests, scopeUnit, scopeLevel, onSav
                   />
                 </label>
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 

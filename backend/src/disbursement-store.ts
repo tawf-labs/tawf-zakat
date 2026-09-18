@@ -67,6 +67,15 @@ import {
   type ProposalRevisionRecord,
   type ProposalRevisionDelta,
 } from "./disbursement";
+import {
+  maskNik,
+  type RealizationItemData,
+  type RealizationAdvanceItem,
+  type RealizationExpenseItem,
+  type RealizationDocumentRef,
+  type RealizationDisputeRef,
+  type RealizationSourceData,
+} from "./realization-source";
 
 export type DisbursementDatabase = {
   execute: (query: any) => Promise<any>;
@@ -4168,6 +4177,148 @@ export function createDisbursementStore(db: DisbursementDatabase) {
 
         return { ...written, closure };
       });
+    },
+
+    /**
+     * Reads all recorded realization items, officer advances, and operational expenses
+     * for reporting evidence source generation and provenance freezing (Spec #86, Ticket #98).
+     *
+     * Beneficiary and purpose come from the approved proposal version the realization
+     * was recorded against. A realization whose version row is missing is returned
+     * flagged, not filled in from the live draft.
+     */
+    async readRealizationSourceData(institutionId: string): Promise<RealizationSourceData> {
+      const realizationRows = rowsOf(await db.execute(sql`
+        SELECT r.*, p.program_id, pr.name AS program_name, pr.fund_type AS program_fund_type,
+               v.data_json AS version_data_json
+        FROM disbursement_realizations r
+        JOIN proposal_drafts p ON p.id = r.proposal_id AND p.institution_id = r.institution_id
+        LEFT JOIN programs pr ON pr.id = p.program_id AND pr.institution_id = p.institution_id
+        LEFT JOIN proposal_versions v ON v.proposal_id = r.proposal_id AND v.institution_id = r.institution_id AND v.version = r.proposal_version
+        WHERE r.institution_id = ${institutionId}
+        ORDER BY r.recorded_at ASC, r.id ASC
+      `));
+
+      const docRows = rowsOf(await db.execute(sql`
+        SELECT d.id, d.document_type, d.file_name, d.mime_type, d.size_bytes, d.content_sha256, d.storage_ref,
+               d.created_at, d.realization_id AS primary_realization_id, a.realization_id AS alloc_realization_id
+        FROM disbursement_realization_documents d
+        LEFT JOIN disbursement_realization_document_allocations a ON a.document_id = d.id AND a.institution_id = d.institution_id
+        WHERE d.institution_id = ${institutionId}
+      `));
+
+      const docsByRealization = new Map<string, Map<string, RealizationDocumentRef>>();
+      for (const row of docRows) {
+        const docRef: RealizationDocumentRef = {
+          id: row.id,
+          documentType: row.document_type,
+          fileName: row.file_name,
+          mimeType: row.mime_type,
+          sizeBytes: Number(row.size_bytes),
+          contentSha256: row.content_sha256,
+          storageRef: row.storage_ref,
+          createdAt: asSeconds(row.created_at),
+        };
+        for (const realizationId of [row.primary_realization_id, row.alloc_realization_id].filter(Boolean)) {
+          const docs = docsByRealization.get(realizationId) ?? new Map<string, RealizationDocumentRef>();
+          docs.set(docRef.id, docRef);
+          docsByRealization.set(realizationId, docs);
+        }
+      }
+
+      const disputeRows = rowsOf(await db.execute(sql`
+        SELECT id, realization_id, subject, status, reason, disputed_amount_idr, disputed_quantity, disputed_unit, created_at
+        FROM disbursement_realization_disputes
+        WHERE institution_id = ${institutionId}
+      `));
+
+      const disputesByRealization = new Map<string, RealizationDisputeRef[]>();
+      for (const row of disputeRows) {
+        const list = disputesByRealization.get(row.realization_id) ?? [];
+        list.push({
+          id: row.id,
+          subject: row.subject,
+          status: row.status,
+          reason: row.reason,
+          createdAt: asSeconds(row.created_at),
+          disputedAmountIdr: row.disputed_amount_idr ?? null,
+          disputedQuantity: row.disputed_quantity ?? null,
+          disputedUnit: row.disputed_unit ?? null,
+        });
+        disputesByRealization.set(row.realization_id, list);
+      }
+
+      const realizations: RealizationItemData[] = realizationRows.map((row) => {
+        let snapshot: any = null;
+        try {
+          snapshot = row.version_data_json ? JSON.parse(row.version_data_json) : null;
+        } catch {
+          snapshot = null;
+        }
+        const beneficiaries: Beneficiary[] = snapshot?.beneficiaries ?? [];
+        const beneficiary = beneficiaries.find((b) => b.id === row.beneficiary_id);
+        const nik = beneficiary?.identityBasis?.kind === "NIK" ? beneficiary.identityBasis.value : null;
+
+        return {
+          id: row.id,
+          institutionId: row.institution_id,
+          proposalId: row.proposal_id,
+          proposalVersion: Number(row.proposal_version),
+          proposalVersionFound: snapshot !== null,
+          programId: snapshot?.programId ?? row.program_id ?? null,
+          programName: row.program_name ?? null,
+          programFundType: row.program_fund_type ?? null,
+          proposalPurpose: snapshot?.purpose ?? "",
+          aidLineId: row.aid_line_id,
+          beneficiaryId: row.beneficiary_id,
+          beneficiaryName: beneficiary?.name ?? row.beneficiary_id,
+          beneficiaryNikMasked: nik ? maskNik(nik) : null,
+          beneficiaryAsnaf: beneficiary?.asnaf ?? null,
+          method: row.method,
+          amountIdr: row.amount_idr ?? null,
+          quantity: row.quantity ?? null,
+          unit: row.unit ?? null,
+          reportedAt: asSeconds(row.reported_at),
+          recordedAt: asSeconds(row.recorded_at),
+          operatorAccount: row.operator_account,
+          operatorOfficerId: row.operator_officer_id,
+          notes: row.notes ?? null,
+          evidenceStatus: row.evidence_status,
+          confirmationStatus: row.confirmation_status,
+          confirmationMethod: row.confirmation_method ?? null,
+          documents: Array.from(docsByRealization.get(row.id)?.values() ?? []),
+          disputes: disputesByRealization.get(row.id) ?? [],
+        };
+      });
+
+      const advances: RealizationAdvanceItem[] = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_advances
+        WHERE institution_id = ${institutionId}
+        ORDER BY issued_at ASC, id ASC
+      `)).map((row) => ({
+        id: row.id,
+        proposalId: row.proposal_id,
+        amountIdr: row.amount_idr,
+        purpose: row.purpose,
+        reference: row.reference,
+        issuedAt: asSeconds(row.issued_at),
+      }));
+
+      const expenses: RealizationExpenseItem[] = rowsOf(await db.execute(sql`
+        SELECT * FROM disbursement_realization_expenses
+        WHERE institution_id = ${institutionId}
+        ORDER BY recorded_at ASC, id ASC
+      `)).map((row) => ({
+        id: row.id,
+        proposalId: row.proposal_id,
+        advanceId: row.advance_id ?? null,
+        amountIdr: row.amount_idr,
+        purpose: row.purpose,
+        payee: row.payee,
+        recordedAt: asSeconds(row.recorded_at),
+      }));
+
+      return { realizations, advances, expenses };
     },
   };
 }
