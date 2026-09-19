@@ -2,42 +2,57 @@
  * Accountless Donor Access routes (Spec #100, Ticket #104).
  *
  * Endpoints:
- *   POST /api/donor/otp-challenge       request one-time verification code to donor contact
- *   POST /api/donor/otp-verify          verify OTP and obtain bounded session token
- *   GET  /api/donor/contributions/:id   get contribution details for authorized session
- *   GET  /api/donor/contributions/:id/allocations get activity allocations & pooled progress
- *   POST /api/donor/logout              revoke active donor session immediately
+ *   GET    /api/donor/channel                             whether this deployment can deliver a code
+ *   POST   /api/donor/otp-challenge                       send a one-time code to the contribution's own contact
+ *   POST   /api/donor/session                             exchange a code for a bounded session token
+ *   GET    /api/donor/contributions/:id                   contribution detail for its session
+ *   GET    /api/donor/contributions/:id/allocations       activity allocations and pooled progress
+ *   DELETE /api/donor/session                             revoke the session immediately
  *
  * Principles (ADR-0033 & Spec #100):
  * - No wallet or account registration needed.
- * - Sesi terbatas binds only the single authorized contribution (IDOR prevented).
- * - Shared contacts never expose entire donation history.
+ * - A session binds only its one contribution; every read checks it (AC13).
+ * - A reference alone reveals neither the contribution ID nor the contact.
  * - Minimal OTP message contains zero private details.
  * - Honest proof status without fabricated ZK/Merkle proofs.
- * - Strict isolation: donor sessions have zero workspace/operator privileges.
+ * - Donor tokens carry no workspace/operator authority.
  */
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { workspaceRuntime, type WorkspaceRuntime } from "../workspace-runtime";
+import { workspaceRuntime } from "../workspace-runtime";
+import { bearerToken } from "../workspace-session";
 import {
   DonorAccessDeniedError,
   DonorContactMissingError,
   DonorContributionNotFoundError,
+  DonorDeliveryFailedError,
   DonorOtpInvalidError,
   DonorOtpRateLimitError,
   DonorSessionExpiredError,
   DonorTransportUnavailableError,
+  type DonorAccessStore,
 } from "../donor-access-store";
+import type { DonorSession } from "../donor-access";
 
 export const donorAccessRoutes = new Hono();
+
+// Private detail must not be kept by a shared cache or served to the next token.
+donorAccessRoutes.use("*", async (c, next) => {
+  c.header("Cache-Control", "private, no-store");
+  c.header("Vary", "Authorization");
+  await next();
+});
 
 donorAccessRoutes.onError((error, c) => {
   if (error instanceof DonorContactMissingError) {
     return c.json({ success: false, error: error.message }, 422);
   }
   if (error instanceof DonorOtpRateLimitError) {
-    return c.json({ success: false, error: error.message }, 429);
+    return c.json({ success: false, error: error.message, retryAt: error.retryAt }, 429);
+  }
+  if (error instanceof DonorDeliveryFailedError) {
+    return c.json({ success: false, error: error.message }, 502);
   }
   if (error instanceof DonorTransportUnavailableError) {
     return c.json({ success: false, error: error.message }, 503);
@@ -59,137 +74,96 @@ donorAccessRoutes.onError((error, c) => {
   return c.json({ success: false, error: "Terjadi kesalahan internal pada layanan akses donatur." }, 500);
 });
 
-const runtimeOf = (): WorkspaceRuntime => {
-  const rt = workspaceRuntime();
-  if (!rt || !rt.donorAccess) {
-    throw new DonorTransportUnavailableError(
-      "Layanan akses donatur belum dikonfigurasi pada deployment ini."
-    );
+const donorAccessOf = () => {
+  const runtime = workspaceRuntime();
+  if (!runtime?.donorAccess) {
+    throw new DonorTransportUnavailableError("Layanan akses donatur belum dikonfigurasi pada deployment ini.");
   }
-  return rt;
-};
-
-const bearerTokenOf = (c: Context): string | null => {
-  const auth = c.req.header("Authorization");
-  if (!auth) return null;
-  const match = auth.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
+  return { store: runtime.donorAccess, now: runtime.now(), messages: runtime.donorMessages };
 };
 
 /**
- * 1. Request OTP challenge for a contribution.
+ * The session behind the bearer token, and only if it was issued for the
+ * contribution in the path. Forwarded links and swapped IDs stop here (AC13).
  */
-donorAccessRoutes.post("/otp-challenge", async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const contributionId = typeof body.contributionId === "string" ? body.contributionId.trim() : "";
+async function authorizedSession(c: Context): Promise<{ store: DonorAccessStore; session: DonorSession }> {
+  const id = c.req.param("id")?.trim();
+  const token = bearerToken(c);
+  if (!token) throw new DonorSessionExpiredError("Token sesi donatur diperlukan.");
 
-  if (!contributionId) {
-    return c.json({ success: false, error: "ID kontribusi wajib disertakan." }, 400);
-  }
+  const { store, now } = donorAccessOf();
+  const session = await store.getSession(token, now);
+  if (!session) throw new DonorSessionExpiredError();
+  if (!id || session.contributionId !== id) throw new DonorAccessDeniedError();
+  return { store, session };
+}
 
-  const runtime = runtimeOf();
-  const challenge = await runtime.donorAccess!.issueOtp(
-    contributionId,
-    runtime.now(),
-    runtime.messages
-  );
-
-  return c.json(
-    {
-      success: true,
-      challengeId: challenge.challengeId,
-      contactMasked: challenge.contactMasked,
-      expiresAt: challenge.expiresAt,
-    },
-    201
-  );
+/**
+ * 0. Whether a code can be delivered here at all, so the page does not offer a
+ *    channel that is not live.
+ */
+donorAccessRoutes.get("/channel", (c) => {
+  const runtime = workspaceRuntime();
+  return c.json({ success: true, available: Boolean(runtime?.donorAccess && runtime.donorMessages) });
 });
 
 /**
- * 2. Verify OTP code and obtain bounded session token.
+ * 1. Request a code for the contribution the donor's reference names.
  */
-donorAccessRoutes.post("/otp-verify", async (c) => {
+donorAccessRoutes.post("/otp-challenge", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const reference = typeof body.reference === "string" ? body.reference.trim() : "";
+  if (!reference) {
+    return c.json({ success: false, error: "Referensi kontribusi wajib disertakan." }, 400);
+  }
+
+  const { store, now, messages } = donorAccessOf();
+  const challenge = await store.issueOtp(reference, now, messages);
+  return c.json({ success: true, ...challenge }, 201);
+});
+
+/**
+ * 2. Exchange a code for a bounded session token.
+ */
+donorAccessRoutes.post("/session", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const challengeId = typeof body.challengeId === "string" ? body.challengeId.trim() : "";
   const otpCode = typeof body.otpCode === "string" ? body.otpCode.trim() : "";
-
   if (!challengeId || !otpCode) {
     return c.json({ success: false, error: "ID tantangan dan kode OTP wajib disertakan." }, 400);
   }
 
-  const runtime = runtimeOf();
-  const session = await runtime.donorAccess!.verifyOtp(challengeId, otpCode, runtime.now());
-
-  return c.json({
-    success: true,
-    sessionToken: session.sessionToken,
-    expiresAt: session.expiresAt,
-    contributionId: session.contributionId,
-  });
+  const { store, now } = donorAccessOf();
+  const session = await store.verifyOtp(challengeId, otpCode, now);
+  return c.json({ success: true, ...session }, 201);
 });
 
 /**
- * 3. Retrieve contribution details for authorized donor session.
+ * 3. Contribution detail for its own session.
  */
 donorAccessRoutes.get("/contributions/:id", async (c) => {
-  const id = c.req.param("id")?.trim();
-  if (!id) return c.json({ success: false, error: "ID kontribusi wajib disertakan." }, 400);
-
-  const token = bearerTokenOf(c);
-  if (!token) {
-    return c.json({ success: false, error: "Token sesi donatur diperlukan." }, 401);
-  }
-
-  const runtime = runtimeOf();
-  const session = await runtime.donorAccess!.getSession(token, runtime.now());
-  if (!session) {
-    throw new DonorSessionExpiredError();
-  }
-
-  // Object authorization check (AC13 IDOR protection)
-  if (session.contributionId !== id) {
-    throw new DonorAccessDeniedError();
-  }
-
-  const contribution = await runtime.donorAccess!.getDonorContribution(session);
-  return c.json({ success: true, contribution });
+  const { store, session } = await authorizedSession(c);
+  return c.json({ success: true, contribution: await store.getDonorContribution(session) });
 });
 
 /**
- * 4. Retrieve activity allocations for authorized donor session.
+ * 4. Activity allocations for its own session.
  */
 donorAccessRoutes.get("/contributions/:id/allocations", async (c) => {
-  const id = c.req.param("id")?.trim();
-  if (!id) return c.json({ success: false, error: "ID kontribusi wajib disertakan." }, 400);
-
-  const token = bearerTokenOf(c);
-  if (!token) {
-    return c.json({ success: false, error: "Token sesi donatur diperlukan." }, 401);
-  }
-
-  const runtime = runtimeOf();
-  const session = await runtime.donorAccess!.getSession(token, runtime.now());
-  if (!session) {
-    throw new DonorSessionExpiredError();
-  }
-
-  // Object authorization check (AC13 IDOR protection)
-  if (session.contributionId !== id) {
-    throw new DonorAccessDeniedError();
-  }
-
-  const allocations = await runtime.donorAccess!.getDonorAllocations(session);
-  return c.json({ success: true, allocations });
+  const { store, session } = await authorizedSession(c);
+  return c.json({ success: true, allocations: await store.getDonorAllocations(session) });
 });
 
 /**
- * 5. Logout / revoke active donor session.
+ * 5. Revoke the session.
  */
-donorAccessRoutes.post("/logout", async (c) => {
-  const token = bearerTokenOf(c);
+donorAccessRoutes.delete("/session", async (c) => {
+  const token = bearerToken(c);
   if (token) {
-    const runtime = runtimeOf();
-    await runtime.donorAccess!.revokeSession(token, runtime.now());
+    const { store, now } = donorAccessOf();
+    await store.revokeSession(token, now);
   }
-  return c.json({ success: true, message: "Sesi donatur berhasil ditutup." });
+  return c.json({ success: true });
 });
+
+export default donorAccessRoutes;

@@ -1,3 +1,2 @@
 export * from "./donorClient";
-export * from "./DonorOtpAccess";
-export * from "./DonorContributionView";
+export { DonorAccessPanel } from "./DonorAccessPanel";

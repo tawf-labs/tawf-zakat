@@ -25,6 +25,8 @@ import type { DisbursementStore } from "./disbursement-store";
 
 export type RecipientMessageTransport = {
   send(message: { to: string; body: string }): Promise<void>;
+  /** Whether this channel can reach the contact at all (e.g. email only). Absent means any. */
+  canDeliver?(to: string): boolean;
 };
 
 export type WorkspaceRuntime = {
@@ -89,6 +91,12 @@ export type WorkspaceRuntime = {
    * Optional, and absent means absent: the donor routes answer 503.
    */
   donorAccess?: import("./donor-access-store").DonorAccessStore;
+  /**
+   * Delivers donor OTP codes (ticket #104), kept apart from `messages` so the
+   * recipient confirmation channel of #94 is not changed by it. Optional, and
+   * absent means absent: the page says no channel is available.
+   */
+  donorMessages?: RecipientMessageTransport;
 };
 
 let runtime: WorkspaceRuntime | null = null;

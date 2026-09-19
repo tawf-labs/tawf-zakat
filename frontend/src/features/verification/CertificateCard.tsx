@@ -7,7 +7,7 @@ const formatDate = (iso: string | null) =>
 
 export function CertificateCard({ contribution }: { contribution: PublicContribution }) {
   const badge = STATUS_BADGES[contribution.status] ?? STATUS_BADGES.PENDING;
-  const isSettled = contribution.status !== "PENDING";
+  const isSettled = contribution.status !== "PENDING" && contribution.status !== "REJECTED";
 
   return (
     <div className="relative overflow-hidden rounded-3xl border-2 border-[#c4ed70] bg-white p-8 sm:p-12 shadow-xl print:border-none print:shadow-none space-y-8">

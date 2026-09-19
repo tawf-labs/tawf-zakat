@@ -1,48 +1,58 @@
 import { getApiBaseUrl } from "../../lib/contracts";
+import type {
+  ContributionStatus,
+  CurrencyUnit,
+  JenisDana,
+  SourceChannel,
+} from "../contributions/contributionClient";
 
-export interface DonorOtpChallengeResult {
-  success: boolean;
-  challengeId?: string;
-  contactMasked?: string;
-  expiresAt?: number;
-  error?: string;
-}
+/**
+ * Accountless donor access client (Ticket #104, Spec #100).
+ *
+ * The types mirror `backend/src/donor-access.ts`. A donor starts from the
+ * reference on their receipt; the contribution ID is only learned once a code
+ * has been verified, and the session token travels only in the Authorization
+ * header, never in a URL.
+ */
 
-export interface DonorOtpVerifyResult {
-  success: boolean;
-  sessionToken?: string;
-  expiresAt?: number;
-  contributionId?: string;
-  remainingAttempts?: number;
-  error?: string;
-}
+export type DonorSessionRecord = {
+  token: string;
+  contributionId: string;
+  /** Unix seconds. */
+  expiresAt: number;
+};
 
-export interface DonorContribution {
+export type DonorOtpChallenge = {
+  challengeId: string;
+  expiresAt: number;
+  resendAvailableAt: number;
+};
+
+export type DonorContribution = {
   id: string;
   institutionId: string;
-  sourceChannel: string;
+  sourceChannel: SourceChannel;
   sourceReference: string;
-  currencyUnit: string;
+  currencyUnit: CurrencyUnit;
   amountExact: string;
-  fundType: string;
+  fundType: JenisDana;
   purpose: string;
   receivedAt: number;
   donorName: string | null;
   donorContactMasked: string | null;
-  status: string;
+  status: ContributionStatus;
   reconciledAt: number | null;
   endorsedAt: number | null;
-  zkProof: {
-    status: "NOT_AVAILABLE" | "PENDING" | "VERIFIED";
-  };
-}
+  /** No ZK pipeline exists yet (#108). */
+  zkProof: { status: "NOT_AVAILABLE" };
+};
 
-export interface DonorActivityAllocation {
+export type DonorActivityAllocation = {
   allocationId: string;
   activityId: string;
   amountExact: string;
-  currencyUnit: string;
-  fundType: string;
+  currencyUnit: CurrencyUnit;
+  fundType: JenisDana;
   purpose: string;
   reason: string;
   allocatedAt: number;
@@ -52,147 +62,128 @@ export interface DonorActivityAllocation {
     description: string | null;
     targetAmount: string;
     targetIsPartial: boolean;
-    currencyUnit: string;
-    status: string;
-    pooled: {
-      totalAllocatedAmount: string;
-      allocationCount: number;
-    };
+    currencyUnit: CurrencyUnit;
+    status: "ACTIVE";
+    pooled: { totalAllocatedAmount: string; allocationCount: number };
   };
+};
+
+/** The server no longer honours this session: expired, revoked or never valid. */
+export class DonorSessionEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DonorSessionEndedError";
+  }
 }
 
-const SESSION_STORAGE_KEY_PREFIX = "zkt_donor_session_";
+export type DonorResult<T> = ({ ok: true } & T) | { ok: false; error: string; retryAt?: number; remainingAttempts?: number };
 
-export function getStoredDonorSession(contributionId: string): string | null {
-  if (typeof window === "undefined") return null;
+const NETWORK_ERROR = "Jaringan tidak terhubung. Periksa koneksi Anda.";
+const STORAGE_KEY_PREFIX = "zkt_donor_session_";
+
+export const nowInSeconds = () => Math.floor(Date.now() / 1000);
+
+/** The stored session for this reference, or null once it has expired. */
+export function readDonorSession(reference: string, now = nowInSeconds()): DonorSessionRecord | null {
   try {
-    return window.sessionStorage.getItem(`${SESSION_STORAGE_KEY_PREFIX}${contributionId}`);
+    const raw = window.sessionStorage.getItem(`${STORAGE_KEY_PREFIX}${reference}`);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as DonorSessionRecord;
+    if (typeof record?.token !== "string" || typeof record.expiresAt !== "number" || record.expiresAt <= now) {
+      clearDonorSession(reference);
+      return null;
+    }
+    return record;
   } catch {
     return null;
   }
 }
 
-export function saveDonorSession(contributionId: string, token: string): void {
-  if (typeof window === "undefined") return;
+export function saveDonorSession(reference: string, record: DonorSessionRecord): void {
   try {
-    window.sessionStorage.setItem(`${SESSION_STORAGE_KEY_PREFIX}${contributionId}`, token);
+    window.sessionStorage.setItem(`${STORAGE_KEY_PREFIX}${reference}`, JSON.stringify(record));
   } catch {
-    // Ignore storage errors
+    // Without storage the session lasts as long as the page.
   }
 }
 
-export function clearStoredDonorSession(contributionId: string): void {
-  if (typeof window === "undefined") return;
+export function clearDonorSession(reference: string): void {
   try {
-    window.sessionStorage.removeItem(`${SESSION_STORAGE_KEY_PREFIX}${contributionId}`);
+    window.sessionStorage.removeItem(`${STORAGE_KEY_PREFIX}${reference}`);
   } catch {
-    // Ignore storage errors
+    // Nothing was stored.
   }
 }
 
-export async function requestDonorOtp(contributionId: string): Promise<DonorOtpChallengeResult> {
+async function send<T>(path: string, init: RequestInit): Promise<DonorResult<T>> {
+  let res: Response;
   try {
-    const res = await fetch(`${getApiBaseUrl()}/api/donor/otp-challenge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contributionId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { success: false, error: data.error || `Gagal mengirim OTP (${res.status}).` };
-    }
+    res = await fetch(`${getApiBaseUrl()}/api/donor${path}`, init);
+  } catch {
+    return { ok: false, error: NETWORK_ERROR };
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
     return {
-      success: true,
-      challengeId: data.challengeId,
-      contactMasked: data.contactMasked,
-      expiresAt: data.expiresAt,
+      ok: false,
+      error: data.error || `Permintaan gagal (${res.status}).`,
+      retryAt: data.retryAt,
+      remainingAttempts: data.remainingAttempts,
     };
-  } catch {
-    return { success: false, error: "Jaringan tidak terhubung. Periksa koneksi Anda." };
   }
+  return { ok: true, ...data };
 }
 
-export async function verifyDonorOtp(
-  challengeId: string,
-  otpCode: string
-): Promise<DonorOtpVerifyResult> {
-  try {
-    const res = await fetch(`${getApiBaseUrl()}/api/donor/otp-verify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ challengeId, otpCode }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return {
-        success: false,
-        error: data.error || "Verifikasi OTP gagal.",
-        remainingAttempts: data.remainingAttempts,
-      };
-    }
-    return {
-      success: true,
-      sessionToken: data.sessionToken,
-      expiresAt: data.expiresAt,
-      contributionId: data.contributionId,
-    };
-  } catch {
-    return { success: false, error: "Jaringan tidak terhubung saat memverifikasi OTP." };
-  }
+const postJson = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+/** Whether this deployment can deliver a code at all. */
+export async function fetchDonorChannel(): Promise<boolean> {
+  const result = await send<{ available: boolean }>("/channel", {});
+  if (!result.ok) throw new Error(result.error);
+  return result.available;
 }
 
-export async function fetchDonorContribution(
-  contributionId: string,
-  sessionToken: string
-): Promise<{ success: boolean; contribution?: DonorContribution; error?: string }> {
+export const requestDonorOtp = (reference: string) =>
+  send<DonorOtpChallenge>("/otp-challenge", postJson({ reference }));
+
+export const verifyDonorOtp = (challengeId: string, otpCode: string) =>
+  send<{ sessionToken: string; expiresAt: number; contributionId: string }>(
+    "/session",
+    postJson({ challengeId, otpCode })
+  );
+
+async function readPrivate<T>(path: string, token: string): Promise<T> {
+  let res: Response;
   try {
-    const res = await fetch(
-      `${getApiBaseUrl()}/api/donor/contributions/${encodeURIComponent(contributionId)}`,
-      {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      }
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { success: false, error: data.error || `Akses ditolak (${res.status}).` };
-    }
-    return { success: true, contribution: data.contribution };
+    res = await fetch(`${getApiBaseUrl()}/api/donor${path}`, { headers: { Authorization: `Bearer ${token}` } });
   } catch {
-    return { success: false, error: "Gagal mengambil data kontribusi donatur." };
+    throw new Error(NETWORK_ERROR);
   }
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) {
+    throw new DonorSessionEndedError(data.error || "Sesi donatur tidak berlaku lagi.");
+  }
+  if (!res.ok) throw new Error(data.error || `Permintaan gagal (${res.status}).`);
+  return data as T;
 }
 
-export async function fetchDonorAllocations(
-  contributionId: string,
-  sessionToken: string
-): Promise<{ success: boolean; allocations?: DonorActivityAllocation[]; error?: string }> {
-  try {
-    const res = await fetch(
-      `${getApiBaseUrl()}/api/donor/contributions/${encodeURIComponent(contributionId)}/allocations`,
-      {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      }
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { success: false, error: data.error || `Akses ditolak (${res.status}).` };
-    }
-    return { success: true, allocations: data.allocations || [] };
-  } catch {
-    return { success: false, error: "Gagal mengambil alokasi kegiatan kontribusi." };
-  }
-}
+export const fetchDonorContribution = async (session: DonorSessionRecord) =>
+  (await readPrivate<{ contribution: DonorContribution }>(
+    `/contributions/${encodeURIComponent(session.contributionId)}`,
+    session.token
+  )).contribution;
 
-export async function logoutDonor(sessionToken: string, contributionId?: string): Promise<void> {
-  if (contributionId) {
-    clearStoredDonorSession(contributionId);
-  }
-  try {
-    await fetch(`${getApiBaseUrl()}/api/donor/logout`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${sessionToken}` },
-    });
-  } catch {
-    // Ignore network error on logout
-  }
+export const fetchDonorAllocations = async (session: DonorSessionRecord) =>
+  (await readPrivate<{ allocations: DonorActivityAllocation[] }>(
+    `/contributions/${encodeURIComponent(session.contributionId)}/allocations`,
+    session.token
+  )).allocations;
+
+/** Revokes the session on the server; the caller forgets it locally regardless. */
+export async function endDonorSession(token: string): Promise<void> {
+  await send("/session", { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
 }

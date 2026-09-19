@@ -266,23 +266,6 @@ export const dbService = {
     return (dataStore.getDonation(trxId) as any) || null;
   },
 
-  async getContributionByIdOrRef(idOrRef: string): Promise<schema.ContributionRow | null> {
-    if (db) {
-      try {
-        const rows = await db
-          .select()
-          .from(schema.contributions)
-          .where(or(eq(schema.contributions.id, idOrRef), eq(schema.contributions.sourceReference, idOrRef)))
-          .limit(1);
-        return rows[0] || null;
-      } catch (err) {
-        console.error("Failed to query contribution from DB:", err);
-        return null;
-      }
-    }
-    return null;
-  },
-
   async markDonationAsPaid(trxId: string, paidAt?: string): Promise<DonationRecord | null> {
     const timeStr = paidAt || new Date().toISOString();
     

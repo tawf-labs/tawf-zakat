@@ -1,9 +1,26 @@
 import type { Hex } from "viem";
 import { dbService } from "./db/index";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "./merkle";
-import { maskContact } from "./donor-access";
+import type { ContributionStatus } from "./contribution";
+import { workspaceRuntime } from "./workspace-runtime";
 
-export type ContributionStatus = "PENDING" | "PAID" | "BATCHED";
+/**
+ * What the public page may say about a record. Online donations move
+ * PENDING -> PAID -> BATCHED; contributions an institution recorded (ticket
+ * #102) keep their own states, REJECTED included, rather than being folded
+ * into a donation state that says something else.
+ */
+export type PublicContributionStatus =
+  | "PENDING"
+  | "PAID"
+  | "BATCHED"
+  | "RECEIVED"
+  | "RECONCILED"
+  | "ENDORSED"
+  | "REJECTED";
+
+/** Only an institution-recorded contribution can be opened by its donor through OTP (#104). */
+export type PublicRecordKind = "ONLINE_DONATION" | "INSTITUTION_CONTRIBUTION";
 export type RestrictedField = "DONOR_NAME" | "AMOUNT" | "SALT" | "CONTACT" | "DOCUMENTS";
 
 /** The server's own batch record; no chain read backs these values. */
@@ -17,7 +34,8 @@ export interface BatchRecord {
 
 export interface PublicContribution {
   trxId: string;
-  status: ContributionStatus;
+  recordKind: PublicRecordKind;
+  status: PublicContributionStatus;
   recordedAt: string;
   paidAt: string | null;
   batch: BatchRecord | null;
@@ -25,10 +43,6 @@ export interface PublicContribution {
   zkProof: { status: "NOT_AVAILABLE" };
   owner: "UNPROVEN";
   restricted: RestrictedField[];
-  hasContact?: boolean;
-  contactMasked?: string | null;
-  contributionId?: string;
-  institutionId?: string;
 }
 
 export type ContributionLookup =
@@ -68,11 +82,35 @@ async function toPublicContribution(donation: StoredDonation): Promise<PublicCon
   const stored = batch ? await dbService.getProofForTrx(donation.trxId, donation.salt, donation.amountIDR) : null;
   return {
     trxId: donation.trxId,
-    status: (donation.status as ContributionStatus) || "PENDING",
+    recordKind: "ONLINE_DONATION",
+    status: (donation.status as PublicContributionStatus) || "PENDING",
     recordedAt: donation.timestamp,
     paidAt: donation.paidAt ?? null,
     batch,
     membershipProof: stored?.proof.length ? { type: "MERKLE_INCLUSION", siblings: stored.proof as Hex[] } : null,
+    zkProof: NO_ZK_PROOF,
+    owner: "UNPROVEN",
+    restricted: RESTRICTED,
+  };
+}
+
+/**
+ * The public face of an institution-recorded contribution: its reference and
+ * state only. The contribution ID, institution and contact stay behind OTP.
+ */
+function toPublicInstitutionContribution(
+  reference: string,
+  state: { status: ContributionStatus; receivedAt: number }
+): PublicContribution {
+  const receivedAt = new Date(state.receivedAt * 1000).toISOString();
+  return {
+    trxId: reference,
+    recordKind: "INSTITUTION_CONTRIBUTION",
+    status: state.status,
+    recordedAt: receivedAt,
+    paidAt: state.status === "REJECTED" ? null : receivedAt,
+    batch: null,
+    membershipProof: null,
     zkProof: NO_ZK_PROOF,
     owner: "UNPROVEN",
     restricted: RESTRICTED,
@@ -90,24 +128,10 @@ export async function lookupContribution(
       return { lookupStatus: "FOUND", contribution: await toPublicContribution(donation) };
     }
 
-    const contrib = await dbService.getContributionByIdOrRef(trxId);
-    if (contrib) {
-      const publicContrib: PublicContribution = {
-        trxId: contrib.sourceReference || contrib.id,
-        status: (contrib.status === "RECEIVED" ? "PENDING" : (contrib.status === "REJECTED" ? "PENDING" : "PAID")) as ContributionStatus,
-        recordedAt: new Date(Number(contrib.receivedAt) * 1000).toISOString(),
-        paidAt: contrib.reconciledAt ? new Date(Number(contrib.reconciledAt) * 1000).toISOString() : null,
-        batch: null,
-        membershipProof: null,
-        zkProof: NO_ZK_PROOF,
-        owner: "UNPROVEN",
-        restricted: RESTRICTED,
-        hasContact: Boolean(contrib.donorContact && contrib.donorContact.trim().length > 0),
-        contactMasked: contrib.donorContact ? maskContact(contrib.donorContact) : null,
-        contributionId: contrib.id,
-        institutionId: contrib.institutionId,
-      };
-      return { lookupStatus: "FOUND", contribution: publicContrib };
+    // Institution-recorded contributions (#102) live in the workspace database.
+    const state = await workspaceRuntime()?.donorAccess?.publicState(trxId);
+    if (state) {
+      return { lookupStatus: "FOUND", contribution: toPublicInstitutionContribution(trxId, state) };
     }
 
     return { lookupStatus: "NOT_FOUND" };

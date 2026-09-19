@@ -43,7 +43,7 @@ import reportPackageRoutes from "./routes/report-package";
 import reportAuditFindingsRoutes from "./routes/report-audit-findings";
 import registryRecoveryRoutes from "./routes/registry-recovery";
 import registryRecordingRoutes from "./routes/registry-recording";
-import { donorAccessRoutes } from "./routes/donor-access";
+import donorAccessRoutes from "./routes/donor-access";
 import { installWorkspaceRuntime } from "./workspace-wiring";
 import { GOVERNANCE_ACTIONS } from "./governance-chain";
 import { GOVERNANCE_ROLE_HASHES } from "./governance-roles";

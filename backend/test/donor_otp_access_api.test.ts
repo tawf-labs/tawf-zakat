@@ -21,6 +21,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { sql } from "drizzle-orm";
+import { createHash, createHmac } from "node:crypto";
 import { type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/index";
@@ -37,6 +38,8 @@ import { CONTRIBUTION_SCHEMA_STATEMENTS } from "../src/contribution-store";
 import { ACTIVITY_SCHEMA_STATEMENTS } from "../src/activity-store";
 import { DISBURSEMENT_SCHEMA_STATEMENTS } from "../src/disbursement-store";
 import { DONOR_ACCESS_SCHEMA_STATEMENTS } from "../src/donor-access-store";
+import { rowsOf } from "../src/sql-rows";
+import { isEmailAddress } from "../src/email-transport";
 
 const BASE_DONOR = "http://localhost:3001/api/donor";
 const BASE_WORKSPACE = "http://localhost:3001/api/workspace";
@@ -49,6 +52,7 @@ const amilSinar = privateKeyToAccount(`0x${"b1".repeat(32)}` as Hex);
 const approverSinar = privateKeyToAccount(`0x${"b2".repeat(32)}` as Hex);
 
 const NOW = 1_800_000_000;
+const OTP_KEY = Buffer.alloc(32, 7);
 
 let database: TestWorkspaceDatabase;
 let workspaceStore: WorkspaceStore;
@@ -126,13 +130,13 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
   let amilToken: string;
 
   beforeAll(async () => {
-    database = await createTestWorkspaceDatabase();
+    database = await createTestWorkspaceDatabase(process.env.DONOR_ACCESS_TEST_DATABASE_URL);
     const handle = database.handle();
     workspaceStore = createWorkspaceStore(handle);
     disbursementStore = createDisbursementStore(handle);
     contributionStore = createContributionStore(handle);
     activityStore = createActivityStore(handle);
-    donorAccessStore = createDonorAccessStore(handle);
+    donorAccessStore = createDonorAccessStore(handle, OTP_KEY);
 
     await workspaceStore.ensureSchema();
     for (const stmt of DISBURSEMENT_SCHEMA_STATEMENTS) await handle.execute(sql.raw(stmt));
@@ -146,7 +150,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
       contributions: contributionStore,
       activities: activityStore,
       donorAccess: donorAccessStore,
-      messages: messageTransport,
+      donorMessages: messageTransport,
       ethCall,
       now: () => clock,
       challengeTtlSeconds: 300,
@@ -166,7 +170,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
       contributions: contributionStore,
       activities: activityStore,
       donorAccess: donorAccessStore,
-      messages: messageTransport,
+      donorMessages: messageTransport,
       ethCall,
       now: () => clock,
       challengeTtlSeconds: 300,
@@ -251,6 +255,13 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     return body.contribution;
   }
 
+  async function openSession(reference: string): Promise<string> {
+    const challenge = await (await postDonor("/otp-challenge", { reference })).json();
+    const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
+    const verified = await (await postDonor("/session", { challengeId: challenge.challengeId, otpCode: code })).json();
+    return verified.sessionToken;
+  }
+
   async function createApprovedProposalAndActivity(targetAmount = "5000000") {
     const db = database.handle();
     const progId = `prog-${crypto.randomUUID().slice(0, 8)}`;
@@ -292,14 +303,17 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
       amountExact: "1500000",
     });
 
-    const res = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const res = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(res.status).toBe(201);
     const body = await res.json();
 
     expect(body.success).toBe(true);
     expect(body.challengeId).toMatch(/^d-otp-/);
-    expect(body.contactMasked).toBe("0812****7890");
     expect(body.expiresAt).toBe(NOW + 900);
+    expect(body.resendAvailableAt).toBe(NOW + 60);
+    // A reference alone reveals neither the contribution ID nor the contact.
+    expect(JSON.stringify(body)).not.toContain(contrib.id);
+    expect(body.contactMasked).toBeUndefined();
     // Plaintext OTP code must NEVER be returned in response
     expect(body.code).toBeUndefined();
     expect(body.otpCode).toBeUndefined();
@@ -325,7 +339,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
       contributions: contributionStore,
       activities: activityStore,
       donorAccess: donorAccessStore,
-      messages: undefined,
+      donorMessages: undefined,
       ethCall,
       now: () => clock,
       challengeTtlSeconds: 300,
@@ -333,7 +347,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     });
 
     const contrib = await createFixtureContribution();
-    const res = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const res = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.success).toBe(false);
@@ -342,7 +356,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
 
   it("refuses to issue OTP for contribution with missing or empty contact (US-51)", async () => {
     const contrib = await createFixtureContribution({ donorContact: null });
-    const res = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const res = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(res.status).toBe(422);
     const body = await res.json();
     expect(body.success).toBe(false);
@@ -351,53 +365,53 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
 
   it("enforces cooldown rate-limiting between OTP requests (AC14)", async () => {
     const contrib = await createFixtureContribution();
-    const first = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const first = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(first.status).toBe(201);
 
     // Immediate second request
-    const second = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const second = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(second.status).toBe(429);
     const body = await second.json();
     expect(body.error).toContain("Harap tunggu 60 detik");
 
     // Advance clock by 61 seconds
     clock += 61;
-    const third = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const third = await postDonor("/otp-challenge", { reference: contrib.id });
     expect(third.status).toBe(201);
   });
 
   it("rejects wrong OTP code with remaining attempts, and invalidates after 5 wrong attempts (AC14)", async () => {
     const contrib = await createFixtureContribution();
-    const challengeRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const challengeRes = await postDonor("/otp-challenge", { reference: contrib.id });
     const { challengeId } = await challengeRes.json();
 
     // 1st wrong attempt
-    const r1 = await postDonor("/otp-verify", { challengeId, otpCode: "000000" });
+    const r1 = await postDonor("/session", { challengeId, otpCode: "000000" });
     expect(r1.status).toBe(401);
     expect((await r1.json()).remainingAttempts).toBe(4);
 
     // 2nd, 3rd, 4th wrong attempts
     for (let i = 0; i < 3; i++) {
-      const res = await postDonor("/otp-verify", { challengeId, otpCode: "000000" });
+      const res = await postDonor("/session", { challengeId, otpCode: "000000" });
       expect(res.status).toBe(401);
     }
 
     // 5th wrong attempt -> exhausts max attempts
-    const r5 = await postDonor("/otp-verify", { challengeId, otpCode: "000000" });
+    const r5 = await postDonor("/session", { challengeId, otpCode: "000000" });
     expect(r5.status).toBe(401);
     const b5 = await r5.json();
     expect(b5.remainingAttempts).toBe(0);
     expect(b5.error).toContain("Batas percobaan habis");
 
     // 6th attempt -> challenge is consumed/spent
-    const r6 = await postDonor("/otp-verify", { challengeId, otpCode: "000000" });
+    const r6 = await postDonor("/session", { challengeId, otpCode: "000000" });
     expect(r6.status).toBe(400);
     expect((await r6.json()).error).toContain("sudah pernah digunakan atau kedaluwarsa");
   });
 
   it("rejects expired OTP challenge after 15 minutes TTL (AC14)", async () => {
     const contrib = await createFixtureContribution();
-    const challengeRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const challengeRes = await postDonor("/otp-challenge", { reference: contrib.id });
     const { challengeId } = await challengeRes.json();
 
     const deliveredCode = outbox[0].body.match(/\b(\d{6})\b/)?.[1]!;
@@ -406,21 +420,21 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     // Advance clock past 900s TTL
     clock += 901;
 
-    const verifyRes = await postDonor("/otp-verify", { challengeId, otpCode: deliveredCode });
+    const verifyRes = await postDonor("/session", { challengeId, otpCode: deliveredCode });
     expect(verifyRes.status).toBe(400);
     expect((await verifyRes.json()).error).toContain("kedaluwarsa");
   });
 
   it("verifies valid OTP, issues bounded session token, and prevents replay (US-47, US-48, AC14)", async () => {
     const contrib = await createFixtureContribution();
-    const challengeRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const challengeRes = await postDonor("/otp-challenge", { reference: contrib.id });
     const { challengeId } = await challengeRes.json();
 
     const code = outbox[0].body.match(/\b(\d{6})\b/)?.[1]!;
     expect(code).toBeDefined();
 
-    const verifyRes = await postDonor("/otp-verify", { challengeId, otpCode: code });
-    expect(verifyRes.status).toBe(200);
+    const verifyRes = await postDonor("/session", { challengeId, otpCode: code });
+    expect(verifyRes.status).toBe(201);
     const { sessionToken, expiresAt, contributionId } = await verifyRes.json();
 
     expect(sessionToken).toMatch(/^dsess_/);
@@ -428,23 +442,14 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     expect(expiresAt).toBe(NOW + 3600);
 
     // Replay attack prevention: Attempting to verify the same challenge again fails
-    const replayRes = await postDonor("/otp-verify", { challengeId, otpCode: code });
+    const replayRes = await postDonor("/session", { challengeId, otpCode: code });
     expect(replayRes.status).toBe(400);
     expect((await replayRes.json()).error).toContain("sudah pernah digunakan");
   });
 
   it("allows navigation with session token without asking OTP on every page, and expires after 1 hour (US-48, AC14)", async () => {
     const contrib = await createFixtureContribution();
-    await postDonor("/otp-challenge", { contributionId: contrib.id });
-    const code = outbox[0].body.match(/\b(\d{6})\b/)?.[1]!;
-    const verifyRes = await postDonor("/otp-verify", { challengeId: outbox[0].body, otpCode: code });
-    // Note: read challengeId from API response
-    const challengeRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
-    clock += 61; // after cooldown
-    const freshChal = await (await postDonor("/otp-challenge", { contributionId: contrib.id })).json();
-    const freshCode = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
-    const sessionRes = await postDonor("/otp-verify", { challengeId: freshChal.challengeId, otpCode: freshCode });
-    const { sessionToken } = await sessionRes.json();
+    const sessionToken = await openSession(contrib.id);
 
     // Call contribution details
     const getRes1 = await getDonor(`/contributions/${contrib.id}`, sessionToken);
@@ -469,10 +474,10 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     const contribB = await createFixtureContribution({ sourceReference: "REF-CONTRIB-B", donorName: "Donatur B" });
 
     // Obtain verified session for Contribution A
-    const chalRes = await postDonor("/otp-challenge", { contributionId: contribA.id });
+    const chalRes = await postDonor("/otp-challenge", { reference: contribA.id });
     const { challengeId } = await chalRes.json();
     const code = outbox[0].body.match(/\b(\d{6})\b/)?.[1]!;
-    const { sessionToken } = await (await postDonor("/otp-verify", { challengeId, otpCode: code })).json();
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
 
     // Legitimate access to Contribution A succeeds
     const legit = await getDonor(`/contributions/${contribA.id}`, sessionToken);
@@ -508,10 +513,10 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     });
 
     // Request and verify OTP for Contrib 1 only
-    const chalRes = await postDonor("/otp-challenge", { contributionId: contrib1.id });
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib1.id });
     const { challengeId } = await chalRes.json();
     const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
-    const { sessionToken } = await (await postDonor("/otp-verify", { challengeId, otpCode: code })).json();
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
 
     // Session 1 can read Contrib 1
     const res1 = await getDonor(`/contributions/${contrib1.id}`, sessionToken);
@@ -551,10 +556,10 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     `);
 
     // Authenticate Donor 1
-    const chalRes = await postDonor("/otp-challenge", { contributionId: contrib1.id });
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib1.id });
     const { challengeId } = await chalRes.json();
     const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
-    const { sessionToken } = await (await postDonor("/otp-verify", { challengeId, otpCode: code })).json();
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
 
     // Check contribution detail
     const detailRes = await getDonor(`/contributions/${contrib1.id}`, sessionToken);
@@ -588,16 +593,19 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
 
   it("revokes session on logout and clears access (AC29)", async () => {
     const contrib = await createFixtureContribution();
-    const chalRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib.id });
     const { challengeId } = await chalRes.json();
     const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
-    const { sessionToken } = await (await postDonor("/otp-verify", { challengeId, otpCode: code })).json();
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
 
     // Valid before logout
     expect((await getDonor(`/contributions/${contrib.id}`, sessionToken)).status).toBe(200);
 
     // Logout
-    const logoutRes = await postDonor("/logout", {}, sessionToken);
+    const logoutRes = await requestDonor("/session", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
     expect(logoutRes.status).toBe(200);
 
     // Subsequent access is refused
@@ -607,10 +615,10 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
 
   it("strictly isolates donor session from operator workspace authority (AC29)", async () => {
     const contrib = await createFixtureContribution();
-    const chalRes = await postDonor("/otp-challenge", { contributionId: contrib.id });
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib.id });
     const { challengeId } = await chalRes.json();
     const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
-    const { sessionToken } = await (await postDonor("/otp-verify", { challengeId, otpCode: code })).json();
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
 
     // Trying to use donor session token on workspace operator endpoint must be refused
     const workspaceCall = await app.fetch(
@@ -621,16 +629,251 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     expect(workspaceCall.status).toBe(401);
   });
 
-  it("bundles the frontend verification page with donor OTP access without errors", async () => {
-    const built = await Bun.build({
-      entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname],
-      target: "browser",
-      define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
-    });
-    expect(built.success).toBe(true);
-    const bundle = await built.outputs[0]!.text();
-    expect(bundle).toContain("Akses Rincian Donatur (Tanpa Akun)");
-    expect(bundle).toContain("Kirim Kode OTP");
-    expect(bundle).toContain("Alokasi ke Kegiatan Penyaluran");
+  it("resolves a receipt's source reference to its contribution, and refuses an ambiguous one", async () => {
+    const contrib = await createFixtureContribution({ sourceReference: "BCA-SHARED-REF" });
+    const byRef = await postDonor("/otp-challenge", { reference: "BCA-SHARED-REF" });
+    expect(byRef.status).toBe(201);
+
+    const db = database.handle();
+    await db.execute(sql`
+      INSERT INTO contributions (
+        id, institution_id, source_channel, source_reference, currency_unit, amount_exact, fund_type,
+        purpose, received_at, donor_name, donor_contact, status, version, created_at, updated_at, created_by
+      )
+      SELECT 'contrib-baitul-dup', ${BAITUL}, source_channel, source_reference, currency_unit, amount_exact, fund_type,
+             purpose, received_at, NULL, '089900001111', status, 1, created_at, updated_at, created_by
+      FROM contributions WHERE id = ${contrib.id}
+    `);
+    clock += 61;
+    const ambiguous = await postDonor("/otp-challenge", { reference: "BCA-SHARED-REF" });
+    expect(ambiguous.status).toBe(404);
+    expect((await ambiguous.json()).error).toContain("lebih dari satu kontribusi");
+    // The ID on the institution's receipt still works.
+    expect((await postDonor("/otp-challenge", { reference: contrib.id })).status).toBe(201);
   });
+
+  it("caps codes per contribution per hour, so guesses and code replacement are bounded (AC14)", async () => {
+    const contrib = await createFixtureContribution();
+    for (let i = 0; i < 5; i++) {
+      expect((await postDonor("/otp-challenge", { reference: contrib.id })).status).toBe(201);
+      clock += 61;
+    }
+    const capped = await postDonor("/otp-challenge", { reference: contrib.id });
+    expect(capped.status).toBe(429);
+    const body = await capped.json();
+    expect(body.error).toContain("Batas 5 kode per 60 menit");
+    expect(body.retryAt).toBe(NOW + 3600);
+    expect(outbox).toHaveLength(5);
+
+    clock = NOW + 3601;
+    expect((await postDonor("/otp-challenge", { reference: contrib.id })).status).toBe(201);
+  });
+
+  it("counts concurrent code requests one at a time, so both cannot pass the cooldown (AC14)", async () => {
+    const contrib = await createFixtureContribution();
+    const statuses = (
+      await Promise.all([
+        postDonor("/otp-challenge", { reference: contrib.id }),
+        postDonor("/otp-challenge", { reference: contrib.id }),
+      ])
+    ).map((res) => res.status).sort();
+    expect(statuses).toEqual([201, 429]);
+    expect(outbox).toHaveLength(1);
+  });
+
+  it("stores codes as a keyed hash that the table alone cannot reverse", async () => {
+    const contrib = await createFixtureContribution();
+    const { challengeId } = await (await postDonor("/otp-challenge", { reference: contrib.id })).json();
+    const code = outbox[0].body.match(/\b(\d{6})\b/)?.[1]!;
+    const [row] = rowsOf(
+      await database.handle().execute(sql`SELECT code_hash FROM donor_otp_challenges WHERE id = ${challengeId}`)
+    );
+    expect(row.code_hash).toBe(createHmac("sha256", OTP_KEY).update(`${challengeId}:${code}`).digest("hex"));
+    expect(row.code_hash).not.toBe(createHash("sha256").update(`${challengeId}:${code}`).digest("hex"));
+  });
+
+  it("says whether a delivery channel exists, and marks private answers uncacheable", async () => {
+    const channel = await getDonor("/channel");
+    expect(await channel.json()).toEqual({ success: true, available: true });
+
+    const contrib = await createFixtureContribution();
+    const sessionToken = await openSession(contrib.id);
+    const detail = await getDonor(`/contributions/${contrib.id}`, sessionToken);
+    expect(detail.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(detail.headers.get("Vary")).toContain("Authorization");
+
+    configureWorkspace({
+      store: workspaceStore,
+      contributions: contributionStore,
+      donorAccess: donorAccessStore,
+      ethCall,
+      now: () => clock,
+      challengeTtlSeconds: 300,
+      sessionTtlSeconds: 3600,
+    });
+    expect(await (await getDonor("/channel")).json()).toEqual({ success: true, available: false });
+  });
+
+  it("shows only reference and honest state publicly, REJECTED included, with no ID or contact (US-52, AC15, AC20)", async () => {
+    const contrib = await createFixtureContribution({ sourceReference: "BCA-PUBLIC-01", donorName: "Fulanah" });
+    const lookup = async () =>
+      (await app.fetch(new Request("http://localhost:3001/api/public/contributions/BCA-PUBLIC-01"))).json();
+
+    const found = await lookup();
+    expect(found.lookupStatus).toBe("FOUND");
+    expect(found.contribution.recordKind).toBe("INSTITUTION_CONTRIBUTION");
+    expect(found.contribution.status).toBe("RECEIVED");
+    const text = JSON.stringify(found);
+    for (const secret of [contrib.id, SINAR, "Fulanah", "1000000", "0812", "7890"]) {
+      expect(text).not.toContain(secret);
+    }
+
+    await database.handle().execute(sql`UPDATE contributions SET status = 'REJECTED' WHERE id = ${contrib.id}`);
+    const rejected = await lookup();
+    expect(rejected.contribution.status).toBe("REJECTED");
+    expect(rejected.contribution.paidAt).toBeNull();
+  });
+
+  it("with an email-only channel, refuses a phone contact honestly and sends to an email contact (US-46)", async () => {
+    const emailOnly: RecipientMessageTransport = { ...messageTransport, canDeliver: isEmailAddress };
+    configureWorkspace({
+      store: workspaceStore,
+      contributions: contributionStore,
+      donorAccess: donorAccessStore,
+      donorMessages: emailOnly,
+      ethCall,
+      now: () => clock,
+      challengeTtlSeconds: 300,
+      sessionTtlSeconds: 3600,
+    });
+
+    const phoneOnly = await createFixtureContribution({ donorContact: "081234567890" });
+    const refused = await postDonor("/otp-challenge", { reference: phoneOnly.id });
+    expect(refused.status).toBe(422);
+    expect((await refused.json()).error).toContain("hanya melalui email");
+    expect(outbox).toHaveLength(0);
+
+    const withEmail = await createFixtureContribution({ donorContact: "donatur@example.org" });
+    expect((await postDonor("/otp-challenge", { reference: withEmail.id })).status).toBe(201);
+    expect(outbox[0].to).toBe("donatur@example.org");
+  });
+
+  it("voids a code whose delivery failed and says so, without a fake success", async () => {
+    configureWorkspace({
+      store: workspaceStore,
+      contributions: contributionStore,
+      donorAccess: donorAccessStore,
+      donorMessages: { async send() { throw new Error("provider down"); } },
+      ethCall,
+      now: () => clock,
+      challengeTtlSeconds: 300,
+      sessionTtlSeconds: 3600,
+    });
+    const contrib = await createFixtureContribution();
+    const res = await postDonor("/otp-challenge", { reference: contrib.id });
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toContain("belum dapat dikirim");
+    const live = rowsOf(
+      await database.handle().execute(
+        sql`SELECT id FROM donor_otp_challenges WHERE contribution_id = ${contrib.id} AND consumed_at IS NULL`
+      )
+    );
+    expect(live).toHaveLength(0);
+  });
+
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
+    "browser: fixture code opens one contribution without signup, survives navigation, and closes on expiry and logout (AC30)",
+    async () => {
+      const { actId } = await createApprovedProposalAndActivity("4000000");
+      const contrib = await createFixtureContribution({ sourceReference: "BCA-SMOKE-104", amountExact: "1250000" });
+      await database.handle().execute(sql`
+        UPDATE contributions SET status = 'ENDORSED', reconciled_at = ${NOW}, endorsed_at = ${NOW} WHERE id = ${contrib.id}
+      `);
+      await database.handle().execute(sql`
+        INSERT INTO contribution_allocations (
+          id, institution_id, contribution_id, activity_id, currency_unit, amount_exact,
+          fund_type, purpose, reason, status, allocated_at, allocated_by, contribution_version, version, created_at, updated_at
+        ) VALUES ('alloc-smoke', ${SINAR}, ${contrib.id}, ${actId}, 'IDR', '1000000', 'ZAKAT', 'Bantuan Pelajar',
+                  'Alokasi semester genap', 'ACTIVE', ${NOW}, 'off-amil', 1, 1, ${NOW}, ${NOW})
+      `);
+
+      const built = await Bun.build({
+        entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname],
+        target: "browser",
+        define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+      });
+      if (!built.success) throw new Error(built.logs.join("\n"));
+      const bundle = await built.outputs[0]!.text();
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+          if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+          return app.fetch(req);
+        },
+      });
+      const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+      let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+      try {
+        browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+        const page = await browser.newPage();
+        page.setDefaultTimeout(10000);
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error: Error) => pageErrors.push(error.message));
+        const requestedUrls: string[] = [];
+        page.on("request", (request: any) => requestedUrls.push(request.url()));
+
+        const signIn = async () => {
+          await page.getByRole("button", { name: "Kirim Kode OTP" }).click();
+          await page.getByLabel(/Masukkan 6 digit kode/).waitFor();
+          const code = outbox.at(-1)!.body.match(/\b(\d{6})\b/)![1];
+          await page.getByLabel(/Masukkan 6 digit kode/).fill(code);
+          await page.getByRole("button", { name: "Verifikasi" }).click();
+          await page.getByRole("heading", { name: "Kontribusi Anda" }).waitFor();
+          return code;
+        };
+
+        await page.goto(`${server.url}?trxId=BCA-SMOKE-104`);
+        await page.getByRole("heading", { name: "Catatan Kontribusi" }).waitFor();
+        // Before the code, nothing private is on the page.
+        expect(await page.getByText("Rp 1.250.000").count()).toBe(0);
+
+        const code = await signIn();
+        await page.getByText("Rp 1.250.000").waitFor();
+        await page.getByRole("heading", { name: "Kegiatan Penyerahan Beasiswa Pelajar" }).waitFor();
+        await page.getByText(/Rp 1\.000\.000 \/ Rp 4\.000\.000 \(25%\)/).waitFor();
+        // Neither the code nor the token ever appears in a URL.
+        expect(requestedUrls.some((url) => url.includes(code) || url.includes("dsess_"))).toBe(false);
+
+        // Navigation within the session needs no new code.
+        await page.reload();
+        await page.getByText("Rp 1.250.000").waitFor();
+
+        // Expiry: the server refuses the session; private detail leaves the page.
+        clock += 3601;
+        await page.reload();
+        await page.getByText(/kedaluwarsa/).waitFor();
+        await page.getByRole("button", { name: "Kirim Kode OTP" }).waitFor();
+        expect(await page.getByText("Rp 1.250.000").count()).toBe(0);
+
+        // Logout revokes the session and forgets it.
+        clock += 61;
+        await signIn();
+        await page.getByRole("button", { name: "Tutup Sesi" }).click();
+        await page.getByRole("button", { name: "Kirim Kode OTP" }).waitFor();
+        expect(await page.getByText("Rp 1.250.000").count()).toBe(0);
+        await page.reload();
+        await page.getByRole("button", { name: "Kirim Kode OTP" }).waitFor();
+        expect(await page.getByText("Rp 1.250.000").count()).toBe(0);
+
+        expect(pageErrors).toEqual([]);
+      } finally {
+        await browser?.close();
+        server.stop(true);
+      }
+    },
+    60000
+  );
 });

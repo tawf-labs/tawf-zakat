@@ -2,7 +2,17 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type { Hex } from "viem";
 import { getApiBaseUrl } from "../../lib/contracts";
 
-export type ContributionStatus = "PENDING" | "PAID" | "BATCHED";
+/** Mirrors `PublicContributionStatus` in `backend/src/contribution-trace.ts`. */
+export type PublicContributionStatus =
+  | "PENDING"
+  | "PAID"
+  | "BATCHED"
+  | "RECEIVED"
+  | "RECONCILED"
+  | "ENDORSED"
+  | "REJECTED";
+
+export type PublicRecordKind = "ONLINE_DONATION" | "INSTITUTION_CONTRIBUTION";
 
 export interface BatchRecord {
   batchId: number;
@@ -14,16 +24,13 @@ export interface BatchRecord {
 
 export interface PublicContribution {
   trxId: string;
-  status: ContributionStatus;
+  recordKind: PublicRecordKind;
+  status: PublicContributionStatus;
   recordedAt: string;
   paidAt: string | null;
   batch: BatchRecord | null;
   membershipProof: { type: "MERKLE_INCLUSION"; siblings: Hex[] } | null;
   zkProof: { status: "NOT_AVAILABLE" };
-  hasContact?: boolean;
-  contactMasked?: string | null;
-  contributionId?: string;
-  institutionId?: string;
 }
 
 export type ContributionLookup =

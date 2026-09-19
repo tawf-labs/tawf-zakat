@@ -7,11 +7,13 @@
  * - Authorized retrieval of contribution details and activity allocations.
  */
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import {
   DONOR_OTP_COOLDOWN_SECONDS,
   DONOR_OTP_MAX_ATTEMPTS,
+  DONOR_OTP_MAX_SENDS_PER_WINDOW,
+  DONOR_OTP_SEND_WINDOW_SECONDS,
   DONOR_OTP_TTL_SECONDS,
   DONOR_SESSION_TTL_SECONDS,
   formatMinimalOtpMessage,
@@ -20,14 +22,16 @@ import {
   hashSessionToken,
   isValidOtpFormat,
   maskContact,
+  otpHashMatches,
   type DonorActivityAllocation,
   type DonorContributionDetail,
-  type DonorOtpChallenge,
   type DonorSession,
 } from "./donor-access";
 import type { RecipientMessageTransport } from "./workspace-runtime";
 import type { CurrencyUnit } from "./reconciliation";
 import type { ContributionStatus, JenisDana, SourceChannel } from "./contribution";
+import type { ActivityStatus } from "./activity";
+import { rowsOf } from "./sql-rows";
 
 export const DONOR_ACCESS_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS donor_otp_challenges (
@@ -63,7 +67,11 @@ export class DonorContactMissingError extends Error {
 }
 
 export class DonorOtpRateLimitError extends Error {
-  constructor(message = "Harap tunggu 60 detik sebelum meminta kode OTP baru.") {
+  constructor(
+    message: string,
+    /** Unix seconds from which a new code may be requested. */
+    readonly retryAt: number
+  ) {
     super(message);
     this.name = "DonorOtpRateLimitError";
   }
@@ -93,9 +101,18 @@ export class DonorAccessDeniedError extends Error {
 }
 
 export class DonorContributionNotFoundError extends Error {
-  constructor(message = "Catatan kontribusi tidak ditemukan.") {
+  constructor(
+    message = "Catatan kontribusi tidak ditemukan. Periksa kembali referensi pada kuitansi Anda."
+  ) {
     super(message);
     this.name = "DonorContributionNotFoundError";
+  }
+}
+
+export class DonorDeliveryFailedError extends Error {
+  constructor(message = "Kode belum dapat dikirim. Coba lagi beberapa saat lagi.") {
+    super(message);
+    this.name = "DonorDeliveryFailedError";
   }
 }
 
@@ -106,37 +123,67 @@ export class DonorTransportUnavailableError extends Error {
   }
 }
 
-export type DonorDatabase = {
-  execute: (query: any) => Promise<any>;
-  transaction: <T>(run: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>) => Promise<T>;
+type Executor = { execute: (query: SQL) => Promise<unknown> };
+
+export type DonorDatabase = Executor & {
+  transaction: <T>(run: (tx: Executor) => Promise<T>) => Promise<T>;
 };
 
-export interface DonorAccessStore {
-  ensureSchema(): Promise<void>;
-  issueOtp(
-    contributionId: string,
-    now: number,
-    messages?: RecipientMessageTransport
-  ): Promise<{ challengeId: string; contactMasked: string; expiresAt: number }>;
-  verifyOtp(
-    challengeId: string,
-    otpCode: string,
-    now: number
-  ): Promise<{ sessionToken: string; expiresAt: number; contributionId: string }>;
-  getSession(sessionToken: string, now: number): Promise<DonorSession | null>;
-  revokeSession(sessionToken: string, now: number): Promise<void>;
-  getDonorContribution(session: DonorSession): Promise<DonorContributionDetail>;
-  getDonorAllocations(session: DonorSession): Promise<DonorActivityAllocation[]>;
+export type DonorAccessStore = ReturnType<typeof createDonorAccessStore>;
+
+export type IssuedDonorOtp = {
+  challengeId: string;
+  expiresAt: number;
+  /** Unix seconds from which another code may be requested. */
+  resendAvailableAt: number;
+};
+
+const consumeChallenge = (executor: Executor, challengeId: string, now: number) =>
+  executor.execute(sql`
+    UPDATE donor_otp_challenges SET consumed_at = ${now}
+    WHERE id = ${challengeId} AND consumed_at IS NULL
+  `);
+
+type ReferencedContribution = {
+  id: string;
+  institution_id: string;
+  donor_contact: string | null;
+  status: ContributionStatus;
+  received_at: number | string;
+};
+
+/**
+ * The one contribution a donor's reference names: its ID, or its source
+ * reference when no other institution's contribution shares it. The public
+ * lookup and the OTP request resolve a reference by this same rule. With
+ * `lock`, the row is held so that concurrent code requests for one
+ * contribution are counted against the send limit one at a time.
+ */
+async function contributionByReference(
+  executor: Executor,
+  reference: string,
+  { lock }: { lock: boolean }
+): Promise<ReferencedContribution> {
+  const rows = rowsOf(
+    await executor.execute(sql`
+      SELECT id, institution_id, donor_contact, status, received_at
+      FROM contributions
+      WHERE id = ${reference} OR source_reference = ${reference}
+      ORDER BY (id = ${reference}) DESC, id
+      LIMIT 2
+      ${lock ? sql`FOR UPDATE` : sql``}
+    `)
+  );
+  if (rows.length === 0) throw new DonorContributionNotFoundError();
+  if (rows.length > 1 && rows[0].id !== reference) {
+    throw new DonorContributionNotFoundError(
+      "Referensi ini cocok dengan lebih dari satu kontribusi. Gunakan ID kontribusi yang tertera pada kuitansi lembaga."
+    );
+  }
+  return rows[0];
 }
 
-function rowsOf<T = any>(result: any): T[] {
-  if (!result) return [];
-  if (Array.isArray(result)) return result;
-  if (Array.isArray(result.rows)) return result.rows;
-  return [];
-}
-
-export function createDonorAccessStore(database: DonorDatabase): DonorAccessStore {
+export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) {
   return {
     async ensureSchema(): Promise<void> {
       for (const statement of DONOR_ACCESS_SCHEMA_STATEMENTS) {
@@ -144,94 +191,109 @@ export function createDonorAccessStore(database: DonorDatabase): DonorAccessStor
       }
     },
 
+    /**
+     * The state a public page may show for a reference, and nothing else: no
+     * contribution ID, institution, contact, donor or amount.
+     */
+    async publicState(reference: string): Promise<{ status: ContributionStatus; receivedAt: number } | null> {
+      try {
+        const row = await contributionByReference(database, reference, { lock: false });
+        return { status: row.status, receivedAt: Number(row.received_at) };
+      } catch (error) {
+        if (error instanceof DonorContributionNotFoundError) return null;
+        throw error;
+      }
+    },
+
+    /**
+     * Issues a code for the contribution the donor's reference names and sends
+     * it to that contribution's own contact. The response names neither the
+     * contribution nor the contact, so a reference alone reveals nothing more.
+     */
     async issueOtp(
-      contributionId: string,
+      reference: string,
       now: number,
       messages?: RecipientMessageTransport
-    ): Promise<{ challengeId: string; contactMasked: string; expiresAt: number }> {
+    ): Promise<IssuedDonorOtp> {
       if (!messages) {
         throw new DonorTransportUnavailableError();
       }
 
-      // Check contribution existence and contact
-      const contribRows = rowsOf(
-        await database.execute(sql`
-          SELECT id, institution_id, donor_contact, donor_name
-          FROM contributions
-          WHERE id = ${contributionId}
-        `)
-      );
+      const issued = await database.transaction(async (tx) => {
+        const contribution = await contributionByReference(tx, reference, { lock: true });
+        const contact = contribution.donor_contact?.trim();
+        if (!contact) throw new DonorContactMissingError();
+        if (messages.canDeliver && !messages.canDeliver(contact)) {
+          throw new DonorContactMissingError(
+            "Kontak pada kontribusi ini belum dapat dijangkau: pengiriman kode saat ini hanya melalui email. Hubungi amil lembaga untuk memperbarui kontak Anda."
+          );
+        }
 
-      const contribution = contribRows[0];
-      if (!contribution) {
-        throw new DonorContributionNotFoundError();
-      }
+        const [recent] = rowsOf(
+          await tx.execute(sql`
+            SELECT COUNT(*) AS sent, MAX(created_at) AS last_sent_at
+            FROM donor_otp_challenges
+            WHERE contribution_id = ${contribution.id}
+              AND created_at > ${now - DONOR_OTP_SEND_WINDOW_SECONDS}
+          `)
+        );
+        const sent = Number(recent?.sent ?? 0);
+        const lastSentAt = recent?.last_sent_at == null ? null : Number(recent.last_sent_at);
+        if (lastSentAt !== null && lastSentAt > now - DONOR_OTP_COOLDOWN_SECONDS) {
+          throw new DonorOtpRateLimitError(
+            `Harap tunggu ${DONOR_OTP_COOLDOWN_SECONDS} detik sebelum meminta kode OTP baru.`,
+            lastSentAt + DONOR_OTP_COOLDOWN_SECONDS
+          );
+        }
+        if (sent >= DONOR_OTP_MAX_SENDS_PER_WINDOW) {
+          const [oldest] = rowsOf(
+            await tx.execute(sql`
+              SELECT MIN(created_at) AS first_sent_at FROM donor_otp_challenges
+              WHERE contribution_id = ${contribution.id}
+                AND created_at > ${now - DONOR_OTP_SEND_WINDOW_SECONDS}
+            `)
+          );
+          throw new DonorOtpRateLimitError(
+            `Batas ${DONOR_OTP_MAX_SENDS_PER_WINDOW} kode per ${Math.round(DONOR_OTP_SEND_WINDOW_SECONDS / 60)} menit untuk kontribusi ini telah tercapai. Coba lagi nanti.`,
+            Number(oldest.first_sent_at) + DONOR_OTP_SEND_WINDOW_SECONDS
+          );
+        }
 
-      const rawContact = contribution.donor_contact;
-      if (!rawContact || typeof rawContact !== "string" || !rawContact.trim()) {
-        throw new DonorContactMissingError();
-      }
+        const challengeId = `d-otp-${randomBytes(16).toString("hex")}`;
+        const code = generateOtpCode();
+        const expiresAt = now + DONOR_OTP_TTL_SECONDS;
 
-      const contact = rawContact.trim();
-
-      // Rate limit check: cooldown within DONOR_OTP_COOLDOWN_SECONDS
-      const recentChallenges = rowsOf(
-        await database.execute(sql`
-          SELECT id, created_at
-          FROM donor_otp_challenges
-          WHERE contribution_id = ${contributionId}
-            AND created_at > ${now - DONOR_OTP_COOLDOWN_SECONDS}
-          ORDER BY created_at DESC
-          LIMIT 1
-        `)
-      );
-
-      if (recentChallenges.length > 0) {
-        throw new DonorOtpRateLimitError();
-      }
-
-      const challengeId = `d-otp-${randomBytes(16).toString("hex")}`;
-      const code = generateOtpCode();
-      const codeHash = hashOtpCode(challengeId, code);
-      const contactMasked = maskContact(contact);
-      const expiresAt = now + DONOR_OTP_TTL_SECONDS;
-
-      // Invalidate any unconsumed previous challenges for this contribution
-      await database.execute(sql`
-        UPDATE donor_otp_challenges
-        SET consumed_at = ${now}
-        WHERE contribution_id = ${contributionId}
-          AND consumed_at IS NULL
-      `);
-
-      // Store challenge
-      await database.execute(sql`
-        INSERT INTO donor_otp_challenges (
-          id, contribution_id, institution_id, contact_masked, code_hash,
-          attempts, max_attempts, expires_at, consumed_at, created_at
-        ) VALUES (
-          ${challengeId}, ${contributionId}, ${contribution.institution_id}, ${contactMasked}, ${codeHash},
-          0, ${DONOR_OTP_MAX_ATTEMPTS}, ${expiresAt}, NULL, ${now}
-        )
-      `);
-
-      // Send minimal message via transport
-      try {
-        await messages.send({
-          to: contact,
-          body: formatMinimalOtpMessage(code),
-        });
-      } catch (sendError) {
-        // Void the challenge if delivery fails
-        await database.execute(sql`
-          UPDATE donor_otp_challenges
-          SET consumed_at = ${now}
-          WHERE id = ${challengeId}
+        // Only the newest code for a contribution is live.
+        await tx.execute(sql`
+          UPDATE donor_otp_challenges SET consumed_at = ${now}
+          WHERE contribution_id = ${contribution.id} AND consumed_at IS NULL
         `);
-        throw sendError;
+        await tx.execute(sql`
+          INSERT INTO donor_otp_challenges (
+            id, contribution_id, institution_id, contact_masked, code_hash,
+            attempts, max_attempts, expires_at, consumed_at, created_at
+          ) VALUES (
+            ${challengeId}, ${contribution.id}, ${contribution.institution_id}, ${maskContact(contact)},
+            ${hashOtpCode(otpKey, challengeId, code)}, 0, ${DONOR_OTP_MAX_ATTEMPTS}, ${expiresAt}, NULL, ${now}
+          )
+        `);
+        return { challengeId, code, contact, expiresAt };
+      });
+
+      try {
+        await messages.send({ to: issued.contact, body: formatMinimalOtpMessage(issued.code) });
+      } catch (sendError) {
+        // A code that never arrived must not stay live. The contact is not logged.
+        await consumeChallenge(database, issued.challengeId, now);
+        console.error("Donor OTP delivery failed:", sendError instanceof Error ? sendError.message : sendError);
+        throw new DonorDeliveryFailedError();
       }
 
-      return { challengeId, contactMasked, expiresAt };
+      return {
+        challengeId: issued.challengeId,
+        expiresAt: issued.expiresAt,
+        resendAvailableAt: now + DONOR_OTP_COOLDOWN_SECONDS,
+      };
     },
 
     async verifyOtp(
@@ -267,11 +329,7 @@ export function createDonorAccessStore(database: DonorDatabase): DonorAccessStor
         }
 
         if (Number(challenge.expires_at) <= now) {
-          await tx.execute(sql`
-            UPDATE donor_otp_challenges
-            SET consumed_at = ${now}
-            WHERE id = ${challengeId}
-          `);
+          await consumeChallenge(tx, challengeId, now);
           return { kind: "spent", message: "Kode OTP sudah kedaluwarsa. Minta kode baru." };
         }
 
@@ -279,16 +337,11 @@ export function createDonorAccessStore(database: DonorDatabase): DonorAccessStor
         const maxAttempts = Number(challenge.max_attempts);
 
         if (currentAttempts >= maxAttempts) {
-          await tx.execute(sql`
-            UPDATE donor_otp_challenges
-            SET consumed_at = ${now}
-            WHERE id = ${challengeId}
-          `);
+          await consumeChallenge(tx, challengeId, now);
           return { kind: "spent", message: "Batas percobaan kode OTP telah habis. Minta kode baru." };
         }
 
-        const expectedHash = hashOtpCode(challengeId, otpCode);
-        if (expectedHash !== challenge.code_hash) {
+        if (!otpHashMatches(challenge.code_hash, hashOtpCode(otpKey, challengeId, otpCode))) {
           const nextAttempts = currentAttempts + 1;
           const isExhausted = nextAttempts >= maxAttempts;
           await tx.execute(sql`
@@ -305,12 +358,7 @@ export function createDonorAccessStore(database: DonorDatabase): DonorAccessStor
           };
         }
 
-        // OTP matched - consume challenge
-        await tx.execute(sql`
-          UPDATE donor_otp_challenges
-          SET consumed_at = ${now}
-          WHERE id = ${challengeId}
-        `);
+        await consumeChallenge(tx, challengeId, now);
 
         // Generate bounded session
         const sessionToken = `dsess_${randomBytes(24).toString("hex")}`;
@@ -422,70 +470,63 @@ export function createDonorAccessStore(database: DonorDatabase): DonorAccessStor
         status: row.status as ContributionStatus,
         reconciledAt: row.reconciled_at ? Number(row.reconciled_at) : null,
         endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
-        zkProof: {
-          status: "NOT_AVAILABLE", // Honest, not fabricated
-        },
+        zkProof: { status: "NOT_AVAILABLE" },
       };
     },
 
     async getDonorAllocations(session: DonorSession): Promise<DonorActivityAllocation[]> {
-      const allocationRows = rowsOf(
+      // Pooled totals cover every active allocation to the activity, and carry
+      // no other donor's identity or individual amount.
+      const rows = rowsOf(
         await database.execute(sql`
-          SELECT ca.*, a.name AS activity_name, a.description AS activity_description,
-                 a.target_amount, a.target_is_partial, a.status AS activity_status
+          SELECT ca.id, ca.activity_id, ca.amount_exact, ca.currency_unit, ca.fund_type,
+                 ca.purpose, ca.reason, ca.allocated_at,
+                 a.name AS activity_name, a.description AS activity_description,
+                 a.target_amount, a.target_is_partial,
+                 a.currency_unit AS activity_currency_unit, a.status AS activity_status,
+                 pooled.total_pooled, pooled.allocation_count
           FROM contribution_allocations ca
-          JOIN distribution_activities a ON a.id = ca.activity_id AND a.institution_id = ca.institution_id
+          JOIN distribution_activities a
+            ON a.id = ca.activity_id AND a.institution_id = ca.institution_id
+          JOIN (
+            SELECT activity_id, institution_id,
+                   SUM(CAST(amount_exact AS NUMERIC)) AS total_pooled,
+                   COUNT(id) AS allocation_count
+            FROM contribution_allocations
+            WHERE status = 'ACTIVE'
+            GROUP BY activity_id, institution_id
+          ) pooled
+            ON pooled.activity_id = ca.activity_id AND pooled.institution_id = ca.institution_id
           WHERE ca.contribution_id = ${session.contributionId}
             AND ca.institution_id = ${session.institutionId}
+            AND ca.status = 'ACTIVE'
           ORDER BY ca.allocated_at DESC, ca.id
         `)
       );
 
-      const allocations: DonorActivityAllocation[] = [];
-
-      for (const row of allocationRows) {
-        // Compute pooled totals for this activity across all donors without exposing individual identities
-        const pooledRows = rowsOf(
-          await database.execute(sql`
-            SELECT COALESCE(SUM(CAST(amount_exact AS NUMERIC)), 0) as total_pooled,
-                   COUNT(id) as allocation_count
-            FROM contribution_allocations
-            WHERE activity_id = ${row.activity_id}
-              AND institution_id = ${session.institutionId}
-              AND status = 'ACTIVE'
-          `)
-        );
-
-        const pooled = pooledRows[0];
-        const totalAllocatedAmount = String(pooled?.total_pooled ?? "0");
-        const allocationCount = Number(pooled?.allocation_count ?? 0);
-
-        allocations.push({
-          allocationId: row.id,
-          activityId: row.activity_id,
-          amountExact: row.amount_exact,
-          currencyUnit: row.currency_unit as CurrencyUnit,
-          fundType: row.fund_type as JenisDana,
-          purpose: row.purpose ?? "",
-          reason: row.reason,
-          allocatedAt: Number(row.allocated_at),
-          activity: {
-            id: row.activity_id,
-            name: row.activity_name,
-            description: row.activity_description ?? null,
-            targetAmount: row.target_amount,
-            targetIsPartial: Boolean(row.target_is_partial),
-            currencyUnit: row.currency_unit as CurrencyUnit,
-            status: row.activity_status,
-            pooled: {
-              totalAllocatedAmount,
-              allocationCount,
-            },
+      return rows.map((row) => ({
+        allocationId: row.id,
+        activityId: row.activity_id,
+        amountExact: row.amount_exact,
+        currencyUnit: row.currency_unit as CurrencyUnit,
+        fundType: row.fund_type as JenisDana,
+        purpose: row.purpose ?? "",
+        reason: row.reason,
+        allocatedAt: Number(row.allocated_at),
+        activity: {
+          id: row.activity_id,
+          name: row.activity_name,
+          description: row.activity_description ?? null,
+          targetAmount: row.target_amount,
+          targetIsPartial: Boolean(row.target_is_partial),
+          currencyUnit: row.activity_currency_unit as CurrencyUnit,
+          status: row.activity_status as ActivityStatus,
+          pooled: {
+            totalAllocatedAmount: String(row.total_pooled ?? "0"),
+            allocationCount: Number(row.allocation_count ?? 0),
           },
-        });
-      }
-
-      return allocations;
+        },
+      }));
     },
   };
 }

@@ -18,27 +18,23 @@
  * - AC29: Strict separation between donor session and operator workspace authority.
  */
 
-import { createHash, randomInt } from "node:crypto";
+import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { CurrencyUnit } from "./reconciliation";
 import type { ContributionStatus, JenisDana, SourceChannel } from "./contribution";
+import type { ActivityStatus } from "./activity";
 
 export const DONOR_OTP_TTL_SECONDS = 900; // 15 menit
 export const DONOR_OTP_MAX_ATTEMPTS = 5;
 export const DONOR_OTP_COOLDOWN_SECONDS = 60; // 1 menit batas pengiriman ulang
+/**
+ * At most this many codes per contribution per window. Each code allows
+ * DONOR_OTP_MAX_ATTEMPTS guesses, so the window also bounds the total guesses
+ * against one contribution, and bounds how often a stranger holding the
+ * reference can replace the donor's live code.
+ */
+export const DONOR_OTP_MAX_SENDS_PER_WINDOW = 5;
+export const DONOR_OTP_SEND_WINDOW_SECONDS = 3600; // 1 jam
 export const DONOR_SESSION_TTL_SECONDS = 3600; // 1 jam masa berlaku sesi
-
-export interface DonorOtpChallenge {
-  id: string;
-  contributionId: string;
-  institutionId: string;
-  contactMasked: string;
-  codeHash: string;
-  attempts: number;
-  maxAttempts: number;
-  expiresAt: number;
-  consumedAt: number | null;
-  createdAt: number;
-}
 
 export interface DonorSession {
   tokenHash: string;
@@ -65,9 +61,8 @@ export interface DonorContributionDetail {
   status: ContributionStatus;
   reconciledAt: number | null;
   endorsedAt: number | null;
-  zkProof: {
-    status: "NOT_AVAILABLE" | "PENDING" | "VERIFIED";
-  };
+  /** No ZK pipeline exists yet (#108); anything else would be manufactured. */
+  zkProof: { status: "NOT_AVAILABLE" };
 }
 
 export interface DonorActivityAllocation {
@@ -86,7 +81,7 @@ export interface DonorActivityAllocation {
     targetAmount: string;
     targetIsPartial: boolean;
     currencyUnit: CurrencyUnit;
-    status: string;
+    status: ActivityStatus;
     pooled: {
       totalAllocatedAmount: string;
       allocationCount: number;
@@ -131,10 +126,33 @@ export function isValidOtpFormat(code: unknown): code is string {
 }
 
 /**
- * Computes a salted SHA-256 hash of the OTP challenge ID and code.
+ * Keyed hash of the challenge ID and code. The challenge ID reaches the
+ * browser and a code has only 10^6 values, so an unkeyed hash would be
+ * reversible by anyone who reads the table; the server key prevents that.
  */
-export function hashOtpCode(challengeId: string, code: string): string {
-  return createHash("sha256").update(`${challengeId}:${code}`).digest("hex");
+export function hashOtpCode(key: Buffer, challengeId: string, code: string): string {
+  return createHmac("sha256", key).update(`${challengeId}:${code}`).digest("hex");
+}
+
+/** Constant-time comparison of two hex digests. */
+export function otpHashMatches(expected: string, actual: string): boolean {
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(actual, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * The OTP key, 32 bytes hex in DONOR_OTP_KEY. Absent means null; a malformed
+ * value is refused rather than silently weakened.
+ */
+export function donorOtpKeyFromEnv(env: NodeJS.ProcessEnv = process.env): Buffer | null {
+  const raw = env.DONOR_OTP_KEY?.trim();
+  if (!raw) return null;
+  const hex = raw.startsWith("0x") ? raw.slice(2) : raw;
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error("DONOR_OTP_KEY harus 32 byte heksadesimal (64 karakter).");
+  }
+  return Buffer.from(hex, "hex");
 }
 
 /**
@@ -156,5 +174,6 @@ export function generateOtpCode(): string {
  * Explicitly does NOT include donor name, donation amount, or any sensitive details.
  */
 export function formatMinimalOtpMessage(code: string): string {
-  return `Kode verifikasi akses kontribusi Anda: ${code}. Berlaku selama 15 menit. Jangan bagikan kode ini kepada siapapun.`;
+  const minutes = Math.round(DONOR_OTP_TTL_SECONDS / 60);
+  return `Kode verifikasi akses kontribusi Anda: ${code}. Berlaku selama ${minutes} menit. Jangan bagikan kode ini kepada siapapun.`;
 }

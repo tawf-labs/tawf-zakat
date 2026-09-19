@@ -30,6 +30,9 @@ import { createContributionStore } from "./contribution-store";
 import { createActivityStore } from "./activity-store";
 import { createAuditFindingStore } from "./audit-finding-store";
 import { createDonorAccessStore } from "./donor-access-store";
+import { donorOtpKeyFromEnv } from "./donor-access";
+import { donorEmailTransportFromEnv } from "./email-transport";
+import { randomBytes } from "node:crypto";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
@@ -65,7 +68,21 @@ export function installWorkspaceRuntime(): void {
   const contributions = createContributionStore(db);
   const activities = createActivityStore(db);
   const auditFindings = createAuditFindingStore(db);
-  const donorAccess = createDonorAccessStore(db);
+  // Codes are stored as HMACs under this key. Without a configured key a
+  // per-process one is used: codes then die with the process (15 minutes at
+  // most) and cannot be checked by another instance, but nothing is weakened.
+  const donorOtpKey = donorOtpKeyFromEnv();
+  if (!donorOtpKey) {
+    console.warn(
+      "DONOR_OTP_KEY belum disetel: kode OTP donatur memakai kunci sementara proses ini " +
+        "dan tidak berlaku setelah restart atau pada instance lain."
+    );
+  }
+  const donorAccess = createDonorAccessStore(db, donorOtpKey ?? randomBytes(32));
+  const donorMessages = donorEmailTransportFromEnv();
+  if (!donorMessages) {
+    console.warn("RESEND_API_KEY/DONOR_OTP_EMAIL_FROM belum disetel: pengiriman kode OTP donatur tidak tersedia.");
+  }
 
   // No key, no file store. The routes then record every offered document as
   // FAILED with that reason, which is the truth - rather than writing an
@@ -94,6 +111,7 @@ export function installWorkspaceRuntime(): void {
     activities,
     auditFindings,
     donorAccess,
+    ...(donorMessages ? { donorMessages } : {}),
     // The same chain, contract and indexer key the indexer writes under, so a
     // package names the deployment it was actually read from.
     internalLedger: createInternalLedgerReader(db, {
