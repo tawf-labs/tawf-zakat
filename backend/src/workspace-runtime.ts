@@ -84,6 +84,11 @@ export type WorkspaceRuntime = {
    * absent means absent: the finding routes answer 503.
    */
   auditFindings?: import("./audit-finding-store").AuditFindingStore;
+  /**
+   * Accountless donor access via OTP and bounded sessions (Spec #100, Ticket #104).
+   * Optional, and absent means absent: the donor routes answer 503.
+   */
+  donorAccess?: import("./donor-access-store").DonorAccessStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;

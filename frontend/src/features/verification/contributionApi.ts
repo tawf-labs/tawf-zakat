@@ -20,6 +20,10 @@ export interface PublicContribution {
   batch: BatchRecord | null;
   membershipProof: { type: "MERKLE_INCLUSION"; siblings: Hex[] } | null;
   zkProof: { status: "NOT_AVAILABLE" };
+  hasContact?: boolean;
+  contactMasked?: string | null;
+  contributionId?: string;
+  institutionId?: string;
 }
 
 export type ContributionLookup =

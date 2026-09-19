@@ -1,10 +1,16 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Search, Loader2, Lock } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { useContributionLookup } from "./contributionApi";
 import { LookupAlert } from "./LookupAlert";
 import { CertificateCard } from "./CertificateCard";
 import { OwnerReceiptCheck } from "./OwnerReceiptCheck";
+import {
+  DonorOtpAccess,
+  DonorContributionView,
+  getStoredDonorSession,
+  clearStoredDonorSession,
+} from "../donor";
 
 interface SearchReceiptFormProps {
   initialTrxId?: string;
@@ -23,6 +29,20 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
   };
 
   const result = lookup.isFetching ? undefined : lookup.data;
+  const activeContributionId =
+    result?.lookupStatus === "FOUND"
+      ? result.contribution.contributionId || result.contribution.trxId
+      : "";
+
+  const [donorSession, setDonorSession] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeContributionId) {
+      setDonorSession(getStoredDonorSession(activeContributionId));
+    } else {
+      setDonorSession(null);
+    }
+  }, [activeContributionId]);
 
   return (
     <div className="space-y-8 max-w-3xl mx-auto">
@@ -65,6 +85,28 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
       {result?.lookupStatus === "FOUND" && (
         <div className="space-y-6 animate-in fade-in duration-300">
           <CertificateCard contribution={result.contribution} />
+
+          {/* Accountless donor access via OTP */}
+          {donorSession ? (
+            <DonorContributionView
+              contributionId={activeContributionId}
+              sessionToken={donorSession}
+              onLoggedOut={() => {
+                clearStoredDonorSession(activeContributionId);
+                setDonorSession(null);
+              }}
+            />
+          ) : (
+            <DonorOtpAccess
+              contributionId={activeContributionId}
+              hasContact={Boolean(result.contribution.hasContact)}
+              initialContactMasked={result.contribution.contactMasked}
+              onAuthenticated={(token) => {
+                setDonorSession(token);
+              }}
+            />
+          )}
+
           <OwnerReceiptCheck key={result.contribution.trxId} contribution={result.contribution} />
         </div>
       )}

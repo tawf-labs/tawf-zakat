@@ -1,6 +1,7 @@
 import type { Hex } from "viem";
 import { dbService } from "./db/index";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "./merkle";
+import { maskContact } from "./donor-access";
 
 export type ContributionStatus = "PENDING" | "PAID" | "BATCHED";
 export type RestrictedField = "DONOR_NAME" | "AMOUNT" | "SALT" | "CONTACT" | "DOCUMENTS";
@@ -24,6 +25,10 @@ export interface PublicContribution {
   zkProof: { status: "NOT_AVAILABLE" };
   owner: "UNPROVEN";
   restricted: RestrictedField[];
+  hasContact?: boolean;
+  contactMasked?: string | null;
+  contributionId?: string;
+  institutionId?: string;
 }
 
 export type ContributionLookup =
@@ -80,9 +85,32 @@ export async function lookupContribution(
 ): Promise<ContributionLookup> {
   try {
     const donation = await dbService.getDonationByTrxId(trxId);
-    if (!donation) return { lookupStatus: "NOT_FOUND" };
-    await beforeProjection?.(donation);
-    return { lookupStatus: "FOUND", contribution: await toPublicContribution(donation) };
+    if (donation) {
+      await beforeProjection?.(donation);
+      return { lookupStatus: "FOUND", contribution: await toPublicContribution(donation) };
+    }
+
+    const contrib = await dbService.getContributionByIdOrRef(trxId);
+    if (contrib) {
+      const publicContrib: PublicContribution = {
+        trxId: contrib.sourceReference || contrib.id,
+        status: (contrib.status === "RECEIVED" ? "PENDING" : (contrib.status === "REJECTED" ? "PENDING" : "PAID")) as ContributionStatus,
+        recordedAt: new Date(Number(contrib.receivedAt) * 1000).toISOString(),
+        paidAt: contrib.reconciledAt ? new Date(Number(contrib.reconciledAt) * 1000).toISOString() : null,
+        batch: null,
+        membershipProof: null,
+        zkProof: NO_ZK_PROOF,
+        owner: "UNPROVEN",
+        restricted: RESTRICTED,
+        hasContact: Boolean(contrib.donorContact && contrib.donorContact.trim().length > 0),
+        contactMasked: contrib.donorContact ? maskContact(contrib.donorContact) : null,
+        contributionId: contrib.id,
+        institutionId: contrib.institutionId,
+      };
+      return { lookupStatus: "FOUND", contribution: publicContrib };
+    }
+
+    return { lookupStatus: "NOT_FOUND" };
   } catch (error) {
     console.error("Contribution lookup failed:", error);
     return { lookupStatus: "UNAVAILABLE" };
