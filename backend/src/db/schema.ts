@@ -917,3 +917,69 @@ export type NewDisbursementRealizationAdvanceRow = typeof disbursementRealizatio
 
 export type DisbursementRealizationExpenseRow = typeof disbursementRealizationExpenses.$inferSelect;
 export type NewDisbursementRealizationExpenseRow = typeof disbursementRealizationExpenses.$inferInsert;
+
+// 18. Auditor findings, amil responses, and examination follow-ups (Issue #99, Spec #86 & #100)
+export const reportAuditFindings = pgTable("report_audit_findings", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  preparationId: text("preparation_id").notNull().references(() => evidencePreparations.id, { onDelete: "cascade" }),
+  packageId: text("package_id").notNull().references(() => reportPackages.id, { onDelete: "cascade" }),
+  packageDigest: text("package_digest").notNull(),
+  reportId: text("report_id").notNull(),
+  version: text("version").notNull(),
+  auditorAccount: text("auditor_account").notNull(),
+  auditorOfficerId: text("auditor_officer_id").notNull(),
+  auditorName: text("auditor_name").notNull(),
+  mandateRef: text("mandate_ref").notNull(),
+  scope: text("scope").notNull(),
+  severity: text("severity").notNull(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  targetProposalId: text("target_proposal_id"),
+  targetProposalVersion: integer("target_proposal_version"),
+  targetRealizationId: text("target_realization_id"),
+  targetDocumentId: text("target_document_id"),
+  status: text("status").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const reportAuditFindingEvents = pgTable("report_audit_finding_events", {
+  id: text("id").primaryKey(),
+  findingId: text("finding_id").notNull().references(() => reportAuditFindings.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  eventType: text("event_type").notNull(),
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").notNull(),
+  actorRole: text("actor_role").notNull(),
+  actorName: text("actor_name").notNull(),
+  note: text("note").notNull(),
+  resultingStatus: text("resulting_status").notNull(),
+  attachmentsJson: text("attachments_json").notNull().default("[]"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const reportAuditFindingAttachments = pgTable("report_audit_finding_attachments", {
+  id: text("id").primaryKey(),
+  findingId: text("finding_id").notNull().references(() => reportAuditFindings.id, { onDelete: "cascade" }),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  uploaderAccount: text("uploader_account").notNull(),
+  uploaderRole: text("uploader_role").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageRef: text("storage_ref").notNull(),
+  isOwnerOnly: integer("is_owner_only").notNull().default(0),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export type ReportAuditFindingRow = typeof reportAuditFindings.$inferSelect;
+export type NewReportAuditFindingRow = typeof reportAuditFindings.$inferInsert;
+
+export type ReportAuditFindingEventRow = typeof reportAuditFindingEvents.$inferSelect;
+export type NewReportAuditFindingEventRow = typeof reportAuditFindingEvents.$inferInsert;
+
+export type ReportAuditFindingAttachmentRow = typeof reportAuditFindingAttachments.$inferSelect;
+export type NewReportAuditFindingAttachmentRow = typeof reportAuditFindingAttachments.$inferInsert;
+

@@ -1,6 +1,7 @@
 import { useUnsavedReport } from "./useWorkspaceAccess";
 import type { PrivateRequests } from "./privateRequests";
 import { RecordingPanel } from "./RecordingPanel";
+import { PackageAuditFindingsSection } from "./PackageAuditFindingsSection";
 import { verifyReportCommitment } from "./reportCommitment";
 import { useEffect, useState } from "react";
 import { Button } from "../../components/ui/Button";
@@ -163,6 +164,7 @@ export function ReportPackageForm({ preparationId, requests, canPrepare, commitm
       {saved.status === "FROZEN" && <RecordingPanel publication key={`publication:${saved.id}:${requests.contextId}`} saved={saved} preparationId={preparationId} requests={requests}
         onCorrect={canPrepare ? id => void act("Membuka versi pendahulu…", () => loadCorrection(id)) : undefined} />}
       {saved.status === "FROZEN" && <RecordingPanel key={`${saved.id}:${requests.contextId}`} saved={saved} preparationId={preparationId} requests={requests} />}
+      {saved.status === "FROZEN" && <PackageAuditFindingsSection key={`findings:${saved.id}:${requests.contextId}`} preparationId={preparationId} packageId={saved.id} requests={requests} />}
       <div className="flex flex-wrap gap-2">
         {canPrepare && saved.status !== "FROZEN" && <Button disabled={!!pending} onClick={() => act("Membekukan paket…", async () => { await acceptSaved((await freezeReport(preparationId, saved.id, requests)).package); setHistory((await listReports(preparationId, requests)).packages); })}>Bekukan paket untuk review pengesahan</Button>}
         <Button variant="outline" disabled={!!pending} onClick={() => act("Memeriksa akses unduhan…", download)}>Unduh draf terbatas</Button>

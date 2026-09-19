@@ -10,6 +10,7 @@ import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
 import { ActivityPanel } from "../activities";
+import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -196,6 +197,7 @@ function WorkspaceContents() {
         allocationRevision={allocationRevision} />
 
       <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
+      <AuditFindingQueuePanel key={`audit-findings:${requests.contextId}`} requests={requests} />
 
       {error && (
         <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
