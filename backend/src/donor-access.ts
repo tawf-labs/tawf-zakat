@@ -18,6 +18,7 @@
  * - AC29: Strict separation between donor session and operator workspace authority.
  */
 
+import type { DonorContributionCorrection } from "../../shared/contribution-lifecycle";
 import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { CurrencyUnit } from "./reconciliation";
 import type { ContributionStatus, JenisDana, SourceChannel } from "./contribution";
@@ -47,6 +48,8 @@ export interface DonorSession {
 }
 
 export interface DonorContributionDetail {
+  version: number;
+  corrections: DonorContributionCorrection[];
   id: string;
   institutionId: string;
   sourceChannel: SourceChannel;

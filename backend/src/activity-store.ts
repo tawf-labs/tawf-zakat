@@ -15,7 +15,6 @@ import {
   activityFunding,
   activityTarget,
   allocationTerms,
-  contributionBalance,
   parseExactAmount,
   type ActivitySummary,
   type AllocationHistoryRecord,
@@ -676,7 +675,7 @@ export function createActivityStore(db: ActivityDatabase) {
     /** Balances for the given contributions, keyed by id, in one query. */
     async contributionBalances(
       institutionId: string,
-      contributions: Array<{ id: string; amountExact: string }>
+      contributions: Array<{ id: string; amountExact: string; status: string }>
     ): Promise<Map<string, ContributionBalance>> {
       if (contributions.length === 0) return new Map();
       const ids = contributions.map((c) => c.id);
@@ -704,7 +703,7 @@ export function createActivityStore(db: ActivityDatabase) {
 
       return new Map(
         contributions.map((c) => {
-          const total = BigInt(c.amountExact);
+          const total = c.status === "REJECTED" ? 0n : BigInt(c.amountExact);
           const allocated = BigInt(totals.get(c.id) ?? "0");
           const ref = refundMap.get(c.id) ?? { paid: 0n, decided: 0n };
           const netTotal = total > ref.paid ? total - ref.paid : 0n;

@@ -1,4 +1,3 @@
-import React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "../components/layout/PageHeader";
 import { Container } from "../components/layout/Container";

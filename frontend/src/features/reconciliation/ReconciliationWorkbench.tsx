@@ -1,4 +1,3 @@
-import React from "react";
 import { AlertOctagon, PlayCircle } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { LedgerSideEditor } from "./LedgerSideEditor";

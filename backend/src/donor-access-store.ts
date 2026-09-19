@@ -530,7 +530,16 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
     async getDonorContribution(session: DonorSession): Promise<DonorContributionDetail> {
       const rows = rowsOf(
         await database.execute(sql`
-          SELECT * FROM contributions
+          SELECT c.*, COALESCE((
+            SELECT json_agg(json_build_object(
+              'fromVersion', cc.from_version, 'toVersion', cc.to_version,
+              'correctionType', cc.correction_type, 'fromAmountExact', cc.from_amount_exact,
+              'toAmountExact', cc.to_amount_exact, 'reason', cc.reason, 'createdAt', cc.created_at
+            ) ORDER BY cc.to_version)
+            FROM contribution_corrections cc
+            WHERE cc.contribution_id = c.id AND cc.institution_id = c.institution_id
+          ), '[]'::json) AS corrections
+          FROM contributions c
           WHERE id = ${session.contributionId}
             AND institution_id = ${session.institutionId}
         `)
@@ -542,6 +551,8 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
       }
 
       return {
+        version: Number(row.version),
+        corrections: row.corrections,
         id: row.id,
         institutionId: row.institution_id,
         sourceChannel: row.source_channel as SourceChannel,

@@ -611,6 +611,7 @@ export type ContributionStore = {
       amountExact?: string;
       reason: string;
       sourceProofRef: string;
+      endorsementMandateId: string;
     },
     operation: ContributionOperation,
     actor: ActorIdentity,
@@ -1025,6 +1026,10 @@ export function createContributionStore(database: ContributionDatabase): Contrib
             SET amount_exact = ${newAmount},
                 status = ${newStatus},
                 unqualified_reason = ${unqualifiedReason},
+                endorsed_at = ${newStatus === "ENDORSED" ? now : null},
+                endorsed_by = ${newStatus === "ENDORSED" ? actor.account : null},
+                endorsement_mandate_id = ${newStatus === "ENDORSED" ? params.endorsementMandateId : null},
+                endorsement_notes = ${newStatus === "ENDORSED" ? `Koreksi disahkan: ${params.reason}. Bukti: ${params.sourceProofRef}` : null},
                 version = ${newVersion},
                 updated_at = ${now}
             WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
@@ -1118,7 +1123,7 @@ export function createContributionStore(database: ContributionDatabase): Contrib
           (sum: bigint, r: any) => sum + BigInt(r.amount_exact),
           0n
         );
-        const contributionTotal = BigInt(row.amount_exact);
+        const contributionTotal = row.status === "REJECTED" ? 0n : BigInt(row.amount_exact);
         const availableToRefund = contributionTotal > totalRefundsSoFar ? contributionTotal - totalRefundsSoFar : 0n;
 
         const issues = validateRefundDecisionInput(params, availableToRefund);

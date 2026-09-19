@@ -41,13 +41,13 @@ export function ContributionAllocations({ requests, record }: { requests: Privat
       {error && <div className="text-red-700">{error}</div>}
       {loaded && loaded.allocations.length === 0 && <div className="text-stone-500">Belum ada alokasi.</div>}
       {loaded?.allocations.map((alloc) => (
-        <div key={alloc.id} className="rounded-xl border border-stone-200 p-3 flex justify-between gap-2">
+        <div key={alloc.id} className="rounded-xl border border-stone-200 p-3 flex flex-col sm:flex-row justify-between gap-2">
           <div>
             <div className="font-semibold text-stone-900">{alloc.activityName}</div>
             <div className="text-stone-500">
               {fundTypeLabel(alloc.fundType)} · {alloc.purpose || "-"} · {alloc.reason}
             </div>
-            <div className="text-[11px] text-stone-400 font-mono">
+            <div className="text-[11px] text-stone-400 font-mono break-all">
               {alloc.allocatedBy} {alloc.allocatedByOfficerId && `(${alloc.allocatedByOfficerId})`} · versi kontribusi {alloc.contributionVersion} ·{" "}
               {new Date(alloc.allocatedAt * 1000).toLocaleString("id-ID")}
             </div>

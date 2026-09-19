@@ -1,6 +1,5 @@
-import React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { TrendingUp, CheckCircle2, HeartHandshake, Users, ShieldAlert, ArrowUpRight } from "lucide-react";
+import { TrendingUp, CheckCircle2, HeartHandshake, Users, ArrowUpRight } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 import { Link } from "@tanstack/react-router";
 import { getApiBaseUrl } from "../../lib/contracts";
@@ -53,10 +52,6 @@ export function LiveMetricsSummary() {
   // Calculations
   const totalCollectedIDR = (batches || []).reduce(
     (acc, b) => acc + (Number(b.totalAmountIDR) || 0),
-    0
-  );
-  const totalDonors = (batches || []).reduce(
-    (acc, b) => acc + (Number(b.donationCount) || 0),
     0
   );
 

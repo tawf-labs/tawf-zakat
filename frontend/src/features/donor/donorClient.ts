@@ -1,3 +1,4 @@
+import type { DonorContributionCorrection } from "../../../../shared/contribution-lifecycle";
 import { getApiBaseUrl } from "../../lib/contracts";
 import type {
   ContributionStatus,
@@ -29,6 +30,8 @@ export type DonorOtpChallenge = {
 };
 
 export type DonorContribution = {
+  version: number;
+  corrections: DonorContributionCorrection[];
   id: string;
   institutionId: string;
   sourceChannel: SourceChannel;

@@ -25,6 +25,9 @@ import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store"
 import { createContributionStore, type ContributionStore } from "../src/contribution-store";
 import { createActivityStore, type ActivityStore } from "../src/activity-store";
 import { createDisbursementStore, type DisbursementStore } from "../src/disbursement-store";
+import { createDonorAccessStore } from "../src/donor-access-store";
+import { evaluateProofValidity } from "../src/contribution";
+import { hashSessionToken } from "../src/donor-access";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { type EthCall } from "../src/account-signature";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
@@ -117,6 +120,7 @@ function configure(handle: any) {
     contributions: contributionStore,
     activities: activityStore,
     files,
+    donorAccess: createDonorAccessStore(handle),
     ethCall,
     now: () => clock,
     challengeTtlSeconds: 300,
@@ -142,6 +146,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
     await createDisbursementStore(handle).ensureSchema();
     await createContributionStore(handle).ensureSchema();
     await createActivityStore(handle).ensureSchema();
+    await createDonorAccessStore(handle).ensureSchema();
 
     configure(handle);
   });
@@ -263,6 +268,29 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
     return { id: endorsed.id, version: endorsed.version };
   }
 
+  async function seedActivity() {
+    const db = database.handle();
+    await db.execute(sql`
+      INSERT INTO programs (id, institution_id, name, purpose, fund_type, scope, status, created_by, created_at, updated_at)
+      VALUES ('prog-01', ${SINAR}, 'Program Penyaluran Beras', 'Bantuan pokok', 'ZAKAT', '2026', 'ACTIVE', 'off-sinar-amil', ${NOW}, ${NOW})
+    `);
+    await db.execute(sql`
+      INSERT INTO proposal_drafts (id, institution_id, program_id, created_by, origin_of_request, purpose, status, version, created_at, updated_at)
+      VALUES ('prop-01', ${SINAR}, 'prog-01', 'off-sinar-amil', 'Permohonan', 'Penyaluran Sembako', 'APPROVED', 1, ${NOW}, ${NOW})
+    `);
+    await db.execute(sql`
+      INSERT INTO distribution_activities (
+        id, institution_id, proposal_id, proposal_version, program_id, program_fund_type,
+        name, description, target_amount, target_is_partial, currency_unit, status,
+        version, created_at, updated_at, created_by
+      ) VALUES (
+        'act-sembako-01', ${SINAR}, 'prop-01', 1, 'prog-01', 'ZAKAT',
+        'Kegiatan Penyaluran RW 05', 'Bantuan sembako', '1000000', false, 'IDR', 'ACTIVE',
+        1, ${NOW}, ${NOW}, 'off-sinar-amil'
+      )
+    `);
+  }
+
   // -------------------------------------------------------------------------
   // 1. Positive Correction & Predecessor Versioning
   // -------------------------------------------------------------------------
@@ -279,7 +307,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "Penyesuaian nominal sesuai nota transfer donatur",
         sourceProofRef: "SLIP-TRANSFER-350K",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
     expect(correctRes.status).toBe(200);
     const body = await correctRes.json();
@@ -328,7 +356,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "Koreksi salah input",
         sourceProofRef: "SLIP-002",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
     expect(staleRes.status).toBe(409);
 
@@ -342,7 +370,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "err",
         sourceProofRef: "SLIP-002",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
     expect(shortReason.status).toBe(400);
 
@@ -365,27 +393,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
   // 3. Spec 100 AC10 & ADR-0033 Q28: 500k -> 450k allocated -> 400k corrected => 50k shortfall
   // -------------------------------------------------------------------------
   it("preserves actual disbursements when corrected below allocations, surfaces 50k shortfall, and blocks worsening allocations (AC10)", async () => {
-    // 1. Seed distribution activity in Sinar
-    const db = database.handle();
-    await db.execute(sql`
-      INSERT INTO programs (id, institution_id, name, purpose, fund_type, scope, status, created_by, created_at, updated_at)
-      VALUES ('prog-01', ${SINAR}, 'Program Penyaluran Beras', 'Bantuan pokok', 'ZAKAT', '2026', 'ACTIVE', 'off-sinar-amil', ${NOW}, ${NOW})
-    `);
-    await db.execute(sql`
-      INSERT INTO proposal_drafts (id, institution_id, program_id, created_by, origin_of_request, purpose, status, version, created_at, updated_at)
-      VALUES ('prop-01', ${SINAR}, 'prog-01', 'off-sinar-amil', 'Permohonan', 'Penyaluran Sembako', 'APPROVED', 1, ${NOW}, ${NOW})
-    `);
-    await db.execute(sql`
-      INSERT INTO distribution_activities (
-        id, institution_id, proposal_id, proposal_version, program_id, program_fund_type,
-        name, description, target_amount, target_is_partial, currency_unit, status,
-        version, created_at, updated_at, created_by
-      ) VALUES (
-        'act-sembako-01', ${SINAR}, 'prop-01', 1, 'prog-01', 'ZAKAT',
-        'Kegiatan Penyaluran RW 05', 'Bantuan sembako', '1000000', false, 'IDR', 'ACTIVE',
-        1, ${NOW}, ${NOW}, 'off-sinar-amil'
-      )
-    `);
+    await seedActivity();
 
     // 2. Create contribution 500.000 IDR
     const { id, version: v1 } = await createEndorsedContribution("BCA-AC10", "500000");
@@ -413,7 +421,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "Koreksi kelebihan pencatatan bank dari 500.000 menjadi 400.000",
         sourceProofRef: "MUTASI-REVISI-400K",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
     expect(corRes.status).toBe(200);
     const corBody = await corRes.json();
@@ -442,6 +450,21 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
     expect(worsenRes.status).toBe(400);
     const worsenBody = await worsenRes.json();
     expect(worsenBody.error).toContain("melebihi sisa kontribusi yang tersedia (0)");
+    const duplicate = await mutate(`/contributions/${id}/correct`, {
+      expectedVersion: v2, correctionType: "DUPLICATE", reason: "Penerimaan ternyata dicatat ganda",
+      sourceProofRef: "MUTASI-DUPLIKAT"
+    }, tokens.approverSinar);
+    expect(duplicate.status).toBe(200);
+    const invalidated = (await (await get(`/contributions/${id}`, tokens.amilSinar)).json()).contribution;
+    expect(invalidated.amountExact).toBe("400000"); // retained as historical face value
+    expect(invalidated.unallocatedAmount).toBe("0");
+    expect(invalidated.shortfallAmount).toBe("450000");
+    const retained = await activityStore.listAllocationsForContribution(SINAR, id);
+    expect(retained.allocations).toHaveLength(1);
+    expect(retained.allocations[0].amountExact).toBe("450000");
+    expect((await mutate(`/contributions/${id}/refunds`, {
+      expectedVersion: v2 + 1, amountExact: "1000", reason: "Pengembalian catatan ganda", policyBasis: "SOP Lembaga"
+    }, tokens.amilSinar)).status).toBe(400);
   });
 
   // -------------------------------------------------------------------------
@@ -458,7 +481,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "Entri ganda dari mutasi 15 September; data asli adalah BCA-ASLI-001",
         sourceProofRef: "AUDIT-MUTASI-DUPLIKAT",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
     expect(dupRes.status).toBe(200);
     const body = await dupRes.json();
@@ -557,34 +580,17 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
   // -------------------------------------------------------------------------
   // 6. Proof Validity & Version Superseding (AC19)
   // -------------------------------------------------------------------------
-  it("labels proof pointing to older business version as SUPERSEDED and never CURRENT (AC19)", async () => {
+  it("does not manufacture proof currentness from caller version hints (AC19)", async () => {
     const { id, version: v1 } = await createEndorsedContribution("BCA-VER-001", "600000");
 
-    // Check proof validity when proof was generated at version 1 (which matches current version 1)
-    const currentRes = await get(`/contributions/${id}?proofVersion=${v1}`, tokens.amilSinar);
-    const curBody = await currentRes.json();
-    expect(curBody.contribution.proofValidity.status).toBe("CURRENT");
-    expect(curBody.contribution.proofValidity.isCurrent).toBe(true);
-
-    // Officer performs correction, bumping contribution version to v1 + 1
-    await mutate(
-      `/contributions/${id}/correct`,
-      {
-        expectedVersion: v1,
-        correctionType: "AMOUNT",
-        amountExact: "650000",
-        reason: "Penyesuaian nominal",
-        sourceProofRef: "REVISI-650K",
-      },
-      tokens.amilSinar
-    );
-
-    // Now, a proof referencing the older business version (v1) must be SUPERSEDED!
-    const supersededRes = await get(`/contributions/${id}?proofVersion=${v1}`, tokens.amilSinar);
-    const supBody = await supersededRes.json();
-    expect(supBody.contribution.proofValidity.status).toBe("SUPERSEDED");
-    expect(supBody.contribution.proofValidity.isCurrent).toBe(false);
-    expect(supBody.contribution.proofValidity.label).toContain("Digantikan / Usang");
+    // Until a persisted receipt binding exists, client version hints cannot create a proof.
+    for (const hint of [String(v1), "0", "999999", "NaN", "garbage", ""]) {
+      const response = await get(`/contributions/${id}?proofVersion=${hint}`, tokens.amilSinar);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.contribution.proofValidity.status).toBe("NOT_AVAILABLE");
+      expect(body.contribution.proofValidity.isCurrent).toBe(false);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -603,7 +609,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
         reason: "Potongan biaya administrasi oleh bank",
         sourceProofRef: "BCA-ADMIN-FEE",
       },
-      tokens.amilSinar
+      tokens.approverSinar
     );
 
     // Decide refund
@@ -648,6 +654,203 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
       },
       tokens.amilBaitul
     );
-    expect(baitulCorrect.status).toBe(404);
+    expect(baitulCorrect.status).toBe(403);
+  });
+
+  it("requires endorsement authority for corrections and records the new endorsement", async () => {
+    const { id, version } = await createEndorsedContribution("REVIEW-AUTH", "500000");
+    const body = { expectedVersion: version, correctionType: "AMOUNT", amountExact: "400000",
+      reason: "Koreksi penerimaan", sourceProofRef: "MUTASI-REVISI" };
+    expect((await mutate(`/contributions/${id}/correct`, body, tokens.amilSinar)).status).toBe(403);
+    expect((await contributionStore.getContribution(SINAR, id))?.version).toBe(version);
+    clock += 10;
+    const allowed = await mutate(`/contributions/${id}/correct`, body, tokens.approverSinar);
+    expect(allowed.status).toBe(200);
+    const {contribution, correction} = await allowed.json();
+    expect(contribution.endorsedAt).toBe(clock);
+    expect(contribution.endorsedBy).toBe(approverSinar.address.toLowerCase());
+    expect(contribution.endorsementMandateId).toBe("sinar-endorse");
+    expect(correction.actorAccount).toBe(approverSinar.address.toLowerCase());
+    expect(correction.createdAt).toBe(clock);
+    const recorderView = await (await get(`/contributions/${id}`, tokens.amilSinar)).json();
+    const endorserView = await (await get(`/contributions/${id}`, tokens.approverSinar)).json();
+    expect(recorderView.capabilities.canCorrect).toBe(false);
+    expect(endorserView.capabilities.canCorrect).toBe(true);
+    expect(recorderView.history.find((event: any) => event.action === "ENDORSE").occurredAt).toBe(NOW);
+  });
+
+  it("replays UI payments without paidAt after time advances and storage reopens", async () => {
+    const {id, version} = await createEndorsedContribution("REVIEW-RETRY", "1000000");
+    const decision = await mutate(`/contributions/${id}/refunds`, {
+      expectedVersion: version, amountExact: "300000", reason: "Kelebihan transfer", policyBasis: "SOP Lembaga"
+    }, tokens.amilSinar);
+    const {refund} = await decision.json();
+    const body = {operationId: crypto.randomUUID(), paymentProofRef: "BANK-REVIEW"};
+    const path = `/contributions/${id}/refunds/${refund.id}/pay`;
+    for (const paidAt of [0, -1, 1.5, "yesterday"]) {
+      expect((await post(path, {...body, paidAt}, tokens.amilSinar)).status).toBe(400);
+    }
+    const first = await post(path, body, tokens.amilSinar);
+    expect(first.status).toBe(200);
+    const recorded = await first.json();
+    clock += 2;
+    await database.reopen();
+    configure(database.handle());
+    const replay = await post(path, body, tokens.amilSinar);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(recorded);
+    expect((await post(path, {...body, paymentProofRef: "DIFFERENT"}, tokens.amilSinar)).status).toBe(409);
+    expect((await contributionStore.getEvents(SINAR, id)).filter(e => e.eventType === "REFUND_PAYMENT")).toHaveLength(1);
+  });
+
+  it("exposes correction history only inside the donor's own verified session", async () => {
+    const {id, version} = await createEndorsedContribution("REVIEW-DONOR", "500000");
+    const other = await createEndorsedContribution("REVIEW-OTHER", "900000");
+    const token = "review-donor-session";
+    await database.handle().execute(sql`
+      INSERT INTO donor_sessions (token_hash, contribution_id, institution_id, expires_at, created_at, last_accessed_at)
+      VALUES (${hashSessionToken(token)}, ${id}, ${SINAR}, ${NOW + 3600}, ${NOW}, ${NOW})
+    `);
+    const corrected = await mutate(`/contributions/${id}/correct`, {
+      expectedVersion: version, correctionType: "AMOUNT", amountExact: "400000",
+      reason: "Koreksi mutasi bank", sourceProofRef: "PRIVATE-SOURCE-REF"
+    }, tokens.approverSinar);
+    expect(corrected.status).toBe(200);
+    const read = (contributionId: string, sessionToken?: string) => app.fetch(new Request(
+      `http://localhost:3001/api/donor/contributions/${contributionId}`,
+      {headers: sessionToken ? {Authorization: `Bearer ${sessionToken}`} : {}}
+    ));
+    const response = await read(id, token);
+    expect(response.status).toBe(200);
+    const {contribution} = await response.json();
+    expect(contribution.version).toBe(version + 1);
+    expect(contribution.corrections).toEqual([{
+      fromVersion: version, toVersion: version + 1, correctionType: "AMOUNT",
+      fromAmountExact: "500000", toAmountExact: "400000", reason: "Koreksi mutasi bank", createdAt: NOW
+    }]);
+    expect(JSON.stringify(contribution)).not.toContain("PRIVATE-SOURCE-REF");
+    expect(JSON.stringify(contribution)).not.toContain(approverSinar.address.toLowerCase());
+    expect((await read(other.id, token)).status).toBe(403);
+    expect((await read(id)).status).toBe(401);
+  });
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: corrects, refunds, retries a lost payment response and retains history on desktop and phone", async () => {
+    await seedActivity();
+    const built = await Bun.build({
+      entrypoints: [new URL("../../frontend/test/donor-recovery-officer-smoke.tsx", import.meta.url).pathname],
+      target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+    });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    const bundle = await built.outputs[0]!.text();
+    const cssProcess = Bun.spawn(["bun", "test/build-smoke-css.ts"], {
+      cwd: new URL("../../frontend", import.meta.url).pathname, stdout: "pipe", stderr: "pipe",
+    });
+    const css = await new Response(cssProcess.stdout).text();
+    if (await cssProcess.exited !== 0) throw new Error(await new Response(cssProcess.stderr).text());
+    let browserToken = tokens.approverSinar;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/") return new Response('<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/smoke.css"><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+      if (path === "/smoke.css") return new Response(css, { headers: { "Content-Type": "text/css" } });
+      if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+      if (path === "/smoke-config") return Response.json({ token: browserToken });
+      return app.fetch(req);
+    }});
+    const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+    let browser: any;
+    try {
+      browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+      for (const viewport of [{width: 1280, height: 900}, {width: 390, height: 844}]) {
+        const reference = `BCA-BROWSER-106-${viewport.width}`;
+        const {id, version} = await createEndorsedContribution(reference, "500000");
+        expect((await mutate(`/contributions/${id}/allocate`, {
+          activityId: "act-sembako-01", amountExact: "450000", expectedVersion: version, reason: "Pendanaan bantuan"
+        }, tokens.amilSinar)).status).toBe(200);
+        browserToken = tokens.approverSinar;
+        const page = await browser.newPage({viewport});
+        const errors: string[] = [];
+        page.on("pageerror", (error: Error) => errors.push(error.message));
+        page.setDefaultTimeout(10000);
+        await page.addInitScript((now: number) => { Date.now = () => now * 1000; }, NOW);
+        const openDetail = async () => {
+          await page.getByRole("row").filter({hasText: reference}).getByRole("button", {name: "Detail", exact: true}).click();
+          await page.getByRole("dialog", {name: `Detail kontribusi ${id}`, exact: true}).waitFor();
+        };
+        await page.goto(server.url.toString());
+        await openDetail();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+        const detail = page.getByRole("dialog", {name: `Detail kontribusi ${id}`, exact: true});
+        await detail.getByText("Bukti belum tersedia", {exact: true}).waitFor();
+        await detail.getByRole("button", {name: "Koreksi Kontribusi", exact: true}).focus();
+        await page.keyboard.press("Enter");
+        const correction = page.getByRole("dialog", {name: "Koreksi Kontribusi", exact: true});
+        await correction.getByLabel(/Nominal Baru/).fill("400000");
+        await correction.getByLabel(/Alasan Koreksi/).fill("Koreksi mutasi pada browser");
+        expect(await correction.getByRole("button", {name: "Sahkan Koreksi", exact: true}).isDisabled()).toBe(true);
+        await correction.getByLabel(/Nomor Bukti Sumber/).fill("BANK-REV-BROWSER");
+        await correction.getByRole("button", {name: "Sahkan Koreksi", exact: true}).click();
+        await correction.waitFor({state: "detached"});
+        await detail.getByText("Koreksi mutasi pada browser", {exact: false}).first().waitFor();
+        await detail.getByText(/Selisih Lebih Alokasi: Rp 50\.000/).waitFor();
+        expect(await detail.innerText()).not.toContain("Invalid Date");
+        await detail.getByRole("button", {name: "Keputusan Pengembalian", exact: true}).click();
+        const decision = page.getByRole("dialog", {name: "Keputusan Pengembalian Dana", exact: true});
+        await decision.getByLabel(/Nominal Pengembalian/).fill("100000");
+        await decision.getByLabel("Alasan Pengembalian", {exact: true}).fill("Kelebihan transfer berdasarkan keputusan lembaga");
+        await decision.getByLabel(/Dasar Kebijakan/).fill("SOP Lembaga 106");
+        await decision.getByRole("button", {name: "Catat Keputusan", exact: true}).click();
+        await decision.waitFor({state: "detached"});
+        await detail.getByText("Menunggu pembayaran", {exact: true}).waitFor();
+        const decided = (await contributionStore.listRefunds(SINAR, id))[0]!;
+        expect(decided.paidAt).toBeNull();
+        await detail.getByRole("button", {name: "Catat Pembayaran", exact: true}).click();
+        const payment = page.getByRole("dialog", {name: "Catat Pembayaran Pengembalian", exact: true});
+        await payment.getByLabel(/Referensi Bukti Pembayaran/).fill("BANK-PAY-BROWSER");
+        await payment.getByLabel(/Waktu Pembayaran Aktual/).fill("2026-09-19T10:30");
+        let paymentCalls = 0;
+        const submitted: any[] = [];
+        await page.route(`**/api/workspace/contributions/${id}/refunds/*/pay`, async (route: any) => {
+          submitted.push(route.request().postDataJSON());
+          const response = await route.fetch();
+          if (++paymentCalls === 1) { clock += 2; await route.abort("failed"); }
+          else await route.fulfill({response});
+        });
+        await payment.getByRole("button", {name: "Catat Pembayaran Selesai", exact: true}).click();
+        // A lost response must be visible in the active dialog, with the same form available for retry.
+        await payment.getByRole("alert").waitFor();
+        expect((await contributionStore.listRefunds(SINAR, id))[0]!.status).toBe("PAID");
+        await payment.getByRole("button", {name: "Catat Pembayaran Selesai", exact: true}).click();
+        await payment.waitFor({state: "detached"});
+        await detail.getByText("Sudah dibayarkan", {exact: true}).waitFor();
+        expect(submitted).toHaveLength(2);
+        expect(submitted[1]).toEqual(submitted[0]);
+        expect((await contributionStore.getEvents(SINAR, id)).filter(e => e.eventType === "REFUND_PAYMENT")).toHaveLength(1);
+        await page.reload();
+        await openDetail();
+        await detail.getByText("BANK-PAY-BROWSER", {exact: true}).waitFor();
+        await detail.getByText(/Selisih Lebih Alokasi: Rp 150\.000/).waitFor();
+        const bounds = await detail.boundingBox();
+        expect(bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(await detail.evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await page.screenshot({path: `/tmp/issue106-browser-${viewport.width}.png`, fullPage: false});
+        browserToken = tokens.amilSinar;
+        await page.reload();
+        await openDetail();
+        expect(await detail.getByRole("button", {name: "Koreksi Kontribusi", exact: true}).count()).toBe(0);
+        expect(errors).toEqual([]);
+        await page.close();
+      }
+    } finally { await browser?.close(); await server.stop(true); }
+  }, 90000);
+
+});
+
+describe("Trusted proof version comparison", () => {
+  it("separates historical, matching, and impossible proof versions", () => {
+    expect(evaluateProofValidity(4, 3).status).toBe("SUPERSEDED");
+    expect(evaluateProofValidity(4, 4).isCurrent).toBe(true);
+    for (const version of [null, NaN, Infinity, 0, -1, 3.5, 5]) {
+      expect(evaluateProofValidity(4, version).status).toBe("NOT_AVAILABLE");
+      expect(evaluateProofValidity(4, version).isCurrent).toBe(false);
+    }
   });
 });

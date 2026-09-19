@@ -32,7 +32,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`pb-3 text-sm font-medium transition-colors border-b-2 flex items-center gap-1.5 ${
+      className={`pb-3 text-sm font-medium shrink-0 whitespace-nowrap transition-colors border-b-2 flex items-center gap-1.5 ${
         active ? "border-emerald-600 text-emerald-700 font-semibold" : "border-transparent text-stone-500 hover:text-stone-800"
       }`}
     >
@@ -90,15 +90,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
     try {
       setError(null);
       const loaded = await getContribution(requests, id);
-      setDetail({
-        record: loaded.contribution,
-        history: loaded.history,
-        documents: loaded.documents,
-        corrections: loaded.corrections,
-        refunds: loaded.refunds,
-        events: loaded.events,
-        proofValidity: loaded.proofValidity,
-      });
+      setDetail(loaded);
     } catch (e) {
       setError(errorMessage(e, "Gagal membuka detail kontribusi."));
     }
@@ -108,7 +100,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
     setSuccessMessage(message.replace("{id}", updated.id));
     close();
     await refresh();
-    if (detail?.record.id === updated.id) await openDetail(updated.id);
+    if (detail?.contribution.id === updated.id) await openDetail(updated.id);
   };
 
   const openDraft = async (id: string) => {
@@ -199,7 +191,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
 
       <ContributionSummary contributions={contributions} drafts={drafts} />
 
-      <div className="flex border-b border-stone-200 mt-6 gap-6">
+      <div className="flex overflow-x-auto border-b border-stone-200 mt-6 gap-6">
         <TabButton active={activeTab === "list"} onClick={() => setActiveTab("list")}>
           Daftar Kontribusi ({contributions.length})
         </TabButton>
@@ -285,7 +277,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
           requests={requests}
           detail={detail}
           canManage={canManage}
-          onReload={() => openDetail(detail.record.id)}
+          onReload={() => openDetail(detail.contribution.id)}
           onClose={() => setDetail(null)}
           onError={setError}
         />

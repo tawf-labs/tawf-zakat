@@ -1,6 +1,5 @@
-import React from "react";
 import { Link } from "@tanstack/react-router";
-import { HeartHandshake, ArrowRight, ShieldCheck, Sparkles, CheckCircle2 } from "lucide-react";
+import { HeartHandshake, ArrowRight, Sparkles, CheckCircle2 } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 
 export function CtaBanner() {

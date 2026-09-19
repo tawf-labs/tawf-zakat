@@ -98,8 +98,8 @@ export function ContributionList({
   return (
     <div className="mt-5 space-y-4">
       <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <div className="relative w-full min-w-0 md:flex-1 md:w-64">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-stone-400" />
             <input
               type="text"
@@ -113,7 +113,7 @@ export function ContributionList({
           <select
             value={filters.status}
             onChange={(e) => onFiltersChange({ ...filters, status: e.target.value as ContributionFilters["status"] })}
-            className="text-sm border border-stone-300 rounded-lg px-3 py-1.5 bg-white text-stone-700 focus:outline-none"
+            className="min-w-0 flex-1 md:flex-none text-sm border border-stone-300 rounded-lg px-3 py-1.5 bg-white text-stone-700 focus:outline-none"
           >
             <option value="ALL">Semua Status</option>
             <option value="RECEIVED">Diterima (Baru)</option>
@@ -127,7 +127,7 @@ export function ContributionList({
             onChange={(e) =>
               onFiltersChange({ ...filters, currencyUnit: e.target.value as ContributionFilters["currencyUnit"] })
             }
-            className="text-sm border border-stone-300 rounded-lg px-3 py-1.5 bg-white text-stone-700 focus:outline-none"
+            className="min-w-0 flex-1 md:flex-none text-sm border border-stone-300 rounded-lg px-3 py-1.5 bg-white text-stone-700 focus:outline-none"
           >
             <option value="ALL">Semua Mata Uang</option>
             <option value="IDR">Rupiah (IDR)</option>

@@ -33,7 +33,6 @@ import {
   validateContributionInput,
   type ContributionInput,
   type ContributionStatus,
-  type CorrectionType,
   type JenisDana,
 } from "../contribution";
 import {
@@ -157,6 +156,7 @@ export async function contributionActor(
     runtime,
     session: auth.session,
     mandate,
+    canCorrect: actor.allows("ENDORSE_CONTRIBUTIONS", {}),
     identity: { account: auth.session.account, officerId: actor.officer.id },
   } as const;
 }
@@ -463,9 +463,9 @@ contributionRoutes.get("/contributions/:id", async (c) => {
     ? (await activities.contributionBalances(who.session.institutionId, [contribution])).get(contribution.id)
     : undefined;
 
-  const proofVersionParam = c.req.query("proofVersion");
-  const proofVersion = proofVersionParam !== undefined ? Number(proofVersionParam) : null;
-  const proofValidity = evaluateProofValidity(contribution.version, proofVersion);
+  // No persisted pilot receipt/proof binding exists yet (#108/#110).
+  // Caller-supplied version hints must never manufacture evidence currentness.
+  const proofValidity = evaluateProofValidity(contribution.version, null);
 
   return c.json({
     success: true,
@@ -477,6 +477,7 @@ contributionRoutes.get("/contributions/:id", async (c) => {
     },
     history,
     documents: documents.map(documentView),
+    capabilities: { canCorrect: who.canCorrect },
     corrections,
     refunds,
     events,
@@ -488,7 +489,7 @@ contributionRoutes.post("/contributions/:id/correct", async (c) => {
   const body = await readJson(c);
   if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
 
-  const who = await contributionActor(c, bodyInstitution(body), READERS);
+  const who = await contributionActor(c, bodyInstitution(body), ENDORSERS);
   if ("response" in who) return who.response;
 
   const expectedVersion = expectedVersionOf(body);
@@ -521,6 +522,7 @@ contributionRoutes.post("/contributions/:id/correct", async (c) => {
       amountExact,
       reason,
       sourceProofRef,
+      endorsementMandateId: who.mandate.id,
     },
     {
       operationId,
@@ -619,7 +621,11 @@ contributionRoutes.post("/contributions/:id/refunds/:refundId/pay", async (c) =>
   if (!paymentProofRef) {
     return badRequest(c, "Nomor referensi bukti transfer / pembayaran pengembalian wajib diisi.");
   }
-  const paidAt = typeof body.paidAt === "number" && body.paidAt > 0 ? body.paidAt : who.runtime.now();
+  if (body.paidAt !== undefined &&
+      (typeof body.paidAt !== "number" || !Number.isSafeInteger(body.paidAt) || body.paidAt <= 0)) {
+    return badRequest(c, "Waktu pembayaran harus berupa timestamp detik yang sah.");
+  }
+  const paidAt = body.paidAt as number | undefined;
   const paymentNotes = text(body.paymentNotes) || undefined;
 
   const id = c.req.param("id");
@@ -631,7 +637,7 @@ contributionRoutes.post("/contributions/:id/refunds/:refundId/pay", async (c) =>
       contributionId: id,
       refundId,
       paymentProofRef,
-      paidAt,
+      paidAt: paidAt ?? who.runtime.now(),
       paymentNotes,
     },
     {

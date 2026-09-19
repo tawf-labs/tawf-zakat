@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { Calculator, ArrowRight, CheckCircle2, AlertCircle, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { ArrowRight, CheckCircle2, AlertCircle, Sparkles } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 import { Badge } from "../../components/ui/Badge";
 import { Input } from "../../components/ui/Input";
@@ -36,7 +36,7 @@ export function QuickCalculatorPreview() {
           <div className="rounded-3xl border border-[#dbe7dd] bg-gradient-to-b from-[#f4f8f3] to-white p-6 sm:p-10 shadow-lg space-y-8">
             {/* Header */}
             <div className="text-center space-y-3">
-              <Badge variant="sharia">Kalkulator Syariah BAZNAS</Badge>
+              <Badge variant="success">Kalkulator Syariah BAZNAS</Badge>
               <h2 className="font-serif text-2xl sm:text-3xl font-bold text-[#17332c]">
                 Hitung Kewajiban Zakat Anda dalam 1 Menit
               </h2>

@@ -1,4 +1,3 @@
-import React from "react";
 import { Sparkles } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { BALANCE_SHEET_LABELS } from "./format";

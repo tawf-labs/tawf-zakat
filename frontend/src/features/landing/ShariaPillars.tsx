@@ -1,6 +1,5 @@
-import React from "react";
 import { Container } from "../../components/layout/Container";
-import { ShieldCheck, UserCheck, Scale, FileSpreadsheet, Lock, CheckCircle2 } from "lucide-react";
+import { UserCheck, Scale, FileSpreadsheet, Lock } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
 
 export function ShariaPillars() {
@@ -39,7 +38,7 @@ export function ShariaPillars() {
       <Container>
         {/* Section Heading */}
         <div className="max-w-3xl mx-auto text-center space-y-4">
-          <Badge variant="sharia">Integritas 3 Lapis</Badge>
+          <Badge variant="success">Integritas 3 Lapis</Badge>
           <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-[#17332c]">
             Pengawasan Berlapis untuk Menjaga Amanah Zakat
           </h2>

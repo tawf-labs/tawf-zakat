@@ -1,6 +1,5 @@
-import React from "react";
 import { Link } from "@tanstack/react-router";
-import { HeartHandshake, ArrowRight, ShieldCheck, Users, Sparkles } from "lucide-react";
+import { HeartHandshake, ArrowRight, ShieldCheck, Users } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 import { Badge } from "../../components/ui/Badge";
 import { Progress } from "../../components/ui/Progress";
@@ -48,7 +47,7 @@ export function FeaturedPrograms() {
         {/* Section Heading */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
           <div className="space-y-3 max-w-2xl">
-            <Badge variant="sharia">Program 8 Asnaf Terverifikasi</Badge>
+            <Badge variant="success">Program 8 Asnaf Terverifikasi</Badge>
             <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-[#17332c]">
               Program Penyaluran yang Siap Menerima Zakat Anda
             </h2>

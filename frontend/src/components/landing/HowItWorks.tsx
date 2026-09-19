@@ -1,4 +1,3 @@
-import React from "react";
 
 const transparencySteps = [
   ["01", "Connect & Verify", "Login easily and get your identity verified automatically."],

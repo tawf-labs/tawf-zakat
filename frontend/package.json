@@ -9,6 +9,7 @@
     "dev": "vite dev --port 3000",
     "generate-routes": "tsr generate",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "verify:ssr": "VERCEL=1 vite build && node scripts/verify-ssr.mjs"
   },

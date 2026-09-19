@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Calculator, CheckCircle2, AlertCircle, Sparkles, ArrowRight } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { Badge } from "../../components/ui/Badge";
@@ -68,7 +68,7 @@ export function ZakatCalculator({ onApplyAmount }: ZakatCalculatorProps) {
             </p>
           </div>
         </div>
-        <Badge variant="sharia">Standar 85g Emas</Badge>
+        <Badge variant="success">Standar 85g Emas</Badge>
       </div>
 
       {/* Tabs */}

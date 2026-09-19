@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, AlertCircle, XCircle } from "lucide-react";
+import { useState } from "react";
+import { Scale, CheckCircle2, ShieldCheck, ExternalLink, Loader2, Lock, XCircle } from "lucide-react";
 import { useAccount } from "wagmi";
 import { useGovernanceTransaction } from "./useGovernanceTransaction";
 import { useGovernanceRole } from "./RoleContext";

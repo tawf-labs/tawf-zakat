@@ -1,4 +1,3 @@
-import React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "../components/layout/PageHeader";
@@ -9,7 +8,7 @@ import {
   DisbursementTable,
   LiveActivityFeed,
 } from "../features/transparency";
-import { ShieldCheck, Eye, Layers } from "lucide-react";
+import { Layers } from "lucide-react";
 
 import { getApiBaseUrl } from "../lib/contracts";
 

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useWebSocket } from "../../lib/WebSocketContext";
-import { Activity, HeartHandshake, ShieldCheck, CheckCircle2, RefreshCw } from "lucide-react";
+import { Activity, HeartHandshake, ShieldCheck, CheckCircle2 } from "lucide-react";
 
 interface ActivityItem {
   id: string;

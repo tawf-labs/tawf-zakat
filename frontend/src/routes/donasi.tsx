@@ -1,10 +1,9 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "../components/layout/PageHeader";
 import { Container } from "../components/layout/Container";
 import { DonationForm, ZakatCalculator } from "../features/donation";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/Tabs";
-import { HeartHandshake, Calculator, ShieldCheck, Sparkles } from "lucide-react";
+import { HeartHandshake, Calculator } from "lucide-react";
 
 interface DonasiSearchParams {
   category?: string;

@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldPlus, Loader2, Upload, UserCheck, Lock } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
-import { 
-  GOVERNANCE_EIP712_DOMAIN, 
-  GOVERNANCE_EIP712_TYPES, 
+import {
+  GOVERNANCE_EIP712_DOMAIN,
+  GOVERNANCE_EIP712_TYPES,
   AUDIT_DOCUMENT_MAX_BYTES,
   getApiBaseUrl,
 } from "../../lib/contracts";

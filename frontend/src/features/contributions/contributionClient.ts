@@ -1,3 +1,9 @@
+import type {
+  ContributionCorrection, ContributionRefund, ContributionEvent, CorrectionType, ContributionProofValidity,
+} from "../../../../shared/contribution-lifecycle";
+export type {
+  ContributionCorrection, ContributionRefund, ContributionEvent, CorrectionType, RefundStatus, ContributionProofValidity,
+} from "../../../../shared/contribution-lifecycle";
 import type { PrivateRequests } from "../workspace/privateRequests";
 
 /**
@@ -219,13 +225,13 @@ export async function listContributions(
 
 export type ContributionDetailResponse = {
   success: boolean;
-  contribution: ContributionRecord;
+  contribution: ContributionRecord & { proofValidity: ContributionProofValidity };
+  capabilities: { canCorrect: boolean };
   history: ContributionHistory[];
   documents: ContributionDocument[];
   corrections?: ContributionCorrection[];
   refunds?: ContributionRefund[];
   events?: ContributionEvent[];
-  proofValidity?: { status: ProofValidity; notes: string };
 };
 
 export async function getContribution(
@@ -468,59 +474,6 @@ export async function decideRecoveryRequest(
 // Correction, Refund & Versioning API (Issue #106, Spec #100)
 // ---------------------------------------------------------------------------
 
-export type CorrectionType = "AMOUNT" | "DUPLICATE";
-
-export type ContributionCorrection = {
-  id: string;
-  institutionId: string;
-  contributionId: string;
-  fromVersion: number;
-  toVersion: number;
-  correctionType: CorrectionType;
-  fromAmountExact: string;
-  toAmountExact: string;
-  reason: string;
-  sourceProofRef: string | null;
-  correctedBy: string;
-  correctedByOfficerId: string | null;
-  correctedAt: number;
-};
-
-export type RefundStatus = "DECIDED" | "PAID";
-
-export type ContributionRefund = {
-  id: string;
-  institutionId: string;
-  contributionId: string;
-  contributionVersion: number;
-  amountExact: string;
-  reason: string;
-  policyBasis: string;
-  status: RefundStatus;
-  decidedAt: number;
-  decidedBy: string;
-  decidedByOfficerId: string | null;
-  paymentProofRef: string | null;
-  paidAt: number | null;
-  paidBy: string | null;
-  paidByOfficerId: string | null;
-  paymentNotes: string | null;
-};
-
-export type ContributionEvent = {
-  id: string;
-  institutionId: string;
-  contributionId: string;
-  version: number;
-  eventType: string;
-  eventData: Record<string, unknown>;
-  occurredAt: number;
-  actorAccount: string;
-  actorOfficerId: string | null;
-};
-
-export type ProofValidity = "CURRENT" | "SUPERSEDED" | "INVALID";
-
 export async function correctContribution(
   requests: PrivateRequests,
   id: string,
@@ -529,7 +482,7 @@ export async function correctContribution(
     correctionType: CorrectionType;
     amountExact?: string;
     reason: string;
-    sourceProofRef?: string;
+    sourceProofRef: string;
     operationId?: string;
   }
 ): Promise<{ contribution: ContributionRecord; correction: ContributionCorrection }> {

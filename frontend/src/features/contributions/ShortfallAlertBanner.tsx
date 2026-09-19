@@ -21,12 +21,12 @@ export function ShortfallAlertBanner({
     >
       <div className="flex items-center gap-2 font-bold text-sm text-amber-900">
         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-        <span>Peringatan Selisih Lebih Alokasi (Shortfall): {formatNominal(shortfallAmount, currencyUnit)}</span>
+        <span>Selisih Lebih Alokasi: {formatNominal(shortfallAmount, currencyUnit)}</span>
       </div>
 
       <p className="text-xs text-amber-800 leading-relaxed">
-        Kontribusi saat ini bernominal{" "}
-        <span className="font-semibold">{formatNominal(amountExact, currencyUnit)}</span>, tetapi total alokasi yang
+        Nominal tercatat (sebelum pengembalian atau pembatalan catatan){" "}
+        <span className="font-semibold">{formatNominal(amountExact, currencyUnit)}</span>, dengan total alokasi yang
         sudah ditetapkan mencapai{" "}
         <span className="font-semibold">{formatNominal(allocatedAmount || "0", currencyUnit)}</span>.
       </p>
@@ -46,11 +46,11 @@ export function ShortfallAlertBanner({
           </li>
           <li>
             <strong>Alokasi baru diblokir:</strong> Penambahan alokasi baru yang memperburuk selisih ditolak otomatis
-            oleh sistem hingga selisih diselesaikan (AC10, ADR-0033 Q28).
+            oleh sistem hingga selisih diselesaikan.
           </li>
           <li>
             <strong>Privasi terjaga:</strong> Rincian donor dan nominal tetap terbatas pada pihak berwenang internal
-            lembaga dan tidak diekspos ke publik (AC15, AC29).
+            lembaga dan tidak diekspos ke publik.
           </li>
         </ul>
       </div>

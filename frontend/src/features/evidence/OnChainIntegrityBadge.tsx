@@ -1,6 +1,5 @@
-import React from "react";
 import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
-import { ShieldCheck, CheckCircle2, AlertCircle, ExternalLink, Cpu } from "lucide-react";
+import { ShieldCheck, CheckCircle2, ExternalLink, Cpu } from "lucide-react";
 
 interface OnChainIntegrityBadgeProps {
   cid: string;

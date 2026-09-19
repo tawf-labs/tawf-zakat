@@ -1,11 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/Table";
-import { Badge } from "../../components/ui/Badge";
-import { FileText, ExternalLink, Search, ShieldCheck, CheckCircle2, Clock, Sparkles } from "lucide-react";
+import { FileText, ExternalLink, Search, ShieldCheck, CheckCircle2, Clock } from "lucide-react";
 import { Input } from "../../components/ui/Input";
-import { BastModal } from "./BastModal";
 import { UniversalEvidenceModal } from "../evidence/UniversalEvidenceModal";
-import { Link } from "@tanstack/react-router";
 import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 
 interface ProposalRecord {

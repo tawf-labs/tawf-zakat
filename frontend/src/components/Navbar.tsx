@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ConnectKitButton } from "connectkit";
-import { Wallet, ChevronDown, AlertCircle, Menu, X, Shield, Search } from "lucide-react";
+import { Wallet, ChevronDown, AlertCircle, Menu, X, Shield } from "lucide-react";
 import { sepolia } from "wagmi/chains";
 import { useWebSocket } from "../lib/WebSocketContext";
 

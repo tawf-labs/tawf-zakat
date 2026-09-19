@@ -1,4 +1,3 @@
-import React from "react";
 import { campaigns } from "../../data/campaigns";
 import { CampaignCard } from "./CampaignCard";
 

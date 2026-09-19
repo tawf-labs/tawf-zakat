@@ -1,11 +1,10 @@
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import createGlobe, { type COBEOptions } from "cobe";
 import { cn } from "../../lib/utils";
 
 const GLOBE_CONFIG: COBEOptions = {
   width: 800,
   height: 800,
-  onRender: () => {},
   devicePixelRatio: 2,
   phi: 0,
   theta: 0.3,
@@ -43,38 +42,39 @@ export function Globe({
   const widthRef = useRef(0);
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     let currentPhiOffset = 0;
-
-    const onResize = () => {
-      if (canvasRef.current) {
-        widthRef.current = canvasRef.current.offsetWidth;
-      }
-    };
+    phiRef.current = config.phi;
+    const onResize = () => { widthRef.current = canvas.offsetWidth; };
     window.addEventListener("resize", onResize);
     onResize();
 
-    if (!canvasRef.current) return;
-
-    const globe = createGlobe(canvasRef.current, {
+    const globe = createGlobe(canvas, {
       ...config,
-      width: (widthRef.current * 2) || 800,
-      height: (widthRef.current * 2) || 800,
-      onRender: (state) => {
-        if (!pointerInteracting.current) {
-          phiRef.current += 0.005;
-        }
-        currentPhiOffset += (pointerDelta.current - currentPhiOffset) * 0.08;
-        state.phi = phiRef.current + currentPhiOffset;
-        state.width = (widthRef.current * 2) || 800;
-        state.height = (widthRef.current * 2) || 800;
-      },
+      width: (widthRef.current * config.devicePixelRatio) || config.width,
+      height: (widthRef.current * config.devicePixelRatio) || config.height,
     });
-
-    setTimeout(() => {
-      if (canvasRef.current) canvasRef.current.style.opacity = "1";
-    }, 50);
-
+    // COBE v2 exposes update(); it no longer invokes an onRender callback.
+    let previousTime: number | undefined;
+    let animationFrame: number;
+    const animate = (time: number) => {
+      const elapsed = previousTime === undefined ? 0 : Math.min(time - previousTime, 64);
+      previousTime = time;
+      if (pointerInteracting.current === null) phiRef.current += elapsed * 0.0003;
+      currentPhiOffset += (pointerDelta.current - currentPhiOffset) * 0.08;
+      globe.update({
+        phi: phiRef.current + currentPhiOffset,
+        width: (widthRef.current * config.devicePixelRatio) || config.width,
+        height: (widthRef.current * config.devicePixelRatio) || config.height,
+      });
+      animationFrame = requestAnimationFrame(animate);
+    };
+    animationFrame = requestAnimationFrame(animate);
+    const fadeIn = window.setTimeout(() => { canvas.style.opacity = "1"; }, 50);
     return () => {
+      cancelAnimationFrame(animationFrame);
+      window.clearTimeout(fadeIn);
       globe.destroy();
       window.removeEventListener("resize", onResize);
     };

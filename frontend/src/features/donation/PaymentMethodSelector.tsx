@@ -1,4 +1,3 @@
-import React from "react";
 import { QrCode, Building2, Wallet, CheckCircle2 } from "lucide-react";
 
 export type PaymentMethodType = "qris" | "va" | "usdc";

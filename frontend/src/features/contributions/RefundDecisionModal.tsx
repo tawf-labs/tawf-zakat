@@ -1,171 +1,60 @@
 import { useId, useState } from "react";
-import { ArrowDownLeft, Info, ShieldAlert } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
-import { Button } from "../../components/ui/Button";
-import {
-  decideRefund,
-  formatNominal,
-  type ContributionRecord,
-  type ContributionRefund,
-} from "./contributionClient";
-import { errorMessage, useOperationIds } from "./contributionUi";
+import { decideRefund, formatNominal, type ContributionRecord, type ContributionRefund } from "./contributionClient";
+import { errorMessage, useOperationIds, useActionError } from "./contributionUi";
+import { ContributionActionDialog, contributionFieldClass as fieldClass } from "./ContributionActionDialog";
 
-const fieldClass = "w-full text-sm border border-stone-300 rounded-lg p-2 focus:ring-1 focus:outline-none";
-const labelClass = "block font-semibold uppercase text-stone-600 mb-1";
-
-export function RefundDecisionModal({
-  requests,
-  target,
-  onDone,
-  onClose,
-  onError,
-}: {
-  requests: PrivateRequests;
-  target: ContributionRecord;
-  onDone: (refund: ContributionRefund) => void;
-  onClose: () => void;
-  onError: (message: string | null) => void;
+export function RefundDecisionModal({ requests, target, refunds, onDone, onClose, onError }: {
+  requests: PrivateRequests; target: ContributionRecord; refunds: ContributionRefund[];
+  onDone: (refund: ContributionRefund) => void; onClose: () => void; onError: (message: string | null) => void;
 }) {
-  const amountId = useId();
-  const reasonId = useId();
-  const policyId = useId();
-
-  const maxRefundable = target.unallocatedAmount ?? target.amountExact;
-  const [amountExact, setAmountExact] = useState(maxRefundable);
+  const id = useId();
+  const { error, reportError } = useActionError(onError);
+  const reserved = refunds.filter(r => r.status !== "CANCELLED").reduce((sum, r) => sum + BigInt(r.amountExact), 0n);
+  const remaining = BigInt(target.amountExact) - reserved;
+  const maximum = remaining > 0n ? remaining : 0n;
+  const [amountExact, setAmountExact] = useState("");
   const [reason, setReason] = useState("");
   const [policyBasis, setPolicyBasis] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const operations = useOperationIds();
-
   const submit = async () => {
-    if (!amountExact.trim() || !/^\d+$/.test(amountExact.trim()) || amountExact.trim() === "0") {
-      onError("Nominal pengembalian harus berupa bilangan bulat positif.");
+    if (submitting) return;
+    if (!/^[1-9]\d*$/.test(amountExact.trim()) || BigInt(amountExact.trim()) > maximum) {
+      reportError("Nominal pengembalian harus positif dan tidak melebihi kontribusi setelah keputusan pengembalian sebelumnya.");
       return;
     }
-    if (!reason.trim()) {
-      onError("Alasan permohonan pengembalian wajib diisi.");
+    if (reason.trim().length < 5 || policyBasis.trim().length < 5) {
+      reportError("Alasan dan dasar kebijakan lembaga wajib diisi, masing-masing minimal 5 karakter.");
       return;
     }
-    if (!policyBasis.trim()) {
-      onError("Dasar kebijakan lembaga / ketentuan syariah wajib diisi.");
-      return;
-    }
-
+    const input = { expectedVersion: target.version, amountExact: amountExact.trim(), reason: reason.trim(), policyBasis: policyBasis.trim() };
+    const intent = JSON.stringify([target.id, input]);
     setSubmitting(true);
-    onError(null);
+    reportError(null);
     try {
-      const intentKey = `decide-refund-${target.id}-v${target.version}-${amountExact}-${reason}-${policyBasis}`;
-      const operationId = operations.mint(intentKey);
-
-      const res = await decideRefund(requests, target.id, {
-        expectedVersion: target.version,
-        amountExact: amountExact.trim(),
-        reason: reason.trim(),
-        policyBasis: policyBasis.trim(),
-        operationId,
-      });
-
-      onDone(res.refund);
-    } catch (err) {
-      onError(errorMessage(err, "Gagal mencatat keputusan pengembalian dana."));
-    } finally {
-      setSubmitting(false);
-    }
+      const result = await decideRefund(requests, target.id, { ...input, operationId: operations.operationFor(intent) });
+      operations.settle(intent);
+      onDone(result.refund);
+    } catch (error) { reportError(errorMessage(error, "Gagal mencatat keputusan pengembalian dana.")); }
+    finally { setSubmitting(false); }
   };
-
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Keputusan Pengembalian Dana"
-        className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl border border-stone-200"
-      >
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-base font-bold text-stone-900 flex items-center gap-1.5">
-              <ArrowDownLeft className="w-5 h-5 text-indigo-600" />
-              <span>Keputusan Pengembalian Dana (Tahap 1: Putusan)</span>
-            </h3>
-            <p className="text-xs text-stone-500 mt-1">
-              Kontribusi: <code>{target.id}</code> (Versi {target.version} · Maksimal Pengembalian:{" "}
-              {formatNominal(maxRefundable, target.currencyUnit)})
-            </p>
-          </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-700 font-bold" aria-label="Tutup">
-            ✕
-          </button>
-        </div>
-
-        <div className="space-y-3 text-xs">
-          <div>
-            <label htmlFor={amountId} className={labelClass}>
-              Nominal Pengembalian ({target.currencyUnit}) <span className="text-rose-600">*</span>
-            </label>
-            <input
-              id={amountId}
-              type="text"
-              value={amountExact}
-              onChange={(e) => setAmountExact(e.target.value)}
-              placeholder="Misal: 300000"
-              className={fieldClass}
-            />
-            <span className="text-[11px] text-stone-500 mt-1 block">
-              Dana yang belum dialokasikan dan dapat dikembalikan: {formatNominal(maxRefundable, target.currencyUnit)}.
-            </span>
-          </div>
-
-          <div>
-            <label htmlFor={reasonId} className={labelClass}>
-              Alasan Pengembalian <span className="text-rose-600">*</span>
-            </label>
-            <textarea
-              id={reasonId}
-              rows={2}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Contoh: Permohonan pembatalan dari donatur karena kelebihan transfer"
-              className={fieldClass}
-            />
-          </div>
-
-          <div>
-            <label htmlFor={policyId} className={labelClass}>
-              Dasar Kebijakan Syariah / SOP Lembaga <span className="text-rose-600">*</span>
-            </label>
-            <input
-              id={policyId}
-              type="text"
-              value={policyBasis}
-              onChange={(e) => setPolicyBasis(e.target.value)}
-              placeholder="Contoh: SOP Pengembalian Dana Zakat No. 04/2026"
-              className={fieldClass}
-            />
-          </div>
-
-          <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 flex items-start gap-2 text-[11px]">
-            <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-            <div>
-              <strong>Kebijakan Syariah & Payout (AC03, US-45):</strong> ZKT <strong>tidak menyediakan payout bank otomatis</strong>.
-              Tidak ada hak bebas pengembalian sepihak untuk dana terikat syariah. Keputusan ini mencatat persetujuan
-              pengesahan lembaga secara administratif; realisasi pembayaran riil dicatat terpisah pada tahap berikutnya.
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-3 border-t border-stone-200">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>
-            Batal
-          </Button>
-          <Button
-            size="sm"
-            onClick={submit}
-            disabled={submitting || !reason.trim() || !policyBasis.trim() || !amountExact.trim()}
-          >
-            {submitting ? "Mencatat Keputusan…" : "Putuskan Pengembalian"}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <ContributionActionDialog error={error} title="Keputusan Pengembalian Dana" submitting={submitting} onSubmit={submit} onClose={onClose}
+      disabled={!amountExact.trim() || reason.trim().length < 5 || policyBasis.trim().length < 5} submitLabel="Catat Keputusan"
+      summary={<>Versi {target.version} · Maksimal {formatNominal(maximum.toString(), target.currencyUnit)}</>}>
+      <label className="block" htmlFor={`${id}-amount`}>Nominal Pengembalian ({target.currencyUnit})</label>
+      <input id={`${id}-amount`} value={amountExact} onChange={e => setAmountExact(e.target.value)} className={fieldClass} />
+      <p className="text-stone-500">Sisa belum dialokasikan: {formatNominal(target.unallocatedAmount ?? "0", target.currencyUnit)}.
+        Pengembalian yang mengurangi pendanaan kegiatan dapat menimbulkan selisih yang perlu diselesaikan lembaga.</p>
+      <label className="block" htmlFor={`${id}-reason`}>Alasan Pengembalian</label>
+      <textarea id={`${id}-reason`} rows={2} value={reason} onChange={e => setReason(e.target.value)} className={fieldClass} />
+      <label className="block" htmlFor={`${id}-policy`}>Dasar Kebijakan Jenis Dana / SOP Lembaga</label>
+      <input id={`${id}-policy`} value={policyBasis} onChange={e => setPolicyBasis(e.target.value)} className={fieldClass} />
+      <p className="p-3 bg-amber-50 rounded-lg text-amber-900">
+        Catat keputusan lembaga sesuai kebijakan jenis dana. Keputusan belum berarti uang telah dikembalikan.
+        Pembayaran dilakukan melalui kanal lembaga dan bukti pelaksanaannya dicatat terpisah oleh petugas.
+      </p>
+    </ContributionActionDialog>
   );
 }

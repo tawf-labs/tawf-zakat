@@ -1,6 +1,5 @@
-import React from "react";
 import { Link } from "@tanstack/react-router";
-import { ShieldCheck, ExternalLink, HeartHandshake, FileText, CheckCircle2 } from "lucide-react";
+import { ShieldCheck, ExternalLink } from "lucide-react";
 import { Container } from "./Container";
 import { ZAKAT_PROTOCOL_L1_ADDRESS, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";
 

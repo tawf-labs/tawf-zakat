@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Input } from "../../components/ui/Input";
 import { useAccount } from "wagmi";
 import { uploadGovernanceFile, useGovernanceTransaction } from "./useGovernanceTransaction";
-import { Upload, Loader2, Sparkles, ShieldCheck, FileText, CheckCircle2 } from "lucide-react";
+import { Upload, Loader2, Sparkles } from "lucide-react";
 import { keccak256, encodePacked, parseUnits, isAddress, type Hex } from "viem";
 import { toast } from "sonner";
 

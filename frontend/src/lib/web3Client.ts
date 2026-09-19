@@ -6,7 +6,7 @@ import {
   type Hex,
   parseUnits,
 } from "viem";
-import { arbitrumSepolia, sepolia } from "viem/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { getAccount } from "@wagmi/core";
 import { wagmiConfig } from "./wagmiConfig";
 import {

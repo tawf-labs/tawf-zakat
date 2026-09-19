@@ -1,5 +1,4 @@
-import React from "react";
-import { ShieldCheck, CheckCircle2, MapPin, FileText, Landmark, Tag, Layers, Clock, AlertTriangle } from "lucide-react";
+import { ShieldCheck, CheckCircle2, MapPin, FileText, Layers } from "lucide-react";
 
 interface MetadataInspectorCardProps {
   metadata: any;

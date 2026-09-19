@@ -3,12 +3,14 @@ import { clearDonorSession, endDonorSession, fetchDonorContribution, readDonorSe
 
 const store = new Map<string, string>();
 const realFetch = globalThis.fetch;
+const realWindow = globalThis.window;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 beforeEach(() => {
   store.clear();
   requests = [];
   (globalThis as any).window = {
+    location: { hostname: "localhost", port: "3000" },
     sessionStorage: {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => void store.set(key, value),
@@ -19,6 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  (globalThis as any).window = realWindow;
 });
 
 const respond = (status: number, body: unknown) => {

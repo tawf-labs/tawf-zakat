@@ -1,4 +1,3 @@
-import React from "react";
 import { ShieldCheck, HeartHandshake, FileCode2, Globe, MessageCircle, Share2, ExternalLink } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 

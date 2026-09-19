@@ -1,4 +1,3 @@
-import React from "react";
 
 /** The one-line format contract, spelled out where the Amil is typing. */
 export function LedgerFormatHelp() {

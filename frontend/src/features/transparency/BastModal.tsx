@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
 import { FileText, ExternalLink, ShieldCheck, Eye } from "lucide-react";
 import { PINATA_DEDICATED_GATEWAY, PUBLIC_IPFS_GATEWAY, getIpfsUrl } from "../../lib/contracts";

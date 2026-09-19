@@ -12,6 +12,9 @@
  * - AC29: Strict institutional isolation and authenticated session attribution.
  */
 
+import { isCorrectionType, type CorrectionType, type ContributionProofValidity } from "../../shared/contribution-lifecycle";
+export { CORRECTION_TYPES, REFUND_STATUSES, isCorrectionType, isRefundStatus } from "../../shared/contribution-lifecycle";
+export type { CorrectionType, ContributionCorrection, ContributionRefund, ContributionEvent, RefundStatus } from "../../shared/contribution-lifecycle";
 import { JENIS_DANA, type CurrencyUnit } from "./reconciliation";
 
 export type JenisDana = (typeof JENIS_DANA)[number];
@@ -283,74 +286,6 @@ export function checkStatusTransition(
 // Correction & Refund Domain Logic (Spec #100, Ticket #106)
 // ---------------------------------------------------------------------------
 
-export const CORRECTION_TYPES = ["AMOUNT", "DUPLICATE"] as const;
-export type CorrectionType = (typeof CORRECTION_TYPES)[number];
-
-export const isCorrectionType = (value: unknown): value is CorrectionType =>
-  typeof value === "string" && (CORRECTION_TYPES as readonly string[]).includes(value as CorrectionType);
-
-export type ContributionCorrection = {
-  id: string;
-  institutionId: string;
-  contributionId: string;
-  fromVersion: number;
-  toVersion: number;
-  correctionType: CorrectionType;
-  fromAmountExact: string;
-  toAmountExact: string;
-  reason: string;
-  sourceProofRef: string;
-  actorAccount: string;
-  actorOfficerId: string | null;
-  createdAt: number;
-};
-
-export const REFUND_STATUSES = ["DECIDED", "PAID", "CANCELLED"] as const;
-export type RefundStatus = (typeof REFUND_STATUSES)[number];
-
-export const isRefundStatus = (value: unknown): value is RefundStatus =>
-  typeof value === "string" && (REFUND_STATUSES as readonly string[]).includes(value as RefundStatus);
-
-export type ContributionRefund = {
-  id: string;
-  institutionId: string;
-  contributionId: string;
-  amountExact: string;
-  currencyUnit: CurrencyUnit;
-  fundType: JenisDana;
-  reason: string;
-  policyBasis: string;
-  status: RefundStatus;
-  contributionVersion: number;
-  decidedAt: number;
-  decidedBy: string;
-  decidedByOfficerId: string | null;
-  paidAt: number | null;
-  paidBy: string | null;
-  paidByOfficerId: string | null;
-  paymentProofRef: string | null;
-  paymentNotes: string | null;
-  version: number;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type ContributionEvent = {
-  id: number;
-  institutionId: string;
-  contributionId: string;
-  version: number;
-  previousVersion: number;
-  eventType: "CORRECTION" | "REFUND_DECISION" | "REFUND_PAYMENT" | "ENDORSEMENT" | "RECONCILIATION";
-  amountExact: string;
-  reason: string;
-  sourceProofRef: string | null;
-  actorAccount: string;
-  actorOfficerId: string | null;
-  occurredAt: number;
-  proofSuperseded: boolean;
-};
-
 export type CorrectionInput = {
   correctionType: CorrectionType;
   amountExact?: string;
@@ -500,12 +435,13 @@ export function validateRefundPaymentInput(input: Partial<RefundPaymentInput>): 
 export function evaluateProofValidity(
   currentContributionVersion: number,
   proofContributionVersion: number | null
-): { status: "CURRENT" | "SUPERSEDED" | "NOT_AVAILABLE"; isCurrent: boolean; label: string } {
-  if (proofContributionVersion === null || proofContributionVersion === undefined) {
-    return { status: "NOT_AVAILABLE", isCurrent: false, label: "Belum Ada Proof" };
+): ContributionProofValidity {
+  if (proofContributionVersion == null || !Number.isSafeInteger(proofContributionVersion) ||
+      proofContributionVersion < 1 || proofContributionVersion > currentContributionVersion) {
+    return { status: "NOT_AVAILABLE", isCurrent: false, label: "Bukti belum tersedia" };
   }
   if (proofContributionVersion < currentContributionVersion) {
-    return { status: "SUPERSEDED", isCurrent: false, label: "Digantikan / Usang (Superseded)" };
+    return { status: "SUPERSEDED", isCurrent: false, label: "Bukti versi terdahulu" };
   }
-  return { status: "CURRENT", isCurrent: true, label: "Berlaku (Current)" };
+  return { status: "CURRENT", isCurrent: true, label: "Bukti berlaku" };
 }

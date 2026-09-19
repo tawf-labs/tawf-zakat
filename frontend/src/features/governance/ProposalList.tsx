@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/Table";
-import { ShieldCheck, CheckCircle2, Clock, PlusCircle, FileText, Lock, Sparkles, AlertCircle } from "lucide-react";
+import { ShieldCheck, CheckCircle2, Clock, PlusCircle, FileText, Lock } from "lucide-react";
 import { ExecuteBastModal } from "./ExecuteBastModal";
 import { BastModal } from "../transparency/BastModal";
 import { useGovernanceRole } from "./RoleContext";
@@ -17,7 +17,7 @@ export function ProposalList({ proposals, onOpenCreate, onRefresh }: ProposalLis
   const [selectedForExecution, setSelectedForExecution] = useState<any | null>(null);
   const [selectedForBastView, setSelectedForBastView] = useState<any | null>(null);
 
-  const { canCreateProposal, canExecuteBast, effectiveRole, getRestrictionReason } = useGovernanceRole();
+  const { canCreateProposal, canExecuteBast, getRestrictionReason } = useGovernanceRole();
 
   const filtered = (proposals || []).filter((p) => {
     if (activeTab === "ALL") return true;

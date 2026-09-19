@@ -1,7 +1,6 @@
-import React from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
 import { EvidenceViewer } from "./EvidenceViewer";
-import { ExternalLink, X } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
 interface UniversalEvidenceModalProps {

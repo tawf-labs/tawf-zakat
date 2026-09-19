@@ -1,5 +1,4 @@
-import React from "react";
-import { Scale, Users, ShieldCheck } from "lucide-react";
+import { Scale } from "lucide-react";
 
 interface AsnafChartProps {
   proposals: Array<{

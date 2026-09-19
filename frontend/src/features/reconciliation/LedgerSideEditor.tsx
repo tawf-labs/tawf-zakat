@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { FileSpreadsheet, Upload } from "lucide-react";
 import { LedgerIssueList } from "./LedgerIssueList";
 import type { BucketDimension, LedgerTextResult } from "./ledgerText";

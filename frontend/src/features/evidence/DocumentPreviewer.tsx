@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Download, ExternalLink, RefreshCw, FileText, Image as ImageIcon, ShieldCheck, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { Download, ExternalLink, FileText, Image as ImageIcon } from "lucide-react";
 import { PINATA_DEDICATED_GATEWAY } from "../../lib/contracts";
 
 interface DocumentPreviewerProps {
@@ -103,7 +103,7 @@ export function DocumentPreviewer({
               src={activeUrl}
               alt={fileName}
               className="max-h-[500px] w-auto object-contain"
-              onError={(e) => {
+              onError={() => {
                 // Auto switch to fallback gateway if primary fails
                 if (selectedGatewayIndex < gateways.length - 1) {
                   setSelectedGatewayIndex((prev) => prev + 1);

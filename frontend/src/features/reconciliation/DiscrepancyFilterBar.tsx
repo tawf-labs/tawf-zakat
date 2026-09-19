@@ -1,4 +1,3 @@
-import React from "react";
 import { Download, FilterX } from "lucide-react";
 import { bucketLabel, DISCREPANCY_LABELS } from "./format";
 import { hasActiveFilters, type DiscrepancyFilters } from "./reconciliationTools";

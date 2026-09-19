@@ -14,7 +14,7 @@ import { Input } from "../../components/ui/Input";
 import { PaymentMethodSelector, type PaymentMethodType } from "./PaymentMethodSelector";
 import { NiatCard } from "./NiatCard";
 import { PaymentSuccessModal } from "./PaymentSuccessModal";
-import { HeartHandshake, Loader2, Sparkles, Lock, ShieldCheck, Wallet } from "lucide-react";
+import { HeartHandshake, Loader2, ShieldCheck, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
 interface DonationFormProps {
@@ -205,14 +205,14 @@ export function DonationForm({
         if (snapToken) {
           setStatusMessage("Menampilkan jendela pembayaran...");
           payWithSnap(snapToken, {
-            onSuccess: (result: any) => {
+            onSuccess: () => {
               setSuccessModalOpen(true);
               toast.success("Pembayaran zakat berhasil diselesaikan!");
             },
-            onPending: (result: any) => {
+            onPending: () => {
               toast.info("Menunggu pembayaran diselesaikan.");
             },
-            onError: (err: any) => {
+            onError: () => {
               toast.error("Pembayaran dibatalkan atau gagal.");
             },
             onClose: () => {

@@ -1,4 +1,3 @@
-import React from "react";
 import { CheckCircle2, Scale as ScaleIcon, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
 import { absoluteAmount, formatMoney, formatSignedMoney } from "./format";

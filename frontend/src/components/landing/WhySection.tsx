@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, ShieldCheck, HeartHandshake, ArrowUpRight } from "lucide-react";
 
 export function WhySection() {

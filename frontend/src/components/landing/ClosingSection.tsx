@@ -1,4 +1,3 @@
-import React from "react";
 import { ArrowUpRight, Sparkles, Cloud } from "lucide-react";
 import { Globe } from "../ui/Globe";
 

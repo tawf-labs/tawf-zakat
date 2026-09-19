@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Shield, ShieldCheck, Scale, FileSpreadsheet, Zap, ExternalLink } from "lucide-react";
+import { Shield, Scale, FileSpreadsheet, Zap, ExternalLink } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { AuditorRegistrationPanel } from "./AuditorRegistrationPanel";
 import { getApiBaseUrl, SEPOLIA_EXPLORER_URL } from "../../lib/contracts";

@@ -632,8 +632,10 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
       page.setDefaultTimeout(10000);
       const errors: string[] = [];
       page.on("pageerror", (error: Error) => { errors.push(error.message); console.error("Activity browser:", error.message); });
-      page.on("response", async (response: any) => {
-        if (response.status() >= 400 && response.url().includes("/api/workspace")) console.error("Activity browser HTTP:", response.url(), response.status(), await response.text());
+      // This diagnostic may run while the page closes; do not start a body read
+      // that can reject after the test has already completed its assertions.
+      page.on("response", (response: any) => {
+        if (response.status() >= 400 && response.url().includes("/api/workspace")) console.error("Activity browser HTTP:", response.url(), response.status());
       });
       await page.goto(server.url.toString());
       await page.getByRole("button", { name: /^0x/ }).waitFor();

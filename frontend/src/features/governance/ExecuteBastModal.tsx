@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Input } from "../../components/ui/Input";
 import { useAccount } from "wagmi";
 import { uploadGovernanceFile, useGovernanceTransaction } from "./useGovernanceTransaction";
-import { Upload, Loader2, CheckCircle2, FileText, Sparkles } from "lucide-react";
+import { Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface ExecuteBastModalProps {

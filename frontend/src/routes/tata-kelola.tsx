@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "../components/layout/PageHeader";
@@ -8,10 +8,8 @@ import {
   CreateProposalModal,
   DpsSafeApprovalCard,
   AuditorAttestationPanel,
-  RoleRoster,
-  RoleProvider,
-  useGovernanceRole,
-  PersonaBanner,
+  RoleRoster, useGovernanceRole,
+  PersonaBanner
 } from "../features/governance";
 import { Landmark, Shield, Scale, FileSpreadsheet, PlusCircle, Users, Lock } from "lucide-react";
 

@@ -66,6 +66,19 @@ export function DonorContributionSummary({ contribution }: { contribution: Donor
         ))}
       </dl>
 
+      <section aria-label="Riwayat koreksi kontribusi" className="space-y-3">
+        <h4 className="text-sm font-semibold text-tawf-green">Riwayat Kontribusi · Versi {contribution.version}</h4>
+        {contribution.corrections.length === 0 && <p className="text-xs text-tawf-muted">Belum ada koreksi.</p>}
+        {contribution.corrections.map(correction => (
+          <div key={correction.toVersion} className="rounded-xl border border-tawf-green-10 p-3 text-sm space-y-1">
+            <p>Versi {correction.fromVersion} → {correction.toVersion} · {formatDate(correction.createdAt)}</p>
+            <p>{formatNominal(correction.fromAmountExact, contribution.currencyUnit)} → {formatNominal(correction.toAmountExact, contribution.currencyUnit)}</p>
+            {correction.correctionType === "DUPLICATE" && <p>Catatan ganda dikeluarkan dari pendanaan; nominal historis tetap tersimpan.</p>}
+            <p>Alasan: {correction.reason}</p>
+          </div>
+        ))}
+      </section>
+
       <details className="group rounded-2xl border border-tawf-green-10 bg-[#f4f8f3]/60">
         <summary className="cursor-pointer list-none p-4 flex items-center justify-between text-xs font-semibold text-tawf-green">
           Rincian teknis pembuktian

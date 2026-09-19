@@ -1,8 +1,7 @@
 import React from "react";
 import { Link } from "@tanstack/react-router";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
-import { CheckCircle2, Copy, Check, ExternalLink, ArrowRight, ShieldCheck, Heart } from "lucide-react";
-import { Badge } from "../../components/ui/Badge";
+import { CheckCircle2, Copy, Check, ExternalLink, ArrowRight, ShieldCheck } from "lucide-react";
 
 interface PaymentSuccessModalProps {
   isOpen: boolean;

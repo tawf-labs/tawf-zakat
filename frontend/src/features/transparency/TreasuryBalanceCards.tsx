@@ -1,6 +1,4 @@
-import React from "react";
-import { Landmark, Wallet, TrendingUp, ShieldCheck, Lock, ArrowUpRight } from "lucide-react";
-import { Badge } from "../../components/ui/Badge";
+import { Landmark, Wallet, TrendingUp, ShieldCheck, Lock } from "lucide-react";
 
 interface TreasuryBalanceCardsProps {
   totalCollectedIDR: number;
@@ -13,7 +11,6 @@ export function TreasuryBalanceCards({
   totalCollectedIDR,
   totalDisbursedIDR,
   usdcVaultBalance,
-  totalUsdcCollected,
 }: TreasuryBalanceCardsProps) {
   const remainingIDR = Math.max(0, totalCollectedIDR - totalDisbursedIDR);
   const amilMaxOperationalIDR = Math.round(totalCollectedIDR * 0.125);

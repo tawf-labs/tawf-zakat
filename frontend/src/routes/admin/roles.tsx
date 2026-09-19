@@ -10,13 +10,10 @@ import {
   ExternalLink,
   Copy,
   Check,
-  Info,
-  Layers,
-  Sparkles,
-  ArrowLeft,
+  Info, ArrowLeft,
   Activity,
   Lock,
-  Unlock,
+  Unlock
 } from "lucide-react";
 import {
   ZAKAT_PROTOCOL_L1_ADDRESS,

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { TabularRow } from "./contributionClient";
 
 /** A cell of an invalid row, looked up under the header spellings the importer accepts. */
@@ -48,4 +48,12 @@ export function useOperationIds() {
       ids.current.delete(intent);
     },
   };
+}
+
+export const at = (seconds: number) => new Date(seconds * 1000).toLocaleString("id-ID");
+
+/** Keep action errors visible inside the active modal as well as the parent panel. */
+export function useActionError(onError: (message: string | null) => void) {
+  const [error, setError] = useState<string | null>(null);
+  return { error, reportError(message: string | null) { setError(message); onError(message); } };
 }

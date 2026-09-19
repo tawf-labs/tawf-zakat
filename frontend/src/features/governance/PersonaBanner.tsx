@@ -1,6 +1,6 @@
 import React from "react";
 import { useGovernanceRole, type GovernancePersona } from "./RoleContext";
-import { Shield, Scale, FileSpreadsheet, User, Info, CheckCircle2, Lock } from "lucide-react";
+import { Shield, Scale, FileSpreadsheet, User, Info, CheckCircle2 } from "lucide-react";
 
 export function PersonaBanner() {
   const {
@@ -9,7 +9,6 @@ export function PersonaBanner() {
     effectiveRole,
     connectedAddress,
     isWalletConnected,
-    detectedRoles,
   } = useGovernanceRole();
 
   const personas: {
