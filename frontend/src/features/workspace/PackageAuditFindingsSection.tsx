@@ -1,153 +1,80 @@
-import { useEffect, useState } from "react";
-import { AlertCircle, Plus, RefreshCw, Shield } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../components/ui/Button";
-import type { PrivateRequests } from "./privateRequests";
-import {
-  fetchPackageAuditFindings,
-} from "./auditFindingClient";
-import type { AuditFinding } from "../../../../shared/audit-findings";
-import {
-  FindingScopeBadge,
-  FindingSeverityBadge,
-  FindingStatusBadge,
-} from "./AuditFindingBadge";
+import { AccessContextChanged, type PrivateRequests } from "./privateRequests";
+import { fetchPackageAuditFindings } from "./auditFindingClient";
+import { FindingScopeBadge, FindingSeverityBadge, FindingStatusBadge } from "./AuditFindingBadge";
 import { AuditFindingDetailModal } from "./AuditFindingDetailModal";
 import { CreateAuditFindingModal } from "./CreateAuditFindingModal";
+import type { AuditFindingView, AuditFindingViewerRole } from "../../../../shared/audit-findings";
 
-interface PackageAuditFindingsSectionProps {
+type Props = {
   preparationId: string;
   packageId: string;
+  packageDigest: string;
+  reportId: string;
+  reportVersion: string;
   requests: PrivateRequests;
-}
+  onStartCorrection?: (packageId: string) => void;
+};
 
-export function PackageAuditFindingsSection({
-  preparationId,
-  packageId,
-  requests,
-}: PackageAuditFindingsSectionProps) {
-  const [findings, setFindings] = useState<AuditFinding[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
+/** Findings recorded against one frozen version, as this reader may see them. */
+export function PackageAuditFindingsSection({ preparationId, packageId, packageDigest, reportId, reportVersion, requests, onStartCorrection }: Props) {
+  const [findings, setFindings] = useState<AuditFindingView[] | null>(null);
+  const [viewer, setViewer] = useState<AuditFindingViewerRole>("STATUS_ONLY");
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
-  async function loadFindings() {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async () => {
+    setError("");
     try {
-      const list = await fetchPackageAuditFindings(requests, preparationId, packageId);
-      setFindings(list);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat temuan untuk paket ini.");
-    } finally {
-      setLoading(false);
+      const result = await fetchPackageAuditFindings(requests, preparationId, packageId);
+      setViewer(result.viewer);
+      setFindings(result.findings);
+    } catch (cause) {
+      if (!(cause instanceof AccessContextChanged)) setError(cause instanceof Error ? cause.message : "Temuan versi ini belum dapat dibaca.");
     }
-  }
-
-  useEffect(() => {
-    loadFindings();
-  }, [preparationId, packageId, requests]);
+  }, [requests, preparationId, packageId]);
+  useEffect(() => { void load(); }, [load]);
 
   return (
-    <div className="rounded-xl border border-stone-200 bg-stone-50/50 p-4 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 pb-3">
-        <div className="flex items-center gap-2">
-          <Shield className="h-4 w-4 text-amber-600" />
-          <h4 className="text-sm font-bold text-stone-900">
-            Temuan Pemeriksaan & Tindak Lanjut ({findings.length})
-          </h4>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setCreateModalOpen(true)}
-            className="text-xs"
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" /> Catat Temuan Baru
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={loadFindings}
-            disabled={loading}
-            className="text-xs"
-          >
-            <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
-          </Button>
+    <section aria-label={`Temuan pemeriksaan versi ${reportVersion}`} className="space-y-3 rounded-xl border border-stone-200 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-stone-900">Temuan pemeriksaan versi {reportVersion} ({findings?.length ?? "…"})</h4>
+        <div className="flex gap-2">
+          {viewer === "AUDITOR" && <Button size="sm" variant="outline" onClick={() => setCreating(true)}>Catat temuan</Button>}
+          <Button size="sm" variant="outline" onClick={() => void load()}>Muat ulang</Button>
         </div>
       </div>
-
+      {viewer === "STATUS_ONLY" && findings && findings.length > 0 && (
+        <p className="text-xs text-stone-600">Anda melihat status temuan per versi. Uraian dan tanggapan hanya untuk pihak pemeriksaan.</p>
+      )}
       {error && (
-        <div role="alert" className="flex items-start gap-2 rounded bg-red-50 p-2.5 text-xs text-red-700">
-          <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
-          <span>{error}</span>
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+          <span>{error}</span><Button size="sm" variant="outline" onClick={() => void load()}>Coba lagi</Button>
         </div>
       )}
-
-      {loading && (
-        <p className="text-xs text-stone-500 py-2 text-center">Memuat temuan audit paket ini…</p>
-      )}
-
-      {!loading && findings.length === 0 && (
-        <p className="text-xs text-stone-500 py-2 text-center">
-          Belum ada temuan yang dicatat auditor untuk versi paket ini.
-        </p>
-      )}
-
-      {!loading && findings.length > 0 && (
+      {findings?.length === 0 && <p className="text-xs text-stone-600">Belum ada temuan untuk versi ini. Tidak adanya temuan bukan opini audit.</p>}
+      {findings && findings.length > 0 && (
         <ul className="space-y-2">
-          {findings.map((f) => (
-            <li
-              key={f.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white p-3 text-xs shadow-sm hover:border-stone-300 transition"
-            >
-              <div className="space-y-1 min-w-0">
+          {findings.map(f => (
+            <li key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 p-3 text-xs">
+              <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[10px] text-stone-400">{f.id}</span>
-                  <FindingStatusBadge status={f.status} />
-                  <FindingSeverityBadge severity={f.severity} />
-                  <FindingScopeBadge scope={f.scope} />
+                  <FindingStatusBadge status={f.status} /><FindingSeverityBadge severity={f.severity} /><FindingScopeBadge scope={f.scope} />
                 </div>
-                <div className="font-semibold text-stone-900 truncate">{f.title}</div>
-                <div className="text-stone-500 text-[11px] truncate">
-                  Oleh {f.auditorName} · {f.events?.length ?? 0} peristiwa
-                </div>
+                <p className="truncate font-semibold text-stone-900">{f.detail === "FULL" ? f.title : `Temuan ${f.id.slice(0, 11)}`}</p>
               </div>
-
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setSelectedFindingId(f.id)}
-                className="text-xs"
-              >
-                Detail
-              </Button>
+              <Button size="sm" variant="outline" onClick={() => setSelected(f.id)}>Buka</Button>
             </li>
           ))}
         </ul>
       )}
-
-      {selectedFindingId && (
-        <AuditFindingDetailModal
-          findingId={selectedFindingId}
-          requests={requests}
-          onClose={() => setSelectedFindingId(null)}
-          onUpdated={loadFindings}
-        />
-      )}
-
-      {createModalOpen && (
-        <CreateAuditFindingModal
-          isOpen={createModalOpen}
-          requests={requests}
-          preparationId={preparationId}
-          packageId={packageId}
-          onClose={() => setCreateModalOpen(false)}
-          onCreated={loadFindings}
-        />
-      )}
-    </div>
+      {selected && <AuditFindingDetailModal findingId={selected} requests={requests} onClose={() => setSelected(null)} onUpdated={() => void load()}
+        onStartCorrection={onStartCorrection && (id => { setSelected(null); onStartCorrection(id); })} />}
+      {creating && <CreateAuditFindingModal requests={requests} preparationId={preparationId} packageId={packageId} packageDigest={packageDigest}
+        reportId={reportId} reportVersion={reportVersion} onClose={() => setCreating(false)}
+        onCreated={finding => { setCreating(false); void load(); setSelected(finding.id); }} />}
+    </section>
   );
 }

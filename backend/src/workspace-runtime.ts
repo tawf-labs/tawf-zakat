@@ -79,6 +79,11 @@ export type WorkspaceRuntime = {
    * than keeping an activity somewhere it will not survive a restart.
    */
   activities?: import("./activity-store").ActivityStore;
+  /**
+   * Auditor findings and their append-only history (Issue #99). Optional, and
+   * absent means absent: the finding routes answer 503.
+   */
+  auditFindings?: import("./audit-finding-store").AuditFindingStore;
 };
 
 let runtime: WorkspaceRuntime | null = null;

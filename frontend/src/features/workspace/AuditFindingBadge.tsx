@@ -12,8 +12,8 @@ export function FindingStatusBadge({ status }: { status: AuditFindingStatus }) {
   const variantMap: Record<AuditFindingStatus, "warning" | "info" | "neutral" | "success"> = {
     OPEN: "warning",
     DITANGGAPI: "info",
-    DALAM_PENELAAHAN: "info",
     DITINDAKLANJUTI: "neutral",
+    MENUNGGU_KOREKSI_LAPORAN: "warning",
     DITUTUP_AUDITOR: "success",
   };
 

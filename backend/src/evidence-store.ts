@@ -297,78 +297,6 @@ export const EVIDENCE_SCHEMA_STATEMENTS = [
    );`,
   `CREATE INDEX IF NOT EXISTS evidence_drafts_by_institution
      ON evidence_drafts (institution_id, updated_at DESC);`,
-  `CREATE TABLE IF NOT EXISTS report_audit_findings (
-     id TEXT PRIMARY KEY,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     preparation_id TEXT NOT NULL REFERENCES evidence_preparations (id) ON DELETE CASCADE,
-     package_id TEXT NOT NULL REFERENCES report_packages (id) ON DELETE CASCADE,
-     package_digest TEXT NOT NULL,
-     report_id TEXT NOT NULL,
-     version TEXT NOT NULL,
-     auditor_account TEXT NOT NULL,
-     auditor_officer_id TEXT NOT NULL,
-     auditor_name TEXT NOT NULL,
-     mandate_ref TEXT NOT NULL,
-     scope TEXT NOT NULL,
-     severity TEXT NOT NULL,
-     title TEXT NOT NULL,
-     description TEXT NOT NULL,
-     target_proposal_id TEXT,
-     target_proposal_version INTEGER,
-     target_realization_id TEXT,
-     target_document_id TEXT,
-     status TEXT NOT NULL,
-     created_at BIGINT NOT NULL,
-     updated_at BIGINT NOT NULL,
-     CONSTRAINT audit_findings_scope_known
-       CHECK (scope IN ('SUMBER_DATA', 'REALISASI', 'DOKUMEN_BUKTI', 'PENERIMA', 'KEPATUHAN_SYARIAH', 'LAINNYA')),
-     CONSTRAINT audit_findings_severity_known
-       CHECK (severity IN ('INFO', 'CATATAN', 'TEMUAN_RINGAN', 'TEMUAN_MATERIAL')),
-     CONSTRAINT audit_findings_status_known
-       CHECK (status IN ('OPEN', 'DITANGGAPI', 'DALAM_PENELAAHAN', 'DITINDAKLANJUTI', 'DITUTUP_AUDITOR'))
-   );`,
-  `CREATE INDEX IF NOT EXISTS report_audit_findings_by_package
-     ON report_audit_findings (institution_id, package_id, created_at DESC);`,
-  `CREATE INDEX IF NOT EXISTS report_audit_findings_by_status
-     ON report_audit_findings (institution_id, status);`,
-  `CREATE TABLE IF NOT EXISTS report_audit_finding_events (
-     id TEXT PRIMARY KEY,
-     finding_id TEXT NOT NULL REFERENCES report_audit_findings (id) ON DELETE CASCADE,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     event_type TEXT NOT NULL,
-     actor_account TEXT NOT NULL,
-     actor_officer_id TEXT NOT NULL,
-     actor_role TEXT NOT NULL,
-     actor_name TEXT NOT NULL,
-     note TEXT NOT NULL,
-     resulting_status TEXT NOT NULL,
-     attachments_json TEXT NOT NULL DEFAULT '[]',
-     created_at BIGINT NOT NULL,
-     CONSTRAINT audit_finding_events_type_known
-       CHECK (event_type IN ('FINDING_CREATED', 'AMIL_RESPONSE', 'AUDITOR_FOLLOWUP', 'NOTE_CORRECTION', 'AUDITOR_CLOSED')),
-     CONSTRAINT audit_finding_events_role_known
-       CHECK (actor_role IN ('AUDITOR', 'AMIL'))
-   );`,
-  `CREATE INDEX IF NOT EXISTS report_audit_finding_events_by_finding
-     ON report_audit_finding_events (finding_id, created_at ASC);`,
-  `CREATE TABLE IF NOT EXISTS report_audit_finding_attachments (
-     id TEXT PRIMARY KEY,
-     finding_id TEXT NOT NULL REFERENCES report_audit_findings (id) ON DELETE CASCADE,
-     institution_id TEXT NOT NULL REFERENCES institutions (id),
-     uploader_account TEXT NOT NULL,
-     uploader_role TEXT NOT NULL,
-     file_name TEXT NOT NULL,
-     mime_type TEXT NOT NULL,
-     size_bytes INTEGER NOT NULL,
-     content_sha256 TEXT NOT NULL,
-     storage_ref TEXT NOT NULL,
-     is_owner_only INTEGER NOT NULL DEFAULT 0,
-     created_at BIGINT NOT NULL,
-     CONSTRAINT audit_finding_attachments_role_known
-       CHECK (uploader_role IN ('AUDITOR', 'AMIL'))
-   );`,
-  `CREATE INDEX IF NOT EXISTS report_audit_finding_attachments_by_finding
-     ON report_audit_finding_attachments (finding_id);`,
 ] as const;
 
 const rowsOf = (result: any): any[] =>
@@ -723,7 +651,6 @@ export function createEvidenceStore(db: EvidenceDatabase) {
       );
       return deleted.length > 0;
     },
-    db,
   };
 }
 

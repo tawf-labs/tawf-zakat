@@ -28,6 +28,7 @@ import { startProposalPreviewMaintenance } from "./proposal-preview-maintenance"
 import { createDisbursementStore } from "./disbursement-store";
 import { createContributionStore } from "./contribution-store";
 import { createActivityStore } from "./activity-store";
+import { createAuditFindingStore } from "./audit-finding-store";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
 import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
@@ -62,6 +63,7 @@ export function installWorkspaceRuntime(): void {
   const disbursement = createDisbursementStore(db);
   const contributions = createContributionStore(db);
   const activities = createActivityStore(db);
+  const auditFindings = createAuditFindingStore(db);
 
   // No key, no file store. The routes then record every offered document as
   // FAILED with that reason, which is the truth - rather than writing an
@@ -88,6 +90,7 @@ export function installWorkspaceRuntime(): void {
     disbursement,
     contributions,
     activities,
+    auditFindings,
     // The same chain, contract and indexer key the indexer writes under, so a
     // package names the deployment it was actually read from.
     internalLedger: createInternalLedgerReader(db, {
@@ -111,6 +114,7 @@ export function installWorkspaceRuntime(): void {
     .then(() => disbursement.ensureSchema())
     .then(() => contributions.ensureSchema())
     .then(() => activities.ensureSchema())
+    .then(() => auditFindings.ensureSchema())
     .then(() => registry?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);

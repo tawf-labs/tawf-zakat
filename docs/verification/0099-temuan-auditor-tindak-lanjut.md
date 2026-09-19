@@ -1,71 +1,32 @@
 # Verifikasi Temuan Auditor, Tanggapan Amil, dan Tindak Lanjut Pemeriksaan — #99
 
-Acuan: issue #99, spec #86 (US-03, US-51–59, AC11, AC20–25), amandemen pilot #100 (AC15, AC19, AC23, AC24, AC26, AC28, AC29, AC30), ADR-0028/0029/0030.
+Acuan: issue #99, spec #86 (US-03, US-51–59, skenario 11, 20–25), amandemen pilot #100 (AC15, AC19, AC23, AC24, AC26, AC28, AC29, AC30), ADR-0022.
 
-## Perilaku yang Diimplementasikan
+Catatan ini menggantikan verifikasi `20a72c2`. Code review atas commit itu menemukan fallback kewenangan auditor tanpa registry, status yang di-`UPDATE`, tidak adanya transaksi/idempotensi/penugasan, kebocoran lampiran ke READER, dan smoke browser yang belum dijalankan. Semuanya diperbaiki di bawah ini.
 
-- **Pengikatan Identitas Versi Laporan & Paket Bukti (AC20)**
-  - Temuan audit mengikat secara eksak: `institution_id`, `preparation_id`, `package_id`, `package_digest`, `report_id`, dan `version`.
-  - Temuan tidak pernah dialamatkan ke `report_id` semata tanpa ikatan versi dan paket bukti yang dibekukan.
-  - Opsi penargetan spesifik ke objek audit: `target_proposal_id`, `target_proposal_version`, `target_realization_id`, `target_document_id`.
+## Perilaku
 
-- **Pemisahan Wewenang & Batas Peran (AC11, AC21)**
-  - Akun dengan keanggotaan `READER` ditolak saat mencoba mencatat temuan audit (`403 Akun pembaca biasa tidak dapat menulis temuan sebagai auditor`).
-  - Akun petugas amil wajib memiliki mandat aktif `HANDLE_REPORT_EXAMINATION` untuk dapat memberikan tanggapan atas temuan (`403 Wewenang ditolak`).
-  - Petugas amil **TIDAK BISA** bertindak sebagai auditor independen ataupun menutup temuan audit sendiri (`403 Forbidden`).
-  - Hanya akun auditor yang berwenang (dan pencatat temuan) yang dapat memberikan tindak lanjut dan menutup temuan (`DITUTUP_AUDITOR`).
+- **Ikatan versi.** Temuan hanya dicatat pada paket `FROZEN` yang dibaca melalui `createReportPackages().read` (commitment digest diverifikasi). Klien mengirim `packageDigest` yang ditinjau; digest berbeda → 409. `reportId`/`version` diambil dari paket; paket tanpa keduanya → 409 (tidak ada nilai default).
+- **Kewenangan auditor = mandat registry.** `auditorAuthority` pada ReportEvidenceRegistry dibaca setiap penulisan. Tanpa registry → 503; tanpa mandat aktif → 403 (termasuk ADMIN, OFFICER, READER tanpa mandat). Keanggotaan READER dengan mandat registry dapat bertindak sebagai auditor. Pemegang mandat amil `HANDLE_REPORT_EXAMINATION` tidak dapat menjadi auditor pada pemeriksaan yang sama.
+- **Penugasan dan serah terima.** Auditor yang ditugaskan diproyeksikan dari riwayat (awal: pencatat temuan). Hanya auditor tersebut, dengan mandat masih aktif, yang menetapkan tindak lanjut. Serah terima (`AUDITOR_HANDOVER`) memerlukan dasar penugasan: diserahkan oleh auditor yang ditugaskan kepada pemegang mandat lain, atau diambil alih setelah mandat auditor yang ditugaskan dicabut.
+- **Append-only.** Tabel `audit_findings` (kepala tak berubah), `audit_finding_events` (unik `(finding_id, seq)`), `audit_finding_files`, `audit_finding_operations`. Tidak ada kolom status, `UPDATE`, `DELETE`, atau cascade. Status, penugasan dan koreksi catatan diproyeksikan dari riwayat. `NOTE_CORRECTION` menambah koreksi oleh penulis asli; catatan asli tetap terbaca.
+- **Transisi.** `OPEN` → `DITANGGAPI` (tanggapan amil) → `DITINDAKLANJUTI` / `MENUNGGU_KOREKSI_LAPORAN` / `DITUTUP_AUDITOR`. Temuan tertutup tidak dapat ditanggapi, ditindaklanjuti ulang, atau diserahterimakan (409). Amil tidak dapat menutup (403).
+- **Transaksi, konkurensi, idempotensi.** Setiap mutasi: klaim `operationId` + hash isi, kunci `FOR UPDATE` pada kepala temuan, cek `expectedRevision`, sisipkan event+berkas, dalam satu transaksi. Retry isi sama → hasil yang sama; id sama isi berbeda → 409; revisi usang → 409.
+- **Akses baca.** Amil bermandat dan auditor bermandat membaca uraian lengkap; anggota lain (READER, ADMIN, OFFICER tanpa mandat) hanya status per versi (`STATUS_ONLY`). Lampiran `OWNER_ONLY` hanya untuk pengunggahnya (tidak untuk auditor pengganti), namanya tidak ditampilkan kepada pihak lain (hanya jumlah). Lampiran `EXAMINATION` untuk pengunggah, amil bermandat, dan auditor yang ditugaskan. Unduhan memeriksa ukuran + SHA-256; berkas rusak → 409, hilang → 404. Locator penyimpanan tidak pernah dikirim.
+- **Rujukan operasional.** Pengajuan (dan versinya), realisasi, dokumen dan sengketa penerimaan divalidasi ada pada lembaga yang sama; penautan tidak mengubah realisasi/sengketa. Sertifikat/NFT tahap belum ada (#111), jadi belum dapat ditautkan.
+- **Koreksi versi.** Detail temuan memuat daftar paket beku yang menyebut versi ini sebagai pendahulu. Saat `MENUNGGU_KOREKSI_LAPORAN`, UI menawarkan “Siapkan versi koreksi dari paket ini” yang membuka alur koreksi `ReportPackageForm` dengan pendahulu terisi. Temuan versi lama tidak diwariskan.
+- **Batas klaim.** `AUDIT_CLAIM_BOUNDARIES` ditampilkan pada detail: proof ZK, NFT tahap, status versi, penyaluran dan opini audit dibedakan; tindak lanjut tidak menerbitkan atestasi onchain.
+- **Hasil belum diketahui.** Kegagalan jaringan/5xx menampilkan “Hasilnya belum diketahui” dengan tombol muat ulang; kirim ulang isi yang sama memakai `operationId` yang sama sehingga tidak tercatat dua kali. Respons 500 server tidak membocorkan pesan internal.
+- **Publik.** Tidak ada temuan dalam ringkasan publik.
 
-- **Siklus Hidup Temuan & Jejak Append-Only (AC21, AC22, AC26, AC28)**
-  - Siklus hidup status temuan: `OPEN` → `DITANGGAPI` → `DITINDAKLANJUTI` → `DITUTUP_AUDITOR`.
-  - Riwayat peristiwa (`report_audit_finding_events`) bersifat murni append-only.
-  - Peristiwa tercatat:
-    - `FINDING_CREATED`: Pembukaan temuan oleh auditor.
-    - `AMIL_RESPONSE`: Tanggapan dan klarifikasi oleh amil.
-    - `AUDITOR_FOLLOWUP`: Tindak lanjut auditor (`MINTA_KLARIFIKASI_LANJUTAN` atau `BUTUH_KOREKSI_LAPORAN`).
-    - `AUDITOR_CLOSED`: Keputusan penutupan temuan oleh auditor (`SELESAI_DITUTUP`).
-  - Status temuan dan riwayat peristiwa tidak dapat ditimpa atau dihapus.
+## Pengujian
 
-- **Antrean Kerja (AC24)**
-  - Endpoint `GET /api/evidence/audit-findings/queues` memproyeksikan dua antrean aksi:
-    - `amilActionQueue`: Temuan dengan status `OPEN` atau `DITINDAKLANJUTI` yang membutuhkan aksi/klarifikasi tim amil.
-    - `auditorReviewQueue`: Temuan dengan status `DITANGGAPI` yang membutuhkan evaluasi atau penutupan oleh auditor.
+- `backend/test/report_audit_findings_api.test.ts`: **10 pass** (dengan smoke browser), registry ReportEvidenceRegistry nyata di Anvil lokal (grant/revoke/re-grant), PGlite, penyimpanan berkas terenkripsi, `reopen()` database. Mencakup: tanpa registry/tanpa mandat/ADMIN/READER, ikatan digest & paket DRAFT, rujukan realisasi+sengketa nyata dan fiktif, siklus lengkap + tidak dibuka kembali, retry/konflik/revisi usang, mandat dicabut + serah terima dua arah, koreksi catatan, owner-only setelah serah terima, berkas rusak, status-only untuk anggota lain, isolasi dua lembaga, ringkasan publik, durabilitas setelah restart.
+- Smoke browser (Chromium, Playwright, viewport 390×844, sesi wallet sintetis nyata, submit via keyboard): auditor mencatat temuan → amil menanggapi; respons pertama sengaja diputus setelah server mencatat, UI menampilkan hasil belum diketahui, kirim ulang menghasilkan tepat 2 event → auditor menutup → READER melihat status “Ditutup auditor” untuk versi 1 tanpa uraian. Tanpa error halaman.
+  `REGISTRY_BROWSER_MODULE=…/playwright-core@1.63.0@@@1/index.mjs REGISTRY_BROWSER_EXECUTABLE=/usr/bin/chromium bun test test/report_audit_findings_api.test.ts`
+- `backend`: `bun test` penuh — **957 pass, 22 skip, 0 fail** (74 file; smoke browser dilewati tanpa variabel Playwright dan dijalankan terpisah seperti di atas).
+- `frontend`: `bun test` — **204 pass, 0 fail**; `auditFindingClient.test.ts` 5 pass. `bun run build` sukses.
 
-- **Privasi Berkas Kertas Kerja & Integritas SHA-256 (AC23, AC25)**
-  - Berkas kertas kerja auditor (`is_owner_only = 1`) dilindungi secara ketat: akun amil tidak dapat mengunduh berkas ini (`403 Kertas kerja auditor privat hanya dapat diakses oleh pemeriksa`).
-  - Berkas lampiran umum dari amil (`is_owner_only = 0`) dapat diunduh oleh kedua belah pihak (amil dan auditor) untuk pemeriksaan.
-  - Seluruh berkas disimpan terenkripsi via `runtime.files` dan diverifikasi integritasnya menggunakan SHA-256 digest sebelum disajikan.
+## Catatan deployment
 
-- **Isolasi Multi-Penyewa (Tenant Isolation) & Ringkasan Publik (AC29, AC30)**
-  - Lembaga lain (misal Lembaga B terhadap temuan Lembaga A) tidak dapat melihat (`404`) maupun menanggapi (`404`/`403`) temuan audit milik lembaga lain.
-  - Endpoint ringkasan publik (`GET /api/public/reports/:packageId`) maupun penyimpanan `public_report_summaries` tidak pernah membocorkan judul temuan, deskripsi, catatan klarifikasi amil, identitas pemeriksa, maupun locator berkas privat.
-
-- **Antarmuka Pengguna (UI/UX)**
-  - `AuditFindingQueuePanel`: Panel antrean kerja dua tab (Antrean Tindak Lanjut Amil & Antrean Tinjauan Auditor) dengan lencana status, indikator jumlah antrean, pencarian/filter, dan akses detail modal.
-  - `AuditFindingDetailModal`: Modal komprehensif menampilkan metadata pengikatan versi, linimasa peristiwa append-only kronologis dengan avatar peran (Auditor vs Amil), daftar lampiran dengan unduhan langsung, form tanggapan amil, dan form keputusan tindak lanjut auditor.
-  - `CreateAuditFindingModal`: Form modal untuk auditor mencatat temuan baru lengkap dengan pemilih lingkup, tingkat keparahan, target pengajuan/realisasi/dokumen, serta unggahan kertas kerja privat.
-  - `PackageAuditFindingsSection`: Bagian terintegrasi pada `ReportPackageForm` saat melihat paket beku (`FROZEN`) untuk memeriksa temuan terkait paket tersebut.
-
-## Pengujian yang Dijalankan
-
-### 1. Backend Integration Tests (`backend/test/report_audit_findings_api.test.ts`)
-Total: **7 pass, 0 fail**, dengan 100 assertion `expect()`.
-- `rejects reader account attempting to record an auditor finding (AC11)`: Verifikasi penolakan keanggotaan READER.
-- `validates finding inputs and missing fields`: Validasi masukan judul, deskripsi, lingkup, dan tingkat keparahan yang sah.
-- `creates auditor finding bound to exact report version and package identity`: Pencatatan temuan terikat digest dan versi laporan.
-- `completes full lifecycle: finding -> amil response -> auditor follow-up -> closure (AC21, AC28)`: Verifikasi alur lengkap siklus temuan, penolakan amil tanpa mandat, penolakan amil yang mencoba menutup sendiri temuan (403), tindak lanjut klarifikasi, hingga penutupan resmi oleh auditor.
-- `enforces tenant isolation: Lembaga B cannot view or mutate findings of Lembaga A (AC11, AC29)`: Verifikasi pencegahan kebocoran lintas lembaga (404).
-- `preserves owner-only working paper privacy while permitting examination downloads (AC23)`: Verifikasi perlindungan berkas kertas kerja privat (403 bagi amil) dan ketersediaan berkas klarifikasi timbal balik.
-- `preserves public summary isolation: public endpoints never leak audit findings or private locators (AC30)`: Verifikasi isolasi ringkasan publik dan proteksi autentikasi 401 bagi pemanggil anonim.
-
-### 2. Frontend Unit Tests (`frontend/src/features/workspace/auditFindingClient.test.ts`)
-Total: **6 pass, 0 fail**, dengan 24 assertion `expect()`.
-- Pengambilan antrean temuan (`fetchAuditQueues`).
-- Pengambilan temuan terikat paket (`fetchPackageAuditFindings`).
-- Pembuatan temuan baru (`createAuditFinding`).
-- Pengiriman tanggapan amil (`submitAmilFindingResponse`).
-- Pengiriman keputusan tindak lanjut auditor (`submitAuditorFindingFollowup`).
-- Pengunduhan biner berkas lampiran (`downloadAuditAttachment`).
-
-### 3. Frontend Full Build & Suite
-- `bun test` di `frontend/`: **205 pass, 0 fail** (22 file tes).
-- `bun run build` di `frontend/`: Sukses build Vite + SSR + Nitro tanpa error (kode keluar 0).
+Tabel lama `report_audit_findings`, `report_audit_finding_events`, `report_audit_finding_attachments` dari `20a72c2` tidak lagi dibuat atau dibaca. Basis data yang sempat menjalankan versi itu masih menyimpannya; tabel tersebut dapat dihapus manual setelah dipastikan kosong.

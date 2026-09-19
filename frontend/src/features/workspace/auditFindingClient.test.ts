@@ -2,146 +2,85 @@ import { describe, expect, it } from "bun:test";
 import {
   createAuditFinding,
   downloadAuditAttachment,
-  fetchAuditFindingDetail,
   fetchAuditQueues,
   fetchPackageAuditFindings,
+  outcomeUnknown,
   submitAmilFindingResponse,
   submitAuditorFindingFollowup,
+  submitAuditorHandover,
+  submitNoteCorrection,
 } from "./auditFindingClient";
-import type { PrivateRequests } from "./privateRequests";
-import type { AuditFinding, AuditFindingQueues } from "../../../../shared/audit-findings";
+import { WorkspaceRequestError, type PrivateRequests } from "./privateRequests";
 
-function mockRequests(calls: { path: string; init?: RequestInit }[]): PrivateRequests {
-  return {
+function recording() {
+  const calls: { path: string; init?: RequestInit }[] = [];
+  const requests: PrivateRequests = {
     contextId: "ctx-test-1",
     assertCurrent: () => {},
     async json<T = any>(path: string, init?: RequestInit): Promise<T> {
       calls.push({ path, init });
-      if (path === "/api/evidence/audit-findings/queues") {
-        return {
-          success: true,
-          queues: {
-            amilActionQueue: [],
-            auditorReviewQueue: [],
-          } as AuditFindingQueues,
-        } as T;
-      }
-      if (path.includes("/findings") || path.includes("/responses") || path.includes("/follow-ups") || path.startsWith("/api/evidence/audit-findings/")) {
-        const dummyFinding: AuditFinding = {
-          id: "af_123",
-          institutionId: "lpz-sinar",
-          preparationId: "prep_1",
-          packageId: "pkg_1",
-          packageDigest: "0x1111",
-          reportId: "REP-2026",
-          version: "1",
-          auditorAccount: "0xa1",
-          auditorOfficerId: "off_1",
-          auditorName: "Auditor Test",
-          mandateRef: "SK-AUDIT",
-          scope: "SUMBER_DATA",
-          severity: "TEMUAN_MATERIAL",
-          title: "Temuan Uji",
-          description: "Deskripsi temuan uji",
-          targetProposalId: null,
-          targetProposalVersion: null,
-          targetRealizationId: null,
-          targetDocumentId: null,
-          status: "OPEN",
-          createdAt: 1800000000,
-          updatedAt: 1800000000,
-          events: [],
-        };
-        if (path.includes("/findings") && init?.method !== "POST") {
-          return { success: true, findings: [dummyFinding] } as T;
-        }
-        return { success: true, finding: dummyFinding } as T;
-      }
-      return { success: true } as T;
+      if (path.endsWith("/queues")) return { success: true, queues: { viewer: "AMIL", amilActionQueue: [], auditorReviewQueue: [] } } as T;
+      if (path.endsWith("/findings") && !init?.method) return { success: true, viewer: "STATUS_ONLY", findings: [{ id: "af_1", detail: "STATUS_ONLY" }] } as T;
+      return { success: true, finding: { id: "af_1" } } as T;
     },
     async blob(path: string, init?: RequestInit): Promise<Blob> {
       calls.push({ path, init });
-      return new Blob(["konten kertas kerja"]);
+      return new Blob(["isi"]);
     },
   };
+  const body = (index: number) => JSON.parse(calls[index]!.init!.body as string);
+  return { calls, requests, body };
 }
 
-describe("Audit Finding Client (Issue #99, Spec #86 & #100)", () => {
-  it("fetches audit queues with exact API endpoint", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const queues = await fetchAuditQueues(requests);
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/audit-findings/queues");
-    expect(queues.amilActionQueue).toEqual([]);
-    expect(queues.auditorReviewQueue).toEqual([]);
+describe("auditFindingClient (Issue #99)", () => {
+  it("reads queues and package findings with the viewer the server decided", async () => {
+    const { calls, requests } = recording();
+    expect((await fetchAuditQueues(requests)).viewer).toBe("AMIL");
+    const listed = await fetchPackageAuditFindings(requests, "prep 1", "pkg/1");
+    expect(listed.viewer).toBe("STATUS_ONLY");
+    expect(calls.map(c => c.path)).toEqual([
+      "/api/evidence/audit-findings/queues",
+      "/api/evidence/prep%201/reports/pkg%2F1/findings",
+    ]);
   });
 
-  it("fetches findings bound to a specific package", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const findings = await fetchPackageAuditFindings(requests, "prep_1", "pkg_1");
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/prep_1/reports/pkg_1/findings");
-    expect(findings.length).toBe(1);
-    expect(findings[0].id).toBe("af_123");
-  });
-
-  it("creates finding with scope, severity, and targets", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const finding = await createAuditFinding(requests, "prep_1", "pkg_1", {
-      scope: "REALISASI",
-      severity: "TEMUAN_MATERIAL",
-      title: "Selisih Penyaluran",
-      description: "Terdapat perbedaan bukti transfer",
-      targetProposalId: "prop_99",
+  it("sends the reviewed digest and operation id with a new finding", async () => {
+    const { calls, requests, body } = recording();
+    await createAuditFinding(requests, "prep_1", "pkg_1", {
+      operationId: "op-1", packageDigest: `0x${"ab".repeat(32)}`, scope: "REALISASI", severity: "TEMUAN_MATERIAL",
+      title: "Selisih", description: "Uraian",
+      targets: { proposalId: "prop_1", proposalVersion: 1, realizationId: null, documentId: null, disputeId: "d_1" },
+      workingPapers: [], sharedFiles: [],
     });
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/prep_1/reports/pkg_1/findings");
-    expect(calls[0].init?.method).toBe("POST");
-    expect(JSON.parse(calls[0].init?.body as string).title).toBe("Selisih Penyaluran");
-    expect(finding.id).toBe("af_123");
+    expect(calls[0]).toMatchObject({ path: "/api/evidence/prep_1/reports/pkg_1/findings", init: { method: "POST" } });
+    expect(body(0)).toMatchObject({ operationId: "op-1", packageDigest: `0x${"ab".repeat(32)}`, targets: { disputeId: "d_1" } });
   });
 
-  it("submits amil explanation and attachments", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const finding = await submitAmilFindingResponse(requests, "af_123", {
-      note: "Sudah dikonfirmasi dengan bank",
-      attachments: [{ fileName: "bukti.txt", mimeType: "text/plain", contentBase64: "YnVrdGk=" }],
-    });
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/audit-findings/af_123/responses");
-    expect(calls[0].init?.method).toBe("POST");
-    expect(finding.id).toBe("af_123");
+  it("carries the revision last read on every change to a finding", async () => {
+    const { calls, requests, body } = recording();
+    await submitAmilFindingResponse(requests, "af_1", { operationId: "a", expectedRevision: 2, note: "n", attachments: [] });
+    await submitAuditorFindingFollowup(requests, "af_1", { operationId: "b", expectedRevision: 3, action: "SELESAI_DITUTUP", note: "n", workingPapers: [], sharedFiles: [] });
+    await submitNoteCorrection(requests, "af_1", { operationId: "c", expectedRevision: 4, eventId: "afe_1", note: "n" });
+    await submitAuditorHandover(requests, "af_1", { operationId: "d", expectedRevision: 5, assignmentRef: "SP-1", note: "n", toAuditor: null });
+    expect(calls.map(c => c.path)).toEqual([
+      "/api/evidence/audit-findings/af_1/responses",
+      "/api/evidence/audit-findings/af_1/follow-ups",
+      "/api/evidence/audit-findings/af_1/corrections",
+      "/api/evidence/audit-findings/af_1/handover",
+    ]);
+    expect([0, 1, 2, 3].map(i => body(i).expectedRevision)).toEqual([2, 3, 4, 5]);
   });
 
-  it("submits auditor follow-up and closure", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const finding = await submitAuditorFindingFollowup(requests, "af_123", {
-      action: "SELESAI_DITUTUP",
-      note: "Klarifikasi bank diterima dan diverifikasi cocok",
-    });
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/audit-findings/af_123/follow-ups");
-    expect(calls[0].init?.method).toBe("POST");
-    expect(finding.id).toBe("af_123");
+  it("downloads an attachment as bytes", async () => {
+    const { calls, requests } = recording();
+    expect(await (await downloadAuditAttachment(requests, "af_1", "afa_2")).text()).toBe("isi");
+    expect(calls[0]!.path).toBe("/api/evidence/audit-findings/af_1/attachments/afa_2");
   });
 
-  it("downloads private audit attachment via binary blob path", async () => {
-    const calls: any[] = [];
-    const requests = mockRequests(calls);
-    const blob = await downloadAuditAttachment(requests, "af_123", "att_456");
-
-    expect(calls.length).toBe(1);
-    expect(calls[0].path).toBe("/api/evidence/audit-findings/af_123/attachments/att_456");
-    expect(await blob.text()).toBe("konten kertas kerja");
+  it("treats only an explained refusal as not recorded", () => {
+    expect(outcomeUnknown(new WorkspaceRequestError("Ditolak", null, 403))).toBe(false);
+    expect(outcomeUnknown(new WorkspaceRequestError("Konflik", null, 409))).toBe(false);
+    expect(outcomeUnknown(new WorkspaceRequestError("Server", null, 500))).toBe(true);
+    expect(outcomeUnknown(new TypeError("Failed to fetch"))).toBe(true);
   });
 });
