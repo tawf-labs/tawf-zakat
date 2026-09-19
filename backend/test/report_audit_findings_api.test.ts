@@ -8,7 +8,7 @@
  * fixture rows are operational records a finding can point at.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
@@ -355,9 +355,13 @@ describe("Issue #99: temuan auditor, tanggapan amil dan tindak lanjut", () => {
     // Closed means closed: no response, no reopening follow-up, no handover.
     expect((await post(findingUrl(finding.id, "/responses"), { operationId: nextOp(), expectedRevision: 5, note: "Terlambat" }, tokens.amil)).status).toBe(409);
     expect((await post(findingUrl(finding.id, "/follow-ups"), { operationId: nextOp(), expectedRevision: 5, action: "MINTA_KLARIFIKASI_LANJUTAN", note: "Buka lagi" }, tokens.auditor)).status).toBe(409);
-    expect((await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 5, assignmentRef: "SP-2", note: "x", toAuditor: auditorB.address }, tokens.auditor)).status).toBe(409);
+    expect((await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 5, note: "x", toAuditor: auditorB.address }, tokens.auditor)).status).toBe(409);
+    // Nor is a note corrected once the finding is closed; the record is final.
+    const lateCorrection = await post(findingUrl(finding.id, "/corrections"), { operationId: nextOp(), expectedRevision: 5, eventId: body.events[3].id, note: "Diubah setelah ditutup" }, tokens.amil);
+    expect(lateCorrection.status).toBe(409);
 
-    // The log is append-only in the database, not only in the API.
+    // The log is append-only in the database, not only in the API. The stored status only
+    // records what the projection said; the projection reads the kinds of event.
     const rows: any = await database.handle().execute(sql`SELECT seq, resulting_status FROM audit_finding_events WHERE finding_id = ${finding.id} ORDER BY seq`);
     expect((rows.rows ?? rows).map((r: any) => r.resulting_status)).toEqual(["OPEN", "DITANGGAPI", "MENUNGGU_KOREKSI_LAPORAN", "DITANGGAPI", "DITUTUP_AUDITOR"]);
     expect(await database.columnsOf("audit_findings")).not.toContain("status");
@@ -390,12 +394,43 @@ describe("Issue #99: temuan auditor, tanggapan amil dan tindak lanjut", () => {
     expect((await stale.json()).error).toContain("telah berubah");
   });
 
+  it("replays a committed write after the writer's mandate lapsed, and leaves no file behind a refused write", async () => {
+    const finding = await created();
+    await post(findingUrl(finding.id, "/responses"), { operationId: nextOp(), expectedRevision: 1, note: "Tanggapan" }, tokens.amil);
+    const followup = { operationId: "followup-once", expectedRevision: 2, action: "MINTA_KLARIFIKASI_LANJUTAN", note: "Lampirkan rekening koran." };
+    expect((await post(findingUrl(finding.id, "/follow-ups"), followup, tokens.auditor)).status).toBe(200);
+
+    // The response was lost and the mandate ended before the retry: the retry still learns what was recorded.
+    await setAuditor(SINAR, auditor.address, false, "Penugasan berakhir");
+    const retried = await post(findingUrl(finding.id, "/follow-ups"), followup, tokens.auditor);
+    expect(retried.status).toBe(200);
+    expect((await retried.json()).finding).toMatchObject({ revision: 3, detail: "STATUS_ONLY" });
+    // A new write under the lapsed mandate is still refused.
+    expect((await post(findingUrl(finding.id, "/follow-ups"), { ...followup, operationId: nextOp(), expectedRevision: 3 }, tokens.auditor)).status).toBe(403);
+
+    const storedFiles = async () => (await readdir(fileDirectory, { recursive: true })).filter(name => String(name).endsWith(".bin")).length;
+    const before = await storedFiles();
+    const stale = await post(findingUrl(finding.id, "/responses"), {
+      operationId: nextOp(), expectedRevision: 1, note: "Revisi usang",
+      attachments: [{ fileName: "rekening.txt", mimeType: "text/plain", contentBase64: b64("rekening koran") }],
+    }, tokens.amil);
+    expect(stale.status).toBe(409);
+    expect(await storedFiles()).toBe(before);
+  });
+
+  it("lists a version's findings only under the preparation that version belongs to", async () => {
+    const finding = await created();
+    expect((await (await get(findingsUrl(), tokens.amil)).json()).findings.map((f: any) => f.id)).toEqual([finding.id]);
+    const elsewhere = await get(`${EVIDENCE}/prep-lain/reports/pkg-v1/findings`, tokens.amil);
+    expect((await elsewhere.json()).findings ?? []).toEqual([]);
+  });
+
   it("stops a revoked auditor and moves the finding only through a recorded handover", async () => {
     const finding = await created();
     await post(findingUrl(finding.id, "/responses"), { operationId: nextOp(), expectedRevision: 1, note: "Tanggapan" }, tokens.amil);
 
     // B cannot take over while A still holds a mandate.
-    const early = await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, assignmentRef: "SP-B/2026", note: "Ambil alih" }, tokens.auditorB);
+    const early = await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, note: "Ambil alih" }, tokens.auditorB);
     expect(early.status).toBe(403);
 
     await setAuditor(SINAR, auditor.address, false, "Penugasan berakhir");
@@ -404,19 +439,23 @@ describe("Issue #99: temuan auditor, tanggapan amil dan tindak lanjut", () => {
     // Without a mandate A reads only the status.
     expect((await (await get(findingUrl(finding.id), tokens.auditor)).json()).finding.detail).toBe("STATUS_ONLY");
 
-    expect((await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, assignmentRef: "", note: "x" }, tokens.auditorB)).status).toBe(400);
-    const taken = await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, assignmentRef: "SP-B/2026", note: "Melanjutkan pemeriksaan A." }, tokens.auditorB);
+    // The assignment basis is what the registry recorded, not a reference typed into the request.
+    expect((await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, assignmentRef: "SP-karangan", note: "x" }, tokens.auditorB)).status).toBe(400);
+    const taken = await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 2, note: "Melanjutkan pemeriksaan A." }, tokens.auditorB);
     expect(taken.status).toBe(200);
     let body = (await taken.json()).finding;
     expect(body).toMatchObject({ assignedAuditor: auditorB.address.toLowerCase(), status: "DITANGGAPI", revision: 3 });
-    expect(body.events[2]).toMatchObject({ eventType: "AUDITOR_HANDOVER", assignmentRef: "SP-B/2026", mandateRef: "Surat penugasan audit 2026/02" });
+    expect(body.events[2]).toMatchObject({ eventType: "AUDITOR_HANDOVER", mandateRef: "Surat penugasan audit 2026/02" });
+    expect(body.events[2].assignmentRef).toMatch(/^Surat penugasan audit 2026\/02 \(epoch \d+\)$/);
     expect(body.permissions.followUp).toBe(true);
 
     // A regains a mandate but is no longer assigned; B hands it back explicitly.
     await setAuditor(SINAR, auditor.address, true, "Surat penugasan audit 2026/03");
     expect((await post(findingUrl(finding.id, "/follow-ups"), { operationId: nextOp(), expectedRevision: 3, action: "SELESAI_DITUTUP", note: "x" }, tokens.auditor)).status).toBe(403);
-    body = (await (await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 3, assignmentRef: "SP-A/2026-03", note: "Dikembalikan", toAuditor: auditor.address }, tokens.auditorB)).json()).finding;
+    body = (await (await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 3, note: "Dikembalikan", toAuditor: auditor.address }, tokens.auditorB)).json()).finding;
     expect(body.assignedAuditor).toBe(auditor.address.toLowerCase());
+    // Handing to someone else records the recipient's mandate, not the giver's.
+    expect(body.events[3].assignmentRef).toMatch(/^Surat penugasan audit 2026\/03 \(epoch \d+\)$/);
     expect((await post(findingUrl(finding.id, "/follow-ups"), { operationId: nextOp(), expectedRevision: 4, action: "SELESAI_DITUTUP", note: "Selesai" }, tokens.auditor)).status).toBe(200);
   });
 
@@ -463,7 +502,7 @@ describe("Issue #99: temuan auditor, tanggapan amil dan tindak lanjut", () => {
 
     // After a handover the new auditor still cannot open the previous auditor's owner-only paper.
     await setAuditor(SINAR, auditor.address, false, "Selesai");
-    await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 1, assignmentRef: "SP-B", note: "Lanjut" }, tokens.auditorB);
+    await post(findingUrl(finding.id, "/handover"), { operationId: nextOp(), expectedRevision: 1, note: "Lanjut" }, tokens.auditorB);
     expect((await get(url(ownerOnly.id), tokens.auditorB)).status).toBe(403);
     expect((await get(url(shared.id), tokens.auditorB)).status).toBe(200);
 

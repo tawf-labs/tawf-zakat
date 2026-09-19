@@ -18,14 +18,20 @@
  */
 
 import { sql, type SQL } from "drizzle-orm";
-import type {
-  AuditAttachmentAccess,
-  AuditFindingActorRole,
-  AuditFindingEventType,
-  AuditFindingScope,
-  AuditFindingSeverity,
-  AuditFindingStatus,
-  AuditorFollowupAction,
+import {
+  AUDIT_ATTACHMENT_ACCESS,
+  AUDIT_FINDING_EVENT_TYPES,
+  AUDIT_FINDING_SCOPES,
+  AUDIT_FINDING_SEVERITIES,
+  AUDIT_FINDING_STATUSES,
+  type AuditAttachmentAccess,
+  type AuditFindingActorRole,
+  type AuditFindingEventType,
+  type AuditFindingScope,
+  type AuditFindingSeverity,
+  type AuditFindingStatus,
+  type AuditFindingTargets,
+  type AuditorFollowupAction,
 } from "../../shared/audit-findings";
 
 type Executor = { execute: (query: SQL) => Promise<unknown> };
@@ -105,6 +111,10 @@ export type NewAuditFile = Omit<StoredAuditFile, "findingId" | "eventId">;
 
 export type AuditOperation = { account: string; id: string; requestHash: string };
 
+const ACTOR_ROLES: readonly AuditFindingActorRole[] = ["AUDITOR", "AMIL"];
+/** A CHECK list written from the shared constants, so a new value is added in one place. */
+const known = (values: readonly string[]) => values.map(value => `'${value}'`).join(", ");
+
 export const AUDIT_FINDING_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS audit_findings (
      id TEXT PRIMARY KEY,
@@ -126,9 +136,9 @@ export const AUDIT_FINDING_SCHEMA_STATEMENTS = [
      target_dispute_id TEXT,
      created_at BIGINT NOT NULL,
      CONSTRAINT audit_findings_scope_known
-       CHECK (scope IN ('SUMBER_DATA', 'REALISASI', 'DOKUMEN_BUKTI', 'PENERIMA', 'KEPATUHAN_SYARIAH', 'LAINNYA')),
+       CHECK (scope IN (${known(AUDIT_FINDING_SCOPES)})),
      CONSTRAINT audit_findings_severity_known
-       CHECK (severity IN ('INFO', 'CATATAN', 'TEMUAN_RINGAN', 'TEMUAN_MATERIAL'))
+       CHECK (severity IN (${known(AUDIT_FINDING_SEVERITIES)}))
    );`,
   `CREATE INDEX IF NOT EXISTS audit_findings_by_package
      ON audit_findings (institution_id, package_id, created_at DESC);`,
@@ -151,11 +161,9 @@ export const AUDIT_FINDING_SCHEMA_STATEMENTS = [
      resulting_status TEXT NOT NULL,
      created_at BIGINT NOT NULL,
      CONSTRAINT audit_finding_events_one_per_seq UNIQUE (finding_id, seq),
-     CONSTRAINT audit_finding_events_type_known CHECK (event_type IN
-       ('FINDING_CREATED', 'AMIL_RESPONSE', 'AUDITOR_FOLLOWUP', 'AUDITOR_CLOSED', 'NOTE_CORRECTION', 'AUDITOR_HANDOVER')),
-     CONSTRAINT audit_finding_events_role_known CHECK (actor_role IN ('AUDITOR', 'AMIL')),
-     CONSTRAINT audit_finding_events_status_known CHECK (resulting_status IN
-       ('OPEN', 'DITANGGAPI', 'DITINDAKLANJUTI', 'MENUNGGU_KOREKSI_LAPORAN', 'DITUTUP_AUDITOR'))
+     CONSTRAINT audit_finding_events_type_known CHECK (event_type IN (${known(AUDIT_FINDING_EVENT_TYPES)})),
+     CONSTRAINT audit_finding_events_role_known CHECK (actor_role IN (${known(ACTOR_ROLES)})),
+     CONSTRAINT audit_finding_events_status_known CHECK (resulting_status IN (${known(AUDIT_FINDING_STATUSES)}))
    );`,
   `CREATE TABLE IF NOT EXISTS audit_finding_files (
      id TEXT PRIMARY KEY,
@@ -171,8 +179,8 @@ export const AUDIT_FINDING_SCHEMA_STATEMENTS = [
      content_sha256 TEXT NOT NULL,
      storage_ref TEXT NOT NULL,
      created_at BIGINT NOT NULL,
-     CONSTRAINT audit_finding_files_access_known CHECK (access IN ('OWNER_ONLY', 'EXAMINATION')),
-     CONSTRAINT audit_finding_files_role_known CHECK (uploader_role IN ('AUDITOR', 'AMIL'))
+     CONSTRAINT audit_finding_files_access_known CHECK (access IN (${known(AUDIT_ATTACHMENT_ACCESS)})),
+     CONSTRAINT audit_finding_files_role_known CHECK (uploader_role IN (${known(ACTOR_ROLES)}))
    );`,
   `CREATE INDEX IF NOT EXISTS audit_finding_files_by_finding ON audit_finding_files (institution_id, finding_id);`,
   `CREATE TABLE IF NOT EXISTS audit_finding_operations (
@@ -393,9 +401,10 @@ export function createAuditFindingStore(db: AuditFindingDatabase) {
 
     read: (institutionId: string, findingId: string) => readOne(db, institutionId, findingId, false),
 
-    async listByPackage(institutionId: string, packageId: string) {
+    async listByPackage(institutionId: string, preparationId: string, packageId: string) {
       const heads = rowsOf(await db.execute(sql`
-        SELECT * FROM audit_findings WHERE institution_id = ${institutionId} AND package_id = ${packageId}
+        SELECT * FROM audit_findings
+        WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} AND package_id = ${packageId}
         ORDER BY created_at DESC, id DESC
       `)).map(headFrom);
       return readMany(db, institutionId, heads);
@@ -426,10 +435,7 @@ export function createAuditFindingStore(db: AuditFindingDatabase) {
     },
 
     /** Does each referenced operational record exist in this institution? Returns the missing ones. */
-    async missingTargets(institutionId: string, targets: {
-      proposalId: string | null; proposalVersion: number | null; realizationId: string | null;
-      documentId: string | null; disputeId: string | null;
-    }): Promise<string[]> {
+    async missingTargets(institutionId: string, targets: AuditFindingTargets): Promise<string[]> {
       const missing: string[] = [];
       const exists = async (query: SQL) => rowsOf(await db.execute(query)).length > 0;
       if (targets.proposalId && !(await exists(targets.proposalVersion == null

@@ -242,6 +242,18 @@ _Avoid_: Bukti lolos, untuk keberadaan catatan temuan.
 Penjelasan atau bukti tambahan yang disampaikan amil terhadap temuan auditor, dengan riwayat yang dapat ditelusuri dan tindak lanjut yang ditetapkan auditor.
 _Avoid_: Perubahan otomatis atas transaksi, snapshot, atau atestasi yang telah tercatat.
 
+**Tindak lanjut temuan**:
+Keputusan auditor yang ditugaskan atas satu [[Temuan pemeriksaan]] setelah membaca tanggapannya: minta klarifikasi lanjutan, tunggu versi koreksi laporan, atau tutup temuan. Hanya auditor tersebut yang menetapkannya; amil tidak menutup temuan.
+_Avoid_: [[Tindak lanjut atestasi]], yang merupakan catatan onchain auditor pada versi laporan; tindak lanjut temuan tidak menerbitkan atestasi.
+
+**Kertas kerja auditor**:
+Lampiran auditor pada temuan yang hanya dapat dibuka oleh pengunggahnya, termasuk setelah temuan diserahterimakan atau ditutup. Pihak lain hanya melihat jumlahnya.
+_Avoid_: Lampiran pemeriksaan, yang dibagikan kepada amil yang menangani pemeriksaan dan auditor yang ditugaskan.
+
+**Pergantian auditor temuan**:
+Perpindahan penugasan satu temuan ke auditor lain, dicatat sebagai peristiwa dalam riwayat temuan. Dasar penugasannya adalah [[Mandat auditor]] penerima sebagaimana tercatat pada registry, bukan nomor surat yang diketik.
+_Avoid_: "Serah terima", yang di glosarium ini berarti penyerahan bantuan kepada penerima (BAST).
+
 **Snapshot sumber**:
 Salinan tetap dari data dan bukti yang digunakan untuk menyusun atau memeriksa suatu laporan.
 _Avoid_: Data terbaru, untuk sumber yang sudah terikat pada laporan tertentu.

@@ -9,7 +9,7 @@
  * from the log; nothing is overwritten. An amil answers and attaches evidence
  * but cannot close a finding. Only the assigned auditor, still holding a
  * registry mandate, sets the follow-up, and a change of auditor is itself a
- * recorded event with its assignment reference.
+ * recorded event carrying the incoming auditor's registry mandate.
  */
 
 export const AUDIT_FINDING_SCOPES = [
@@ -71,7 +71,7 @@ export const AUDITOR_FOLLOWUP_ACTION_LABELS: Record<AuditorFollowupAction, strin
 };
 
 /** The status each auditor follow-up leaves the finding in. */
-export const FOLLOWUP_RESULT: Record<AuditorFollowupAction, AuditFindingStatus> = {
+export const STATUS_AFTER_FOLLOWUP: Record<AuditorFollowupAction, AuditFindingStatus> = {
   MINTA_KLARIFIKASI_LANJUTAN: "DITINDAKLANJUTI",
   BUTUH_KOREKSI_LAPORAN: "MENUNGGU_KOREKSI_LAPORAN",
   SELESAI_DITUTUP: "DITUTUP_AUDITOR",
@@ -95,6 +95,9 @@ export type AuditFindingActorRole = "AUDITOR" | "AMIL";
  * with the parties of this examination: the amil holding the examination mandate and
  * the assigned auditor.
  */
+/** Largest single attachment a finding event accepts. */
+export const AUDIT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+
 export const AUDIT_ATTACHMENT_ACCESS = ["OWNER_ONLY", "EXAMINATION"] as const;
 export type AuditAttachmentAccess = (typeof AUDIT_ATTACHMENT_ACCESS)[number];
 
@@ -129,6 +132,7 @@ export type AuditFindingEvent = {
   /** Set on FINDING_CREATED and AUDITOR_HANDOVER: who is assigned from here on. */
   assignedAuditor: string | null;
   mandateRef: string | null;
+  /** Set on AUDITOR_HANDOVER: the incoming auditor's mandate as the registry recorded it. */
   assignmentRef: string | null;
   followupAction: AuditorFollowupAction | null;
   resultingStatus: AuditFindingStatus;
@@ -181,6 +185,34 @@ export type AuditFindingTargets = {
   documentId: string | null;
   disputeId: string | null;
 };
+
+export type CreateAuditFindingInput = {
+  operationId: string;
+  /** The digest of the version the auditor reviewed; a different stored version is refused. */
+  packageDigest: string;
+  scope: AuditFindingScope;
+  severity: AuditFindingSeverity;
+  title: string;
+  description: string;
+  targets: AuditFindingTargets;
+  /** Owner-only: readable by the uploading auditor alone. */
+  workingPapers: AuditFindingFileInput[];
+  /** Shared with the amil handling this examination. */
+  sharedFiles: AuditFindingFileInput[];
+};
+
+/** Every write after creation names the revision it read, so a stale view is refused. */
+type AuditFindingMutation = { operationId: string; expectedRevision: number };
+export type AmilFindingResponseInput = AuditFindingMutation & { note: string; attachments: AuditFindingFileInput[] };
+export type AuditorFindingFollowupInput = AuditFindingMutation & {
+  action: AuditorFollowupAction;
+  note: string;
+  workingPapers: AuditFindingFileInput[];
+  sharedFiles: AuditFindingFileInput[];
+};
+export type NoteCorrectionInput = AuditFindingMutation & { eventId: string; note: string };
+/** The assignment basis is not typed in: it is the incoming auditor's mandate as recorded on the registry. */
+export type AuditorHandoverInput = AuditFindingMutation & { note: string; toAuditor: string | null };
 
 export type AuditFinding = AuditFindingStatusView & {
   detail: "FULL";

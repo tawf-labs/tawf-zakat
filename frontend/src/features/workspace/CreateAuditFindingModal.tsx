@@ -93,7 +93,7 @@ export function CreateAuditFindingModal({ requests, preparationId, packageId, pa
           </div>
         </fieldset>
 
-        <FileField label="Kertas kerja auditor (privat)" hint="Hanya dapat dibuka oleh Anda sebagai pengunggah, termasuk setelah serah terima. Maks. 10 MB per berkas."
+        <FileField label="Kertas kerja auditor (privat)" hint="Hanya dapat dibuka oleh Anda sebagai pengunggah, termasuk setelah pergantian auditor. Maks. 10 MB per berkas."
           files={workingPapers} onChange={setWorkingPapers} disabled={write.pending} />
         <FileField label="Berkas untuk amil (dibagikan dalam pemeriksaan)" hint="Dapat dibuka amil yang menangani pemeriksaan dan auditor yang ditugaskan."
           files={sharedFiles} onChange={setSharedFiles} disabled={write.pending} />

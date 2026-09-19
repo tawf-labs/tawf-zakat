@@ -4,9 +4,7 @@ import { Button } from "../../components/ui/Button";
 import { fileToBase64, useOperationIds } from "../contributions/contributionUi";
 import { AccessContextChanged } from "./privateRequests";
 import { outcomeUnknown } from "./auditFindingClient";
-import type { AuditFindingFileInput } from "../../../../shared/audit-findings";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+import { AUDIT_ATTACHMENT_MAX_BYTES, type AuditFindingFileInput } from "../../../../shared/audit-findings";
 
 /** A dialog that takes focus when it opens, closes on Escape and returns focus when it closes. */
 export function AuditDialog({ title, onClose, children, footer, wide }: {
@@ -53,7 +51,7 @@ export function FileField({ label, hint, files, onChange, disabled }: {
   const [error, setError] = useState("");
   async function add(file: File | undefined) {
     if (!file) return;
-    if (file.size > MAX_FILE_BYTES) { setError(`Berkas ${file.name} melebihi 10 MB.`); return; }
+    if (file.size > AUDIT_ATTACHMENT_MAX_BYTES) { setError(`Berkas ${file.name} melebihi 10 MB.`); return; }
     try {
       onChange([...files, { fileName: file.name, mimeType: file.type || "application/octet-stream", contentBase64: await fileToBase64(file), sizeBytes: file.size }]);
       setError("");

@@ -19,7 +19,7 @@ async function handle(c: Context) {
     const packageId = c.req.param("packageId");
     if (packageId) {
       const preparationId = c.req.param("preparationId")!;
-      if (c.req.method === "GET") return c.json({ success: true, ...await findings.listFindingsForPackage(session, packageId) });
+      if (c.req.method === "GET") return c.json({ success: true, ...await findings.listFindingsForPackage(session, preparationId, packageId) });
       if (c.req.method === "POST") return c.json({ success: true, finding: await findings.createFinding(session, preparationId, packageId, await body()) }, 201);
       return c.notFound();
     }

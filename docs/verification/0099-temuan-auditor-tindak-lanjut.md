@@ -27,6 +27,23 @@ Catatan ini menggantikan verifikasi `20a72c2`. Code review atas commit itu menem
 - `backend`: `bun test` penuh — **957 pass, 22 skip, 0 fail** (74 file; smoke browser dilewati tanpa variabel Playwright dan dijalankan terpisah seperti di atas).
 - `frontend`: `bun test` — **204 pass, 0 fail**; `auditFindingClient.test.ts` 5 pass. `bun run build` sukses.
 
+## Tindak lanjut code review `8bd9402`
+
+- **Dasar pergantian auditor tervalidasi.** `assignmentRef` tidak lagi diketik pengguna (field ditolak 400). Server mencatat mandat auditor penerima dari registry beserta epoch-nya (`<mandat> (epoch N)`), baik saat dialihkan maupun diambil alih; mandat kosong ditolak 409.
+- **Status diproyeksikan dari jenis event.** `project()` menurunkan status dari `eventType`/`followupAction`; kolom `resulting_status` hanya rekaman hasil proyeksi yang sama.
+- **Replay sebelum kewenangan.** Retry operasi yang sudah tercatat mengembalikan hasilnya walau mandat penulis telah berakhir; penulisan baru tetap 403.
+- **Koreksi catatan pada temuan tertutup ditolak (409).**
+- **Daftar temuan per versi dibatasi `preparationId` pada URL.**
+- **Berkas dari penulisan yang gagal dihapus** (konflik revisi, temuan hilang), sehingga tidak ada blob terenkripsi yatim.
+- Kerapian: daftar CHECK SQL dibentuk dari konstanta `shared/`, tipe input klien dipindah ke `shared/audit-findings.ts`, batas lampiran `AUDIT_ATTACHMENT_MAX_BYTES` dipakai bersama, `FOLLOWUP_RESULT` → `STATUS_AFTER_FOLLOWUP`, istilah "serah terima" diganti "pergantian auditor" (glosarium `CONTEXT.md`).
+- Tidak diubah, karena sudah diputuskan di tempat lain:
+  - **Mandat auditor se-lembaga.** #76 meminta kewenangan auditor "untuk scope lembaga yang eksplisit" pada registry, dan `docs/design/report-attestation-v1.md` mencatat `setAuditor(institutionId, auditor, active, mandate)` tanpa lingkup per pemeriksaan. Sama dengan `report-attestation.ts`. Mandat per pemeriksaan memerlukan tiket dan perubahan registry tersendiri.
+  - **Pemegang mandat amil `HANDLE_REPORT_EXAMINATION` tidak dapat menjadi auditor.** Turunan dari ADR-0006 (auditor independen tanpa konflik kepentingan), ADR-0028 ("pemisahan auditor setelah kegiatan tetap berlaku") dan riset 0007 (pemisahan penyusun/pengesah/auditor sudah diputuskan).
+  - **Pengambilalihan setelah mandat auditor yang ditugaskan dicabut.** #86 mensyaratkan "mandat/penugasan yang tercatat", kini dipenuhi mandat registry penerima; #77 menetapkan "tindakan baru memakai kewenangan terkini sementara publikasi lama tetap dapat diperiksa".
+- Belum tercakup: uji integrasi tindak lanjut temuan hingga atestasi atau versi koreksi di EVM lokal. Hanya grant/revoke/re-grant registry yang berjalan di Anvil; atestasi tetap diuji di `auditor_attestation.test.ts` (#76). Sisa ini dibawa ke gerbang rilis #115.
+
+Pengujian ulang: `report_audit_findings_api.test.ts` **12 pass** dengan smoke browser; `bun test` backend penuh **959 pass, 22 skip, 0 fail**; frontend **204 pass**, `bun run build` sukses.
+
 ## Catatan deployment
 
 Tabel lama `report_audit_findings`, `report_audit_finding_events`, `report_audit_finding_attachments` dari `20a72c2` tidak lagi dibuat atau dibaca. Basis data yang sempat menjalankan versi itu masih menyimpannya; tabel tersebut dapat dihapus manual setelah dipastikan kosong.

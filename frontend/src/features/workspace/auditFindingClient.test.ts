@@ -61,7 +61,7 @@ describe("auditFindingClient (Issue #99)", () => {
     await submitAmilFindingResponse(requests, "af_1", { operationId: "a", expectedRevision: 2, note: "n", attachments: [] });
     await submitAuditorFindingFollowup(requests, "af_1", { operationId: "b", expectedRevision: 3, action: "SELESAI_DITUTUP", note: "n", workingPapers: [], sharedFiles: [] });
     await submitNoteCorrection(requests, "af_1", { operationId: "c", expectedRevision: 4, eventId: "afe_1", note: "n" });
-    await submitAuditorHandover(requests, "af_1", { operationId: "d", expectedRevision: 5, assignmentRef: "SP-1", note: "n", toAuditor: null });
+    await submitAuditorHandover(requests, "af_1", { operationId: "d", expectedRevision: 5, note: "n", toAuditor: null });
     expect(calls.map(c => c.path)).toEqual([
       "/api/evidence/audit-findings/af_1/responses",
       "/api/evidence/audit-findings/af_1/follow-ups",

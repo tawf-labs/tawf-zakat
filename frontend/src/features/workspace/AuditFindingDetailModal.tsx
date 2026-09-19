@@ -42,7 +42,7 @@ const EVENT_LABELS: Record<AuditFindingEvent["eventType"], string> = {
   AUDITOR_FOLLOWUP: "Tindak lanjut auditor",
   AUDITOR_CLOSED: "Ditutup auditor",
   NOTE_CORRECTION: "Koreksi catatan",
-  AUDITOR_HANDOVER: "Serah terima auditor",
+  AUDITOR_HANDOVER: "Pergantian auditor",
 };
 
 export function AuditFindingDetailModal({ findingId, requests, onClose, onUpdated, onStartCorrection }: Props) {
@@ -158,7 +158,7 @@ function FullFinding({ finding, requests, applied, reload, onStartCorrection }: 
               </div>
               {event.correctsEventId && <p className="mt-1 text-xs text-stone-600">Mengoreksi catatan #{finding.events.find(e => e.id === event.correctsEventId)?.seq}</p>}
               {event.eventType === "AUDITOR_HANDOVER" && (
-                <p className="mt-1 text-xs text-stone-700">Ditugaskan kepada <span className="font-mono">{short(event.assignedAuditor!)}</span> · dasar penugasan: {event.assignmentRef}</p>
+                <p className="mt-1 text-xs text-stone-700">Ditugaskan kepada <span className="font-mono">{short(event.assignedAuditor!)}</span> · dasar penugasan (mandat registry): {event.assignmentRef}</p>
               )}
               {event.followupAction && <p className="mt-1 text-xs text-stone-700">Keputusan: {AUDITOR_FOLLOWUP_ACTION_LABELS[event.followupAction]}</p>}
               <p className="mt-2 whitespace-pre-wrap">{event.note}</p>
@@ -285,35 +285,32 @@ function FollowupForm({ finding, requests, applied, reload }: FormProps) {
 
 function HandoverForm({ finding, requests, applied, reload, mode }: FormProps & { mode: "GIVE" | "TAKE" }) {
   const [toAuditor, setToAuditor] = useState("");
-  const [assignmentRef, setAssignmentRef] = useState("");
   const [note, setNote] = useState("");
   const write = useAuditWrite();
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    const input = { expectedRevision: finding.revision, assignmentRef: assignmentRef.trim(), note: note.trim(), toAuditor: mode === "GIVE" ? toAuditor.trim() : null };
+    const input = { expectedRevision: finding.revision, note: note.trim(), toAuditor: mode === "GIVE" ? toAuditor.trim() : null };
     const updated = await write.run(`handover:${finding.id}:${JSON.stringify(input)}`, operationId => submitAuditorHandover(requests, finding.id, { ...input, operationId }));
-    if (applied(updated, "Serah terima penugasan tercatat.")) { setToAuditor(""); setAssignmentRef(""); setNote(""); }
+    if (applied(updated, "Pergantian auditor tercatat.")) { setToAuditor(""); setNote(""); }
   }
   return (
     <details className="rounded-xl border border-stone-200 p-4">
-      <summary className="cursor-pointer text-sm font-semibold">{mode === "GIVE" ? "Serahkan ke auditor lain" : "Ambil alih penugasan"}</summary>
+      <summary className="cursor-pointer text-sm font-semibold">{mode === "GIVE" ? "Alihkan ke auditor lain" : "Ambil alih penugasan"}</summary>
       <form onSubmit={submit} className="mt-3 space-y-3">
         <p className="text-xs text-stone-600">{mode === "GIVE"
           ? "Penerima harus memegang mandat auditor aktif pada registry. Kertas kerja privat Anda tetap hanya untuk Anda."
-          : "Hanya dapat dilakukan bila mandat auditor yang ditugaskan sudah tidak aktif. Kertas kerja privat auditor sebelumnya tidak terbuka untuk Anda."}</p>
+          : "Hanya dapat dilakukan bila mandat auditor yang ditugaskan sudah tidak aktif. Kertas kerja privat auditor sebelumnya tidak terbuka untuk Anda."}
+          {" "}Dasar penugasan dicatat dari mandat auditor penerima pada registry.</p>
         {mode === "GIVE" && (
           <label className="block text-xs font-medium text-stone-700">Akun auditor penerima
             <input className={field} value={toAuditor} onChange={e => setToAuditor(e.target.value)} placeholder="0x…" required pattern="^0x[0-9a-fA-F]{40}$" disabled={write.pending} />
           </label>
         )}
-        <label className="block text-xs font-medium text-stone-700">Dasar penugasan (nomor surat)
-          <input className={field} value={assignmentRef} onChange={e => setAssignmentRef(e.target.value)} required maxLength={300} disabled={write.pending} />
-        </label>
-        <label className="block text-xs font-medium text-stone-700">Catatan serah terima
+        <label className="block text-xs font-medium text-stone-700">Catatan pergantian
           <textarea className={field} rows={2} value={note} onChange={e => setNote(e.target.value)} required maxLength={2000} disabled={write.pending} />
         </label>
         <WriteOutcome outcome={write.outcome} onReload={() => void reload()} />
-        <Button type="submit" variant="outline" disabled={write.pending || !assignmentRef.trim() || !note.trim()}>Catat serah terima</Button>
+        <Button type="submit" variant="outline" disabled={write.pending || !note.trim()}>Catat pergantian auditor</Button>
       </form>
     </details>
   );

@@ -1,43 +1,24 @@
 import { WorkspaceRequestError, type PrivateRequests } from "./privateRequests";
 import type {
+  AmilFindingResponseInput,
   AuditFinding,
-  AuditFindingFileInput,
   AuditFindingQueues,
-  AuditFindingScope,
-  AuditFindingSeverity,
-  AuditFindingTargets,
   AuditFindingView,
   AuditFindingViewerRole,
-  AuditorFollowupAction,
+  AuditorFindingFollowupInput,
+  AuditorHandoverInput,
+  CreateAuditFindingInput,
+  NoteCorrectionInput,
 } from "../../../../shared/audit-findings";
 
-export type { AuditFindingQueues };
-
-export type CreateAuditFindingInput = {
-  operationId: string;
-  /** The digest of the version the auditor reviewed; a different stored version is refused. */
-  packageDigest: string;
-  scope: AuditFindingScope;
-  severity: AuditFindingSeverity;
-  title: string;
-  description: string;
-  targets: AuditFindingTargets;
-  /** Owner-only: readable by the uploading auditor alone. */
-  workingPapers: AuditFindingFileInput[];
-  /** Shared with the amil handling this examination. */
-  sharedFiles: AuditFindingFileInput[];
+export type {
+  AmilFindingResponseInput,
+  AuditFindingQueues,
+  AuditorFindingFollowupInput,
+  AuditorHandoverInput,
+  CreateAuditFindingInput,
+  NoteCorrectionInput,
 };
-
-type Mutation = { operationId: string; expectedRevision: number };
-export type AmilFindingResponseInput = Mutation & { note: string; attachments: AuditFindingFileInput[] };
-export type AuditorFindingFollowupInput = Mutation & {
-  action: AuditorFollowupAction;
-  note: string;
-  workingPapers: AuditFindingFileInput[];
-  sharedFiles: AuditFindingFileInput[];
-};
-export type NoteCorrectionInput = Mutation & { eventId: string; note: string };
-export type AuditorHandoverInput = Mutation & { assignmentRef: string; note: string; toAuditor: string | null };
 
 const base = "/api/evidence/audit-findings";
 const findingPath = (id: string, tail = "") => `${base}/${encodeURIComponent(id)}${tail}`;
