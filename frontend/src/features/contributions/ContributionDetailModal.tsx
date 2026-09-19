@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { History, Paperclip, Receipt } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDownLeft,
+  CheckCircle2,
+  Clock,
+  DollarSign,
+  Edit3,
+  History,
+  Paperclip,
+  Receipt,
+  ShieldCheck,
+} from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -9,18 +20,30 @@ import {
   fundTypeLabel,
   STATUS_MEANINGS,
   uploadContributionDocument,
+  type ContributionCorrection,
   type ContributionDocument,
+  type ContributionEvent,
   type ContributionHistory,
   type ContributionRecord,
+  type ContributionRefund,
+  type ProofValidity,
 } from "./contributionClient";
 import { ContributionStatusBadge } from "./ContributionStatusBadge";
 import { ContributionAllocations } from "./ContributionAllocations";
 import { errorMessage, fileToBase64 } from "./contributionUi";
+import { ShortfallAlertBanner } from "./ShortfallAlertBanner";
+import { ContributionCorrectionModal } from "./ContributionCorrectionModal";
+import { RefundDecisionModal } from "./RefundDecisionModal";
+import { RefundPaymentModal } from "./RefundPaymentModal";
 
 export type ContributionDetail = {
   record: ContributionRecord;
   history: ContributionHistory[];
   documents: ContributionDocument[];
+  corrections?: ContributionCorrection[];
+  refunds?: ContributionRefund[];
+  events?: ContributionEvent[];
+  proofValidity?: { status: ProofValidity; notes: string };
 };
 
 const at = (seconds: number) => new Date(seconds * 1000).toLocaleString("id-ID");
@@ -150,7 +173,13 @@ export function ContributionDetailModal({
   onClose: () => void;
   onError: (message: string | null) => void;
 }) {
-  const { record } = detail;
+  const { record, corrections = [], refunds = [], proofValidity } = detail;
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [showRefundDecisionModal, setShowRefundDecisionModal] = useState(false);
+  const [activePaymentRefund, setActivePaymentRefund] = useState<ContributionRefund | null>(null);
+
+  const hasShortfall = Boolean(record.shortfallAmount && Number(record.shortfallAmount) > 0);
+
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div
@@ -159,23 +188,81 @@ export function ContributionDetailModal({
         aria-label={`Detail kontribusi ${record.id}`}
         className="bg-white rounded-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto space-y-6 shadow-xl border border-stone-200"
       >
+        {/* Header */}
         <div className="flex items-start justify-between border-b border-stone-200 pb-4">
           <div>
             <div className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-emerald-700" />
               <h3 className="text-lg font-bold text-stone-900">Detail Kontribusi: {record.id}</h3>
             </div>
-            <div className="mt-1 flex items-center gap-2">
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
               <ContributionStatusBadge status={record.status} />
-              <span className="text-xs text-stone-500 font-mono">Versi {record.version}</span>
+              <span className="text-xs text-stone-500 font-mono bg-stone-100 px-2 py-0.5 rounded">
+                Versi Bisnis: V{record.version}
+              </span>
+              {proofValidity && (
+                <span
+                  className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                    proofValidity.status === "CURRENT"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : proofValidity.status === "SUPERSEDED"
+                      ? "bg-amber-100 text-amber-800 border border-amber-300"
+                      : "bg-rose-100 text-rose-800"
+                  }`}
+                  title={proofValidity.notes}
+                >
+                  Bukti: {proofValidity.status}
+                </span>
+              )}
             </div>
             <div className="mt-1 text-xs text-stone-600">{STATUS_MEANINGS[record.status]}</div>
+            {proofValidity?.status === "SUPERSEDED" && (
+              <div className="mt-1 text-[11px] text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">
+                <strong>Catatan Keberlakuan Bukti (AC19):</strong> {proofValidity.notes}
+              </div>
+            )}
           </div>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-700 font-bold p-1 text-lg" aria-label="Tutup">
             ✕
           </button>
         </div>
 
+        {/* Shortfall Alert Banner if discrepancy exists */}
+        {hasShortfall && (
+          <ShortfallAlertBanner
+            shortfallAmount={record.shortfallAmount!}
+            currencyUnit={record.currencyUnit}
+            allocatedAmount={record.allocatedAmount}
+            amountExact={record.amountExact}
+          />
+        )}
+
+        {/* Action Toolbar for Authorized Officers */}
+        {canManage && record.status !== "REJECTED" && (
+          <div className="flex items-center gap-2 bg-stone-50 p-3 rounded-xl border border-stone-200 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowCorrectionModal(true)}
+              className="text-xs flex items-center gap-1.5"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+              <span>Koreksi Kontribusi (US-41)</span>
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowRefundDecisionModal(true)}
+              className="text-xs flex items-center gap-1.5"
+            >
+              <ArrowDownLeft className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Keputusan Refund (US-44, AC03)</span>
+            </Button>
+          </div>
+        )}
+
+        {/* Main Grid Info */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs bg-stone-50 p-4 rounded-xl">
           <Field label="Nomor Referensi Sumber" mono>
             {record.sourceReference}
@@ -190,6 +277,7 @@ export function ContributionDetailModal({
           <Field label="Kelayakan Batch">{record.unqualifiedReason || "Layak masuk batch kontribusi."}</Field>
         </div>
 
+        {/* Endorsement and Reconciliation Details */}
         {(record.reconciledAt || record.endorsedAt) && (
           <div className="rounded-xl border border-stone-200 p-4 space-y-2 text-xs">
             <h4 className="font-semibold text-stone-800">Status Pengesahan & Bukti</h4>
@@ -208,10 +296,143 @@ export function ContributionDetailModal({
           </div>
         )}
 
+        {/* Corrections History (Spec #100, Issue #106) */}
+        {corrections.length > 0 && (
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-stone-900 flex items-center gap-1.5">
+              <Edit3 className="w-4 h-4 text-amber-600" />
+              <span>Riwayat Koreksi Nominal & Versi ({corrections.length})</span>
+            </h4>
+            <div className="space-y-2">
+              {corrections.map((cor) => (
+                <div
+                  key={cor.id}
+                  className="text-xs p-3 rounded-xl border border-amber-200 bg-amber-50/40 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-stone-900 flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-mono text-[10px]">
+                        V{cor.fromVersion} → V{cor.toVersion}
+                      </span>
+                      <span>Jenis: {cor.correctionType}</span>
+                    </div>
+                    <span className="text-[11px] text-stone-400">{at(cor.correctedAt)}</span>
+                  </div>
+                  <div className="text-stone-700">
+                    <span className="font-medium">Perubahan Nominal:</span>{" "}
+                    <span className="font-mono line-through text-stone-400">
+                      {formatNominal(cor.fromAmountExact, record.currencyUnit)}
+                    </span>{" "}
+                    →{" "}
+                    <span className="font-mono font-bold text-amber-900">
+                      {formatNominal(cor.toAmountExact, record.currencyUnit)}
+                    </span>
+                  </div>
+                  <div className="text-stone-600 italic">"{cor.reason}"</div>
+                  {cor.sourceProofRef && (
+                    <div className="text-stone-500 text-[11px]">
+                      Referensi Bukti: <code className="bg-white px-1 py-0.5 rounded border">{cor.sourceProofRef}</code>
+                    </div>
+                  )}
+                  <div className="text-stone-400 text-[11px] font-mono">Oleh: {cor.correctedBy}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Refunds (Keputusan & Realisasi Pembayaran) */}
+        {refunds.length > 0 && (
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-stone-900 flex items-center gap-1.5">
+              <DollarSign className="w-4 h-4 text-indigo-600" />
+              <span>Pengembalian Dana / Refund ({refunds.length})</span>
+            </h4>
+            <div className="space-y-2">
+              {refunds.map((ref) => (
+                <div
+                  key={ref.id}
+                  className={`text-xs p-3.5 rounded-xl border space-y-2 ${
+                    ref.status === "PAID"
+                      ? "border-emerald-200 bg-emerald-50/40"
+                      : "border-amber-200 bg-amber-50/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-stone-900 flex items-center gap-2">
+                      <code className="text-stone-700">{ref.id}</code>
+                      <span className="font-bold text-stone-900">
+                        {formatNominal(ref.amountExact, record.currencyUnit)}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded font-semibold text-[10px] ${
+                          ref.status === "PAID"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {ref.status === "PAID" ? "SUDAH DIBAYARKAN (PAID)" : "DIPUTUSKAN / MENUNGGU PEMBAYARAN"}
+                      </span>
+                    </div>
+                    {ref.status === "DECIDED" && canManage && (
+                      <Button
+                        size="sm"
+                        onClick={() => setActivePaymentRefund(ref)}
+                        className="text-xs bg-emerald-700 hover:bg-emerald-800 text-white"
+                      >
+                        Catat Pembayaran
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="text-stone-700 space-y-1">
+                    <div>
+                      <span className="font-medium">Alasan:</span> {ref.reason}
+                    </div>
+                    <div>
+                      <span className="font-medium">Dasar Kebijakan Lembaga:</span> {ref.policyBasis}
+                    </div>
+                    <div className="text-stone-500 text-[11px] font-mono">
+                      Diputuskan oleh: {ref.decidedBy} ({at(ref.decidedAt)})
+                    </div>
+                  </div>
+
+                  {ref.status === "PAID" && (
+                    <div className="pt-2 border-t border-emerald-200 text-emerald-900 text-xs space-y-1">
+                      <div className="font-semibold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                        <span>Realisasi Pembayaran Selesai</span>
+                      </div>
+                      <div>
+                        Referensi Bukti Transfer:{" "}
+                        <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300">
+                          {ref.paymentProofRef}
+                        </code>
+                      </div>
+                      {ref.paidAt && <div>Waktu Pembayaran: {at(ref.paidAt)}</div>}
+                      {ref.paymentNotes && <div>Catatan: {ref.paymentNotes}</div>}
+                      <div className="text-stone-500 text-[11px] font-mono">Dibayarkan oleh: {ref.paidBy}</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Allocations Section */}
         <ContributionAllocations requests={requests} record={record} />
 
-        <DocumentSection requests={requests} detail={detail} canManage={canManage} onChanged={onReload} onError={onError} />
+        {/* Documents Section */}
+        <DocumentSection
+          requests={requests}
+          detail={detail}
+          canManage={canManage}
+          onChanged={onReload}
+          onError={onError}
+        />
 
+        {/* Audit History */}
         <div className="space-y-3">
           <h4 className="text-sm font-semibold text-stone-900 flex items-center gap-1.5">
             <History className="w-4 h-4 text-stone-600" />
@@ -241,12 +462,55 @@ export function ContributionDetailModal({
           </div>
         </div>
 
+        {/* Footer */}
         <div className="flex justify-end pt-3 border-t border-stone-200">
           <Button variant="outline" onClick={onClose}>
             Tutup
           </Button>
         </div>
       </div>
+
+      {/* Child Modals */}
+      {showCorrectionModal && (
+        <ContributionCorrectionModal
+          requests={requests}
+          target={record}
+          onDone={async () => {
+            setShowCorrectionModal(false);
+            onReload();
+          }}
+          onClose={() => setShowCorrectionModal(false)}
+          onError={onError}
+        />
+      )}
+
+      {showRefundDecisionModal && (
+        <RefundDecisionModal
+          requests={requests}
+          target={record}
+          onDone={async () => {
+            setShowRefundDecisionModal(false);
+            onReload();
+          }}
+          onClose={() => setShowRefundDecisionModal(false)}
+          onError={onError}
+        />
+      )}
+
+      {activePaymentRefund && (
+        <RefundPaymentModal
+          requests={requests}
+          contributionId={record.id}
+          refund={activePaymentRefund}
+          currencyUnit={record.currencyUnit}
+          onDone={async () => {
+            setActivePaymentRefund(null);
+            onReload();
+          }}
+          onClose={() => setActivePaymentRefund(null)}
+          onError={onError}
+        />
+      )}
     </div>
   );
 }

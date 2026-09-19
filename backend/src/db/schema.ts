@@ -988,3 +988,59 @@ export const auditFindingOperations = pgTable("audit_finding_operations", {
 export type AuditFindingRow = typeof auditFindings.$inferSelect;
 export type AuditFindingEventRow = typeof auditFindingEvents.$inferSelect;
 export type AuditFindingFileRow = typeof auditFindingFiles.$inferSelect;
+
+export const contributionCorrections = pgTable("contribution_corrections", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  fromVersion: integer("from_version").notNull(),
+  toVersion: integer("to_version").notNull(),
+  correctionType: text("correction_type").notNull(),
+  fromAmountExact: text("from_amount_exact").notNull(),
+  toAmountExact: text("to_amount_exact").notNull(),
+  reason: text("reason").notNull(),
+  sourceProofRef: text("source_proof_ref").notNull(),
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").references(() => officerProfiles.id),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const contributionRefunds = pgTable("contribution_refunds", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  amountExact: text("amount_exact").notNull(),
+  currencyUnit: text("currency_unit").notNull().default("IDR"),
+  fundType: text("fund_type").notNull(),
+  reason: text("reason").notNull(),
+  policyBasis: text("policy_basis").notNull(),
+  status: text("status").notNull().default("DECIDED"),
+  contributionVersion: integer("contribution_version").notNull(),
+  decidedAt: bigint("decided_at", { mode: "number" }).notNull(),
+  decidedBy: text("decided_by").notNull(),
+  decidedByOfficerId: text("decided_by_officer_id").references(() => officerProfiles.id),
+  paidAt: bigint("paid_at", { mode: "number" }),
+  paidBy: text("paid_by"),
+  paidByOfficerId: text("paid_by_officer_id").references(() => officerProfiles.id),
+  paymentProofRef: text("payment_proof_ref"),
+  paymentNotes: text("payment_notes"),
+  version: integer("version").notNull().default(1),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const contributionEvents = pgTable("contribution_events", {
+  id: serial("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  version: integer("version").notNull(),
+  previousVersion: integer("previous_version").notNull(),
+  eventType: text("event_type").notNull(),
+  amountExact: text("amount_exact").notNull(),
+  reason: text("reason").notNull(),
+  sourceProofRef: text("source_proof_ref"),
+  actorAccount: text("actor_account").notNull(),
+  actorOfficerId: text("actor_officer_id").references(() => officerProfiles.id),
+  occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
+  proofSuperseded: boolean("proof_superseded").notNull().default(true),
+});

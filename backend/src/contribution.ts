@@ -278,3 +278,234 @@ export function checkStatusTransition(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Correction & Refund Domain Logic (Spec #100, Ticket #106)
+// ---------------------------------------------------------------------------
+
+export const CORRECTION_TYPES = ["AMOUNT", "DUPLICATE"] as const;
+export type CorrectionType = (typeof CORRECTION_TYPES)[number];
+
+export const isCorrectionType = (value: unknown): value is CorrectionType =>
+  typeof value === "string" && (CORRECTION_TYPES as readonly string[]).includes(value as CorrectionType);
+
+export type ContributionCorrection = {
+  id: string;
+  institutionId: string;
+  contributionId: string;
+  fromVersion: number;
+  toVersion: number;
+  correctionType: CorrectionType;
+  fromAmountExact: string;
+  toAmountExact: string;
+  reason: string;
+  sourceProofRef: string;
+  actorAccount: string;
+  actorOfficerId: string | null;
+  createdAt: number;
+};
+
+export const REFUND_STATUSES = ["DECIDED", "PAID", "CANCELLED"] as const;
+export type RefundStatus = (typeof REFUND_STATUSES)[number];
+
+export const isRefundStatus = (value: unknown): value is RefundStatus =>
+  typeof value === "string" && (REFUND_STATUSES as readonly string[]).includes(value as RefundStatus);
+
+export type ContributionRefund = {
+  id: string;
+  institutionId: string;
+  contributionId: string;
+  amountExact: string;
+  currencyUnit: CurrencyUnit;
+  fundType: JenisDana;
+  reason: string;
+  policyBasis: string;
+  status: RefundStatus;
+  contributionVersion: number;
+  decidedAt: number;
+  decidedBy: string;
+  decidedByOfficerId: string | null;
+  paidAt: number | null;
+  paidBy: string | null;
+  paidByOfficerId: string | null;
+  paymentProofRef: string | null;
+  paymentNotes: string | null;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ContributionEvent = {
+  id: number;
+  institutionId: string;
+  contributionId: string;
+  version: number;
+  previousVersion: number;
+  eventType: "CORRECTION" | "REFUND_DECISION" | "REFUND_PAYMENT" | "ENDORSEMENT" | "RECONCILIATION";
+  amountExact: string;
+  reason: string;
+  sourceProofRef: string | null;
+  actorAccount: string;
+  actorOfficerId: string | null;
+  occurredAt: number;
+  proofSuperseded: boolean;
+};
+
+export type CorrectionInput = {
+  correctionType: CorrectionType;
+  amountExact?: string;
+  reason: string;
+  sourceProofRef: string;
+  expectedVersion: number;
+};
+
+export function validateCorrectionInput(
+  input: Partial<CorrectionInput>,
+  currentAmountExact: string
+): ContributionIssue[] {
+  const issues: ContributionIssue[] = [];
+
+  if (!input.correctionType || !isCorrectionType(input.correctionType)) {
+    issues.push({
+      field: "correctionType",
+      message: "Tipe koreksi harus berupa 'AMOUNT' (koreksi nominal) atau 'DUPLICATE' (pencatatan ganda).",
+      code: "INVALID_STATUS_TRANSITION",
+    });
+  }
+
+  const reason = String(input.reason ?? "").trim();
+  if (!reason || reason.length < 5) {
+    issues.push({
+      field: "reason",
+      message: "Alasan koreksi wajib diisi dan minimal 5 karakter.",
+      code: "MISSING_SOURCE_REFERENCE",
+    });
+  }
+
+  const sourceProofRef = String(input.sourceProofRef ?? "").trim();
+  if (!sourceProofRef) {
+    issues.push({
+      field: "sourceProofRef",
+      message: "Referensi bukti sumber koreksi wajib disertakan.",
+      code: "MISSING_SOURCE_REFERENCE",
+    });
+  }
+
+  if (input.correctionType === "AMOUNT") {
+    const rawAmount = String(input.amountExact ?? "").trim();
+    if (!/^\d+$/.test(rawAmount) || rawAmount === "0" || rawAmount.startsWith("0")) {
+      issues.push({
+        field: "amountExact",
+        message: "Nominal baru harus berupa bilangan bulat positif tanpa desimal atau pemisah ribuan.",
+        code: "INVALID_AMOUNT",
+      });
+    } else if (rawAmount === currentAmountExact) {
+      issues.push({
+        field: "amountExact",
+        message: "Nominal baru sama dengan nominal saat ini. Gunakan nominal yang berbeda untuk koreksi nominal.",
+        code: "INVALID_AMOUNT",
+      });
+    }
+  }
+
+  return issues;
+}
+
+export type RefundDecisionInput = {
+  amountExact: string;
+  reason: string;
+  policyBasis: string;
+  expectedVersion: number;
+};
+
+export function validateRefundDecisionInput(
+  input: Partial<RefundDecisionInput>,
+  availableContributionAmount: bigint
+): ContributionIssue[] {
+  const issues: ContributionIssue[] = [];
+
+  const rawAmount = String(input.amountExact ?? "").trim();
+  if (!/^\d+$/.test(rawAmount) || rawAmount === "0" || rawAmount.startsWith("0")) {
+    issues.push({
+      field: "amountExact",
+      message: "Nominal pengembalian harus berupa bilangan bulat positif.",
+      code: "INVALID_AMOUNT",
+    });
+  } else {
+    const refundBig = BigInt(rawAmount);
+    if (refundBig > availableContributionAmount) {
+      issues.push({
+        field: "amountExact",
+        message: `Nominal pengembalian (${rawAmount}) melebihi nominal kontribusi (${availableContributionAmount.toString()}).`,
+        code: "INVALID_AMOUNT",
+      });
+    }
+  }
+
+  const reason = String(input.reason ?? "").trim();
+  if (!reason || reason.length < 5) {
+    issues.push({
+      field: "reason",
+      message: "Alasan keputusan pengembalian wajib diisi (minimal 5 karakter).",
+      code: "MISSING_SOURCE_REFERENCE",
+    });
+  }
+
+  const policyBasis = String(input.policyBasis ?? "").trim();
+  if (!policyBasis || policyBasis.length < 5) {
+    issues.push({
+      field: "policyBasis",
+      message: "Dasar kebijakan jenis dana lembaga wajib disertakan (minimal 5 karakter). ZKT tidak menyediakan hak refund bebas.",
+      code: "MISSING_SOURCE_REFERENCE",
+    });
+  }
+
+  return issues;
+}
+
+export type RefundPaymentInput = {
+  paymentProofRef: string;
+  paidAt: number;
+  paymentNotes?: string;
+};
+
+export function validateRefundPaymentInput(input: Partial<RefundPaymentInput>): ContributionIssue[] {
+  const issues: ContributionIssue[] = [];
+
+  const proofRef = String(input.paymentProofRef ?? "").trim();
+  if (!proofRef) {
+    issues.push({
+      field: "paymentProofRef",
+      message: "Nomor referensi atau bukti transfer pengembalian dana wajib diisi.",
+      code: "MISSING_SOURCE_REFERENCE",
+    });
+  }
+
+  if (typeof input.paidAt !== "number" || !Number.isSafeInteger(input.paidAt) || input.paidAt <= 0) {
+    issues.push({
+      field: "paidAt",
+      message: "Waktu pembayaran aktual wajib berupa timestamp detik yang sah.",
+      code: "INVALID_RECEIVED_AT",
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Proof versioning check (AC19):
+ * Proofs pointing to an older business version than the contribution's current version
+ * are NOT current, and MUST be labeled SUPERSEDED (never CURRENT).
+ */
+export function evaluateProofValidity(
+  currentContributionVersion: number,
+  proofContributionVersion: number | null
+): { status: "CURRENT" | "SUPERSEDED" | "NOT_AVAILABLE"; isCurrent: boolean; label: string } {
+  if (proofContributionVersion === null || proofContributionVersion === undefined) {
+    return { status: "NOT_AVAILABLE", isCurrent: false, label: "Belum Ada Proof" };
+  }
+  if (proofContributionVersion < currentContributionVersion) {
+    return { status: "SUPERSEDED", isCurrent: false, label: "Digantikan / Usang (Superseded)" };
+  }
+  return { status: "CURRENT", isCurrent: true, label: "Berlaku (Current)" };
+}

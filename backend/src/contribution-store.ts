@@ -15,12 +15,20 @@ import {
   checkStatusTransition,
   evaluateQualificationReason,
   validateContributionInput,
+  validateCorrectionInput,
+  validateRefundDecisionInput,
+  validateRefundPaymentInput,
+  type ContributionCorrection,
+  type ContributionEvent,
   type ContributionInput,
   type ContributionRecord,
+  type ContributionRefund,
   type ContributionStatus,
+  type CorrectionType,
   type EndorsementInput,
   type JenisDana,
   type ReconciliationInput,
+  type RefundStatus,
   type SourceChannel,
 } from "./contribution";
 import type { CurrencyUnit } from "./reconciliation";
@@ -45,6 +53,23 @@ export type StoredContributionHistory = {
   occurredAt: number;
 };
 
+export type StoredImportDraft = {
+  id: string;
+  institutionId: string;
+  createdBy: string;
+  fileName: string;
+  currencyUnit: CurrencyUnit;
+  rawRowsCount: number;
+  validRowsCount: number;
+  invalidRowsCount: number;
+  totalValidAmount: string;
+  rowsJson: string;
+  issuesJson: string;
+  status: "DRAFT" | "COMMITTED" | "DISCARDED";
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type StoredContributionDocument = {
   id: string;
   contributionId: string;
@@ -60,11 +85,19 @@ export type StoredContributionDocument = {
   createdAt: number;
 };
 
-export type ImportDraftStatus = "DRAFT" | "COMMITTED" | "DISCARDED";
+export type ContributionOperation = {
+  operationId: string;
+  account: string;
+  requestHash: string;
+};
 
-/** What the server read out of an import file; the counts and rows are never taken from a client. */
+export type ActorIdentity = {
+  account: string;
+  officerId: string | null;
+};
+
 export type ImportDraftInput = {
-  id: string;
+  id?: string;
   fileName: string;
   currencyUnit: CurrencyUnit;
   rawRowsCount: number;
@@ -75,41 +108,24 @@ export type ImportDraftInput = {
   issuesJson: string;
 };
 
-export type StoredImportDraft = {
-  id: string;
-  institutionId: string;
-  createdBy: string;
-  fileName: string;
-  currencyUnit: CurrencyUnit;
-  rawRowsCount: number;
-  validRowsCount: number;
-  invalidRowsCount: number;
-  totalValidAmount: string;
-  rowsJson: string;
-  issuesJson: string;
-  status: ImportDraftStatus;
-  createdAt: number;
-  updatedAt: number;
-};
+export class ContributionNotFoundError extends Error {
+  constructor(entity: string, id: string) {
+    super(`${entity} "${id}" tidak ditemukan pada ruang kerja lembaga ini.`);
+    this.name = "ContributionNotFoundError";
+  }
+}
+
+export class ContributionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContributionConflictError";
+  }
+}
 
 export class ContributionDuplicateError extends Error {
   constructor(channel: string, ref: string) {
     super(`Penerimaan dengan kanal "${channel}" dan referensi "${ref}" sudah pernah dicatat pada lembaga ini.`);
     this.name = "ContributionDuplicateError";
-  }
-}
-
-export class ContributionConflictError extends Error {
-  constructor(id: string) {
-    super(`Catatan kontribusi "${id}" telah diperbarui oleh pihak lain sejak versi yang Anda muat. Muat ulang sebelum mencoba lagi.`);
-    this.name = "ContributionConflictError";
-  }
-}
-
-export class ContributionNotFoundError extends Error {
-  constructor(id: string, what = "Catatan kontribusi") {
-    super(`${what} "${id}" tidak ditemukan pada ruang kerja lembaga ini.`);
-    this.name = "ContributionNotFoundError";
   }
 }
 
@@ -126,17 +142,6 @@ export class ContributionOperationConflictError extends Error {
     this.name = "ContributionOperationConflictError";
   }
 }
-
-export type ContributionOperation = {
-  operationId: string;
-  account: string;
-  requestHash: string;
-};
-
-export type ActorIdentity = {
-  account: string;
-  officerId: string | null;
-};
 
 export const CONTRIBUTION_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS contributions (
@@ -224,6 +229,63 @@ export const CONTRIBUTION_SCHEMA_STATEMENTS = [
      created_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS contribution_documents_by_contrib ON contribution_documents (institution_id, contribution_id);`,
+  `CREATE TABLE IF NOT EXISTS contribution_corrections (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     contribution_id TEXT NOT NULL REFERENCES contributions(id) ON DELETE CASCADE,
+     from_version INTEGER NOT NULL,
+     to_version INTEGER NOT NULL,
+     correction_type TEXT NOT NULL,
+     from_amount_exact TEXT NOT NULL,
+     to_amount_exact TEXT NOT NULL,
+     reason TEXT NOT NULL,
+     source_proof_ref TEXT NOT NULL,
+     actor_account TEXT NOT NULL,
+     actor_officer_id TEXT REFERENCES officer_profiles(id),
+     created_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS contribution_corrections_by_contrib ON contribution_corrections (institution_id, contribution_id, created_at ASC);`,
+  `CREATE TABLE IF NOT EXISTS contribution_refunds (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     contribution_id TEXT NOT NULL REFERENCES contributions(id) ON DELETE CASCADE,
+     amount_exact TEXT NOT NULL,
+     currency_unit TEXT NOT NULL DEFAULT 'IDR',
+     fund_type TEXT NOT NULL,
+     reason TEXT NOT NULL,
+     policy_basis TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'DECIDED',
+     contribution_version INTEGER NOT NULL,
+     decided_at BIGINT NOT NULL,
+     decided_by TEXT NOT NULL,
+     decided_by_officer_id TEXT REFERENCES officer_profiles(id),
+     paid_at BIGINT,
+     paid_by TEXT,
+     paid_by_officer_id TEXT REFERENCES officer_profiles(id),
+     payment_proof_ref TEXT,
+     payment_notes TEXT,
+     version INTEGER NOT NULL DEFAULT 1,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS contribution_refunds_by_contrib ON contribution_refunds (institution_id, contribution_id);`,
+  `CREATE INDEX IF NOT EXISTS contribution_refunds_by_status ON contribution_refunds (institution_id, status);`,
+  `CREATE TABLE IF NOT EXISTS contribution_events (
+     id SERIAL PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     contribution_id TEXT NOT NULL REFERENCES contributions(id) ON DELETE CASCADE,
+     version INTEGER NOT NULL,
+     previous_version INTEGER NOT NULL,
+     event_type TEXT NOT NULL,
+     amount_exact TEXT NOT NULL,
+     reason TEXT NOT NULL,
+     source_proof_ref TEXT,
+     actor_account TEXT NOT NULL,
+     actor_officer_id TEXT REFERENCES officer_profiles(id),
+     occurred_at BIGINT NOT NULL,
+     proof_superseded BOOLEAN NOT NULL DEFAULT true
+   );`,
+  `CREATE INDEX IF NOT EXISTS contribution_events_by_contrib ON contribution_events (institution_id, contribution_id, version ASC);`,
 ];
 
 type Executor = { execute: ContributionDatabase["execute"] };
@@ -297,6 +359,68 @@ function documentFromRow(row: any): StoredContributionDocument {
     storageRef: row.storage_ref ?? null,
     createdBy: row.created_by,
     createdAt: Number(row.created_at),
+  };
+}
+
+function correctionFromRow(row: any): ContributionCorrection {
+  return {
+    id: row.id,
+    institutionId: row.institution_id,
+    contributionId: row.contribution_id,
+    fromVersion: Number(row.from_version),
+    toVersion: Number(row.to_version),
+    correctionType: row.correction_type as CorrectionType,
+    fromAmountExact: String(row.from_amount_exact),
+    toAmountExact: String(row.to_amount_exact),
+    reason: row.reason,
+    sourceProofRef: row.source_proof_ref,
+    actorAccount: row.actor_account,
+    actorOfficerId: row.actor_officer_id ?? null,
+    createdAt: Number(row.created_at),
+  };
+}
+
+function refundFromRow(row: any): ContributionRefund {
+  return {
+    id: row.id,
+    institutionId: row.institution_id,
+    contributionId: row.contribution_id,
+    amountExact: String(row.amount_exact),
+    currencyUnit: row.currency_unit as CurrencyUnit,
+    fundType: row.fund_type as JenisDana,
+    reason: row.reason,
+    policyBasis: row.policy_basis,
+    status: row.status as RefundStatus,
+    contributionVersion: Number(row.contribution_version),
+    decidedAt: Number(row.decided_at),
+    decidedBy: row.decided_by,
+    decidedByOfficerId: row.decided_by_officer_id ?? null,
+    paidAt: row.paid_at ? Number(row.paid_at) : null,
+    paidBy: row.paid_by ?? null,
+    paidByOfficerId: row.paid_by_officer_id ?? null,
+    paymentProofRef: row.payment_proof_ref ?? null,
+    paymentNotes: row.payment_notes ?? null,
+    version: Number(row.version),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function eventFromRow(row: any): ContributionEvent {
+  return {
+    id: Number(row.id),
+    institutionId: row.institution_id,
+    contributionId: row.contribution_id,
+    version: Number(row.version),
+    previousVersion: Number(row.previous_version),
+    eventType: row.event_type,
+    amountExact: String(row.amount_exact),
+    reason: row.reason,
+    sourceProofRef: row.source_proof_ref ?? null,
+    actorAccount: row.actor_account,
+    actorOfficerId: row.actor_officer_id ?? null,
+    occurredAt: Number(row.occurred_at),
+    proofSuperseded: Boolean(row.proof_superseded),
   };
 }
 
@@ -477,6 +601,60 @@ export type ContributionStore = {
   listDocuments: (institutionId: string, contributionId: string) => Promise<StoredContributionDocument[]>;
 
   getHistory: (institutionId: string, contributionId: string) => Promise<StoredContributionHistory[]>;
+
+  correctContribution: (
+    institutionId: string,
+    params: {
+      contributionId: string;
+      expectedVersion: number;
+      correctionType: CorrectionType;
+      amountExact?: string;
+      reason: string;
+      sourceProofRef: string;
+    },
+    operation: ContributionOperation,
+    actor: ActorIdentity,
+    now: number
+  ) => Promise<{ contribution: ContributionRecord; correction: ContributionCorrection }>;
+
+  listCorrections: (institutionId: string, contributionId: string) => Promise<ContributionCorrection[]>;
+
+  decideRefund: (
+    institutionId: string,
+    params: {
+      contributionId: string;
+      expectedVersion: number;
+      amountExact: string;
+      reason: string;
+      policyBasis: string;
+    },
+    operation: ContributionOperation,
+    actor: ActorIdentity,
+    now: number
+  ) => Promise<ContributionRefund>;
+
+  payRefund: (
+    institutionId: string,
+    params: {
+      contributionId: string;
+      refundId: string;
+      paymentProofRef: string;
+      paidAt: number;
+      paymentNotes?: string;
+    },
+    operation: ContributionOperation,
+    actor: ActorIdentity,
+    now: number
+  ) => Promise<ContributionRefund>;
+
+  listRefunds: (institutionId: string, contributionId: string) => Promise<ContributionRefund[]>;
+
+  getEvents: (institutionId: string, contributionId: string) => Promise<ContributionEvent[]>;
+
+  getRefundTotals: (
+    institutionId: string,
+    contributionIds: string[]
+  ) => Promise<Map<string, { paidRefundTotal: string; decidedRefundTotal: string }>>;
 };
 
 export function createContributionStore(database: ContributionDatabase): ContributionStore {
@@ -809,6 +987,315 @@ export function createContributionStore(database: ContributionDatabase): Contrib
         notes: r.notes ?? null,
         occurredAt: Number(r.occurred_at),
       }));
+    },
+
+    async correctContribution(institutionId, params, operation, actor, now) {
+      return withOperation(institutionId, operation, async (tx) => {
+        const row = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contributions
+            WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!row) throw new ContributionNotFoundError("Catatan kontribusi", params.contributionId);
+        const currentVersion = Number(row.version);
+        if (currentVersion !== params.expectedVersion) {
+          throw new ContributionConflictError(
+            `Catatan kontribusi "${params.contributionId}" telah diperbarui sejak versi yang Anda muat. Muat ulang sebelum mencoba lagi.`
+          );
+        }
+
+        const issues = validateCorrectionInput(params, String(row.amount_exact));
+        if (issues.length > 0) {
+          throw new ContributionStateError(issues.map((i) => i.message).join(" "));
+        }
+
+        const newVersion = currentVersion + 1;
+        const newAmount = params.correctionType === "AMOUNT" ? String(params.amountExact) : String(row.amount_exact);
+        const newStatus = params.correctionType === "DUPLICATE" ? "REJECTED" : row.status;
+        const unqualifiedReason =
+          params.correctionType === "DUPLICATE"
+            ? "Pencatatan ganda dikoreksi: tanpa arus kas balik."
+            : row.unqualified_reason;
+
+        const updated = rowsOf(
+          await tx.execute(sql`
+            UPDATE contributions
+            SET amount_exact = ${newAmount},
+                status = ${newStatus},
+                unqualified_reason = ${unqualifiedReason},
+                version = ${newVersion},
+                updated_at = ${now}
+            WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
+            RETURNING *
+          `)
+        )[0];
+
+        const correctionId = `cor-${crypto.randomUUID()}`;
+        const correctionRow = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO contribution_corrections (
+              id, institution_id, contribution_id, from_version, to_version,
+              correction_type, from_amount_exact, to_amount_exact, reason,
+              source_proof_ref, actor_account, actor_officer_id, created_at
+            ) VALUES (
+              ${correctionId}, ${institutionId}, ${params.contributionId}, ${currentVersion}, ${newVersion},
+              ${params.correctionType}, ${String(row.amount_exact)}, ${newAmount}, ${params.reason},
+              ${params.sourceProofRef}, ${actor.account}, ${actor.officerId ?? null}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          INSERT INTO contribution_events (
+            institution_id, contribution_id, version, previous_version,
+            event_type, amount_exact, reason, source_proof_ref,
+            actor_account, actor_officer_id, occurred_at, proof_superseded
+          ) VALUES (
+            ${institutionId}, ${params.contributionId}, ${newVersion}, ${currentVersion},
+            'CORRECTION', ${newAmount}, ${params.reason}, ${params.sourceProofRef},
+            ${actor.account}, ${actor.officerId ?? null}, ${now}, true
+          )
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO contribution_history (
+            contribution_id, institution_id, version, from_status, to_status,
+            action, actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${params.contributionId}, ${institutionId}, ${newVersion}, ${row.status}, ${newStatus},
+            ${params.correctionType === "DUPLICATE" ? "CORRECT_DUPLICATE" : "CORRECT_AMOUNT"},
+            ${actor.account}, ${actor.officerId ?? null}, ${params.reason},
+            ${`Koreksi (${params.correctionType}): ${params.reason}. Bukti: ${params.sourceProofRef}`}, ${now}
+          )
+        `);
+
+        return {
+          contribution: contributionFromRow(updated),
+          correction: correctionFromRow(correctionRow),
+        };
+      });
+    },
+
+    async listCorrections(institutionId, contributionId) {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT * FROM contribution_corrections
+          WHERE contribution_id = ${contributionId} AND institution_id = ${institutionId}
+          ORDER BY created_at ASC, id ASC
+        `)
+      );
+      return rows.map(correctionFromRow);
+    },
+
+    async decideRefund(institutionId, params, operation, actor, now) {
+      return withOperation(institutionId, operation, async (tx) => {
+        const row = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contributions
+            WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!row) throw new ContributionNotFoundError("Catatan kontribusi", params.contributionId);
+        const currentVersion = Number(row.version);
+        if (currentVersion !== params.expectedVersion) {
+          throw new ContributionConflictError(
+            `Catatan kontribusi "${params.contributionId}" telah diperbarui sejak versi yang Anda muat. Muat ulang sebelum mencoba lagi.`
+          );
+        }
+
+        const existingRefundRows = rowsOf(
+          await tx.execute(sql`
+            SELECT amount_exact, status FROM contribution_refunds
+            WHERE contribution_id = ${params.contributionId} AND institution_id = ${institutionId}
+              AND status IN ('DECIDED', 'PAID')
+          `)
+        );
+        const totalRefundsSoFar = existingRefundRows.reduce(
+          (sum: bigint, r: any) => sum + BigInt(r.amount_exact),
+          0n
+        );
+        const contributionTotal = BigInt(row.amount_exact);
+        const availableToRefund = contributionTotal > totalRefundsSoFar ? contributionTotal - totalRefundsSoFar : 0n;
+
+        const issues = validateRefundDecisionInput(params, availableToRefund);
+        if (issues.length > 0) {
+          throw new ContributionStateError(issues.map((i) => i.message).join(" "));
+        }
+
+        const refundId = `ref-${crypto.randomUUID()}`;
+        const inserted = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO contribution_refunds (
+              id, institution_id, contribution_id, amount_exact, currency_unit, fund_type,
+              reason, policy_basis, status, contribution_version, decided_at,
+              decided_by, decided_by_officer_id, paid_at, paid_by, paid_by_officer_id,
+              payment_proof_ref, payment_notes, version, created_at, updated_at
+            ) VALUES (
+              ${refundId}, ${institutionId}, ${params.contributionId}, ${params.amountExact},
+              ${row.currency_unit}, ${row.fund_type}, ${params.reason}, ${params.policyBasis},
+              'DECIDED', ${currentVersion}, ${now}, ${actor.account}, ${actor.officerId ?? null},
+              NULL, NULL, NULL, NULL, NULL, 1, ${now}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          INSERT INTO contribution_events (
+            institution_id, contribution_id, version, previous_version,
+            event_type, amount_exact, reason, source_proof_ref,
+            actor_account, actor_officer_id, occurred_at, proof_superseded
+          ) VALUES (
+            ${institutionId}, ${params.contributionId}, ${currentVersion}, ${currentVersion},
+            'REFUND_DECISION', ${params.amountExact}, ${params.reason}, ${params.policyBasis},
+            ${actor.account}, ${actor.officerId ?? null}, ${now}, false
+          )
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO contribution_history (
+            contribution_id, institution_id, version, from_status, to_status,
+            action, actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${params.contributionId}, ${institutionId}, ${currentVersion}, ${row.status}, ${row.status},
+            'DECIDE_REFUND', ${actor.account}, ${actor.officerId ?? null}, ${params.reason},
+            ${`Keputusan refund ${params.amountExact} dicatat (Menunggu Pembayaran). Kebijakan: ${params.policyBasis}`}, ${now}
+          )
+        `);
+
+        return refundFromRow(inserted);
+      });
+    },
+
+    async payRefund(institutionId, params, operation, actor, now) {
+      return withOperation(institutionId, operation, async (tx) => {
+        const refundRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contribution_refunds
+            WHERE id = ${params.refundId} AND contribution_id = ${params.contributionId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!refundRow) throw new ContributionNotFoundError("Data keputusan pengembalian", params.refundId);
+        if (refundRow.status === "PAID") {
+          throw new ContributionConflictError("Pembayaran pengembalian dana ini sudah pernah dicatat.");
+        }
+        if (refundRow.status !== "DECIDED") {
+          throw new ContributionStateError(`Pengembalian dengan status "${refundRow.status}" tidak dapat dibayarkan.`);
+        }
+
+        const issues = validateRefundPaymentInput(params);
+        if (issues.length > 0) {
+          throw new ContributionStateError(issues.map((i) => i.message).join(" "));
+        }
+
+        const contribRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contributions
+            WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!contribRow) throw new ContributionNotFoundError("Catatan kontribusi", params.contributionId);
+
+        const currentVersion = Number(contribRow.version);
+        const newVersion = currentVersion + 1;
+
+        await tx.execute(sql`
+          UPDATE contributions
+          SET version = ${newVersion}, updated_at = ${now}
+          WHERE id = ${params.contributionId} AND institution_id = ${institutionId}
+        `);
+
+        const updatedRefund = rowsOf(
+          await tx.execute(sql`
+            UPDATE contribution_refunds
+            SET status = 'PAID',
+                paid_at = ${params.paidAt},
+                paid_by = ${actor.account},
+                paid_by_officer_id = ${actor.officerId ?? null},
+                payment_proof_ref = ${params.paymentProofRef},
+                payment_notes = ${params.paymentNotes ?? null},
+                version = version + 1,
+                updated_at = ${now}
+            WHERE id = ${params.refundId} AND institution_id = ${institutionId}
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          INSERT INTO contribution_events (
+            institution_id, contribution_id, version, previous_version,
+            event_type, amount_exact, reason, source_proof_ref,
+            actor_account, actor_officer_id, occurred_at, proof_superseded
+          ) VALUES (
+            ${institutionId}, ${params.contributionId}, ${newVersion}, ${currentVersion},
+            'REFUND_PAYMENT', ${refundRow.amount_exact}, 'Pembayaran pengembalian dana dicatat', ${params.paymentProofRef},
+            ${actor.account}, ${actor.officerId ?? null}, ${now}, true
+          )
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO contribution_history (
+            contribution_id, institution_id, version, from_status, to_status,
+            action, actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${params.contributionId}, ${institutionId}, ${newVersion}, ${contribRow.status}, ${contribRow.status},
+            'PAY_REFUND', ${actor.account}, ${actor.officerId ?? null},
+            'Pembayaran pengembalian dana selesai',
+            ${`Pembayaran pengembalian dana sebesar ${refundRow.amount_exact} dicatat. Bukti: ${params.paymentProofRef}`}, ${now}
+          )
+        `);
+
+        return refundFromRow(updatedRefund);
+      });
+    },
+
+    async listRefunds(institutionId, contributionId) {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT * FROM contribution_refunds
+          WHERE contribution_id = ${contributionId} AND institution_id = ${institutionId}
+          ORDER BY created_at ASC, id ASC
+        `)
+      );
+      return rows.map(refundFromRow);
+    },
+
+    async getEvents(institutionId, contributionId) {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT * FROM contribution_events
+          WHERE contribution_id = ${contributionId} AND institution_id = ${institutionId}
+          ORDER BY occurred_at ASC, id ASC
+        `)
+      );
+      return rows.map(eventFromRow);
+    },
+
+    async getRefundTotals(institutionId, contributionIds) {
+      if (contributionIds.length === 0) return new Map();
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT contribution_id,
+                 COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
+                 COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
+          FROM contribution_refunds
+          WHERE institution_id = ${institutionId}
+            AND contribution_id IN (${sql.join(contributionIds.map((id) => sql`${id}`), sql`, `)})
+          GROUP BY contribution_id
+        `)
+      );
+      return new Map(
+        rows.map((row) => [
+          row.contribution_id as string,
+          { paidRefundTotal: row.paid_total as string, decidedRefundTotal: row.decided_total as string },
+        ])
+      );
     },
   };
 }

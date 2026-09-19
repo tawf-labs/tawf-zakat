@@ -162,8 +162,16 @@ export function ContributionList({
               {visible.map((c) => (
                 <tr key={c.id} className="hover:bg-stone-50/70 transition-colors">
                   <td className="px-4 py-3.5">
-                    <div className="whitespace-nowrap">
+                    <div className="whitespace-nowrap flex items-center gap-1.5">
                       <ContributionStatusBadge status={c.status} />
+                      {c.version > 1 && (
+                        <span
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-300"
+                          title={`Telah dikoreksi ke versi ${c.version}`}
+                        >
+                          V{c.version}
+                        </span>
+                      )}
                     </div>
                     {c.unqualifiedReason && (
                       <div className="mt-1 max-w-[14rem] text-[11px] text-stone-500">{c.unqualifiedReason}</div>

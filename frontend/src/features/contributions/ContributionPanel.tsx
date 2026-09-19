@@ -90,7 +90,15 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
     try {
       setError(null);
       const loaded = await getContribution(requests, id);
-      setDetail({ record: loaded.contribution, history: loaded.history, documents: loaded.documents });
+      setDetail({
+        record: loaded.contribution,
+        history: loaded.history,
+        documents: loaded.documents,
+        corrections: loaded.corrections,
+        refunds: loaded.refunds,
+        events: loaded.events,
+        proofValidity: loaded.proofValidity,
+      });
     } catch (e) {
       setError(errorMessage(e, "Gagal membuka detail kontribusi."));
     }

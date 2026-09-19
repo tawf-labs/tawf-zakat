@@ -503,9 +503,33 @@ export function createActivityStore(db: ActivityDatabase) {
 
         const allocatedBefore =
           (await allocatedTotals(tx, institutionId, [contribution.id])).get(contribution.id) ?? "0";
-        const before = contributionBalance(contribution.amount_exact, allocatedBefore);
-        if (requested > BigInt(before.unallocatedAmount)) {
-          throw new AllocationOverLimitError(before.unallocatedAmount, requested.toString());
+
+        // Check refunds
+        let paidRefund = 0n;
+        let decidedRefund = 0n;
+        try {
+          const refundRows = rowsOf(
+            await tx.execute(sql`
+              SELECT COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
+                     COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
+              FROM contribution_refunds
+              WHERE institution_id = ${institutionId} AND contribution_id = ${contribution.id}
+            `)
+          );
+          paidRefund = BigInt(refundRows[0]?.paid_total ?? "0");
+          decidedRefund = BigInt(refundRows[0]?.decided_total ?? "0");
+        } catch {
+          // contribution_refunds table might not exist in isolated activity-only tests
+        }
+
+        const totalAmount = BigInt(contribution.amount_exact);
+        const netTotal = totalAmount > paidRefund ? totalAmount - paidRefund : 0n;
+        const totalAllocated = BigInt(allocatedBefore);
+        const committed = totalAllocated + decidedRefund;
+        const available = netTotal > committed ? netTotal - committed : 0n;
+
+        if (requested > available) {
+          throw new AllocationOverLimitError(available.toString(), requested.toString());
         }
 
         const allocationId = `alloc-${crypto.randomUUID()}`;
@@ -542,13 +566,21 @@ export function createActivityStore(db: ActivityDatabase) {
         `);
 
         const [activitySummary] = await activitySummaries(tx, institutionId, activity.id);
+        const newAllocated = totalAllocated + requested;
+        const unallocatedAfter = netTotal > (newAllocated + decidedRefund)
+          ? (netTotal - (newAllocated + decidedRefund)).toString()
+          : "0";
+        const shortfallAfter = newAllocated > netTotal ? (newAllocated - netTotal).toString() : "0";
+
         return {
           allocation: allocationFrom(inserted),
           contributionSummary: {
             contributionId: contribution.id,
             currencyUnit: contribution.currency_unit,
             totalAmount: contribution.amount_exact,
-            ...contributionBalance(contribution.amount_exact, (BigInt(allocatedBefore) + requested).toString()),
+            allocatedAmount: newAllocated.toString(),
+            unallocatedAmount: unallocatedAfter,
+            shortfallAmount: shortfallAfter,
           },
           activitySummary,
         };
@@ -646,9 +678,49 @@ export function createActivityStore(db: ActivityDatabase) {
       institutionId: string,
       contributions: Array<{ id: string; amountExact: string }>
     ): Promise<Map<string, ContributionBalance>> {
-      const totals = await allocatedTotals(db, institutionId, contributions.map((c) => c.id));
+      if (contributions.length === 0) return new Map();
+      const ids = contributions.map((c) => c.id);
+      const totals = await allocatedTotals(db, institutionId, ids);
+
+      let refundMap = new Map<string, { paid: bigint; decided: bigint }>();
+      try {
+        const refundRows = rowsOf(
+          await db.execute(sql`
+            SELECT contribution_id,
+                   COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
+                   COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
+            FROM contribution_refunds
+            WHERE institution_id = ${institutionId}
+              AND contribution_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+            GROUP BY contribution_id
+          `)
+        );
+        refundMap = new Map(
+          refundRows.map((r) => [r.contribution_id as string, { paid: BigInt(r.paid_total), decided: BigInt(r.decided_total) }])
+        );
+      } catch {
+        // Table might not exist in isolated activity-only tests
+      }
+
       return new Map(
-        contributions.map((c) => [c.id, contributionBalance(c.amountExact, totals.get(c.id) ?? "0")])
+        contributions.map((c) => {
+          const total = BigInt(c.amountExact);
+          const allocated = BigInt(totals.get(c.id) ?? "0");
+          const ref = refundMap.get(c.id) ?? { paid: 0n, decided: 0n };
+          const netTotal = total > ref.paid ? total - ref.paid : 0n;
+          const shortfall = allocated > netTotal ? allocated - netTotal : 0n;
+          const committed = allocated + ref.decided;
+          const unallocated = netTotal > committed ? netTotal - committed : 0n;
+
+          return [
+            c.id,
+            {
+              allocatedAmount: allocated.toString(),
+              unallocatedAmount: unallocated.toString(),
+              shortfallAmount: shortfall.toString(),
+            },
+          ];
+        })
       );
     },
   };

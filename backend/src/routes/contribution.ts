@@ -24,13 +24,16 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import {
+  evaluateProofValidity,
   isContributionStatus,
+  isCorrectionType,
   isCurrencyUnit,
   isSourceChannel,
   normalizeFundType,
   validateContributionInput,
   type ContributionInput,
   type ContributionStatus,
+  type CorrectionType,
   type JenisDana,
 } from "../contribution";
 import {
@@ -451,18 +454,208 @@ contributionRoutes.get("/contributions/:id", async (c) => {
 
   const history = await store.getHistory(who.session.institutionId, id);
   const documents = await store.listDocuments(who.session.institutionId, id);
+  const corrections = await store.listCorrections(who.session.institutionId, id);
+  const refunds = await store.listRefunds(who.session.institutionId, id);
+  const events = await store.getEvents(who.session.institutionId, id);
 
   const activities = who.runtime.activities;
   const balance = activities
     ? (await activities.contributionBalances(who.session.institutionId, [contribution])).get(contribution.id)
     : undefined;
 
+  const proofVersionParam = c.req.query("proofVersion");
+  const proofVersion = proofVersionParam !== undefined ? Number(proofVersionParam) : null;
+  const proofValidity = evaluateProofValidity(contribution.version, proofVersion);
+
   return c.json({
     success: true,
-    contribution: { ...contribution, ...balance },
+    contribution: {
+      ...contribution,
+      ...balance,
+      isCurrentVersion: true,
+      proofValidity,
+    },
     history,
     documents: documents.map(documentView),
+    corrections,
+    refunds,
+    events,
   });
+});
+
+// 4a. Correct contribution (nominal amount or duplicate entry)
+contributionRoutes.post("/contributions/:id/correct", async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const who = await contributionActor(c, bodyInstitution(body), READERS);
+  if ("response" in who) return who.response;
+
+  const expectedVersion = expectedVersionOf(body);
+  if (expectedVersion === null) return badRequest(c, MISSING_VERSION);
+  const operationId = operationIdOf(body);
+  if (!operationId) return badRequest(c, MISSING_OPERATION);
+
+  const correctionType = text(body.correctionType);
+  if (!isCorrectionType(correctionType)) {
+    return badRequest(c, "Tipe koreksi harus berupa 'AMOUNT' atau 'DUPLICATE'.");
+  }
+
+  const amountExact = text(body.amountExact) || undefined;
+  const reason = text(body.reason);
+  if (!reason || reason.length < 5) {
+    return badRequest(c, "Alasan koreksi wajib diisi (minimal 5 karakter).");
+  }
+  const sourceProofRef = text(body.sourceProofRef);
+  if (!sourceProofRef) {
+    return badRequest(c, "Referensi bukti sumber koreksi wajib disertakan.");
+  }
+
+  const id = c.req.param("id");
+  const result = await who.runtime.contributions!.correctContribution(
+    who.session.institutionId,
+    {
+      contributionId: id,
+      expectedVersion,
+      correctionType,
+      amountExact,
+      reason,
+      sourceProofRef,
+    },
+    {
+      operationId,
+      account: who.session.account,
+      requestHash: requestHash(["correct", id, expectedVersion, correctionType, amountExact, reason, sourceProofRef]),
+    },
+    who.identity,
+    who.runtime.now()
+  );
+
+  return c.json({ success: true, ...result });
+});
+
+// 4b. List corrections for contribution
+contributionRoutes.get("/contributions/:id/corrections", async (c) => {
+  const who = await contributionActor(c, c.req.query("institutionId"), READERS);
+  if ("response" in who) return who.response;
+
+  const corrections = await who.runtime.contributions!.listCorrections(
+    who.session.institutionId,
+    c.req.param("id")
+  );
+  return c.json({ success: true, corrections });
+});
+
+// 4c. Decide refund (pending payment)
+contributionRoutes.post("/contributions/:id/refunds", async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const who = await contributionActor(c, bodyInstitution(body), READERS);
+  if ("response" in who) return who.response;
+
+  const expectedVersion = expectedVersionOf(body);
+  if (expectedVersion === null) return badRequest(c, MISSING_VERSION);
+  const operationId = operationIdOf(body);
+  if (!operationId) return badRequest(c, MISSING_OPERATION);
+
+  const amountExact = text(body.amountExact);
+  if (!amountExact) return badRequest(c, "Nominal pengembalian wajib diisi.");
+  const reason = text(body.reason);
+  if (!reason || reason.length < 5) {
+    return badRequest(c, "Alasan pengembalian wajib diisi (minimal 5 karakter).");
+  }
+  const policyBasis = text(body.policyBasis);
+  if (!policyBasis || policyBasis.length < 5) {
+    return badRequest(c, "Dasar kebijakan jenis dana lembaga wajib diisi (minimal 5 karakter).");
+  }
+
+  const id = c.req.param("id");
+  const refund = await who.runtime.contributions!.decideRefund(
+    who.session.institutionId,
+    {
+      contributionId: id,
+      expectedVersion,
+      amountExact,
+      reason,
+      policyBasis,
+    },
+    {
+      operationId,
+      account: who.session.account,
+      requestHash: requestHash(["decide_refund", id, expectedVersion, amountExact, reason, policyBasis]),
+    },
+    who.identity,
+    who.runtime.now()
+  );
+
+  return c.json({ success: true, refund }, 201);
+});
+
+// 4d. List refunds for contribution
+contributionRoutes.get("/contributions/:id/refunds", async (c) => {
+  const who = await contributionActor(c, c.req.query("institutionId"), READERS);
+  if ("response" in who) return who.response;
+
+  const refunds = await who.runtime.contributions!.listRefunds(
+    who.session.institutionId,
+    c.req.param("id")
+  );
+  return c.json({ success: true, refunds });
+});
+
+// 4e. Record actual refund payment
+contributionRoutes.post("/contributions/:id/refunds/:refundId/pay", async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const who = await contributionActor(c, bodyInstitution(body), READERS);
+  if ("response" in who) return who.response;
+
+  const operationId = operationIdOf(body);
+  if (!operationId) return badRequest(c, MISSING_OPERATION);
+
+  const paymentProofRef = text(body.paymentProofRef);
+  if (!paymentProofRef) {
+    return badRequest(c, "Nomor referensi bukti transfer / pembayaran pengembalian wajib diisi.");
+  }
+  const paidAt = typeof body.paidAt === "number" && body.paidAt > 0 ? body.paidAt : who.runtime.now();
+  const paymentNotes = text(body.paymentNotes) || undefined;
+
+  const id = c.req.param("id");
+  const refundId = c.req.param("refundId");
+
+  const refund = await who.runtime.contributions!.payRefund(
+    who.session.institutionId,
+    {
+      contributionId: id,
+      refundId,
+      paymentProofRef,
+      paidAt,
+      paymentNotes,
+    },
+    {
+      operationId,
+      account: who.session.account,
+      requestHash: requestHash(["pay_refund", id, refundId, paymentProofRef, paidAt, paymentNotes]),
+    },
+    who.identity,
+    who.runtime.now()
+  );
+
+  return c.json({ success: true, refund });
+});
+
+// 4f. List versioned events for contribution
+contributionRoutes.get("/contributions/:id/events", async (c) => {
+  const who = await contributionActor(c, c.req.query("institutionId"), READERS);
+  if ("response" in who) return who.response;
+
+  const events = await who.runtime.contributions!.getEvents(
+    who.session.institutionId,
+    c.req.param("id")
+  );
+  return c.json({ success: true, events });
 });
 
 // 5. Reconcile contribution against source proof

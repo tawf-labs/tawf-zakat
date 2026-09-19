@@ -217,20 +217,22 @@ export async function listContributions(
   return res.contributions;
 }
 
-export async function getContribution(
-  requests: PrivateRequests,
-  id: string
-): Promise<{
+export type ContributionDetailResponse = {
+  success: boolean;
   contribution: ContributionRecord;
   history: ContributionHistory[];
   documents: ContributionDocument[];
-}> {
-  return requests.json<{
-    success: boolean;
-    contribution: ContributionRecord;
-    history: ContributionHistory[];
-    documents: ContributionDocument[];
-  }>(`/api/workspace/contributions/${encodeURIComponent(id)}`);
+  corrections?: ContributionCorrection[];
+  refunds?: ContributionRefund[];
+  events?: ContributionEvent[];
+  proofValidity?: { status: ProofValidity; notes: string };
+};
+
+export async function getContribution(
+  requests: PrivateRequests,
+  id: string
+): Promise<ContributionDetailResponse> {
+  return requests.json<ContributionDetailResponse>(`/api/workspace/contributions/${encodeURIComponent(id)}`);
 }
 
 export async function createContribution(
@@ -462,3 +464,154 @@ export async function decideRecoveryRequest(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Correction, Refund & Versioning API (Issue #106, Spec #100)
+// ---------------------------------------------------------------------------
+
+export type CorrectionType = "AMOUNT" | "DUPLICATE";
+
+export type ContributionCorrection = {
+  id: string;
+  institutionId: string;
+  contributionId: string;
+  fromVersion: number;
+  toVersion: number;
+  correctionType: CorrectionType;
+  fromAmountExact: string;
+  toAmountExact: string;
+  reason: string;
+  sourceProofRef: string | null;
+  correctedBy: string;
+  correctedByOfficerId: string | null;
+  correctedAt: number;
+};
+
+export type RefundStatus = "DECIDED" | "PAID";
+
+export type ContributionRefund = {
+  id: string;
+  institutionId: string;
+  contributionId: string;
+  contributionVersion: number;
+  amountExact: string;
+  reason: string;
+  policyBasis: string;
+  status: RefundStatus;
+  decidedAt: number;
+  decidedBy: string;
+  decidedByOfficerId: string | null;
+  paymentProofRef: string | null;
+  paidAt: number | null;
+  paidBy: string | null;
+  paidByOfficerId: string | null;
+  paymentNotes: string | null;
+};
+
+export type ContributionEvent = {
+  id: string;
+  institutionId: string;
+  contributionId: string;
+  version: number;
+  eventType: string;
+  eventData: Record<string, unknown>;
+  occurredAt: number;
+  actorAccount: string;
+  actorOfficerId: string | null;
+};
+
+export type ProofValidity = "CURRENT" | "SUPERSEDED" | "INVALID";
+
+export async function correctContribution(
+  requests: PrivateRequests,
+  id: string,
+  input: {
+    expectedVersion: number;
+    correctionType: CorrectionType;
+    amountExact?: string;
+    reason: string;
+    sourceProofRef?: string;
+    operationId?: string;
+  }
+): Promise<{ contribution: ContributionRecord; correction: ContributionCorrection }> {
+  const operationId = input.operationId || crypto.randomUUID();
+  return requests.json<{
+    success: boolean;
+    contribution: ContributionRecord;
+    correction: ContributionCorrection;
+  }>(`/api/workspace/contributions/${encodeURIComponent(id)}/correct`, {
+    method: "POST",
+    body: JSON.stringify({ ...input, operationId }),
+  });
+}
+
+export async function listCorrections(
+  requests: PrivateRequests,
+  id: string
+): Promise<ContributionCorrection[]> {
+  const res = await requests.json<{ success: boolean; corrections: ContributionCorrection[] }>(
+    `/api/workspace/contributions/${encodeURIComponent(id)}/corrections`
+  );
+  return res.corrections;
+}
+
+export async function decideRefund(
+  requests: PrivateRequests,
+  id: string,
+  input: {
+    expectedVersion: number;
+    amountExact: string;
+    reason: string;
+    policyBasis: string;
+    operationId?: string;
+  }
+): Promise<{ refund: ContributionRefund }> {
+  const operationId = input.operationId || crypto.randomUUID();
+  return requests.json<{ success: boolean; refund: ContributionRefund }>(
+    `/api/workspace/contributions/${encodeURIComponent(id)}/refunds`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ...input, operationId }),
+    }
+  );
+}
+
+export async function payRefund(
+  requests: PrivateRequests,
+  id: string,
+  refundId: string,
+  input: {
+    paymentProofRef: string;
+    paidAt?: number;
+    paymentNotes?: string;
+    operationId?: string;
+  }
+): Promise<{ refund: ContributionRefund }> {
+  const operationId = input.operationId || crypto.randomUUID();
+  return requests.json<{ success: boolean; refund: ContributionRefund }>(
+    `/api/workspace/contributions/${encodeURIComponent(id)}/refunds/${encodeURIComponent(refundId)}/pay`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ...input, operationId }),
+    }
+  );
+}
+
+export async function listRefunds(
+  requests: PrivateRequests,
+  id: string
+): Promise<ContributionRefund[]> {
+  const res = await requests.json<{ success: boolean; refunds: ContributionRefund[] }>(
+    `/api/workspace/contributions/${encodeURIComponent(id)}/refunds`
+  );
+  return res.refunds;
+}
+
+export async function listContributionEvents(
+  requests: PrivateRequests,
+  id: string
+): Promise<ContributionEvent[]> {
+  const res = await requests.json<{ success: boolean; events: ContributionEvent[] }>(
+    `/api/workspace/contributions/${encodeURIComponent(id)}/events`
+  );
+  return res.events;
+}
