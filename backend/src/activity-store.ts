@@ -15,15 +15,19 @@ import {
   activityFunding,
   activityTarget,
   allocationTerms,
+  calculateActivityAccountability,
   parseExactAmount,
+  summarizeAidLines,
+  type ActivityAccountabilitySummary,
   type ActivitySummary,
   type AllocationHistoryRecord,
   type ContributionAllocationRecord,
   type ContributionAllocationSummary,
   type ContributionBalance,
   type DistributionActivityRecord,
+  type ReallocationDecisionRecord,
 } from "./activity";
-import type { FundType } from "./disbursement";
+import { type AidLine, type FundType } from "./disbursement";
 import type { ActivityTraceData } from "./realization-source";
 
 type Executor = { execute: (query: SQL) => Promise<unknown> };
@@ -58,6 +62,13 @@ export class AllocationOverLimitError extends Error {
   }
 }
 
+export class AllocationAvailabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AllocationAvailabilityError";
+  }
+}
+
 export class ActivityOperationConflictError extends Error {
   constructor() {
     super("Identitas operasi (operationId) sudah digunakan untuk permintaan berbeda.");
@@ -85,6 +96,8 @@ export type ActivityAllocation = ContributionAllocationRecord & { source: Alloca
 export type ActivityDetail = ActivitySummary & {
   allocations: ActivityAllocation[];
   history: AllocationHistoryRecord[];
+  accountability: ActivityAccountabilitySummary;
+  reallocations: ReallocationDecisionRecord[];
 };
 
 export type ContributionAllocation = ContributionAllocationRecord & { activityName: string };
@@ -134,7 +147,7 @@ export const ACTIVITY_SCHEMA_STATEMENTS = [
     version INTEGER NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
-    CONSTRAINT contribution_allocations_status_known CHECK (status IN ('ACTIVE'))
+    CONSTRAINT contribution_allocations_status_known CHECK (status IN ('ACTIVE', 'REALLOCATED'))
   );`,
   `CREATE INDEX IF NOT EXISTS contribution_allocations_by_contribution
     ON contribution_allocations (institution_id, contribution_id);`,
@@ -158,6 +171,38 @@ export const ACTIVITY_SCHEMA_STATEMENTS = [
     reason TEXT NOT NULL,
     occurred_at BIGINT NOT NULL
   );`,
+
+  `CREATE TABLE IF NOT EXISTS reallocation_decisions (
+    id TEXT PRIMARY KEY,
+    institution_id TEXT NOT NULL REFERENCES institutions(id),
+    source_activity_id TEXT NOT NULL REFERENCES distribution_activities(id),
+    target_activity_id TEXT NOT NULL REFERENCES distribution_activities(id),
+    source_allocation_id TEXT NOT NULL REFERENCES contribution_allocations(id),
+    target_allocation_id TEXT NOT NULL REFERENCES contribution_allocations(id),
+    contribution_id TEXT NOT NULL REFERENCES contributions(id),
+    amount_exact TEXT NOT NULL,
+    fund_type TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    decided_by_account TEXT NOT NULL,
+    decided_by_officer_id TEXT REFERENCES officer_profiles(id),
+    source_activity_version INTEGER NOT NULL,
+    target_activity_version INTEGER NOT NULL,
+    source_allocation_version INTEGER NOT NULL,
+    target_allocation_version INTEGER NOT NULL,
+    occurred_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL
+  );`,
+  `CREATE INDEX IF NOT EXISTS reallocation_decisions_by_source
+    ON reallocation_decisions (institution_id, source_activity_id);`,
+  `CREATE INDEX IF NOT EXISTS reallocation_decisions_by_target
+    ON reallocation_decisions (institution_id, target_activity_id);`,
+
+  // #107 widened the allocation states. Dropping first keeps this re-runnable on a
+  // database created before REALLOCATED existed, without hiding a failure to apply it.
+  `ALTER TABLE contribution_allocations DROP CONSTRAINT IF EXISTS contribution_allocations_status_known;`,
+  `ALTER TABLE contribution_allocations ADD CONSTRAINT contribution_allocations_status_known
+    CHECK (status IN ('ACTIVE', 'REALLOCATED'));`,
 
   `CREATE TABLE IF NOT EXISTS activity_operations (
     institution_id TEXT NOT NULL REFERENCES institutions(id),
@@ -271,6 +316,173 @@ function historyFrom(row: any): AllocationHistoryRecord {
   };
 }
 
+function reallocationFrom(row: any): ReallocationDecisionRecord {
+  return {
+    id: row.id,
+    institutionId: row.institution_id,
+    sourceActivityId: row.source_activity_id,
+    targetActivityId: row.target_activity_id,
+    sourceAllocationId: row.source_allocation_id,
+    targetAllocationId: row.target_allocation_id,
+    contributionId: row.contribution_id,
+    amountExact: row.amount_exact,
+    fundType: row.fund_type,
+    purpose: row.purpose,
+    reason: row.reason,
+    decidedByAccount: row.decided_by_account,
+    decidedByOfficerId: row.decided_by_officer_id ?? null,
+    sourceActivityVersion: Number(row.source_activity_version),
+    targetActivityVersion: Number(row.target_activity_version),
+    sourceAllocationVersion: Number(row.source_allocation_version),
+    targetAllocationVersion: Number(row.target_allocation_version),
+    occurredAt: Number(row.occurred_at),
+    createdAt: Number(row.created_at),
+  };
+}
+
+/** Every decision that moved funds into or out of this activity, newest first. */
+async function reallocationsTouching(
+  executor: Executor,
+  institutionId: string,
+  activityId: string
+): Promise<ReallocationDecisionRecord[]> {
+  const rows = rowsOf(
+    await executor.execute(sql`
+      SELECT * FROM reallocation_decisions
+      WHERE institution_id = ${institutionId}
+        AND (source_activity_id = ${activityId} OR target_activity_id = ${activityId})
+      ORDER BY occurred_at DESC, id DESC
+    `)
+  );
+  return rows.map(reallocationFrom);
+}
+
+async function loadActivityAccountability(
+  executor: Executor,
+  institutionId: string,
+  activityId: string
+): Promise<ActivityAccountabilitySummary> {
+  const activityRow = rowsOf(
+    await executor.execute(sql`
+      SELECT a.*, COALESCE(SUM(ca.amount_exact::numeric), 0)::text AS total_allocated
+      FROM distribution_activities a
+      LEFT JOIN contribution_allocations ca
+        ON ca.activity_id = a.id AND ca.institution_id = a.institution_id AND ca.status = 'ACTIVE'
+      WHERE a.id = ${activityId} AND a.institution_id = ${institutionId}
+      GROUP BY a.id
+    `)
+  )[0];
+  if (!activityRow) throw new ActivityNotFoundError("Kegiatan penyaluran", activityId);
+
+  const proposal = rowsOf(
+    await executor.execute(sql`
+      SELECT id, version, status, aid_lines_json, remainder_closed_json
+      FROM proposal_drafts
+      WHERE id = ${activityRow.proposal_id} AND institution_id = ${institutionId}
+    `)
+  )[0];
+  if (!proposal) throw new ActivityNotFoundError("Pengajuan", activityRow.proposal_id);
+
+  const aidLines: AidLine[] = JSON.parse(proposal.aid_lines_json ?? "[]");
+  const isRemainderClosed = proposal.status === "REMAINDER_CLOSED" || Boolean(proposal.remainder_closed_json);
+
+  const realizations = rowsOf(
+    await executor.execute(sql`
+      SELECT aid_line_id, amount_idr, quantity FROM disbursement_realizations
+      WHERE institution_id = ${institutionId} AND proposal_id = ${proposal.id}
+      ORDER BY recorded_at ASC, id ASC
+    `)
+  );
+
+  const advances = rowsOf(
+    await executor.execute(sql`
+      SELECT COALESCE(SUM(amount_idr::numeric), 0)::text AS total
+      FROM disbursement_realization_advances
+      WHERE institution_id = ${institutionId} AND proposal_id = ${proposal.id}
+    `)
+  );
+
+  const expenses = rowsOf(
+    await executor.execute(sql`
+      SELECT
+        COALESCE(SUM(CASE WHEN advance_id IS NULL THEN amount_idr::numeric ELSE 0 END), 0)::text AS direct_total,
+        COALESCE(SUM(CASE WHEN advance_id IS NOT NULL THEN amount_idr::numeric ELSE 0 END), 0)::text AS accounted_total
+      FROM disbursement_realization_expenses
+      WHERE institution_id = ${institutionId} AND proposal_id = ${proposal.id}
+    `)
+  );
+
+  return calculateActivityAccountability({
+    activityId: activityRow.id,
+    proposalId: proposal.id,
+    proposalVersion: Number(proposal.version),
+    proposalStatus: proposal.status,
+    currencyUnit: activityRow.currency_unit,
+    isRemainderClosed,
+    totalAllocatedAmount: activityRow.total_allocated,
+    totalDirectExpensesIdr: expenses[0]?.direct_total ?? "0",
+    totalAccountedExpensesIdr: expenses[0]?.accounted_total ?? "0",
+    totalAdvancesIdr: advances[0]?.total ?? "0",
+    totalContributionShortfall: await activityShortfall(executor, institutionId, activityId),
+    aidLines: summarizeAidLines(
+      aidLines,
+      realizations.map((row) => ({
+        aidLineId: row.aid_line_id,
+        amountIdr: row.amount_idr ?? null,
+        quantity: row.quantity ?? null,
+      }))
+    ),
+  });
+}
+
+/**
+ * How far this activity's allocations stand above the contributions still backing them
+ * after a correction or a paid refund (AC10, #106). Each contribution is counted once,
+ * across every activity it funds, and its shortfall is attributed here in proportion to
+ * what this activity holds - never inflated by counting the same gap in two activities.
+ */
+async function activityShortfall(
+  executor: Executor,
+  institutionId: string,
+  activityId: string
+): Promise<string> {
+  const rows = rowsOf(
+    await executor.execute(sql`
+      SELECT
+        CEIL(COALESCE(SUM(
+          GREATEST(shortfall.gap * shortfall.here / NULLIF(shortfall.allocated, 0), 0)
+        ), 0))::text AS total
+      FROM (
+        SELECT
+          GREATEST(
+            SUM(ca.amount_exact::numeric)
+              - GREATEST(c.amount_exact::numeric - COALESCE(r.paid, 0), 0),
+            0
+          ) AS gap,
+          SUM(ca.amount_exact::numeric) AS allocated,
+          SUM(CASE WHEN ca.activity_id = ${activityId} THEN ca.amount_exact::numeric ELSE 0 END) AS here
+        FROM contribution_allocations ca
+        JOIN contributions c ON c.id = ca.contribution_id AND c.institution_id = ca.institution_id
+        LEFT JOIN (
+          SELECT contribution_id, SUM(amount_exact::numeric) AS paid
+          FROM contribution_refunds
+          WHERE institution_id = ${institutionId} AND status = 'PAID'
+          GROUP BY contribution_id
+        ) r ON r.contribution_id = c.id
+        WHERE ca.institution_id = ${institutionId} AND ca.status = 'ACTIVE'
+          AND ca.contribution_id IN (
+            SELECT contribution_id FROM contribution_allocations
+            WHERE institution_id = ${institutionId} AND activity_id = ${activityId} AND status = 'ACTIVE'
+          )
+        GROUP BY c.id, c.amount_exact, r.paid
+      ) shortfall
+    `)
+  );
+  // Rounded up in SQL: the reported gap stays whole and never understates this
+  // activity's share of it.
+  return rows[0]?.total ?? "0";
+}
+
 /** Activities with their active allocation totals, in one query; `activityId` narrows to one. */
 async function activitySummaries(
   executor: Executor,
@@ -300,6 +512,53 @@ async function activitySummaries(
       tracingCoverage: TRACING_COVERAGE,
     };
   });
+}
+
+/** What a refund has taken out of a contribution, or is about to (#106, AC12). */
+export type RefundTotals = {
+  /** Money actually paid back: it is no longer part of the contribution. */
+  paid: bigint;
+  /** Decided but unpaid: still committed, so it may not be allocated or reallocated away. */
+  decided: bigint;
+};
+
+const NO_REFUNDS: RefundTotals = { paid: 0n, decided: 0n };
+
+/** Refund totals per contribution, in one query. Contributions without refunds are absent. */
+async function refundTotals(
+  executor: Executor,
+  institutionId: string,
+  contributionIds: string[]
+): Promise<Map<string, RefundTotals>> {
+  if (contributionIds.length === 0) return new Map();
+  const rows = rowsOf(
+    await executor.execute(sql`
+      SELECT contribution_id,
+             COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
+             COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
+      FROM contribution_refunds
+      WHERE institution_id = ${institutionId}
+        AND contribution_id IN (${sql.join(contributionIds.map((id) => sql`${id}`), sql`, `)})
+      GROUP BY contribution_id
+    `)
+  );
+  return new Map(
+    rows.map((row) => [
+      row.contribution_id as string,
+      { paid: BigInt(row.paid_total), decided: BigInt(row.decided_total) },
+    ])
+  );
+}
+
+/**
+ * What of a contribution may still be committed to an activity: its recorded amount less
+ * refunds paid back, less what is already allocated and what a decided refund has claimed.
+ */
+function allocatableRemainder(totalExact: string, allocatedExact: string, refunds: RefundTotals): bigint {
+  const total = BigInt(totalExact);
+  const net = total > refunds.paid ? total - refunds.paid : 0n;
+  const committed = BigInt(allocatedExact) + refunds.decided;
+  return net > committed ? net - committed : 0n;
 }
 
 /** Active allocation totals for many contributions, in one query. */
@@ -425,6 +684,9 @@ export function createActivityStore(db: ActivityDatabase) {
         `)
       );
 
+      const accountability = await loadActivityAccountability(db, institutionId, activityId);
+      const reallocations = await reallocationsTouching(db, institutionId, activityId);
+
       return {
         ...summary,
         allocations: allocationRows.map((row) => ({
@@ -434,6 +696,8 @@ export function createActivityStore(db: ActivityDatabase) {
             : null,
         })),
         history: historyRows.map(historyFrom),
+        accountability,
+        reallocations,
       };
     },
 
@@ -503,29 +767,8 @@ export function createActivityStore(db: ActivityDatabase) {
         const allocatedBefore =
           (await allocatedTotals(tx, institutionId, [contribution.id])).get(contribution.id) ?? "0";
 
-        // Check refunds
-        let paidRefund = 0n;
-        let decidedRefund = 0n;
-        try {
-          const refundRows = rowsOf(
-            await tx.execute(sql`
-              SELECT COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
-                     COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
-              FROM contribution_refunds
-              WHERE institution_id = ${institutionId} AND contribution_id = ${contribution.id}
-            `)
-          );
-          paidRefund = BigInt(refundRows[0]?.paid_total ?? "0");
-          decidedRefund = BigInt(refundRows[0]?.decided_total ?? "0");
-        } catch {
-          // contribution_refunds table might not exist in isolated activity-only tests
-        }
-
-        const totalAmount = BigInt(contribution.amount_exact);
-        const netTotal = totalAmount > paidRefund ? totalAmount - paidRefund : 0n;
-        const totalAllocated = BigInt(allocatedBefore);
-        const committed = totalAllocated + decidedRefund;
-        const available = netTotal > committed ? netTotal - committed : 0n;
+        const refunds = (await refundTotals(tx, institutionId, [contribution.id])).get(contribution.id) ?? NO_REFUNDS;
+        const available = allocatableRemainder(contribution.amount_exact, allocatedBefore, refunds);
 
         if (requested > available) {
           throw new AllocationOverLimitError(available.toString(), requested.toString());
@@ -565,10 +808,15 @@ export function createActivityStore(db: ActivityDatabase) {
         `);
 
         const [activitySummary] = await activitySummaries(tx, institutionId, activity.id);
-        const newAllocated = totalAllocated + requested;
-        const unallocatedAfter = netTotal > (newAllocated + decidedRefund)
-          ? (netTotal - (newAllocated + decidedRefund)).toString()
-          : "0";
+        const newAllocated = BigInt(allocatedBefore) + requested;
+        const netTotal = BigInt(contribution.amount_exact) > refunds.paid
+          ? BigInt(contribution.amount_exact) - refunds.paid
+          : 0n;
+        const unallocatedAfter = allocatableRemainder(
+          contribution.amount_exact,
+          newAllocated.toString(),
+          refunds
+        ).toString();
         const shortfallAfter = newAllocated > netTotal ? (newAllocated - netTotal).toString() : "0";
 
         return {
@@ -681,46 +929,319 @@ export function createActivityStore(db: ActivityDatabase) {
       const ids = contributions.map((c) => c.id);
       const totals = await allocatedTotals(db, institutionId, ids);
 
-      let refundMap = new Map<string, { paid: bigint; decided: bigint }>();
-      try {
-        const refundRows = rowsOf(
-          await db.execute(sql`
-            SELECT contribution_id,
-                   COALESCE(SUM(CASE WHEN status = 'PAID' THEN amount_exact::numeric ELSE 0 END), 0)::text AS paid_total,
-                   COALESCE(SUM(CASE WHEN status = 'DECIDED' THEN amount_exact::numeric ELSE 0 END), 0)::text AS decided_total
-            FROM contribution_refunds
-            WHERE institution_id = ${institutionId}
-              AND contribution_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-            GROUP BY contribution_id
-          `)
-        );
-        refundMap = new Map(
-          refundRows.map((r) => [r.contribution_id as string, { paid: BigInt(r.paid_total), decided: BigInt(r.decided_total) }])
-        );
-      } catch {
-        // Table might not exist in isolated activity-only tests
-      }
+      const refundMap = await refundTotals(db, institutionId, ids);
 
       return new Map(
         contributions.map((c) => {
-          const total = c.status === "REJECTED" ? 0n : BigInt(c.amountExact);
+          // A rejected contribution backs nothing, so every allocation on it is a shortfall.
+          const total = c.status === "REJECTED" ? "0" : c.amountExact;
+          const refunds = refundMap.get(c.id) ?? NO_REFUNDS;
           const allocated = BigInt(totals.get(c.id) ?? "0");
-          const ref = refundMap.get(c.id) ?? { paid: 0n, decided: 0n };
-          const netTotal = total > ref.paid ? total - ref.paid : 0n;
-          const shortfall = allocated > netTotal ? allocated - netTotal : 0n;
-          const committed = allocated + ref.decided;
-          const unallocated = netTotal > committed ? netTotal - committed : 0n;
+          const net = BigInt(total) > refunds.paid ? BigInt(total) - refunds.paid : 0n;
 
           return [
             c.id,
             {
               allocatedAmount: allocated.toString(),
-              unallocatedAmount: unallocated.toString(),
-              shortfallAmount: shortfall.toString(),
+              unallocatedAmount: allocatableRemainder(total, allocated.toString(), refunds).toString(),
+              shortfallAmount: (allocated > net ? allocated - net : 0n).toString(),
             },
           ];
         })
       );
+    },
+
+    async getActivityAccountability(
+      institutionId: string,
+      activityId: string
+    ): Promise<ActivityAccountabilitySummary> {
+      return loadActivityAccountability(db, institutionId, activityId);
+    },
+
+    async listReallocationsForActivity(
+      institutionId: string,
+      activityId: string
+    ): Promise<ReallocationDecisionRecord[]> {
+      const activityRow = rowsOf(
+        await db.execute(sql`
+          SELECT id FROM distribution_activities
+          WHERE id = ${activityId} AND institution_id = ${institutionId}
+        `)
+      )[0];
+      if (!activityRow) throw new ActivityNotFoundError("Kegiatan penyaluran", activityId);
+
+      return reallocationsTouching(db, institutionId, activityId);
+    },
+
+    async reallocateAllocation(
+      institutionId: string,
+      params: {
+        sourceActivityId: string;
+        targetActivityId: string;
+        sourceAllocationId: string;
+        amountExact: string;
+        fundType?: string | null;
+        purpose?: string | null;
+        reason: string;
+        expectedSourceVersion: number;
+        /** Checked when the officer sent one; a stale target is as unsafe as a stale source. */
+        expectedTargetVersion: number | null;
+      },
+      operation: ActivityOperation,
+      actor: ActivityActor,
+      now: number
+    ): Promise<{
+      decision: ReallocationDecisionRecord;
+      sourceAllocation: ContributionAllocationRecord;
+      targetAllocation: ContributionAllocationRecord;
+      sourceActivitySummary: ActivitySummary;
+      targetActivitySummary: ActivitySummary;
+      sourceAccountability: ActivityAccountabilitySummary;
+    }> {
+      const requested = parseExactAmount(params.amountExact);
+      if (params.sourceActivityId === params.targetActivityId) {
+        throw new ActivityRuleError("Kegiatan tujuan tidak boleh sama dengan kegiatan sumber.");
+      }
+
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        // Lock both activities in deterministic order to prevent deadlocks
+        const firstId = params.sourceActivityId < params.targetActivityId ? params.sourceActivityId : params.targetActivityId;
+        const secondId = params.sourceActivityId < params.targetActivityId ? params.targetActivityId : params.sourceActivityId;
+
+        await tx.execute(sql`
+          SELECT id FROM distribution_activities
+          WHERE id = ${firstId} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `);
+        await tx.execute(sql`
+          SELECT id FROM distribution_activities
+          WHERE id = ${secondId} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `);
+
+        const sourceActivityRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM distribution_activities
+            WHERE id = ${params.sourceActivityId} AND institution_id = ${institutionId}
+          `)
+        )[0];
+        if (!sourceActivityRow) throw new ActivityNotFoundError("Kegiatan penyaluran sumber", params.sourceActivityId);
+
+        const targetActivityRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM distribution_activities
+            WHERE id = ${params.targetActivityId} AND institution_id = ${institutionId}
+          `)
+        )[0];
+        if (!targetActivityRow) throw new ActivityNotFoundError("Kegiatan penyaluran tujuan", params.targetActivityId);
+
+        if (Number(sourceActivityRow.version) !== params.expectedSourceVersion) {
+          throw new ActivityConflictError(
+            `Kegiatan sumber telah diperbarui sejak versi yang Anda muat (versi sekarang ${sourceActivityRow.version}, diharapkan ${params.expectedSourceVersion}). Muat ulang sebelum mencoba lagi.`
+          );
+        }
+        if (params.expectedTargetVersion !== null && Number(targetActivityRow.version) !== params.expectedTargetVersion) {
+          throw new ActivityConflictError(
+            `Kegiatan tujuan telah diperbarui sejak versi yang Anda muat (versi sekarang ${targetActivityRow.version}, diharapkan ${params.expectedTargetVersion}). Muat ulang sebelum mencoba lagi.`
+          );
+        }
+
+        // The proposals behind both activities are locked in the same order realization,
+        // expense and remainder-closure recording lock them (`disbursement-store`). Without
+        // this, a realization could commit beside this decision and both would read the
+        // same remainder as available, spending it twice (AC04).
+        for (const proposalId of [sourceActivityRow.proposal_id, targetActivityRow.proposal_id].sort()) {
+          await tx.execute(sql`
+            SELECT id FROM proposal_drafts
+            WHERE id = ${proposalId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `);
+        }
+
+        if (sourceActivityRow.currency_unit !== targetActivityRow.currency_unit) {
+          throw new ActivityRuleError(
+            `Mata uang kegiatan sumber (${sourceActivityRow.currency_unit}) berbeda dengan kegiatan tujuan (${targetActivityRow.currency_unit}).`
+          );
+        }
+
+        const sourceAllocationRow = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contribution_allocations
+            WHERE id = ${params.sourceAllocationId} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!sourceAllocationRow) throw new ActivityNotFoundError("Alokasi sumber", params.sourceAllocationId);
+        if (sourceAllocationRow.activity_id !== sourceActivityRow.id) {
+          throw new ActivityRuleError("Alokasi sumber tidak berada pada kegiatan sumber yang ditentukan.");
+        }
+        if (sourceAllocationRow.status !== "ACTIVE") {
+          throw new ActivityRuleError(
+            `Alokasi sumber berstatus "${sourceAllocationRow.status}", hanya alokasi aktif yang dapat dialihkan.`
+          );
+        }
+
+        const contribution = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM contributions
+            WHERE id = ${sourceAllocationRow.contribution_id} AND institution_id = ${institutionId}
+            FOR UPDATE
+          `)
+        )[0];
+        if (!contribution) throw new ActivityNotFoundError("Catatan kontribusi", sourceAllocationRow.contribution_id);
+        if (contribution.status !== "ENDORSED") {
+          throw new ActivityRuleError("Kontribusi belum disahkan (ENDORSED).");
+        }
+        // A refund already paid back left the contribution; one merely decided is still
+        // owed to the donor. Neither may travel on to another activity (AC12, #106).
+        const refunds = (await refundTotals(tx, institutionId, [contribution.id])).get(contribution.id) ?? NO_REFUNDS;
+        const totalContribution = BigInt(contribution.amount_exact);
+        const netContribution = totalContribution > refunds.paid ? totalContribution - refunds.paid : 0n;
+        const movable = netContribution > refunds.decided ? netContribution - refunds.decided : 0n;
+        if (requested > movable) {
+          throw new ActivityRuleError(
+            `Nominal pengalihan (${requested.toString()}) melebihi nilai kontribusi yang masih dapat dialihkan (${movable.toString()}) setelah pengembalian dana diperhitungkan.`
+          );
+        }
+
+        const terms = allocationTerms({
+          contributionFundType: contribution.fund_type,
+          contributionPurpose: contribution.purpose ?? "",
+          programFundType: targetActivityRow.program_fund_type as FundType,
+          requestedFundType: params.fundType ?? null,
+          requestedPurpose: params.purpose ?? null,
+        });
+
+        const accountability = await loadActivityAccountability(tx, institutionId, sourceActivityRow.id);
+        if (accountability.availabilityStatus === "INDETERMINATE") {
+          throw new AllocationAvailabilityError(
+            `Pengalihan belum dapat dilakukan: ${accountability.availabilityReason}`
+          );
+        }
+        if (accountability.availabilityStatus === "NONE" || BigInt(accountability.availableForReallocation) <= 0n) {
+          throw new AllocationAvailabilityError(
+            "Tidak ada sisa dana yang dapat dialihkan pada kegiatan sumber. Seluruh dana telah terealisasi, terpakai biaya, atau terikat kewajiban bantuan."
+          );
+        }
+        if (requested > BigInt(accountability.availableForReallocation)) {
+          throw new AllocationOverLimitError(accountability.availableForReallocation, requested.toString());
+        }
+        if (requested > BigInt(sourceAllocationRow.amount_exact)) {
+          throw new ActivityRuleError(
+            `Nominal pengalihan (${requested.toString()}) melebihi nominal alokasi sumber (${sourceAllocationRow.amount_exact}).`
+          );
+        }
+
+        const sourceAllocAmount = BigInt(sourceAllocationRow.amount_exact);
+        const isFullReallocation = requested === sourceAllocAmount;
+        const sourceNewStatus = isFullReallocation ? "REALLOCATED" : "ACTIVE";
+        const sourceNewAmount = sourceAllocAmount - requested;
+        const sourceNewVersion = Number(sourceAllocationRow.version) + 1;
+
+        await tx.execute(sql`
+          UPDATE contribution_allocations
+          SET status = ${sourceNewStatus},
+              amount_exact = ${sourceNewAmount.toString()},
+              version = ${sourceNewVersion},
+              updated_at = ${now}
+          WHERE id = ${sourceAllocationRow.id} AND institution_id = ${institutionId}
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO allocation_history (
+            allocation_id, institution_id, contribution_id, activity_id, version, contribution_version,
+            action, actor_account, actor_officer_id, from_status, to_status, amount_exact, reason, occurred_at
+          ) VALUES (
+            ${sourceAllocationRow.id}, ${institutionId}, ${contribution.id}, ${sourceActivityRow.id},
+            ${sourceNewVersion}, ${Number(contribution.version)},
+            'REALLOCATE_OUT', ${actor.account}, ${actor.officerId},
+            'ACTIVE', ${sourceNewStatus}, ${requested.toString()}, ${params.reason}, ${now}
+          )
+        `);
+
+        const targetAllocationId = `alloc-${crypto.randomUUID()}`;
+        const insertedTarget = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO contribution_allocations (
+              id, institution_id, contribution_id, activity_id, currency_unit,
+              amount_exact, fund_type, purpose, reason, status, allocated_at,
+              allocated_by, allocated_by_officer_id, contribution_version, version, created_at, updated_at
+            ) VALUES (
+              ${targetAllocationId}, ${institutionId}, ${contribution.id}, ${targetActivityRow.id}, ${contribution.currency_unit},
+              ${requested.toString()}, ${terms.fundType}, ${terms.purpose}, ${params.reason}, 'ACTIVE', ${now},
+              ${actor.account}, ${actor.officerId}, ${Number(contribution.version)}, 1, ${now}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          INSERT INTO allocation_history (
+            allocation_id, institution_id, contribution_id, activity_id, version, contribution_version,
+            action, actor_account, actor_officer_id, from_status, to_status, amount_exact, reason, occurred_at
+          ) VALUES (
+            ${targetAllocationId}, ${institutionId}, ${contribution.id}, ${targetActivityRow.id},
+            1, ${Number(contribution.version)},
+            'REALLOCATE_IN', ${actor.account}, ${actor.officerId},
+            NULL, 'ACTIVE', ${requested.toString()}, ${params.reason}, ${now}
+          )
+        `);
+
+        const reallocId = `realloc-${crypto.randomUUID()}`;
+        const sourceActivityNewVersion = Number(sourceActivityRow.version) + 1;
+        const targetActivityNewVersion = Number(targetActivityRow.version) + 1;
+
+        const decisionRow = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO reallocation_decisions (
+              id, institution_id, source_activity_id, target_activity_id,
+              source_allocation_id, target_allocation_id, contribution_id,
+              amount_exact, fund_type, purpose, reason, decided_by_account, decided_by_officer_id,
+              source_activity_version, target_activity_version, source_allocation_version, target_allocation_version,
+              occurred_at, created_at
+            ) VALUES (
+              ${reallocId}, ${institutionId}, ${sourceActivityRow.id}, ${targetActivityRow.id},
+              ${sourceAllocationRow.id}, ${targetAllocationId}, ${contribution.id},
+              ${requested.toString()}, ${terms.fundType}, ${terms.purpose}, ${params.reason},
+              ${actor.account}, ${actor.officerId},
+              ${sourceActivityNewVersion}, ${targetActivityNewVersion}, ${sourceNewVersion}, 1,
+              ${now}, ${now}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          UPDATE distribution_activities SET updated_at = ${now}, version = ${sourceActivityNewVersion}
+          WHERE id = ${sourceActivityRow.id} AND institution_id = ${institutionId}
+        `);
+        await tx.execute(sql`
+          UPDATE distribution_activities SET updated_at = ${now}, version = ${targetActivityNewVersion}
+          WHERE id = ${targetActivityRow.id} AND institution_id = ${institutionId}
+        `);
+
+        const [updatedSourceSummary] = await activitySummaries(tx, institutionId, sourceActivityRow.id);
+        const [updatedTargetSummary] = await activitySummaries(tx, institutionId, targetActivityRow.id);
+        const updatedAccountability = await loadActivityAccountability(tx, institutionId, sourceActivityRow.id);
+
+        return {
+          decision: reallocationFrom(decisionRow),
+          sourceAllocation: allocationFrom({
+            ...sourceAllocationRow,
+            status: sourceNewStatus,
+            amount_exact: sourceNewAmount.toString(),
+            version: sourceNewVersion,
+            updated_at: now,
+          }),
+          targetAllocation: {
+            ...allocationFrom(insertedTarget),
+            sourceAllocationId: sourceAllocationRow.id,
+          },
+          sourceActivitySummary: updatedSourceSummary,
+          targetActivitySummary: updatedTargetSummary,
+          sourceAccountability: updatedAccountability,
+        };
+      });
     },
   };
 }

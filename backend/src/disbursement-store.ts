@@ -3296,6 +3296,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       operation: DraftOperation
     ): Promise<OperationalAdvanceRecord> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
+        // The proposal is the point everything spending against it queues on: a
+        // reallocation reading this activity's remainder must not run beside a new
+        // advance, or both read the same rupiah as free (#107 AC04).
+        await tx.execute(sql`
+          SELECT id FROM proposal_drafts
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `);
         const row = rowsOf(await tx.execute(sql`
           INSERT INTO disbursement_realization_advances (
             id, institution_id, proposal_id, officer_id, officer_account, amount_idr, purpose, reference, issued_at
@@ -3335,6 +3343,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       operation: DraftOperation
     ): Promise<OperationalExpenseRecord> {
       return mutateOnce(db, institutionId, operation, async (tx) => {
+        // Taken before the advance row, and before any spend is read, for the same
+        // reason as `recordAdvance` above (#107 AC04).
+        await tx.execute(sql`
+          SELECT id FROM proposal_drafts
+          WHERE id = ${proposalId} AND institution_id = ${institutionId}
+          FOR UPDATE
+        `);
         if (input.advanceId) {
           const advance = rowsOf(await tx.execute(sql`
             SELECT * FROM disbursement_realization_advances

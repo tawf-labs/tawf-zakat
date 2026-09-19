@@ -53,6 +53,7 @@ const WORKSPACE_TABLES = [
   "proposal_decision_challenges",
   "proposal_decisions",
   "proposal_decision_documents",
+  "reallocation_decisions",
   "allocation_history",
   "contribution_allocations",
   "activity_operations",

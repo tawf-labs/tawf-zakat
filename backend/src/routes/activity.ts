@@ -1,14 +1,19 @@
 /**
- * Distribution Activities and Contribution Allocations routes (Spec #100, Ticket #103).
+ * Distribution Activities and Contribution Allocations routes (Spec #100, Tickets #103, #107).
  *
- *   GET    /api/workspace/activities                      list activities with allocated funding totals
- *   POST   /api/workspace/activities                      create an activity from an approved proposal version
- *   GET    /api/workspace/activities/:id                  one activity with its allocations and allocation history
- *   POST   /api/workspace/contributions/:id/allocate      allocate part of an endorsed contribution to an activity
- *   GET    /api/workspace/contributions/:id/allocations   allocations and allocation history of one contribution
+ *   GET    /api/workspace/activities                        list activities with allocated funding totals
+ *   POST   /api/workspace/activities                        create an activity from an approved proposal version
+ *   GET    /api/workspace/activities/:id                    one activity with its allocations and allocation history
+ *   GET    /api/workspace/activities/:id/accountability     what the activity has spent, owes and has left over
+ *   GET    /api/workspace/activities/:id/reallocations      decisions that moved funds into or out of it
+ *   POST   /api/workspace/activities/:id/reallocate         move part of an allocation to another activity
+ *   POST   /api/workspace/contributions/:id/allocate        allocate part of an endorsed contribution to an activity
+ *   GET    /api/workspace/contributions/:id/allocations     allocations and allocation history of one contribution
  *
- * Mutations carry `operationId`; an allocation also carries the contribution's
- * `expectedVersion`. Donor-level detail is only returned to contribution-mandate holders.
+ * Mutations carry `operationId`; an allocation carries the contribution's `expectedVersion`
+ * and a reallocation the source activity's, optionally the target's
+ * (`expectedTargetActivityVersion`). Donor-level detail is only returned to
+ * contribution-mandate holders.
  */
 
 import { Hono } from "hono";
@@ -18,6 +23,7 @@ import {
   ActivityConflictError,
   ActivityNotFoundError,
   ActivityOperationConflictError,
+  AllocationAvailabilityError,
   AllocationOverLimitError,
 } from "../activity-store";
 import { authenticateWorkspace, badRequest, refuse } from "../workspace-session";
@@ -45,7 +51,11 @@ activityRoutes.onError((error, c) => {
   if (error instanceof ActivityConflictError || error instanceof ActivityOperationConflictError) {
     return c.json({ success: false, error: error.message }, 409);
   }
-  if (error instanceof ActivityRuleError || error instanceof AllocationOverLimitError) {
+  if (
+    error instanceof ActivityRuleError ||
+    error instanceof AllocationOverLimitError ||
+    error instanceof AllocationAvailabilityError
+  ) {
     return c.json({ success: false, error: error.message }, 400);
   }
   if (error instanceof ActivityNotFoundError) {
@@ -158,6 +168,99 @@ activityRoutes.get("/activities/:id", async (c) => {
   );
   if (!activity) return refuse(c, 404, "not-found");
   return c.json({ success: true, activity });
+});
+
+activityRoutes.get("/activities/:id/accountability", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  const accountability = await runtime.activities!.getActivityAccountability(
+    auth.session.institutionId,
+    c.req.param("id")
+  );
+  return c.json({ success: true, accountability });
+});
+
+activityRoutes.get("/activities/:id/reallocations", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  const reallocations = await runtime.activities!.listReallocationsForActivity(
+    auth.session.institutionId,
+    c.req.param("id")
+  );
+  return c.json({ success: true, reallocations });
+});
+
+activityRoutes.post("/activities/:id/reallocate", async (c: Context) => {
+  const runtime = runtimeOf();
+  const body = (await readJson(c)) ?? {};
+  const auth = await authenticateWorkspace(c, runtime, bodyInstitution(body));
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const actor = await operationalActor(runtime, auth.session);
+  const granted = DISBURSEMENT_FUNCTIONS.find((fn) => actor.allows(fn, {}));
+  actor.require(granted ?? DISBURSEMENT_FUNCTIONS[0]);
+
+  const sourceActivityId = c.req.param("id")!;
+  const targetActivityId = text(body.targetActivityId);
+  if (!targetActivityId) return badRequest(c, "targetActivityId wajib diisi.");
+  const sourceAllocationId = text(body.sourceAllocationId);
+  if (!sourceAllocationId) return badRequest(c, "sourceAllocationId wajib diisi.");
+  const amountExact = text(body.amountExact);
+  if (!amountExact) return badRequest(c, "amountExact wajib diisi.");
+  const reason = text(body.reason);
+  if (!reason) return badRequest(c, "Alasan pengalihan (reason) wajib diisi agar riwayat keputusan dapat dibaca.");
+  // The source activity's version is the one being spent against, so it uses the
+  // workspace-wide `expectedVersion` field every other mutation carries.
+  const expectedSourceVersion = expectedVersionOf(body);
+  if (expectedSourceVersion === null) return badRequest(c, MISSING_VERSION);
+  const expectedTargetVersion = expectedVersionOf({ expectedVersion: body.expectedTargetActivityVersion });
+  if (body.expectedTargetActivityVersion !== undefined && expectedTargetVersion === null) {
+    return badRequest(c, "expectedTargetActivityVersion wajib berupa nomor versi kegiatan tujuan yang Anda muat.");
+  }
+  const operationId = operationIdOf(body);
+  if (!operationId) return badRequest(c, MISSING_OPERATION);
+
+  const fundType = text(body.fundType) || null;
+  const purpose = text(body.purpose) || null;
+
+  const result = await runtime.activities!.reallocateAllocation(
+    auth.session.institutionId,
+    {
+      sourceActivityId,
+      targetActivityId,
+      sourceAllocationId,
+      amountExact,
+      fundType,
+      purpose,
+      reason,
+      expectedSourceVersion,
+      expectedTargetVersion,
+    },
+    {
+      id: operationId,
+      account: auth.session.account,
+      requestHash: requestHash([
+        "reallocate",
+        sourceActivityId,
+        targetActivityId,
+        sourceAllocationId,
+        amountExact,
+        fundType,
+        purpose,
+        reason,
+        expectedSourceVersion,
+        expectedTargetVersion,
+      ]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+  return c.json({ success: true, ...result });
 });
 
 // ---------------------------------------------------------------------------

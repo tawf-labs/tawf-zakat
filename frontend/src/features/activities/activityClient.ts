@@ -51,7 +51,7 @@ export type ContributionAllocation = {
   fundType: JenisDana;
   purpose: string;
   reason: string;
-  status: "ACTIVE";
+  status: "ACTIVE" | "REALLOCATED";
   allocatedAt: number;
   allocatedBy: string;
   allocatedByOfficerId: string | null;
@@ -71,19 +71,78 @@ export type AllocationHistoryEntry = {
   activityId: string;
   version: number;
   contributionVersion: number;
-  action: "ALLOCATE";
+  action: "ALLOCATE" | "REALLOCATE_OUT" | "REALLOCATE_IN";
   actorAccount: string;
   actorOfficerId: string | null;
-  fromStatus: "ACTIVE" | null;
-  toStatus: "ACTIVE";
+  fromStatus: "ACTIVE" | "REALLOCATED" | null;
+  toStatus: "ACTIVE" | "REALLOCATED";
   amountExact: string;
   reason: string;
   occurredAt: number;
 };
 
+export type ActivityAvailabilityStatus = "AVAILABLE" | "INDETERMINATE" | "NONE";
+
+export type ActivityAccountabilitySummary = {
+  activityId: string;
+  proposalId: string;
+  proposalVersion: number;
+  proposalStatus: string;
+  currencyUnit: CurrencyUnit;
+  isRemainderClosed: boolean;
+  totalAllocatedAmount: string;
+  totalRealizedMoneyIdr: string;
+  totalExpensesIdr: string;
+  totalDirectExpensesIdr: string;
+  totalAccountedExpensesIdr: string;
+  totalAdvancesIdr: string;
+  unaccountedAdvancesIdr: string;
+  hasOutstandingAccountability: boolean;
+  /** Approved money not yet realized: still owed to mustahik. */
+  totalCommittedMoneyIdr: string;
+  /** Valuation of approved goods not yet handed over. */
+  totalCommittedGoodsIdr: string;
+  /** The whole outstanding aid commitment, money and goods together. */
+  totalCommittedAidIdr: string;
+  /** Allocations standing above the contributions still backing them, after a correction. */
+  totalContributionShortfall: string;
+  /** What spending and commitments exceed this activity's allocation by; zero when they balance. */
+  totalOverCommitmentIdr: string;
+  hasUnvaluedGoods: boolean;
+  unitSummaries: Array<{ aidType: string; unit: string; approved: string; realized: string; remaining: string }>;
+  availabilityStatus: ActivityAvailabilityStatus;
+  availableForReallocation: string;
+  availabilityReason: string;
+  disclaimer: string;
+};
+
+export type ReallocationDecision = {
+  id: string;
+  institutionId: string;
+  sourceActivityId: string;
+  targetActivityId: string;
+  sourceAllocationId: string;
+  targetAllocationId: string;
+  contributionId: string;
+  amountExact: string;
+  fundType: JenisDana;
+  purpose: string;
+  reason: string;
+  decidedByAccount: string;
+  decidedByOfficerId: string | null;
+  sourceActivityVersion: number;
+  targetActivityVersion: number;
+  sourceAllocationVersion: number;
+  targetAllocationVersion: number;
+  occurredAt: number;
+  createdAt: number;
+};
+
 export type ActivityDetail = DistributionActivity & {
   allocations: Array<ContributionAllocation & { source: AllocationSource | null }>;
   history: AllocationHistoryEntry[];
+  accountability?: ActivityAccountabilitySummary;
+  reallocations?: ReallocationDecision[];
 };
 
 export type ContributionBalance = {
@@ -98,6 +157,20 @@ export type AllocateInput = {
   amountExact: string;
   reason: string;
   expectedVersion: number;
+  operationId: string;
+};
+
+export type ReallocateInput = {
+  targetActivityId: string;
+  sourceAllocationId: string;
+  amountExact: string;
+  fundType?: string;
+  purpose?: string;
+  reason: string;
+  /** The source activity version being spent against, as every workspace mutation carries it. */
+  expectedVersion: number;
+  /** The target activity version the officer read; the server refuses a stale one. */
+  expectedTargetActivityVersion?: number;
   operationId: string;
 };
 
@@ -138,6 +211,44 @@ export async function listContributionAllocations(
   contributionId: string
 ): Promise<{ allocations: Array<ContributionAllocation & { activityName: string }>; history: AllocationHistoryEntry[] }> {
   return requests.json(`/api/workspace/contributions/${encodeURIComponent(contributionId)}/allocations`);
+}
+
+export async function getActivityAccountability(
+  requests: PrivateRequests,
+  activityId: string
+): Promise<ActivityAccountabilitySummary> {
+  const res = await requests.json<{ accountability: ActivityAccountabilitySummary }>(
+    `/api/workspace/activities/${encodeURIComponent(activityId)}/accountability`
+  );
+  return res.accountability;
+}
+
+export async function listReallocations(
+  requests: PrivateRequests,
+  activityId: string
+): Promise<ReallocationDecision[]> {
+  const res = await requests.json<{ reallocations: ReallocationDecision[] }>(
+    `/api/workspace/activities/${encodeURIComponent(activityId)}/reallocations`
+  );
+  return res.reallocations;
+}
+
+export async function reallocateAllocation(
+  requests: PrivateRequests,
+  sourceActivityId: string,
+  input: ReallocateInput
+): Promise<{
+  decision: ReallocationDecision;
+  sourceAllocation: ContributionAllocation;
+  targetAllocation: ContributionAllocation;
+  sourceActivitySummary: DistributionActivity;
+  targetActivitySummary: DistributionActivity;
+  sourceAccountability: ActivityAccountabilitySummary;
+}> {
+  return requests.json(`/api/workspace/activities/${encodeURIComponent(sourceActivityId)}/reallocate`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 /** Percent of a known target that is allocated; null when the target is partial or zero. */
