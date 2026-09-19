@@ -1,8 +1,10 @@
-import { KeyRound, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { HelpCircle, KeyRound, Loader2 } from "lucide-react";
 import { Notice } from "./DonorNotice";
 import type { DonorSessionRecord } from "./donorClient";
 import { useDonorChannel } from "./donorQueries";
 import { DonorOtpForm } from "./DonorOtpForm";
+import { DonorRecoveryModal } from "./DonorRecoveryModal";
 
 type DonorOtpAccessProps = {
   reference: string;
@@ -18,6 +20,7 @@ type DonorOtpAccessProps = {
  */
 export function DonorOtpAccess({ reference, notice, onAuthenticated }: DonorOtpAccessProps) {
   const channel = useDonorChannel();
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
 
   return (
     <section
@@ -57,6 +60,27 @@ export function DonorOtpAccess({ reference, notice, onAuthenticated }: DonorOtpA
       ) : (
         <DonorOtpForm reference={reference} onAuthenticated={onAuthenticated} />
       )}
+
+      <div className="pt-2 border-t border-tawf-green-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+        <span className="text-tawf-muted">
+          Kontak belum terdaftar atau tidak dapat menerima kode?
+        </span>
+        <button
+          type="button"
+          onClick={() => setRecoveryOpen(true)}
+          className="font-semibold text-tawf-green hover:text-tawf-green-light underline inline-flex items-center gap-1 cursor-pointer"
+        >
+          <HelpCircle className="w-3.5 h-3.5" aria-hidden />
+          <span>Ajukan Pemulihan Kontak & Akses</span>
+        </button>
+      </div>
+
+      <DonorRecoveryModal
+        reference={reference}
+        isOpen={recoveryOpen}
+        onClose={() => setRecoveryOpen(false)}
+      />
     </section>
   );
 }
+

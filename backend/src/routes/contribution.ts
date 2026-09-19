@@ -51,6 +51,14 @@ import { MAX_EVIDENCE_FILE_BYTES } from "../evidence-files";
 import { JENIS_DANA, type CurrencyUnit } from "../reconciliation";
 // Shared with `evidence-preparation.ts` rather than redefined, as `disbursement.ts` does.
 import { readJson, text } from "./evidence-preparation";
+import {
+  validateRecoveryDecisionInput,
+  type DonorRecoveryStatus,
+} from "../donor-access";
+import {
+  DonorRecoveryConflictError,
+  DonorRecoveryNotFoundError,
+} from "../donor-access-store";
 
 export const contributionRoutes = new Hono();
 
@@ -61,14 +69,15 @@ contributionRoutes.onError((error, c) => {
   if (
     error instanceof ContributionConflictError ||
     error instanceof ContributionOperationConflictError ||
-    error instanceof ContributionDuplicateError
+    error instanceof ContributionDuplicateError ||
+    error instanceof DonorRecoveryConflictError
   ) {
     return c.json({ success: false, error: error.message }, 409);
   }
   if (error instanceof ContributionStateError) {
     return c.json({ success: false, error: error.message }, 400);
   }
-  if (error instanceof ContributionNotFoundError) {
+  if (error instanceof ContributionNotFoundError || error instanceof DonorRecoveryNotFoundError) {
     return c.json({ success: false, error: error.message }, 404);
   }
   throw error;
@@ -354,6 +363,80 @@ contributionRoutes.delete("/contributions/import/drafts/:id", async (c) => {
     who.runtime.now()
   );
   return c.json({ success: true, draft });
+});
+
+// 3b. Donor contact and access recovery examination (Spec #100, Ticket #105)
+contributionRoutes.get("/contributions/recovery-requests", async (c) => {
+  const who = await contributionActor(c, c.req.query("institutionId"), READERS);
+  if ("response" in who) return who.response;
+  if (!who.runtime.donorAccess) {
+    return c.json({ success: false, error: "Layanan akses donatur belum dikonfigurasi." }, 503);
+  }
+
+  const statusParam = c.req.query("status");
+  const filter =
+    statusParam && ["PENDING", "APPROVED", "REJECTED"].includes(statusParam)
+      ? { status: statusParam as DonorRecoveryStatus }
+      : undefined;
+
+  const requests = await who.runtime.donorAccess.listRecoveryRequests(who.session.institutionId, filter);
+  return c.json({ success: true, requests });
+});
+
+contributionRoutes.get("/contributions/recovery-requests/:id", async (c) => {
+  const who = await contributionActor(c, c.req.query("institutionId"), READERS);
+  if ("response" in who) return who.response;
+  if (!who.runtime.donorAccess) {
+    return c.json({ success: false, error: "Layanan akses donatur belum dikonfigurasi." }, 503);
+  }
+
+  const requestId = c.req.param("id");
+  const request = await who.runtime.donorAccess.getRecoveryRequest(who.session.institutionId, requestId);
+  if (!request) {
+    return c.json({ success: false, error: "Permohonan pemulihan tidak ditemukan." }, 404);
+  }
+
+  return c.json({ success: true, request });
+});
+
+contributionRoutes.post("/contributions/recovery-requests/:id/decision", async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const who = await contributionActor(c, bodyInstitution(body), RECORDERS);
+  if ("response" in who) return who.response;
+  if (!who.runtime.donorAccess) {
+    return c.json({ success: false, error: "Layanan akses donatur belum dikonfigurasi." }, 503);
+  }
+
+  const validation = validateRecoveryDecisionInput(body);
+  if (!validation.ok) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
+
+  const requestId = c.req.param("id");
+  const operationId = validation.value.operationId || operationIdOf(body);
+  const operation = operationId
+    ? {
+        operationId,
+        account: who.session.account,
+        requestHash: requestHash(["recovery-decision", requestId, validation.value]),
+      }
+    : undefined;
+
+  const result = await who.runtime.donorAccess.decideRecoveryRequest({
+    institutionId: who.session.institutionId,
+    requestId,
+    decision: validation.value.decision,
+    reason: validation.value.reason,
+    expectedContributionVersion: validation.value.expectedContributionVersion,
+    actorAccount: who.session.account,
+    actorOfficerId: who.identity.officerId,
+    now: who.runtime.now(),
+    operation,
+  });
+
+  return c.json({ success: true, ...result });
 });
 
 // 4. Get single contribution

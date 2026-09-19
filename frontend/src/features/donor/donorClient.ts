@@ -187,3 +187,52 @@ export const fetchDonorAllocations = async (session: DonorSessionRecord) =>
 export async function endDonorSession(token: string): Promise<void> {
   await send("/session", { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
 }
+
+export type DonorRecoveryStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export type PublicDonorRecoveryStatus = {
+  id: string;
+  status: DonorRecoveryStatus;
+  requestedContactMasked: string;
+  decisionReason: string | null;
+  createdAt: number;
+  decidedAt: number | null;
+};
+
+export const submitDonorRecoveryRequest = (params: {
+  reference: string;
+  requestedContact: string;
+  donorName?: string;
+  evidenceBasis: string;
+}) =>
+  send<{
+    requestId: string;
+    status: DonorRecoveryStatus;
+    createdAt: number;
+    contributionReference: string;
+    requestedContactMasked: string;
+  }>(
+    "/recovery-request",
+    postJson(params)
+  );
+
+export const getDonorRecoveryStatus = async (requestId: string): Promise<PublicDonorRecoveryStatus | null> => {
+  const result = await send<{ request: PublicDonorRecoveryStatus }>(
+    `/recovery-request/${encodeURIComponent(requestId)}`,
+    {}
+  );
+  if (!result.ok) return null;
+  return result.request;
+};
+
+export const getDonorRecoveryStatusByReference = async (
+  reference: string
+): Promise<PublicDonorRecoveryStatus | null> => {
+  const result = await send<{ request: PublicDonorRecoveryStatus | null }>(
+    `/recovery-status?reference=${encodeURIComponent(reference)}`,
+    {}
+  );
+  if (!result.ok) return null;
+  return result.request;
+};
+

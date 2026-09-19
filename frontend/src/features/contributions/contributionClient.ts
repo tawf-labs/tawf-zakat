@@ -389,3 +389,76 @@ export async function uploadContributionDocument(
   );
   return res.document;
 }
+
+export type DonorRecoveryStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export type DonorRecoveryRequestRecord = {
+  id: string;
+  contributionId: string;
+  institutionId: string;
+  requestedContact: string;
+  requestedContactMasked: string;
+  donorName: string | null;
+  evidenceBasis: string;
+  status: DonorRecoveryStatus;
+  decisionReason: string | null;
+  decidedByAccount: string | null;
+  decidedByOfficerId: string | null;
+  decidedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  contribution: {
+    id: string;
+    sourceReference: string;
+    sourceChannel: SourceChannel;
+    currencyUnit: CurrencyUnit;
+    amountExact: string;
+    fundType: JenisDana;
+    currentContactMasked: string | null;
+    currentContact: string | null;
+    version: number;
+    status: ContributionStatus;
+  };
+};
+
+export async function listRecoveryRequests(
+  requests: PrivateRequests,
+  filter?: { status?: DonorRecoveryStatus }
+): Promise<DonorRecoveryRequestRecord[]> {
+  const query = filter?.status ? `?status=${encodeURIComponent(filter.status)}` : "";
+  const res = await requests.json<{ success: boolean; requests: DonorRecoveryRequestRecord[] }>(
+    `/api/workspace/contributions/recovery-requests${query}`
+  );
+  return res.requests;
+}
+
+export async function getRecoveryRequestDetail(
+  requests: PrivateRequests,
+  id: string
+): Promise<DonorRecoveryRequestRecord> {
+  const res = await requests.json<{ success: boolean; request: DonorRecoveryRequestRecord }>(
+    `/api/workspace/contributions/recovery-requests/${encodeURIComponent(id)}`
+  );
+  return res.request;
+}
+
+export async function decideRecoveryRequest(
+  requests: PrivateRequests,
+  id: string,
+  input: {
+    decision: "APPROVED" | "REJECTED";
+    reason: string;
+    expectedContributionVersion: number;
+    operationId?: string;
+  }
+): Promise<{ request: DonorRecoveryRequestRecord; contribution: ContributionRecord }> {
+  return requests.json<{
+    success: boolean;
+    request: DonorRecoveryRequestRecord;
+    contribution: ContributionRecord;
+  }>(`/api/workspace/contributions/recovery-requests/${encodeURIComponent(id)}/decision`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+

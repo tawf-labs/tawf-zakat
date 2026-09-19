@@ -25,13 +25,19 @@ import {
   otpHashMatches,
   type DonorActivityAllocation,
   type DonorContributionDetail,
+  type DonorRecoveryDecisionInput,
+  type DonorRecoveryRequest,
+  type DonorRecoveryRequestInput,
+  type DonorRecoveryStatus,
   type DonorSession,
+  type PublicDonorRecoveryStatus,
 } from "./donor-access";
 import type { RecipientMessageTransport } from "./workspace-runtime";
 import type { CurrencyUnit } from "./reconciliation";
 import type { ContributionStatus, JenisDana, SourceChannel } from "./contribution";
 import type { ActivityStatus } from "./activity";
 import { rowsOf } from "./sql-rows";
+import { ContributionConflictError } from "./contribution-store";
 
 export const DONOR_ACCESS_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS donor_otp_challenges (
@@ -57,12 +63,51 @@ export const DONOR_ACCESS_SCHEMA_STATEMENTS = [
      last_accessed_at BIGINT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS donor_sess_by_contrib ON donor_sessions (contribution_id, expires_at);`,
+  `CREATE TABLE IF NOT EXISTS donor_recovery_requests (
+     id TEXT PRIMARY KEY,
+     contribution_id TEXT NOT NULL REFERENCES contributions (id) ON DELETE CASCADE,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     requested_contact TEXT NOT NULL,
+     requested_contact_masked TEXT NOT NULL,
+     donor_name TEXT,
+     evidence_basis TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'PENDING',
+     decision_reason TEXT,
+     decided_by_account TEXT,
+     decided_by_officer_id TEXT REFERENCES officer_profiles(id),
+     decided_at BIGINT,
+     created_at BIGINT NOT NULL,
+     updated_at BIGINT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS donor_recovery_by_inst ON donor_recovery_requests (institution_id, status, created_at DESC);`,
+  `CREATE INDEX IF NOT EXISTS donor_recovery_by_contrib ON donor_recovery_requests (contribution_id, created_at DESC);`,
 ];
 
 export class DonorContactMissingError extends Error {
   constructor(message = "Kontribusi ini tidak memiliki kontak terdaftar untuk pengiriman OTP. Hubungi amil lembaga untuk pemulihan akses.") {
     super(message);
     this.name = "DonorContactMissingError";
+  }
+}
+
+export class DonorRecoveryNotFoundError extends Error {
+  constructor(message = "Permohonan pemulihan akses tidak ditemukan.") {
+    super(message);
+    this.name = "DonorRecoveryNotFoundError";
+  }
+}
+
+export class DonorRecoveryConflictError extends Error {
+  constructor(message = "Permohonan pemulihan akses telah diputuskan atau diperbarui oleh pihak lain.") {
+    super(message);
+    this.name = "DonorRecoveryConflictError";
+  }
+}
+
+export class DonorRecoveryValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DonorRecoveryValidationError";
   }
 }
 
@@ -528,5 +573,428 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         },
       }));
     },
+
+    /**
+     * Submits a request to recover contact/access for a contribution.
+     * Requires evidenceBasis of relationship to prevent unauthorized reference squatting.
+     */
+    async submitRecoveryRequest(
+      input: DonorRecoveryRequestInput,
+      now: number
+    ): Promise<{
+      requestId: string;
+      status: DonorRecoveryStatus;
+      createdAt: number;
+      contributionReference: string;
+      requestedContactMasked: string;
+    }> {
+      const contribution = await contributionByReference(database, input.reference, { lock: false });
+
+      const existingPending = rowsOf(
+        await database.execute(sql`
+          SELECT id FROM donor_recovery_requests
+          WHERE contribution_id = ${contribution.id} AND status = 'PENDING'
+          LIMIT 1
+        `)
+      )[0];
+      if (existingPending) {
+        throw new DonorRecoveryConflictError(
+          "Permohonan pemulihan untuk kontribusi ini sudah diajukan dan sedang menunggu pemeriksaan petugas."
+        );
+      }
+
+      const requestId = `d-rec-${randomBytes(16).toString("hex")}`;
+      const requestedContact = input.requestedContact.trim();
+      const requestedContactMasked = maskContact(requestedContact);
+      const donorName = input.donorName?.trim() || null;
+      const evidenceBasis = input.evidenceBasis.trim();
+
+      await database.execute(sql`
+        INSERT INTO donor_recovery_requests (
+          id, contribution_id, institution_id, requested_contact, requested_contact_masked,
+          donor_name, evidence_basis, status, decision_reason, decided_by_account,
+          decided_by_officer_id, decided_at, created_at, updated_at
+        ) VALUES (
+          ${requestId}, ${contribution.id}, ${contribution.institution_id}, ${requestedContact},
+          ${requestedContactMasked}, ${donorName}, ${evidenceBasis}, 'PENDING',
+          NULL, NULL, NULL, NULL, ${now}, ${now}
+        )
+      `);
+
+      return {
+        requestId,
+        status: "PENDING",
+        createdAt: now,
+        contributionReference: input.reference,
+        requestedContactMasked,
+      };
+    },
+
+    /**
+     * Public stage of a recovery request, safe from leaking private donor financial details.
+     */
+    async getPublicRecoveryStatus(requestId: string): Promise<PublicDonorRecoveryStatus | null> {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT id, status, requested_contact_masked, decision_reason, created_at, decided_at
+          FROM donor_recovery_requests
+          WHERE id = ${requestId}
+        `)
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        status: row.status as DonorRecoveryStatus,
+        requestedContactMasked: row.requested_contact_masked,
+        decisionReason: row.decision_reason ?? null,
+        createdAt: Number(row.created_at),
+        decidedAt: row.decided_at ? Number(row.decided_at) : null,
+      };
+    },
+
+    /**
+     * Public stage of the latest recovery request for a contribution reference.
+     */
+    async getPublicRecoveryStatusByReference(reference: string): Promise<PublicDonorRecoveryStatus | null> {
+      try {
+        const contribution = await contributionByReference(database, reference, { lock: false });
+        const rows = rowsOf(
+          await database.execute(sql`
+            SELECT id, status, requested_contact_masked, decision_reason, created_at, decided_at
+            FROM donor_recovery_requests
+            WHERE contribution_id = ${contribution.id}
+            ORDER BY created_at DESC
+            LIMIT 1
+          `)
+        );
+        const row = rows[0];
+        if (!row) return null;
+        return {
+          id: row.id,
+          status: row.status as DonorRecoveryStatus,
+          requestedContactMasked: row.requested_contact_masked,
+          decisionReason: row.decision_reason ?? null,
+          createdAt: Number(row.created_at),
+          decidedAt: row.decided_at ? Number(row.decided_at) : null,
+        };
+      } catch (error) {
+        if (error instanceof DonorContributionNotFoundError) return null;
+        throw error;
+      }
+    },
+
+    /**
+     * Lists recovery requests for an institution (for authorized officers in workspace).
+     */
+    async listRecoveryRequests(
+      institutionId: string,
+      filter?: { status?: DonorRecoveryStatus }
+    ): Promise<DonorRecoveryRequestWithContribution[]> {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT r.*,
+                 c.source_reference, c.source_channel, c.currency_unit,
+                 c.amount_exact, c.fund_type, c.donor_contact AS current_contact,
+                 c.version AS contribution_version, c.status AS contribution_status
+          FROM donor_recovery_requests r
+          JOIN contributions c ON c.id = r.contribution_id
+          WHERE r.institution_id = ${institutionId}
+            ${filter?.status ? sql`AND r.status = ${filter.status}` : sql``}
+          ORDER BY r.created_at DESC
+        `)
+      );
+
+      return rows.map((row) => ({
+        id: row.id,
+        contributionId: row.contribution_id,
+        institutionId: row.institution_id,
+        requestedContact: row.requested_contact,
+        requestedContactMasked: row.requested_contact_masked,
+        donorName: row.donor_name ?? null,
+        evidenceBasis: row.evidence_basis,
+        status: row.status as DonorRecoveryStatus,
+        decisionReason: row.decision_reason ?? null,
+        decidedByAccount: row.decided_by_account ?? null,
+        decidedByOfficerId: row.decided_by_officer_id ?? null,
+        decidedAt: row.decided_at ? Number(row.decided_at) : null,
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
+        contribution: {
+          id: row.contribution_id,
+          sourceReference: row.source_reference,
+          sourceChannel: row.source_channel as SourceChannel,
+          currencyUnit: row.currency_unit as CurrencyUnit,
+          amountExact: row.amount_exact,
+          fundType: row.fund_type as JenisDana,
+          currentContactMasked: row.current_contact ? maskContact(row.current_contact) : null,
+          currentContact: row.current_contact ?? null,
+          version: Number(row.contribution_version),
+          status: row.contribution_status as ContributionStatus,
+        },
+      }));
+    },
+
+    /**
+     * Gets a single recovery request with contribution context for examination.
+     */
+    async getRecoveryRequest(
+      institutionId: string,
+      requestId: string
+    ): Promise<DonorRecoveryRequestWithContribution | null> {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT r.*,
+                 c.source_reference, c.source_channel, c.currency_unit,
+                 c.amount_exact, c.fund_type, c.donor_contact AS current_contact,
+                 c.version AS contribution_version, c.status AS contribution_status
+          FROM donor_recovery_requests r
+          JOIN contributions c ON c.id = r.contribution_id
+          WHERE r.id = ${requestId} AND r.institution_id = ${institutionId}
+        `)
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        contributionId: row.contribution_id,
+        institutionId: row.institution_id,
+        requestedContact: row.requested_contact,
+        requestedContactMasked: row.requested_contact_masked,
+        donorName: row.donor_name ?? null,
+        evidenceBasis: row.evidence_basis,
+        status: row.status as DonorRecoveryStatus,
+        decisionReason: row.decision_reason ?? null,
+        decidedByAccount: row.decided_by_account ?? null,
+        decidedByOfficerId: row.decided_by_officer_id ?? null,
+        decidedAt: row.decided_at ? Number(row.decided_at) : null,
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
+        contribution: {
+          id: row.contribution_id,
+          sourceReference: row.source_reference,
+          sourceChannel: row.source_channel as SourceChannel,
+          currencyUnit: row.currency_unit as CurrencyUnit,
+          amountExact: row.amount_exact,
+          fundType: row.fund_type as JenisDana,
+          currentContactMasked: row.current_contact ? maskContact(row.current_contact) : null,
+          currentContact: row.current_contact ?? null,
+          version: Number(row.contribution_version),
+          status: row.contribution_status as ContributionStatus,
+        },
+      };
+    },
+
+    /**
+     * Authorized officer examination decision (APPROVE or REJECT).
+     * Bumps version, updates contact if approved, revokes old OTP and sessions,
+     * writes durable audit trail, with optimistic concurrency and idempotency.
+     */
+    async decideRecoveryRequest(params: {
+      institutionId: string;
+      requestId: string;
+      decision: "APPROVED" | "REJECTED";
+      reason: string;
+      expectedContributionVersion: number;
+      actorAccount: string;
+      actorOfficerId: string | null;
+      now: number;
+      operation?: { operationId: string; account: string; requestHash: string };
+    }): Promise<{ request: DonorRecoveryRequest; contribution: ReferencedContribution }> {
+      return database.transaction(async (tx) => {
+        if (params.operation) {
+          const existingOp = rowsOf(
+            await tx.execute(sql`
+              SELECT * FROM contribution_operations
+              WHERE institution_id = ${params.institutionId}
+                AND account = ${params.operation.account}
+                AND operation_id = ${params.operation.operationId}
+              FOR UPDATE
+            `)
+          )[0];
+          if (existingOp) {
+            if (existingOp.request_hash !== params.operation.requestHash) {
+              throw new ContributionConflictError(
+                "Identitas operasi (operationId) sudah digunakan untuk permintaan berbeda."
+              );
+            }
+            if (existingOp.result_json) {
+              return JSON.parse(existingOp.result_json);
+            }
+          } else {
+            await tx.execute(sql`
+              INSERT INTO contribution_operations (institution_id, account, operation_id, request_hash)
+              VALUES (${params.institutionId}, ${params.operation.account}, ${params.operation.operationId}, ${params.operation.requestHash})
+            `);
+          }
+        }
+
+        const requestRows = rowsOf(
+          await tx.execute(sql`
+            SELECT * FROM donor_recovery_requests
+            WHERE id = ${params.requestId} AND institution_id = ${params.institutionId}
+            FOR UPDATE
+          `)
+        );
+        const reqRow = requestRows[0];
+        if (!reqRow) throw new DonorRecoveryNotFoundError();
+        if (reqRow.status !== "PENDING") {
+          throw new DonorRecoveryConflictError("Permohonan pemulihan akses telah diputuskan sebelumnya.");
+        }
+
+        const contribRows = rowsOf(
+          await tx.execute(sql`
+            SELECT id, institution_id, donor_contact, status, received_at, version
+            FROM contributions
+            WHERE id = ${reqRow.contribution_id} AND institution_id = ${params.institutionId}
+            FOR UPDATE
+          `)
+        );
+        const contribRow = contribRows[0];
+        if (!contribRow) throw new DonorContributionNotFoundError();
+        if (Number(contribRow.version) !== params.expectedContributionVersion) {
+          throw new ContributionConflictError(contribRow.id);
+        }
+
+        let nextContribVersion = Number(contribRow.version);
+        let updatedContact = contribRow.donor_contact;
+
+        if (params.decision === "APPROVED") {
+          nextContribVersion += 1;
+          updatedContact = reqRow.requested_contact;
+
+          // 1. Update contribution with verified contact & bumped version
+          await tx.execute(sql`
+            UPDATE contributions
+            SET donor_contact = ${updatedContact},
+                version = ${nextContribVersion},
+                updated_at = ${params.now}
+            WHERE id = ${contribRow.id}
+          `);
+
+          // 2. Invalidate all pending OTP challenges for this contribution
+          await tx.execute(sql`
+            UPDATE donor_otp_challenges
+            SET consumed_at = ${params.now}
+            WHERE contribution_id = ${contribRow.id} AND consumed_at IS NULL
+          `);
+
+          // 3. Revoke all active donor sessions for this contribution
+          await tx.execute(sql`
+            UPDATE donor_sessions
+            SET revoked_at = ${params.now}
+            WHERE contribution_id = ${contribRow.id} AND revoked_at IS NULL
+          `);
+
+          // 4. Update recovery request
+          await tx.execute(sql`
+            UPDATE donor_recovery_requests
+            SET status = 'APPROVED',
+                decision_reason = ${params.reason},
+                decided_by_account = ${params.actorAccount},
+                decided_by_officer_id = ${params.actorOfficerId},
+                decided_at = ${params.now},
+                updated_at = ${params.now}
+            WHERE id = ${params.requestId}
+          `);
+
+          // 5. Append audit history
+          const beforeMasked = contribRow.donor_contact ? maskContact(contribRow.donor_contact) : "(kosong)";
+          const afterMasked = maskContact(reqRow.requested_contact);
+          await tx.execute(sql`
+            INSERT INTO contribution_history (
+              contribution_id, institution_id, version, from_status, to_status,
+              action, actor_account, actor_officer_id, reason, notes, occurred_at
+            ) VALUES (
+              ${contribRow.id}, ${params.institutionId}, ${nextContribVersion},
+              ${contribRow.status}, ${contribRow.status}, 'RECOVER_DONOR_CONTACT',
+              ${params.actorAccount}, ${params.actorOfficerId}, ${params.reason},
+              ${'Kontak donatur dipulihkan dari ' + beforeMasked + ' menjadi ' + afterMasked},
+              ${params.now}
+            )
+          `);
+        } else {
+          // REJECTED:
+          // Do not touch contributions table. Retain history and reason.
+          await tx.execute(sql`
+            UPDATE donor_recovery_requests
+            SET status = 'REJECTED',
+                decision_reason = ${params.reason},
+                decided_by_account = ${params.actorAccount},
+                decided_by_officer_id = ${params.actorOfficerId},
+                decided_at = ${params.now},
+                updated_at = ${params.now}
+            WHERE id = ${params.requestId}
+          `);
+
+          await tx.execute(sql`
+            INSERT INTO contribution_history (
+              contribution_id, institution_id, version, from_status, to_status,
+              action, actor_account, actor_officer_id, reason, notes, occurred_at
+            ) VALUES (
+              ${contribRow.id}, ${params.institutionId}, ${nextContribVersion},
+              ${contribRow.status}, ${contribRow.status}, 'REJECT_DONOR_CONTACT_RECOVERY',
+              ${params.actorAccount}, ${params.actorOfficerId}, ${params.reason},
+              ${'Permohonan pemulihan kontak ditolak: ' + params.reason},
+              ${params.now}
+            )
+          `);
+        }
+
+        const result = {
+          request: {
+            id: reqRow.id,
+            contributionId: reqRow.contribution_id,
+            institutionId: reqRow.institution_id,
+            requestedContact: reqRow.requested_contact,
+            requestedContactMasked: reqRow.requested_contact_masked,
+            donorName: reqRow.donor_name ?? null,
+            evidenceBasis: reqRow.evidence_basis,
+            status: params.decision as DonorRecoveryStatus,
+            decisionReason: params.reason,
+            decidedByAccount: params.actorAccount,
+            decidedByOfficerId: params.actorOfficerId,
+            decidedAt: params.now,
+            createdAt: Number(reqRow.created_at),
+            updatedAt: params.now,
+          },
+          contribution: {
+            id: contribRow.id,
+            institution_id: contribRow.institution_id,
+            donor_contact: updatedContact,
+            status: contribRow.status as ContributionStatus,
+            received_at: Number(contribRow.received_at),
+            version: nextContribVersion,
+          },
+        };
+
+        if (params.operation) {
+          await tx.execute(sql`
+            UPDATE contribution_operations
+            SET result_json = ${JSON.stringify(result)}
+            WHERE institution_id = ${params.institutionId}
+              AND account = ${params.operation.account}
+              AND operation_id = ${params.operation.operationId}
+          `);
+        }
+
+        return result;
+      });
+    },
   };
 }
+
+export type DonorRecoveryRequestWithContribution = DonorRecoveryRequest & {
+  contribution: {
+    id: string;
+    sourceReference: string;
+    sourceChannel: SourceChannel;
+    currencyUnit: CurrencyUnit;
+    amountExact: string;
+    fundType: JenisDana;
+    currentContactMasked: string | null;
+    currentContact: string | null;
+    version: number;
+    status: ContributionStatus;
+  };
+};

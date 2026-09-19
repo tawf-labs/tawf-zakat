@@ -89,6 +89,110 @@ export interface DonorActivityAllocation {
   };
 }
 
+export const DONOR_RECOVERY_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+export type DonorRecoveryStatus = (typeof DONOR_RECOVERY_STATUSES)[number];
+
+export interface DonorRecoveryRequest {
+  id: string;
+  contributionId: string;
+  institutionId: string;
+  requestedContact: string;
+  requestedContactMasked: string;
+  donorName: string | null;
+  evidenceBasis: string;
+  status: DonorRecoveryStatus;
+  decisionReason: string | null;
+  decidedByAccount: string | null;
+  decidedByOfficerId: string | null;
+  decidedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PublicDonorRecoveryStatus {
+  id: string;
+  status: DonorRecoveryStatus;
+  requestedContactMasked: string;
+  decisionReason: string | null;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+export interface DonorRecoveryRequestInput {
+  reference: string;
+  requestedContact: string;
+  donorName?: string | null;
+  evidenceBasis: string;
+}
+
+export function validateRecoveryRequestInput(input: unknown): { ok: true; value: DonorRecoveryRequestInput } | { ok: false; error: string } {
+  if (!input || typeof input !== "object") {
+    return { ok: false, error: "Badan permintaan tidak sah." };
+  }
+  const rec = input as Record<string, unknown>;
+  const reference = typeof rec.reference === "string" ? rec.reference.trim() : "";
+  if (!reference) {
+    return { ok: false, error: "Referensi kontribusi wajib diisi." };
+  }
+  const requestedContact = typeof rec.requestedContact === "string" ? rec.requestedContact.trim() : "";
+  if (!requestedContact) {
+    return { ok: false, error: "Kontak baru yang diajukan wajib diisi." };
+  }
+  if (!requestedContact.includes("@") || requestedContact.length < 5) {
+    return { ok: false, error: "Kontak yang diajukan harus berupa alamat email yang sah." };
+  }
+  const evidenceBasis = typeof rec.evidenceBasis === "string" ? rec.evidenceBasis.trim() : "";
+  if (!evidenceBasis || evidenceBasis.length < 5) {
+    return { ok: false, error: "Dasar hubungan atau bukti kepemilikan kontribusi wajib diisi (minimal 5 karakter)." };
+  }
+  const donorName = typeof rec.donorName === "string" && rec.donorName.trim() ? rec.donorName.trim() : null;
+  return {
+    ok: true,
+    value: {
+      reference,
+      requestedContact,
+      donorName,
+      evidenceBasis,
+    },
+  };
+}
+
+export interface DonorRecoveryDecisionInput {
+  decision: "APPROVED" | "REJECTED";
+  reason: string;
+  expectedContributionVersion: number;
+  operationId?: string;
+}
+
+export function validateRecoveryDecisionInput(input: unknown): { ok: true; value: DonorRecoveryDecisionInput } | { ok: false; error: string } {
+  if (!input || typeof input !== "object") {
+    return { ok: false, error: "Badan keputusan tidak sah." };
+  }
+  const rec = input as Record<string, unknown>;
+  const decision = rec.decision;
+  if (decision !== "APPROVED" && decision !== "REJECTED") {
+    return { ok: false, error: "Keputusan harus berupa 'APPROVED' atau 'REJECTED'." };
+  }
+  const reason = typeof rec.reason === "string" ? rec.reason.trim() : "";
+  if (!reason || reason.length < 5) {
+    return { ok: false, error: "Alasan keputusan wajib diisi (minimal 5 karakter)." };
+  }
+  const expectedContributionVersion = Number(rec.expectedContributionVersion);
+  if (!Number.isInteger(expectedContributionVersion) || expectedContributionVersion <= 0) {
+    return { ok: false, error: "Versi kontribusi yang diharapkan (expectedContributionVersion) wajib berupa bilangan bulat positif." };
+  }
+  const operationId = typeof rec.operationId === "string" && rec.operationId.trim() ? rec.operationId.trim() : undefined;
+  return {
+    ok: true,
+    value: {
+      decision,
+      reason,
+      expectedContributionVersion,
+      operationId,
+    },
+  };
+}
+
 /**
  * Masks a contact string (phone number or email) to protect donor privacy.
  * Examples:

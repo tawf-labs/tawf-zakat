@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Plus, Receipt, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, Plus, Receipt, RefreshCw, UserCheck } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { Button } from "../../components/ui/Button";
 import {
@@ -9,8 +9,11 @@ import {
   getImportDraft,
   listContributions,
   listImportDrafts,
+  listRecoveryRequests,
   type ContributionImportDraft,
   type ContributionRecord,
+  type DonorRecoveryRequestRecord,
+  type DonorRecoveryStatus,
 } from "./contributionClient";
 import { errorMessage, useOperationIds } from "./contributionUi";
 import { ContributionList, ContributionSummary, type ContributionFilters } from "./ContributionList";
@@ -20,8 +23,10 @@ import { ImportDraftList, ImportDraftModal, type OpenedDraft } from "./ImportDra
 import { ContributionDetailModal, type ContributionDetail } from "./ContributionDetailModal";
 import { EndorseModal, ReconcileModal } from "./ContributionDecisionModals";
 import { AllocationModal } from "./AllocationModal";
+import { DonorRecoveryTable } from "./DonorRecoveryTable";
+import { DonorRecoveryReviewModal } from "./DonorRecoveryReviewModal";
 
-type Tab = "list" | "create" | "import" | "drafts";
+type Tab = "list" | "create" | "import" | "drafts" | "recovery";
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -42,6 +47,9 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
   const [activeTab, setActiveTab] = useState<Tab>("list");
   const [contributions, setContributions] = useState<ContributionRecord[]>([]);
   const [drafts, setDrafts] = useState<ContributionImportDraft[]>([]);
+  const [recoveryRequests, setRecoveryRequests] = useState<DonorRecoveryRequestRecord[]>([]);
+  const [selectedRecoveryRequest, setSelectedRecoveryRequest] = useState<DonorRecoveryRequestRecord | null>(null);
+  const [recoveryFilter, setRecoveryFilter] = useState<"ALL" | DonorRecoveryStatus>("ALL");
   const [filters, setFilters] = useState<ContributionFilters>({ status: "ALL", currencyUnit: "ALL" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,19 +66,21 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
     setLoading(true);
     setError(null);
     // Loaded separately: an endorser may read contributions without the recording mandate
-    // that import drafts require, and that refusal must not empty the contribution list.
-    const [list, draftList] = await Promise.allSettled([
+    // that import drafts and recovery requests require, and that refusal must not empty the contribution list.
+    const [list, draftList, recoveryList] = await Promise.allSettled([
       listContributions(requests, {
         status: filters.status === "ALL" ? undefined : filters.status,
         currencyUnit: filters.currencyUnit === "ALL" ? undefined : filters.currencyUnit,
       }),
       listImportDrafts(requests),
+      canManage ? listRecoveryRequests(requests) : Promise.resolve([]),
     ]);
     if (list.status === "fulfilled") setContributions(list.value);
     else setError(errorMessage(list.reason, "Gagal memuat data kontribusi."));
     setDrafts(draftList.status === "fulfilled" ? draftList.value : []);
+    if (recoveryList.status === "fulfilled") setRecoveryRequests(recoveryList.value);
     setLoading(false);
-  }, [requests, filters]);
+  }, [requests, filters, canManage]);
 
   useEffect(() => {
     refresh();
@@ -200,6 +210,17 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
         <TabButton active={activeTab === "drafts"} onClick={() => setActiveTab("drafts")}>
           Draf Impor ({drafts.length})
         </TabButton>
+        {canManage && (
+          <TabButton active={activeTab === "recovery"} onClick={() => setActiveTab("recovery")}>
+            <UserCheck className="h-4 w-4" />
+            <span>
+              Pemulihan Kontak ({recoveryRequests.length}
+              {recoveryRequests.filter((r) => r.status === "PENDING").length > 0
+                ? ` · ${recoveryRequests.filter((r) => r.status === "PENDING").length} Baru`
+                : ""})
+            </span>
+          </TabButton>
+        )}
       </div>
 
       {activeTab === "list" && (
@@ -241,6 +262,15 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
       )}
 
       {activeTab === "drafts" && <ImportDraftList drafts={drafts} onOpen={openDraft} {...draftActions} />}
+
+      {activeTab === "recovery" && (
+        <DonorRecoveryTable
+          requests={recoveryRequests}
+          onSelect={(req) => setSelectedRecoveryRequest(req)}
+          statusFilter={recoveryFilter}
+          onFilterChange={setRecoveryFilter}
+        />
+      )}
 
       {detail && (
         <ContributionDetailModal
@@ -288,6 +318,19 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
       )}
 
       {openedDraft && <ImportDraftModal opened={openedDraft} onClose={() => setOpenedDraft(null)} {...draftActions} />}
+
+      {selectedRecoveryRequest && (
+        <DonorRecoveryReviewModal
+          requests={requests}
+          record={selectedRecoveryRequest}
+          onClose={() => setSelectedRecoveryRequest(null)}
+          onDecided={async (updatedContrib) => {
+            setSelectedRecoveryRequest(null);
+            setSuccessMessage(`Keputusan pemulihan untuk kontribusi ${updatedContrib.id} berhasil dicatat.`);
+            await refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

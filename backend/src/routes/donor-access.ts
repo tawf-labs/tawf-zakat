@@ -29,11 +29,17 @@ import {
   DonorDeliveryFailedError,
   DonorOtpInvalidError,
   DonorOtpRateLimitError,
+  DonorRecoveryConflictError,
+  DonorRecoveryNotFoundError,
+  DonorRecoveryValidationError,
   DonorSessionExpiredError,
   DonorTransportUnavailableError,
   type DonorAccessStore,
 } from "../donor-access-store";
-import type { DonorSession } from "../donor-access";
+import {
+  validateRecoveryRequestInput,
+  type DonorSession,
+} from "../donor-access";
 
 export const donorAccessRoutes = new Hono();
 
@@ -59,6 +65,15 @@ donorAccessRoutes.onError((error, c) => {
   }
   if (error instanceof DonorContributionNotFoundError) {
     return c.json({ success: false, error: error.message }, 404);
+  }
+  if (error instanceof DonorRecoveryNotFoundError) {
+    return c.json({ success: false, error: error.message }, 404);
+  }
+  if (error instanceof DonorRecoveryConflictError) {
+    return c.json({ success: false, error: error.message }, 409);
+  }
+  if (error instanceof DonorRecoveryValidationError) {
+    return c.json({ success: false, error: error.message }, 400);
   }
   if (error instanceof DonorAccessDeniedError) {
     return c.json({ success: false, error: error.message }, 403);
@@ -164,6 +179,49 @@ donorAccessRoutes.delete("/session", async (c) => {
     await store.revokeSession(token, now);
   }
   return c.json({ success: true });
+});
+
+/**
+ * 6. Submit a recovery request for lost or wrong contact (Spec #100, Ticket #105).
+ * Requires evidence basis connecting to the contribution; reference alone is not enough.
+ */
+donorAccessRoutes.post("/recovery-request", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const validation = validateRecoveryRequestInput(body);
+  if (!validation.ok) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
+
+  const { store, now } = donorAccessOf();
+  const result = await store.submitRecoveryRequest(validation.value, now);
+  return c.json({ success: true, ...result }, 201);
+});
+
+/**
+ * 7. Check public recovery request status by requestId.
+ * Stage (PENDING, APPROVED, REJECTED) and masked contact without leaking amounts or private identity.
+ */
+donorAccessRoutes.get("/recovery-request/:id", async (c) => {
+  const id = c.req.param("id")?.trim();
+  if (!id) return c.json({ success: false, error: "ID permohonan wajib disertakan." }, 400);
+
+  const { store } = donorAccessOf();
+  const request = await store.getPublicRecoveryStatus(id);
+  if (!request) return c.json({ success: false, error: "Permohonan pemulihan tidak ditemukan." }, 404);
+
+  return c.json({ success: true, request });
+});
+
+/**
+ * 8. Check latest public recovery status for a contribution reference.
+ */
+donorAccessRoutes.get("/recovery-status", async (c) => {
+  const reference = c.req.query("reference")?.trim();
+  if (!reference) return c.json({ success: false, error: "Referensi kontribusi wajib disertakan." }, 400);
+
+  const { store } = donorAccessOf();
+  const request = await store.getPublicRecoveryStatusByReference(reference);
+  return c.json({ success: true, request });
 });
 
 export default donorAccessRoutes;
