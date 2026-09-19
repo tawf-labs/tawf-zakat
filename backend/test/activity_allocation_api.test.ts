@@ -6,9 +6,8 @@
  * (explicit, pooled and partial allocation; limit; fund type/purpose; tracing coverage),
  * US-91, AC09, AC15, AC29.
  *
- * Proposal approval is decided by #93, which is not built yet. Until it is, a proposal
- * is taken through the real submit/examine/ready routes and then marked APPROVED in
- * SQL, standing in for that decision - nothing here claims to test approval.
+ * Proposal approval follows #93's document/challenge/signature/decision protocol.
+ * No SQL status override stands in for the durable decision.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -120,8 +119,8 @@ type AidValue =
   | { kind: "MONEY"; amountRequestedIdr: string }
   | { kind: "GOODS"; unit: string; quantityRequested: string; valuedAmountIdr: string | null };
 
-/** Submit, examine and mark ready over HTTP; then stand in for #93's decision in SQL. */
-async function approvedProposal(programId: string, proposalId: string, values: AidValue[], tokens: Tokens) {
+/** Submit, examine and approve over authenticated HTTP with a separate signer. */
+async function approvedProposal(programId: string, proposalId: string, values: AidValue[], tokens: Tokens, approvedAmounts?: string[]) {
   const beneficiaryId = `ben-${proposalId}`;
   const created = await mutate(
     "/proposals",
@@ -186,9 +185,37 @@ async function approvedProposal(programId: string, proposalId: string, values: A
   );
   expect(ready.status).toBe(200);
 
-  const db = database.handle();
-  await db.execute(sql`UPDATE proposal_drafts SET status = 'APPROVED' WHERE id = ${proposalId}`);
-  await db.execute(sql`UPDATE proposal_versions SET status = 'APPROVED' WHERE proposal_id = ${proposalId}`);
+  const uploaded = await post(`/proposals/${proposalId}/decision-documents`, {
+    expectedVersion: 1, fileName: "qa103-decision.txt", mimeType: "text/plain",
+    contentBase64: Buffer.from("Keputusan sintetis QA #103").toString("base64"),
+  }, tokens.approver);
+  expect(uploaded.status).toBe(201);
+  const intent = {
+    expectedVersion: 1, action: "APPROVE", decisionReference: `SK-${proposalId}`,
+    decisionDate: "2027-01-15", decisionDocumentId: (await uploaded.json()).document.id,
+    approvedAidLines: values.map((value, index) => ({
+      id: `aid-${proposalId}-${index}`,
+      ...(value.kind === "MONEY"
+        ? { amountApprovedIdr: approvedAmounts?.[index] ?? value.amountRequestedIdr }
+        : { quantityApproved: value.quantityRequested }),
+    })),
+  };
+  const minted = await post(`/proposals/${proposalId}/decision-challenge`, intent, tokens.approver);
+  expect(minted.status).toBe(201);
+  const { challenge, typedData } = await minted.json();
+  const uints = new Set(typedData.types[typedData.primaryType]
+    .filter((field: { type: string }) => field.type === "uint256")
+    .map((field: { name: string }) => field.name));
+  const signature = await approverSinar.signTypedData({ ...typedData, message: Object.fromEntries(
+    Object.entries(typedData.message).map(([name, value]) => [name, uints.has(name) ? BigInt(value as string) : value])
+  ) });
+  const decided = await mutate(`/proposals/${proposalId}/decide`, {
+    ...intent, signerAccount: challenge.signerAccount, mandateId: challenge.mandateId,
+    nonce: challenge.nonce, signature,
+  }, tokens.approver);
+  expect(decided.status).toBe(200);
+  const persisted = await get(`/proposals/${proposalId}`, tokens.amil);
+  expect((await persisted.json()).draft.status).toBe("APPROVED");
 }
 
 async function createActivity(activityId: string, proposalId: string, tokens: Tokens) {
@@ -284,6 +311,7 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
           mandate("sinar-rec", SINAR, "off-sinar-amil", amilSinar.address, "RECORD_CONTRIBUTIONS"),
           mandate("sinar-prog", SINAR, "off-sinar-amil", amilSinar.address, "MANAGE_PROGRAMS"),
           mandate("sinar-endorse", SINAR, "off-sinar-approver", approverSinar.address, "ENDORSE_CONTRIBUTIONS"),
+          mandate("sinar-decision", SINAR, "off-sinar-approver", approverSinar.address, "APPROVE_DECISIONS"),
           mandate("baitul-rec", BAITUL, "off-baitul-amil", amilBaitul.address, "RECORD_CONTRIBUTIONS"),
         ],
         sql`, `
@@ -333,6 +361,17 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
 
     const list = await (await get("/activities", tokens.amil)).json();
     expect(list.activities).toHaveLength(1);
+  });
+
+  it("uses signed approved rights rather than the larger requested amount as the activity target", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(programId, "prop-reduced", [money("1000000")], tokens, ["600000"]);
+    const activity = await createActivity("act-reduced", "prop-reduced", tokens);
+    expect(activity).toMatchObject({ proposalVersion: 1, targetAmount: "600000", targetIsPartial: false });
+    const decision = await get("/proposals/prop-reduced/decision", tokens.amil);
+    expect(decision.status).toBe(200);
+    expect((await decision.json()).decision).toBeTruthy();
   });
 
   it("lets only one of two concurrent officers create the activity for a proposal version", async () => {

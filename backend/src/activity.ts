@@ -166,7 +166,9 @@ export function activityTarget(aidLines: AidLine[]): { targetAmount: string; tar
   let total = 0n;
   let partial = false;
   for (const line of aidLines) {
-    const idr = line.value.kind === "MONEY" ? line.value.amountRequestedIdr : goodsValuationOf(line.value);
+    const idr = line.value.kind === "MONEY"
+      ? (line.value.amountApprovedIdr ?? line.value.amountRequestedIdr)
+      : goodsValuationOf(line.value);
     if (idr === null) {
       partial = true;
       continue;

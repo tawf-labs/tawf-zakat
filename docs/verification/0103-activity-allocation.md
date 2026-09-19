@@ -2,6 +2,33 @@
 
 Tanggal: 2026-09-17. Issue: https://github.com/tawf-labs/tawf-zakat/issues/103
 
+## Verifikasi lanjutan 2026-09-19 setelah #92–99
+
+Baseline source: `cf86ea5`. Blocker keputusan durable #93 dari pemeriksaan 17 September sudah tersedia di implementasi terbaru. Helper suite #103 dan script penyiapan QA kini mengunggah dokumen keputusan, meminta challenge, menandatanganinya dengan akun pengesah terpisah dari penyusun/pemeriksa, lalu menyimpan keputusan melalui `/proposals/:id/decide`. Tidak ada UPDATE status APPROVED lewat SQL lagi. Opsi script lama `--simulate-approval` ditolak; jalankan script tanpa opsi itu.
+
+- Suite gabungan #93/#103 pada PGlite + Chromium: **31 pass**, 710 assertions (sebelum penambahan kasus nominal disetujui lebih kecil).
+- Kasus tambahan menemukan bug: usulan 1000000 yang disetujui 600000 menghasilkan target kegiatan 1000000. `activityTarget` kini memakai `amountApprovedIdr` jika tersedia, mengikuti hak bantuan yang diputuskan. Kasus ini gagal sebelum perbaikan.
+- Suite #103 terakhir pada schema PostgreSQL terisolasi + Chromium: **14 pass**, 293 assertions, termasuk kasus nominal disetujui 600000 dan pembacaan keputusan durable, concurrency, retry, batas saldo, serta pembaruan panel sebelum reload. Mode restart PostgreSQL masih berupa reconnect klien, bukan restart server database.
+- Data lokal baru `qa103-1789821658578`: dua pengajuan sudah APPROVED melalui keputusan bertanda tangan `SK-qa103-1789821658578-proposal-a` dan `SK-qa103-1789821658578-proposal-b`; kontribusi sintetis 900000 dan 400000 sudah direkonsiliasi/disahkan lewat API. Mandat pengesah baru dibatasi pada program QA selama satu hari. Dokumen QA baru memakai penyimpanan terenkripsi khusus `/tmp/qa103-sep19-runtime`.
+- QA Chrome pengguna selesai setelah pengguna menandatangani login ulang: wallet tetap `0x5e9B…9968`, officer `off-sinar-smoke-browser`, lembaga Sinar Amanah. API lokal direstart untuk memuat perbaikan target sebelum membuat kegiatan baru.
+
+### Hasil Chrome pengguna, run keputusan durable
+
+| Pemeriksaan | Hasil teramati |
+| --- | --- |
+| Keputusan #93 | UI pengajuan A menampilkan Disetujui Lembaga, versi 1, SK-qa103-1789821658578-proposal-a, tanggal 2026-09-19, hak disetujui 1000000. Keputusan disiapkan melalui API dengan signer development sintetis; bukan ditandatangani wallet pengguna di Chrome. |
+| Kegiatan A/B | Dibuat melalui Chrome dari masing-masing pengajuan V1, target 1000000. Percobaan membuat kegiatan A lagi ditolak karena versi yang sama sudah memiliki kegiatan. |
+| Kontribusi A ke dua kegiatan | 300000 ke A lalu 200000 ke B; sisa kontribusi 400000. |
+| Batas dana | Percobaan 600001 saat sisa 600000 ditolak dengan pesan nominal melebihi sisa kontribusi. |
+| Kontribusi B anonim ke A | 150000; sisa kontribusi B 250000. Kegiatan A menjadi 450000 dari dua kontribusi, sisa kebutuhan 550000; kegiatan B 200000, sisa kebutuhan 800000. |
+| Pembaruan tanpa reload | Kedua panel langsung menunjukkan angka baru setelah setiap alokasi sukses. |
+| Penelusuran | Peruntukan umum/pendidikan tetap melekat pada sumbernya, donor anonim ditandai tidak tercatat, riwayat memuat alasan, officer, wallet, waktu, dan versi kontribusi 3. Batas penelusuran dan catatan internal bukan saldo bank ditampilkan. |
+| Reload | Wallet, sesi, semua alokasi dan sisa tetap sama. Sisa kontribusi tidak berpindah otomatis. |
+
+**Status QA #103: lulus pada cakupan acceptance criteria yang diuji, dengan batas restart database berikut.** Blocker keputusan durable #93 pada run lama sudah terselesaikan. Concurrency, retry, versi usang, isolasi, dan koreksi kontribusi diverifikasi melalui suite HTTP/SQL; interaksi alokasi dan pembacaan sisa diverifikasi pada Chrome pengguna. Pengujian restart dalam suite PostgreSQL adalah reconnect klien, bukan restart container/server PostgreSQL. Tidak ada transaksi onchain atau uang sungguhan yang dipindahkan.
+
+Bagian bertanggal 17 September di bawah adalah catatan historis; batas simulasi persetujuannya tidak berlaku untuk suite terbaru.
+
 ## Hasil
 
 - Suite #103: **13 pass, 0 fail**, 218 assertions, memakai PostgreSQL lokal pada database `zkt`, port 5432, dan Chromium headless.
