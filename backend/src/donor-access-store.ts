@@ -25,7 +25,6 @@ import {
   otpHashMatches,
   type DonorActivityAllocation,
   type DonorContributionDetail,
-  type DonorRecoveryDecisionInput,
   type DonorRecoveryRequest,
   type DonorRecoveryRequestInput,
   type DonorRecoveryStatus,
@@ -226,6 +225,48 @@ async function contributionByReference(
     );
   }
   return rows[0];
+}
+
+function recoveryWithContributionOf(row: Record<string, any>): DonorRecoveryRequestWithContribution {
+  return {
+    id: row.id,
+    contributionId: row.contribution_id,
+    institutionId: row.institution_id,
+    requestedContact: row.requested_contact,
+    requestedContactMasked: row.requested_contact_masked,
+    donorName: row.donor_name ?? null,
+    evidenceBasis: row.evidence_basis,
+    status: row.status as DonorRecoveryStatus,
+    decisionReason: row.decision_reason ?? null,
+    decidedByAccount: row.decided_by_account ?? null,
+    decidedByOfficerId: row.decided_by_officer_id ?? null,
+    decidedAt: row.decided_at ? Number(row.decided_at) : null,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    contribution: {
+      id: row.contribution_id,
+      sourceReference: row.source_reference,
+      sourceChannel: row.source_channel as SourceChannel,
+      currencyUnit: row.currency_unit as CurrencyUnit,
+      amountExact: row.amount_exact,
+      fundType: row.fund_type as JenisDana,
+      currentContactMasked: row.current_contact ? maskContact(row.current_contact) : null,
+      currentContact: row.current_contact ?? null,
+      version: Number(row.contribution_version),
+      status: row.contribution_status as ContributionStatus,
+    },
+  };
+}
+
+function publicRecoveryStatusOf(row: Record<string, any>): PublicDonorRecoveryStatus {
+  // Explicit allowlist: officer reasons and evidence must never reach public callers.
+  return {
+    id: row.id,
+    status: row.status as DonorRecoveryStatus,
+    requestedContactMasked: row.requested_contact_masked,
+    createdAt: Number(row.created_at),
+    decidedAt: row.decided_at == null ? null : Number(row.decided_at),
+  };
 }
 
 export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) {
@@ -636,21 +677,14 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
     async getPublicRecoveryStatus(requestId: string): Promise<PublicDonorRecoveryStatus | null> {
       const rows = rowsOf(
         await database.execute(sql`
-          SELECT id, status, requested_contact_masked, decision_reason, created_at, decided_at
+          SELECT id, status, requested_contact_masked, created_at, decided_at
           FROM donor_recovery_requests
           WHERE id = ${requestId}
         `)
       );
       const row = rows[0];
       if (!row) return null;
-      return {
-        id: row.id,
-        status: row.status as DonorRecoveryStatus,
-        requestedContactMasked: row.requested_contact_masked,
-        decisionReason: row.decision_reason ?? null,
-        createdAt: Number(row.created_at),
-        decidedAt: row.decided_at ? Number(row.decided_at) : null,
-      };
+      return publicRecoveryStatusOf(row);
     },
 
     /**
@@ -661,7 +695,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         const contribution = await contributionByReference(database, reference, { lock: false });
         const rows = rowsOf(
           await database.execute(sql`
-            SELECT id, status, requested_contact_masked, decision_reason, created_at, decided_at
+            SELECT id, status, requested_contact_masked, created_at, decided_at
             FROM donor_recovery_requests
             WHERE contribution_id = ${contribution.id}
             ORDER BY created_at DESC
@@ -670,14 +704,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         );
         const row = rows[0];
         if (!row) return null;
-        return {
-          id: row.id,
-          status: row.status as DonorRecoveryStatus,
-          requestedContactMasked: row.requested_contact_masked,
-          decisionReason: row.decision_reason ?? null,
-          createdAt: Number(row.created_at),
-          decidedAt: row.decided_at ? Number(row.decided_at) : null,
-        };
+        return publicRecoveryStatusOf(row);
       } catch (error) {
         if (error instanceof DonorContributionNotFoundError) return null;
         throw error;
@@ -705,34 +732,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         `)
       );
 
-      return rows.map((row) => ({
-        id: row.id,
-        contributionId: row.contribution_id,
-        institutionId: row.institution_id,
-        requestedContact: row.requested_contact,
-        requestedContactMasked: row.requested_contact_masked,
-        donorName: row.donor_name ?? null,
-        evidenceBasis: row.evidence_basis,
-        status: row.status as DonorRecoveryStatus,
-        decisionReason: row.decision_reason ?? null,
-        decidedByAccount: row.decided_by_account ?? null,
-        decidedByOfficerId: row.decided_by_officer_id ?? null,
-        decidedAt: row.decided_at ? Number(row.decided_at) : null,
-        createdAt: Number(row.created_at),
-        updatedAt: Number(row.updated_at),
-        contribution: {
-          id: row.contribution_id,
-          sourceReference: row.source_reference,
-          sourceChannel: row.source_channel as SourceChannel,
-          currencyUnit: row.currency_unit as CurrencyUnit,
-          amountExact: row.amount_exact,
-          fundType: row.fund_type as JenisDana,
-          currentContactMasked: row.current_contact ? maskContact(row.current_contact) : null,
-          currentContact: row.current_contact ?? null,
-          version: Number(row.contribution_version),
-          status: row.contribution_status as ContributionStatus,
-        },
-      }));
+      return rows.map(recoveryWithContributionOf);
     },
 
     /**
@@ -755,34 +755,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
       );
       const row = rows[0];
       if (!row) return null;
-      return {
-        id: row.id,
-        contributionId: row.contribution_id,
-        institutionId: row.institution_id,
-        requestedContact: row.requested_contact,
-        requestedContactMasked: row.requested_contact_masked,
-        donorName: row.donor_name ?? null,
-        evidenceBasis: row.evidence_basis,
-        status: row.status as DonorRecoveryStatus,
-        decisionReason: row.decision_reason ?? null,
-        decidedByAccount: row.decided_by_account ?? null,
-        decidedByOfficerId: row.decided_by_officer_id ?? null,
-        decidedAt: row.decided_at ? Number(row.decided_at) : null,
-        createdAt: Number(row.created_at),
-        updatedAt: Number(row.updated_at),
-        contribution: {
-          id: row.contribution_id,
-          sourceReference: row.source_reference,
-          sourceChannel: row.source_channel as SourceChannel,
-          currencyUnit: row.currency_unit as CurrencyUnit,
-          amountExact: row.amount_exact,
-          fundType: row.fund_type as JenisDana,
-          currentContactMasked: row.current_contact ? maskContact(row.current_contact) : null,
-          currentContact: row.current_contact ?? null,
-          version: Number(row.contribution_version),
-          status: row.contribution_status as ContributionStatus,
-        },
-      };
+      return recoveryWithContributionOf(row);
     },
 
     /**

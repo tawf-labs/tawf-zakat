@@ -194,7 +194,6 @@ export type PublicDonorRecoveryStatus = {
   id: string;
   status: DonorRecoveryStatus;
   requestedContactMasked: string;
-  decisionReason: string | null;
   createdAt: number;
   decidedAt: number | null;
 };
@@ -232,7 +231,7 @@ export const getDonorRecoveryStatusByReference = async (
     `/recovery-status?reference=${encodeURIComponent(reference)}`,
     {}
   );
-  if (!result.ok) return null;
+  if (!result.ok) throw new Error(result.error);
   return result.request;
 };
 

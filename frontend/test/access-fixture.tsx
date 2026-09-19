@@ -8,7 +8,7 @@ import type { PrivateRequests } from "../src/features/workspace/privateRequests"
 // Existing HTTP fixtures seed a session; the same production owner validates it
 // and handles every subsequent private request and invalidation.
 export async function fixtureAccess(token: string) {
-  const origin = getApiBaseUrl();
+  const origin = getApiBaseUrl() || window.location.origin;
   const workspace = await (await fetch(origin + "/api/workspace", { headers: { Authorization: `Bearer ${token}` } })).json();
   sessionStorage.setItem(sessionStorageKey(origin, workspace.account), JSON.stringify({
     token, institutionId: workspace.institution.id, role: workspace.role, expiresAt: Math.floor(Date.now() / 1000) + 3600,

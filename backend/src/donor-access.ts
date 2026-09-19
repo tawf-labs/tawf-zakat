@@ -113,7 +113,6 @@ export interface PublicDonorRecoveryStatus {
   id: string;
   status: DonorRecoveryStatus;
   requestedContactMasked: string;
-  decisionReason: string | null;
   createdAt: number;
   decidedAt: number | null;
 }

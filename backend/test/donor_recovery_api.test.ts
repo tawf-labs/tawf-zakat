@@ -381,7 +381,7 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
         method: "POST",
         body: JSON.stringify({
           decision: "REJECTED",
-          reason: "Bukti transfer tidak memuat nama pengirim yang sah dan nomor referensi tidak cukup.",
+          reason: "Bukti transfer tidak memuat kecocokan dengan donor Rahasia Sintetis, nominal 987654321, kontak privat@example.test.",
           expectedContributionVersion: 1,
         }),
       }
@@ -404,11 +404,18 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
     expect(historyRows[0].action).toBe("REJECT_DONOR_CONTACT_RECOVERY");
     expect(historyRows[0].actor_account).toBe(amilSinar.address.toLowerCase());
 
-    // Public check reflects rejection reason
+    // Public check shows stage only; examination reasons stay private
     const pubRes = await getDonor(`/recovery-request/${requestId}`);
     const pubBody = await pubRes.json();
     expect(pubBody.request.status).toBe("REJECTED");
-    expect(pubBody.request.decisionReason).toContain("Bukti transfer tidak memuat");
+    expect(pubBody.request).not.toHaveProperty("decisionReason");
+    const byReference = await getDonor('/recovery-status?reference=BCA-REC-003');
+    const publicText = JSON.stringify([pubBody, await byReference.json()]);
+    for (const secret of ['Rahasia Sintetis', '987654321', 'privat@example.test']) {
+      expect(publicText).not.toContain(secret);
+    }
+    const privateDetail = await requestWorkspace(`/contributions/recovery-requests/${requestId}`, amilToken);
+    expect((await privateDetail.json()).request.decisionReason).toContain('Rahasia Sintetis');
   });
 
   it("approves recovery, updates contact, bumps version, revokes old session and codes, and allows new OTP access (AC14, AC105.2, AC105.3)", async () => {
@@ -530,35 +537,30 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
     });
     const { requestId } = await reqRes.json();
 
-    // First officer approves
-    const firstRes = await requestWorkspace(
-      `/contributions/recovery-requests/${requestId}/decision`,
-      amilToken,
-      {
+    await handle.execute(sql`
+      INSERT INTO operational_mandates (
+        id, institution_id, officer_id, account_address, function, scope_type, program_id,
+        valid_from, valid_until, assignment_ref, nominal_limit, version, is_active, created_at, updated_at, created_by
+      ) VALUES ('mandate-admin-record', ${SINAR}, 'off-sinar-admin', ${adminSinar.address.toLowerCase()},
+        'RECORD_CONTRIBUTIONS', 'ALL_PROGRAMS', null, ${NOW - 1000}, ${NOW + 100000}, 'SK-ADMIN-02', null, 1, true, ${NOW}, ${NOW}, ${adminSinar.address.toLowerCase()})
+    `);
+    const secondOfficerToken = await signInWorkspace(adminSinar, SINAR);
+    // Two authorized officers decide at the same time; exactly one may persist.
+    const decisions = await Promise.all(["APPROVED", "REJECTED"].map((decision, index) =>
+      requestWorkspace(`/contributions/recovery-requests/${requestId}/decision`, index === 0 ? amilToken : secondOfficerToken, {
         method: "POST",
-        body: JSON.stringify({
-          decision: "APPROVED",
-          reason: "Pemeriksaan pertama selesai.",
-          expectedContributionVersion: 1,
-        }),
-      }
-    );
-    expect(firstRes.status).toBe(200);
+        body: JSON.stringify({ decision, reason: `Pemeriksaan ${decision}`, expectedContributionVersion: 1 }),
+      })
+    ));
+    expect(decisions.map((r) => r.status).sort()).toEqual([200, 409]);
+    const winner = await decisions.find((r) => r.status === 200)!.json();
+    const reread = await requestWorkspace(`/contributions/recovery-requests/${requestId}`, amilToken);
+    expect((await reread.json()).request.status).toBe(winner.request.status);
+    const history = rowsOf(await handle.execute(sql`SELECT * FROM contribution_history WHERE contribution_id = 'c-rec-005'`));
+    expect(history).toHaveLength(1);
+    expect(history[0].reason).toBe(winner.request.decisionReason);
+    expect(outbox).toHaveLength(0);
 
-    // Second officer attempts to decide on the same request -> Conflict 409
-    const secondRes = await requestWorkspace(
-      `/contributions/recovery-requests/${requestId}/decision`,
-      amilToken,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          decision: "REJECTED",
-          reason: "Pemeriksaan kedua terlambat.",
-          expectedContributionVersion: 1,
-        }),
-      }
-    );
-    expect(secondRes.status).toBe(409);
   });
 
   it("is idempotent when retrying decision with operationId (AC105.2)", async () => {
@@ -617,7 +619,7 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
         status, version, created_at, updated_at, created_by
       ) VALUES (
         'c-rec-007', ${SINAR}, 'BANK_TRANSFER', 'BCA-REC-007', 'IDR',
-        '900000', 'ZAKAT_MAL', 'Zakat Maal', ${NOW - 10000}, null, null,
+        '900000', 'ZAKAT_MAL', 'Zakat Maal', ${NOW - 10000}, null, 'old-restart@example.test',
         'RECEIVED', 1, ${NOW - 10000}, ${NOW - 10000}, 'sys'
       );
     `);
@@ -630,117 +632,182 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
     });
     const { requestId } = await reqRes.json();
 
-    // Create fresh store instance on same database
-    const freshStore = createDonorAccessStore(handle, OTP_KEY);
-    const loaded = await freshStore.getPublicRecoveryStatus(requestId);
-    expect(loaded).not.toBeNull();
-    expect(loaded?.status).toBe("PENDING");
-    expect(loaded?.requestedContactMasked).toBe("p***d@test.com");
+    const issue = await postDonor('/otp-challenge', { reference: 'BCA-REC-007' });
+    expect(issue.status).toBe(201);
+    const oldChallenge = await issue.json();
+    const oldCode = outbox.at(-1)!.body.match(/\b(\d{6})\b/)![1];
+    const verified = await postDonor('/session', { challengeId: oldChallenge.challengeId, otpCode: oldCode });
+    expect(verified.status).toBe(201);
+    const oldSession = await verified.json();
+    clock += 61;
+    const unspent = await postDonor('/otp-challenge', { reference: 'BCA-REC-007' });
+    const unspentChallenge = await unspent.json();
+    const unspentCode = outbox.at(-1)!.body.match(/\b(\d{6})\b/)![1];
+    const payload = { decision: 'APPROVED', reason: 'Mutasi BCA diperiksa dan cocok.', expectedContributionVersion: 1, operationId: 'durable-recovery' };
+    const decisionPath = `/contributions/recovery-requests/${requestId}/decision`;
+    const decided = await requestWorkspace(decisionPath, amilToken, { method: 'POST', body: JSON.stringify(payload) });
+    expect(decided.status).toBe(200);
+    const decidedBody = await decided.json();
+    const reopened = await database.reopen();
+    workspaceStore = createWorkspaceStore(reopened);
+    disbursementStore = createDisbursementStore(reopened);
+    contributionStore = createContributionStore(reopened);
+    activityStore = createActivityStore(reopened);
+    donorAccessStore = createDonorAccessStore(reopened, OTP_KEY);
+    configureWorkspace({ store: workspaceStore, disbursement: disbursementStore, contributions: contributionStore,
+      activities: activityStore, donorAccess: donorAccessStore, donorMessages: messageTransport, ethCall, now: () => clock });
+    const publicResult = await getDonor(`/recovery-request/${requestId}`);
+    expect((await publicResult.json()).request.status).toBe('APPROVED');
+    const retry = await requestWorkspace(decisionPath, amilToken, { method: 'POST', body: JSON.stringify(payload) });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual(decidedBody);
+    const detail = await requestWorkspace(`/contributions/recovery-requests/${requestId}`, amilToken);
+    const saved = (await detail.json()).request;
+    expect(saved.contribution.currentContact).toBe('persisted@test.com');
+    expect(saved.contribution.version).toBe(2);
+    expect(saved.decidedByAccount).toBe(amilSinar.address.toLowerCase());
+    const revokedSession = await getDonor('/contributions/c-rec-007', oldSession.sessionToken);
+    expect(revokedSession.status).toBe(401);
+    const revokedCode = await postDonor('/session', { challengeId: unspentChallenge.challengeId, otpCode: unspentCode });
+    expect(revokedCode.status).toBe(400);
+    expect(rowsOf(await reopened.execute(sql`SELECT * FROM contribution_history WHERE contribution_id = 'c-rec-007'`))).toHaveLength(1);
+
   });
 
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
-    "browser: donor submits recovery request, officer approves via workspace API, and donor accesses contribution via new contact OTP (AC30)",
+    "browser: donor and officer recover twice, reject safely, and navigate by keyboard on laptop and phone (AC30)",
     async () => {
-      const handle = database.handle();
-      await handle.execute(sql`
-        INSERT INTO contributions (
-          id, institution_id, source_channel, source_reference, currency_unit,
-          amount_exact, fund_type, purpose, received_at, donor_name, donor_contact,
-          status, version, created_at, updated_at, created_by
-        ) VALUES (
-          'c-rec-smoke-1', ${SINAR}, 'BANK_TRANSFER', 'BCA-REC-SMOKE-1', 'IDR',
-          '1500000', 'ZAKAT_MAL', 'Zakat Maal', ${NOW - 5000}, 'Hamba Allah', 'wrong-contact@test.com',
-          'RECEIVED', 1, ${NOW - 5000}, ${NOW - 5000}, 'sys'
-        );
-      `);
-
-      const built = await Bun.build({
-        entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname],
-        target: "browser",
-        define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+      const bundles = await Promise.all(['verification-smoke', 'donor-recovery-officer-smoke'].map(async (name) => {
+        const built = await Bun.build({
+          entrypoints: [new URL(`../../frontend/test/${name}.tsx`, import.meta.url).pathname],
+          target: "browser", define: { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "" }) },
+        });
+        if (!built.success) throw new Error(built.logs.join("\n"));
+        return built.outputs[0]!.text();
+      }));
+      const cssProcess = Bun.spawn(['bun', 'test/build-smoke-css.ts'], {
+        cwd: new URL('../../frontend', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe',
       });
-      if (!built.success) throw new Error(built.logs.join("\n"));
-      const bundle = await built.outputs[0]!.text();
+      const css = await new Response(cssProcess.stdout).text();
+      if (await cssProcess.exited !== 0) throw new Error(await new Response(cssProcess.stderr).text());
       const server = Bun.serve({
-        hostname: "127.0.0.1",
-        port: 0,
+        hostname: "127.0.0.1", port: 0,
         fetch(req) {
           const path = new URL(req.url).pathname;
-          if (path === "/") return new Response('<!doctype html><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
-          if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+          if (path === '/' || path === '/officer') return new Response(
+            `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/smoke.css"><div id="root"></div><script type="module" src="${path === '/officer' ? '/officer.js' : '/donor.js'}"></script>`,
+            { headers: { 'Content-Type': 'text/html' } });
+          if (path === '/smoke.css') return new Response(css, { headers: { 'Content-Type': 'text/css' } });
+          if (path === '/donor.js' || path === '/officer.js') return new Response(bundles[path === '/donor.js' ? 0 : 1], { headers: { 'Content-Type': 'application/javascript' } });
+          if (path === '/smoke-config') return Response.json({ token: amilToken });
           return app.fetch(req);
         },
       });
       const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
       let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
       try {
-        browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
-        const page = await browser.newPage();
-        page.setDefaultTimeout(10000);
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error: Error) => pageErrors.push(error.message));
-
-        await page.goto(`${server.url}?trxId=BCA-REC-SMOKE-1`);
-        await page.getByRole("heading", { name: "Catatan Kontribusi" }).waitFor();
-
-        // Donor opens recovery modal
-        await page.getByRole("button", { name: /Ajukan Pemulihan Kontak & Akses/i }).click();
-        await page.getByRole("heading", { name: "Pemulihan Kontak & Akses Donatur" }).waitFor();
-
-        // Fill recovery request
-        await page.locator("#recovery-contact").fill("new-donor@example.com");
-        await page.locator("#recovery-name").fill("Ahmad Fauzi");
-        await page.locator("#recovery-evidence").fill("Bukti mutasi rekening m-banking BCA referensi BCA-REC-SMOKE-1");
-        await page.getByRole("button", { name: "Ajukan Pemulihan", exact: true }).click();
-
-        // Wait for pending status in modal
-        await page.getByText(/Permohonan Sedang Diperiksa/i).waitFor();
-        await page.getByText(/n\*\*\*r@example\.com/).waitFor();
-
-        // Officer lists recovery requests and approves
-        const listRes = await requestWorkspace(`/contributions/recovery-requests`, amilToken);
-        expect(listRes.status).toBe(200);
-        const listData = await listRes.json();
-        const pendingReq = listData.requests.find((r: any) => r.contributionId === "c-rec-smoke-1");
-        expect(pendingReq).toBeDefined();
-
-        const decideRes = await requestWorkspace(`/contributions/recovery-requests/${pendingReq.id}/decision`, amilToken, {
-          method: "POST",
-          body: JSON.stringify({
-            decision: "APPROVED",
-            reason: "Bukti mutasi cocok dengan rekening koran yayasan.",
-            expectedContributionVersion: 1,
-            operationId: "smoke-rec-approve-01",
-          }),
-        });
-        expect(decideRes.status).toBe(200);
-
-        // Close recovery modal
-        await page.getByRole("button", { name: "Tutup jendela pemulihan" }).click();
-
-        // Donor now requests OTP - should go to new-donor@example.com
-        outbox = [];
-        await page.getByRole("button", { name: "Kirim Kode OTP" }).click();
-        await page.getByLabel(/Masukkan 6 digit kode/).waitFor();
-
-        expect(outbox.length).toBeGreaterThan(0);
-        const lastMsg = outbox.at(-1)!;
-        expect(lastMsg.to).toBe("new-donor@example.com");
-        const code = lastMsg.body.match(/\b(\d{6})\b/)![1];
-
-        // Enter OTP and verify
-        await page.getByLabel(/Masukkan 6 digit kode/).fill(code);
-        await page.getByRole("button", { name: "Verifikasi" }).click();
-        await page.getByRole("heading", { name: "Kontribusi Anda" }).waitFor();
-        await page.getByText("Rp 1.500.000").waitFor();
-
-        expect(pageErrors).toEqual([]);
+        browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox'] });
+        for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+          const reference = `BCA-REC-SMOKE-${viewport.width}`;
+          await database.handle().execute(sql`
+            INSERT INTO contributions (id, institution_id, source_channel, source_reference, currency_unit,
+              amount_exact, fund_type, purpose, received_at, donor_name, donor_contact, status, version, created_at, updated_at, created_by)
+            VALUES (${reference}, ${SINAR}, 'BANK_TRANSFER', ${reference}, 'IDR', '1500000', 'ZAKAT_MAL', 'Zakat Maal',
+              ${NOW - 5000}, 'Donatur Sintetis', 'wrong-contact@test.com', 'RECEIVED', 1, ${NOW - 5000}, ${NOW - 5000}, 'sys')
+          `);
+          const page = await browser.newPage({ viewport });
+          const officer = await browser.newPage({ viewport });
+          const errors: string[] = [];
+          for (const tab of [page, officer]) {
+            tab.setDefaultTimeout(10000);
+            tab.on('pageerror', (error: Error) => errors.push(error.message));
+            await tab.addInitScript((now: number) => { Date.now = () => now * 1000; }, NOW);
+          }
+          const openRecovery = async () => {
+            const trigger = page.getByRole('button', { name: 'Ajukan Pemulihan Kontak & Akses', exact: true });
+            await trigger.focus();
+            await page.keyboard.press('Enter');
+            await page.getByRole('dialog').waitFor();
+          };
+          const submitRequest = async (contact: string) => {
+            await page.locator('#recovery-contact').fill(contact);
+            await page.locator('#recovery-evidence').fill('abc');
+            await page.getByRole('button', { name: 'Ajukan Pemulihan', exact: true }).click();
+            await page.getByRole('alert').waitFor();
+            await page.locator('#recovery-evidence').fill(`Bukti transfer sintetis untuk ${reference}`);
+            await page.getByRole('button', { name: 'Ajukan Pemulihan', exact: true }).focus();
+            await page.keyboard.press('Enter');
+            await page.getByText('Permohonan Sedang Diperiksa', { exact: true }).waitFor();
+          };
+          const decide = async (decision: 'APPROVED' | 'REJECTED') => {
+            await officer.goto(`${server.url}officer`);
+            await officer.getByRole('button', { name: /Pemulihan Kontak \(/ }).click();
+            const row = officer.getByRole('row').filter({ hasText: reference }).filter({ hasText: 'Menunggu' });
+            await row.getByRole('button', { name: 'Periksa', exact: true }).focus();
+            await officer.keyboard.press('Enter');
+            const dialog = officer.getByRole('dialog');
+            await dialog.waitFor();
+            await officer.getByLabel(decision === 'APPROVED' ? 'Setujui Pemulihan Kontak' : 'Tolak Permohonan', { exact: true }).check();
+            await officer.getByLabel(/Alasan Keputusan/).fill('abc');
+            const action = officer.getByRole('button', { name: decision === 'APPROVED' ? 'Setujui & Perbarui Kontak' : 'Tolak Permohonan', exact: true });
+            await action.click();
+            await officer.getByRole('alert').waitFor();
+            await officer.getByLabel(/Alasan Keputusan/).fill('Donatur Sintetis, nominal 1500000, kontak privat@example.test diperiksa.');
+            const bounds = await dialog.boundingBox();
+            expect(bounds!.width).toBeLessThanOrEqual(viewport.width);
+            await action.focus();
+            await officer.keyboard.press('Tab');
+            expect(await dialog.evaluate((element: HTMLElement) => element.contains(document.activeElement))).toBe(true);
+            await action.focus();
+            await officer.keyboard.press('Enter');
+            await dialog.waitFor({ state: 'hidden' });
+          };
+          await page.goto(`${server.url}?trxId=${reference}`);
+          await openRecovery();
+          const close = page.getByRole('button', { name: 'Tutup jendela pemulihan' });
+          await close.focus();
+          await page.keyboard.press('Shift+Tab');
+          expect(await page.getByRole('dialog').evaluate((element: HTMLElement) => element.contains(document.activeElement))).toBe(true);
+          await page.keyboard.press('Escape');
+          await page.getByRole('dialog').waitFor({ state: 'hidden' });
+          await page.waitForFunction(() => document.activeElement?.textContent?.includes('Ajukan Pemulihan Kontak & Akses'));
+          await openRecovery();
+          await submitRequest('first@example.test');
+          await decide('REJECTED');
+          await page.keyboard.press('Escape');
+          await openRecovery();
+          await page.getByText('Permohonan Sebelumnya Ditolak', { exact: true }).waitFor();
+          expect(await page.getByRole('dialog').textContent()).not.toContain('privat@example.test');
+          await page.getByRole('button', { name: 'Ajukan Pemulihan Baru' }).click();
+          clock++;
+          await submitRequest('first@example.test');
+          await decide('APPROVED');
+          await page.reload();
+          await openRecovery();
+          await page.getByText('Akses Telah Dipulihkan', { exact: true }).waitFor();
+          await page.getByRole('button', { name: 'Ajukan Pemulihan Baru' }).focus();
+          await page.keyboard.press('Enter');
+          clock++;
+          await submitRequest('second@example.test');
+          await decide('APPROVED');
+          await page.keyboard.press('Escape');
+          outbox = [];
+          await page.getByRole('button', { name: 'Kirim Kode OTP' }).click();
+          await page.getByLabel(/Masukkan 6 digit kode/).waitFor();
+          expect(outbox).toHaveLength(1);
+          expect(outbox[0].to).toBe('second@example.test');
+          await page.getByLabel(/Masukkan 6 digit kode/).fill(outbox[0].body.match(/\b(\d{6})\b/)![1]);
+          await page.getByRole('button', { name: 'Verifikasi', exact: true }).click();
+          await page.getByRole('heading', { name: 'Kontribusi Anda' }).waitFor();
+          await page.getByText('Rp 1.500.000', { exact: true }).waitFor();
+          expect(errors).toEqual([]);
+          await page.close();
+          await officer.close();
+        }
       } finally {
         await browser?.close();
         server.stop(true);
       }
-    },
-    60000
+    }, 120000,
   );
 });
-
