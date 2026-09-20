@@ -26,7 +26,9 @@ import { AllocationModal } from "./AllocationModal";
 import { DonorRecoveryTable } from "./DonorRecoveryTable";
 import { DonorRecoveryReviewModal } from "./DonorRecoveryReviewModal";
 
-type Tab = "list" | "create" | "import" | "drafts" | "recovery";
+import { ContributionBatches } from "./ContributionBatches";
+
+type Tab = "batches" | "list" | "create" | "import" | "drafts" | "recovery";
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -197,6 +199,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
         </TabButton>
         {canManage && (
           <>
+            <TabButton active={activeTab === "batches"} onClick={() => setActiveTab("batches")}>Batch bukti ZK</TabButton>
             <TabButton active={activeTab === "create"} onClick={() => setActiveTab("create")}>
               <Plus className="h-4 w-4" />
               <span>Catat Manual</span>
@@ -222,6 +225,8 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
           </TabButton>
         )}
       </div>
+
+      {activeTab === "batches" && <ContributionBatches key={requests.contextId} requests={requests} />}
 
       {activeTab === "list" && (
         <ContributionList

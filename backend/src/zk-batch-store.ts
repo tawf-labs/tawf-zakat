@@ -63,6 +63,8 @@ export const ZK_BATCH_SCHEMA_STATEMENTS = [
     updated_at BIGINT NOT NULL,
     CONSTRAINT zk_proof_uniq UNIQUE (contribution_id, batch_id, version)
   );`,
+  `ALTER TABLE zk_contribution_batches ADD COLUMN IF NOT EXISTS cutoff BIGINT;`,
+  `ALTER TABLE zk_contribution_batches ADD COLUMN IF NOT EXISTS endorsement_mandate_version INTEGER;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS zk_proof_receipt_version_unique ON zk_contribution_receipt_proofs (contribution_id, version);`,
 ];
 
@@ -97,9 +99,11 @@ export interface ContributionBatchDetail {
   itemCount: number;
   endorsedBy: string | null;
   endorsementMandateId: string | null;
+  endorsementMandateVersion: number | null;
   endorsedAt: number | null;
   txHash: string | null;
   createdAt: number;
+  cutoff: number;
   updatedAt: number;
   items: {
     id: string;
@@ -158,6 +162,7 @@ export interface ZkBatchStore {
     contributionIds: string[];
     fundType: string;
     currencyUnit: string;
+    cutoff?: number;
     now: number;
   }): Promise<ContributionBatchDetail>;
   endorseBatch(params: {
@@ -209,9 +214,11 @@ function mapContributionBatch(row: any, iRows: any[]): ContributionBatchDetail {
     itemCount: Number(row.item_count),
     endorsedBy: row.endorsed_by,
     endorsementMandateId: row.endorsement_mandate_id,
+    endorsementMandateVersion: row.endorsement_mandate_version == null ? null : Number(row.endorsement_mandate_version),
     endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
     txHash: row.tx_hash,
     createdAt: Number(row.created_at),
+    cutoff: Number(row.cutoff ?? row.created_at),
     updatedAt: Number(row.updated_at),
     items: iRows.map((it: any) => ({
       id: it.id,
@@ -274,12 +281,14 @@ export function createZkBatchStore(db: any): ZkBatchStore {
       contributionIds,
       fundType,
       currencyUnit,
+      cutoff,
       now,
     }: {
       institutionId: string;
       contributionIds: string[];
       fundType: string;
       currencyUnit: string;
+      cutoff?: number;
       now: number;
     }): Promise<ContributionBatchDetail> {
       return db.transaction(async (db: any) => {
@@ -296,7 +305,7 @@ export function createZkBatchStore(db: any): ZkBatchStore {
 
       // Fetch contributions and verify they belong to this institution and are ENDORSED
       const contributionsRes = await db.execute(sql`
-        SELECT id, institution_id, amount_exact, currency_unit, fund_type, purpose, status, version
+        SELECT id, institution_id, amount_exact, currency_unit, fund_type, purpose, status, version, received_at
         FROM contributions
         WHERE id IN (${sql.join(contributionIds.map(id => sql`${id}`), sql`, `)})
           AND institution_id = ${institutionId}
@@ -309,7 +318,9 @@ export function createZkBatchStore(db: any): ZkBatchStore {
       }
 
       // Enforce AC08: Only ENDORSED contributions can enter an authorized batch
+      if (!Number.isSafeInteger(cutoff ?? now) || (cutoff ?? now) > now) throw new Error("Cutoff tidak sah.");
       for (const row of rows) {
+        if (Number(row.received_at) > (cutoff ?? now)) throw new Error("Kontribusi melewati cutoff.");
         if (row.status !== "ENDORSED") {
           throw new Error(
             `Kontribusi ${row.id} berstatus "${row.status}"; hanya kontribusi yang disahkan (ENDORSED) yang boleh masuk batch.`
@@ -418,11 +429,11 @@ export function createZkBatchStore(db: any): ZkBatchStore {
         INSERT INTO zk_contribution_batches (
           id, institution_id, batch_number, version, status, merkle_root,
           total_amount_exact, currency_unit, fund_type, item_count,
-          leaves_json, created_at, updated_at
+          leaves_json, cutoff, created_at, updated_at
         ) VALUES (
           ${batchId}, ${institutionId}, ${nextBatchNumber}, 1, 'DRAFT', ${batchRootHex},
           ${totalAmountExact.toString()}, ${currencyUnit}, ${fundType}, ${orderedRows.length},
-          ${JSON.stringify(leaves.map(l => toFieldHex(l)))}, ${now}, ${now}
+          ${JSON.stringify(leaves.map(l => toFieldHex(l)))}, ${cutoff ?? now}, ${now}, ${now}
         )
       `);
 
@@ -499,9 +510,11 @@ export function createZkBatchStore(db: any): ZkBatchStore {
         itemCount: orderedRows.length,
         endorsedBy: null,
         endorsementMandateId: null,
+        endorsementMandateVersion: null,
         endorsedAt: null,
         txHash: null,
         createdAt: now,
+        cutoff: cutoff ?? now,
         updatedAt: now,
         items: itemsList,
       };
@@ -697,7 +710,7 @@ export function createZkBatchStore(db: any): ZkBatchStore {
           verified_at = COALESCE(EXCLUDED.verified_at, zk_contribution_receipt_proofs.verified_at),
           failure_reason = EXCLUDED.failure_reason,
           updated_at = EXCLUDED.updated_at
-        WHERE zk_contribution_receipt_proofs.batch_id = EXCLUDED.batch_id AND zk_contribution_receipt_proofs.status <> 'VERIFIED'
+        WHERE zk_contribution_receipt_proofs.batch_id = EXCLUDED.batch_id AND (zk_contribution_receipt_proofs.status <> 'VERIFIED' OR EXCLUDED.status = 'VERIFIED')
       `);
 
       return (await this.getReceiptProof(contributionId, version))!;

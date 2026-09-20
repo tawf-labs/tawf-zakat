@@ -107,6 +107,18 @@ export function createZkProofService(config?: ZkProofServiceConfig) {
     join(__dirname, "zk-prover-runner.cjs");
 
   return {
+    assertArtifacts(): void {
+      // Refuse mixed proving artifacts before sending any transaction.
+      try {
+        const manifest = readFileSync(join(rootDir, "sc/circuits/artifacts.sha256"), "utf8");
+        for (const [path, suffix] of [[wasmPath, "build/contribution_membership_js/contribution_membership.wasm"], [zkeyPath, "build/circuit_final.zkey"]]) {
+          const entry = manifest.split("\n").find(line => line.endsWith(`  ${suffix}`));
+          const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+          if (!entry || entry.split(" ")[0] !== digest) throw new Error("mismatch");
+        }
+      } catch { throw new Error("Gagal menghasilkan proof ZK: artefak tidak cocok atau tidak tersedia."); }
+
+    },
     async assertDeployment(publicClient: any, registryAddress: Hex): Promise<void> {
       const verifierAddress = await publicClient.readContract({
         address: registryAddress,
@@ -123,15 +135,7 @@ export function createZkProofService(config?: ZkProofServiceConfig) {
      * Generate real Groth16 proof using the pinned circuit artifacts.
      */
     async generateProof(witness: BatchItemWitness): Promise<GeneratedZKProof> {
-      // Refuse mixed proving artifacts before sending any transaction.
-      try {
-        const manifest = readFileSync(join(rootDir, "sc/circuits/artifacts.sha256"), "utf8");
-        for (const [path, suffix] of [[wasmPath, "build/contribution_membership_js/contribution_membership.wasm"], [zkeyPath, "build/circuit_final.zkey"]]) {
-          const entry = manifest.split("\n").find(line => line.endsWith(`  ${suffix}`));
-          const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-          if (!entry || entry.split(" ")[0] !== digest) throw new Error("mismatch");
-        }
-      } catch { throw new Error("Gagal menghasilkan proof ZK: artefak tidak cocok atau tidak tersedia."); }
+      this.assertArtifacts();
 
       const circuitInput = {
         batchRoot: witness.batchRoot,

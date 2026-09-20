@@ -23,9 +23,13 @@ import { authenticateWorkspace, badRequest, refuse } from "../workspace-session"
 import { authorize } from "../tenancy";
 import { operationalActor, OperationalAccessDenied } from "../operational-access";
 import { text } from "./evidence-preparation";
-import { CONTRIBUTION_PROOF_REGISTRY_ABI } from "../zk-proof-service";
+import { inspectPublications, runZkPublication } from "../zk-publication";
 
 export const contributionBatchRoutes = new Hono();
+contributionBatchRoutes.use("*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
+  await next();
+});
 
 contributionBatchRoutes.onError((error, c) => {
   if (error instanceof OperationalAccessDenied) {
@@ -67,13 +71,11 @@ async function batchActor(
  */
 contributionBatchRoutes.post("/contribution-batches", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-  const institutionId = text(body.institutionId);
-  if (!institutionId) {
-    return badRequest(c, "institutionId wajib disertakan.");
-  }
+  let institutionId = text(body.institutionId) || undefined;
 
   const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const contributionIds = Array.isArray(body.contributionIds)
     ? (body.contributionIds.filter((id) => typeof id === "string" && id.trim()) as string[])
@@ -94,6 +96,7 @@ contributionBatchRoutes.post("/contribution-batches", async (c) => {
       contributionIds,
       fundType,
       currencyUnit,
+      cutoff: typeof body.cutoff === "number" ? body.cutoff : undefined,
       now: gate.runtime.now(),
     });
     return c.json({ success: true, batch }, 201);
@@ -106,13 +109,11 @@ contributionBatchRoutes.post("/contribution-batches", async (c) => {
  * 2. List batches for an institution.
  */
 contributionBatchRoutes.get("/contribution-batches", async (c) => {
-  const institutionId = c.req.query("institutionId")?.trim();
-  if (!institutionId) {
-    return badRequest(c, "institutionId wajib disertakan.");
-  }
+  let institutionId = c.req.query("institutionId")?.trim();
 
   const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const batches = await gate.runtime.zkBatches!.listBatches(institutionId);
   return c.json({ success: true, batches });
@@ -123,20 +124,21 @@ contributionBatchRoutes.get("/contribution-batches", async (c) => {
  */
 contributionBatchRoutes.get("/contribution-batches/:id", async (c) => {
   const batchId = c.req.param("id")?.trim();
-  const institutionId = c.req.query("institutionId")?.trim();
-  if (!batchId || !institutionId) {
+  let institutionId = c.req.query("institutionId")?.trim();
+  if (!batchId) {
     return badRequest(c, "batchId dan institutionId wajib disertakan.");
   }
 
   const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const batch = await gate.runtime.zkBatches!.getBatch(institutionId, batchId);
   if (!batch) {
     return c.json({ success: false, error: "Batch kontribusi tidak ditemukan." }, 404);
   }
 
-  return c.json({ success: true, batch });
+  return c.json({ success: true, batch, operations: gate.runtime.zkPublications ? await inspectPublications(gate.runtime, institutionId, batchId) : [] });
 });
 
 /**
@@ -146,65 +148,32 @@ contributionBatchRoutes.get("/contribution-batches/:id", async (c) => {
 contributionBatchRoutes.post("/contribution-batches/:id/endorse", async (c) => {
   const batchId = c.req.param("id")?.trim();
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-  const institutionId = text(body.institutionId);
-  if (!batchId || !institutionId) {
+  let institutionId = text(body.institutionId) || undefined;
+  if (!batchId) {
     return badRequest(c, "batchId dan institutionId wajib disertakan.");
   }
 
   const gate = await batchActor(c, institutionId, "ENDORSE_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const existing = await gate.runtime.zkBatches!.getBatch(institutionId, batchId);
   if (!existing) {
     return c.json({ success: false, error: "Batch kontribusi tidak ditemukan." }, 404);
   }
-  if (existing.status === "ENDORSED") {
-    return c.json({ success: true, batch: existing }); // Idempotent
+  if (body.snapshotRoot !== existing.merkleRoot) return c.json({ success: false, error: "Tinjau dan sahkan snapshot root yang tepat." }, 409);
+  if (!gate.runtime.zkPublications || !gate.runtime.zkBudget || !gate.runtime.zkRegistryAddress || !gate.runtime.zkWalletClient || !gate.runtime.zkPublicClient || !gate.runtime.zkProver) {
+    return c.json({ success: false, error: "Layanan dan anggaran ZK belum dikonfigurasi." }, 503);
   }
-
-  if (!gate.runtime.zkRegistryAddress || !gate.runtime.zkWalletClient || !gate.runtime.zkPublicClient || !gate.runtime.zkProver) {
-    return c.json({ success: false, error: "Layanan EVM belum dikonfigurasi." }, 503);
-  }
-  if (!await gate.runtime.zkBatches!.batchIsCurrent(institutionId, batchId)) {
-    return c.json({ success: false, error: "Snapshot batch sudah berubah; perlu pengesahan versi yang sesuai." }, 409);
-  }
-  let onChainTxHash: string | undefined = undefined;
-
-  // If on-chain registry and wallet client are wired, register batch root
-  if (gate.runtime.zkRegistryAddress && gate.runtime.zkWalletClient && gate.runtime.zkPublicClient) {
-    try {
-      await gate.runtime.zkProver.assertDeployment(gate.runtime.zkPublicClient, gate.runtime.zkRegistryAddress);
-      const hash = await gate.runtime.zkWalletClient.writeContract({
-        address: gate.runtime.zkRegistryAddress,
-        abi: CONTRIBUTION_PROOF_REGISTRY_ABI,
-        functionName: "endorseBatchRoot",
-        args: [
-          institutionId,
-          BigInt(existing.batchNumber),
-          BigInt(existing.version),
-          existing.merkleRoot as `0x${string}`,
-        ],
-      });
-      const receipt = await gate.runtime.zkPublicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
-      if (receipt.status !== "success") {
-        return c.json({ success: false, error: "Transaksi endorse batch root di EVM gagal/revert." }, 502);
-      }
-      onChainTxHash = hash;
-    } catch (err: any) {
-      return c.json({ success: false, error: "Gagal mendaftarkan batch root di EVM." }, 502);
-    }
-  }
-
-  const endorsed = await gate.runtime.zkBatches!.endorseBatch({
-    institutionId,
-    batchId,
-    endorsedBy: gate.identity.account,
-    endorsementMandateId: gate.mandate.id,
-    txHash: onChainTxHash,
-    now: gate.runtime.now(),
-  });
-
-  return c.json({ success: true, batch: endorsed });
+  try {
+    const actor = await operationalActor(gate.runtime, gate.session);
+    const mandate = actor.require("ENDORSE_CONTRIBUTIONS", { nominalAmount: existing.currencyUnit === "IDR" ? BigInt(existing.totalAmountExact) : undefined });
+    await gate.runtime.zkPublications.approve(existing, gate.identity.account, mandate.id, mandate.version, gate.runtime.now());
+  } catch { return c.json({ success: false, error: "Snapshot berubah atau receipt sudah masuk antrean batch lain." }, 409); }
+  // Root publication uses the same durable, budgeted path as receipts.
+  await runZkPublication(gate.runtime, `root:${batchId}`);
+  const endorsed = await gate.runtime.zkBatches!.getBatch(institutionId, batchId);
+  return c.json({ success: true, batch: endorsed, operations: await inspectPublications(gate.runtime, institutionId, batchId) });
 });
 
 /**
@@ -214,14 +183,15 @@ contributionBatchRoutes.post("/contribution-batches/:id/proofs/:contributionId/p
   const batchId = c.req.param("id")?.trim();
   const contributionId = c.req.param("contributionId")?.trim();
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-  const institutionId = text(body.institutionId);
+  let institutionId = text(body.institutionId) || undefined;
 
-  if (!batchId || !contributionId || !institutionId) {
+  if (!batchId || !contributionId) {
     return badRequest(c, "batchId, contributionId, dan institutionId wajib disertakan.");
   }
 
   const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const batch = await gate.runtime.zkBatches!.getBatch(institutionId, batchId);
   if (!batch) {
@@ -243,73 +213,20 @@ contributionBatchRoutes.post("/contribution-batches/:id/proofs/:contributionId/p
     return c.json({ success: false, error: "Data witness kontribusi tidak ditemukan dalam batch ini." }, 404);
   }
 
-  const targetVersion = witness.version ?? 1;
-
-  // Idempotency: if already VERIFIED, return immediately (AC04, AC18)
-  const existingProof = await gate.runtime.zkBatches!.getReceiptProof(contributionId, targetVersion);
-  if (existingProof && existingProof.batchId === batchId && existingProof.status === "VERIFIED") {
-    return c.json({ success: true, proofRecord: existingProof, message: "Proof sudah terverifikasi sebelumnya (idempoten)." });
+  const targetVersion = witness.version;
+  const runtime = gate.runtime;
+  if (!runtime.zkPublications || !runtime.zkBudget || !runtime.zkPublicClient || !runtime.zkWalletClient || !runtime.zkProver) {
+    return c.json({ success: false, error: "Layanan dan anggaran ZK belum dikonfigurasi." }, 503);
   }
-
-  if (!gate.runtime.zkProver || !gate.runtime.zkRegistryAddress || !gate.runtime.zkWalletClient || !gate.runtime.zkPublicClient) {
-    return c.json({ success: false, error: "ZK Prover service belum dikonfigurasi." }, 503);
-  }
-
-  if (!await gate.runtime.zkBatches!.claimProof(contributionId, batchId, targetVersion, gate.runtime.now())) {
-    return c.json({ success: false, error: "Proof sedang diproses atau sudah dicatat." }, 409);
-  }
-
-  try {
-    await gate.runtime.zkProver.assertDeployment(gate.runtime.zkPublicClient, gate.runtime.zkRegistryAddress);
-    // Generate real Groth16 proof
-    const proofResult = await gate.runtime.zkProver.generateProof(witness);
-
-    const onChainResult = await gate.runtime.zkProver.verifyAndRecordOnChain({
-      institutionId, batchIdNumber: batch.batchNumber, version: targetVersion,
-      contributionId, fundType: witness.fundType, proof: proofResult,
-      registryAddress: gate.runtime.zkRegistryAddress,
-      walletClient: gate.runtime.zkWalletClient, publicClient: gate.runtime.zkPublicClient,
-    });
-
-    if (!onChainResult.success) {
-      const failedRecord = await gate.runtime.zkBatches!.saveReceiptProof({
-        contributionId,
-        batchId,
-        version: targetVersion,
-        status: "FAILED",
-        publicSignals: proofResult.publicSignals,
-        proof: proofResult.proof,
-        failureReason: onChainResult.failureReason || "Verifikasi on-chain gagal.",
-        now: gate.runtime.now(),
-      });
-      return c.json({ success: false, error: onChainResult.failureReason, proofRecord: failedRecord }, 422);
-    }
-
-    const verifiedRecord = await gate.runtime.zkBatches!.saveReceiptProof({
-      contributionId,
-      batchId,
-      version: targetVersion,
-      status: "VERIFIED",
-      publicSignals: proofResult.publicSignals,
-      proof: proofResult.proof,
-      txHash: onChainResult.txHash,
-      blockNumber: onChainResult.blockNumber,
-      verifiedAt: onChainResult.verifiedAt ?? gate.runtime.now(),
-      now: gate.runtime.now(),
-    });
-
-    return c.json({ success: true, proofRecord: verifiedRecord }, 201);
-  } catch (err: any) {
-    const failedRecord = await gate.runtime.zkBatches!.saveReceiptProof({
-      contributionId,
-      batchId,
-      version: targetVersion,
-      status: "FAILED",
-      failureReason: "Pemrosesan proof gagal; belum ada hasil terkonfirmasi.",
-      now: gate.runtime.now(),
-    });
-    return c.json({ success: false, error: "Pemrosesan proof gagal; belum ada hasil terkonfirmasi.", proofRecord: failedRecord }, 500);
-  }
+  const id = `receipt:${contributionId}:${targetVersion}`;
+  const before = (await inspectPublications(runtime, institutionId, batchId)).find(p => p.id === id);
+  if (!before) return c.json({ success: false, error: "Receipt belum masuk antrean yang disahkan." }, 409);
+  if (before.status === "CONFIRMED") return c.json({ success: true, proofRecord: await runtime.zkBatches!.getReceiptProof(contributionId, targetVersion) });
+  await runtime.zkPublications.retry(institutionId, batchId, runtime.now());
+  await runZkPublication(runtime, id);
+  const operation = (await inspectPublications(runtime, institutionId, batchId)).find(p => p.id === id)!;
+  if (operation.status === "CONFIRMED") return c.json({ success: true, proofRecord: await runtime.zkBatches!.getReceiptProof(contributionId, targetVersion) }, 201);
+  return c.json({ success: true, operation, proofRecord: { status: operation.status } }, 202);
 });
 
 /**
@@ -318,14 +235,15 @@ contributionBatchRoutes.post("/contribution-batches/:id/proofs/:contributionId/p
 contributionBatchRoutes.get("/contribution-batches/:id/proofs/:contributionId", async (c) => {
   const batchId = c.req.param("id")?.trim();
   const contributionId = c.req.param("contributionId")?.trim();
-  const institutionId = c.req.query("institutionId")?.trim();
+  let institutionId = c.req.query("institutionId")?.trim();
 
-  if (!batchId || !contributionId || !institutionId) {
+  if (!batchId || !contributionId) {
     return badRequest(c, "batchId, contributionId, dan institutionId wajib disertakan.");
   }
 
   const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
   if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
 
   const witness = await gate.runtime.zkBatches!.getBatchItemWitness(institutionId, batchId, contributionId);
   if (!witness) return c.json({ success: false, error: "Kontribusi tidak ditemukan dalam batch lembaga ini." }, 404);
@@ -334,7 +252,19 @@ contributionBatchRoutes.get("/contribution-batches/:id/proofs/:contributionId", 
     return c.json({ success: true, proofRecord: { status: "NOT_AVAILABLE" } });
   }
 
-  return c.json({ success: true, proofRecord: proof });
+  const operation = gate.runtime.zkPublications ? (await inspectPublications(gate.runtime, institutionId, batchId)).find(p => p.contributionId === contributionId) : undefined;
+  return c.json({ success: true, proofRecord: { ...proof, status: operation && operation.status !== "CONFIRMED" ? operation.status : proof.status } });
 });
 
+contributionBatchRoutes.post("/contribution-batches/:id/retry", async c => {
+  const body = await c.req.json().catch(() => ({}));
+  const gate = await batchActor(c, text(body.institutionId) || undefined, "RECORD_CONTRIBUTIONS");
+  if ("response" in gate) return gate.response;
+  const { runtime, session } = gate;
+  const batchId = c.req.param("id");
+  if (!await runtime.zkBatches!.getBatch(session.institutionId, batchId)) return c.json({ success: false, error: "Batch tidak ditemukan." }, 404);
+  if (!runtime.zkPublications) return c.json({ success: false, error: "Antrean belum tersedia." }, 503);
+  await runtime.zkPublications.retry(session.institutionId, batchId, runtime.now());
+  return c.json({ success: true, operations: await inspectPublications(runtime, session.institutionId, batchId) }, 202);
+});
 export default contributionBatchRoutes;

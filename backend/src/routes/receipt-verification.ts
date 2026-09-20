@@ -17,6 +17,8 @@ receiptVerificationRoutes.get("/receipt-verification/:reference", async (c) => {
   const reference = c.req.param("reference").trim();
   const record = await runtime.zkBatches.publicReceipt(reference);
   if (!record) return c.json({ success: false, error: "Receipt tidak ditemukan." }, 404);
+  const operation = runtime.zkPublications ? (await runtime.zkPublications.list(record.institution_id))
+    .filter(p => p.contributionId === record.id).sort((a, b) => b.version - a.version)[0] : undefined;
   let onChainConfirmed = false;
   let checkStatus = "NOT_CHECKED";
   if (record.status === "VERIFIED") {
@@ -32,14 +34,21 @@ receiptVerificationRoutes.get("/receipt-verification/:reference", async (c) => {
         onChainConfirmed = data[0] && data[1] === BigInt(record.batch_number) &&
           data[2] === record.merkle_root && data[3] === record.receipt_commitment &&
           data[5] === BigInt(record.block_number);
+        if (onChainConfirmed) {
+          const receipt = await runtime.zkPublicClient.getTransactionReceipt({ hash: record.tx_hash });
+          const block = await runtime.zkPublicClient.getBlock({ blockNumber: receipt.blockNumber });
+          const head = await runtime.zkPublicClient.getBlockNumber({ cacheTime: 0 });
+          onChainConfirmed = receipt.status === "success" && block.hash === receipt.blockHash &&
+            receipt.blockNumber === BigInt(record.block_number) && BigInt(head) - BigInt(receipt.blockNumber) + 1n >= BigInt(runtime.zkBudget?.confirmations ?? 1);
+        }
         checkStatus = onChainConfirmed ? "CONFIRMED" : "MISMATCH";
-      } catch { /* Historical SQL result is separate from this live check. */ }
+      } catch { onChainConfirmed = false; /* Historical SQL result is separate from this live check. */ }
     }
   }
   return c.json({ success: true, verification: {
     reference,
     status: record.version != null && Number(record.version) < Number(record.current_version) ? "SUPERSEDED" :
-      record.status === "VERIFIED" && !onChainConfirmed ? "UNCONFIRMED" : record.status ?? "NOT_AVAILABLE",
+      record.status === "VERIFIED" && !onChainConfirmed ? "UNCONFIRMED" : record.status === "VERIFIED" ? "VERIFIED" : operation?.status ?? record.status ?? "NOT_AVAILABLE",
     recordedStatus: record.status ?? "NOT_AVAILABLE",
     claimType: "ZKT_MEMBERSHIP_PROOF_GROTH16_BN254",
     endorsementSource: "INSTITUTION_BATCH_ROOT",

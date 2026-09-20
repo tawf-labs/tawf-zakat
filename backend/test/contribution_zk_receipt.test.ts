@@ -22,8 +22,10 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createPublicClient, createWalletClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { localhost } from "viem/chains";
+import { foundry } from "viem/chains";
 import app from "../src/index";
+import { createZkPublicationStore } from "../src/zk-publication-store";
+import { runZkPublication } from "../src/zk-publication";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
 import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store";
 import { createContributionStore, type ContributionStore } from "../src/contribution-store";
@@ -61,6 +63,7 @@ let contributionStore: ContributionStore;
 let donorAccessStore: DonorAccessStore;
 let zkBatchStore: ZkBatchStore;
 let zkProofService: ZkProofService;
+let publications: ReturnType<typeof createZkPublicationStore>;
 
 let publicClient: any;
 let walletClient: any;
@@ -128,13 +131,13 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     });
 
     publicClient = createPublicClient({
-      chain: localhost,
+      chain: foundry,
       transport: http(RPC_URL),
     });
 
     walletClient = createWalletClient({
       account: deployer,
-      chain: localhost,
+      chain: foundry,
       transport: http(RPC_URL),
     });
 
@@ -215,12 +218,17 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     for (const stmt of DONOR_ACCESS_SCHEMA_STATEMENTS) await handle.execute(sql.raw(stmt));
     for (const stmt of ZK_BATCH_SCHEMA_STATEMENTS) await handle.execute(sql.raw(stmt));
 
+    publications = createZkPublicationStore(handle);
+    await publications.ensureSchema();
+
     // Configure runtime
     configureWorkspace({
       store: workspaceStore,
       contributions: contributionStore,
       donorAccess: donorAccessStore,
       zkBatches: zkBatchStore,
+      zkPublications: publications,
+      zkBudget: { id: "local-pilot", maxAttempts: 100, maxWei: "1000000000000000000", gasLimit: "700000", maxFeePerGas: "2000000000", confirmations: 1 },
       zkProver: zkProofService,
       zkRegistryAddress: registryAddress,
       zkWalletClient: walletClient,
@@ -408,7 +416,7 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
           Authorization: `Bearer ${amilToken}`,
         },
         body: JSON.stringify({
-          institutionId: SINAR,
+          institutionId: SINAR, snapshotRoot: batch.merkleRoot,
         }),
       })
     );
@@ -439,18 +447,20 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
       expect(await zkBatchStore.getReceiptProof(contributionId)).toBeNull();
       configureWorkspace({ ...runtime, zkProver: createZkProofService({ wasmPath: "/missing-private-artifact" }) });
       const failed = await app.fetch(processRequest());
-      expect(failed.status).toBe(500);
+      expect(failed.status).toBe(202);
       const failureText = await failed.text();
       expect(failureText).not.toContain("missing-private-artifact");
-      expect(JSON.parse(failureText).proofRecord.status).toBe("FAILED");
+      expect(JSON.parse(failureText).proofRecord.status).toBe("RETRY");
       configureWorkspace(runtime);
       const originalCode = await publicClient.getBytecode({ address: verifierAddress });
       await publicClient.request({ method: "anvil_setCode", params: [verifierAddress, "0x60006000f3"] });
       try {
         await expect(zkProofService.assertDeployment(publicClient, registryAddress)).rejects.toThrow("Kode verifier");
-        expect((await app.fetch(processRequest())).status).toBe(500);
+        expect((await app.fetch(processRequest())).status).toBe(202);
       } finally { await publicClient.request({ method: "anvil_setCode", params: [verifierAddress, originalCode] }); }
     } finally { configureWorkspace(runtime); }
+
+    await runZkPublication(runtime, `root:${batch.id}`); // refresh root after verifier outage
 
     // Step 6: Generate Real Groth16 Proof and Verify on EVM (AC01, AC04, AC18)
     const processProofPromise = app.fetch(
@@ -467,7 +477,7 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     );
     const concurrent = await app.fetch(processRequest());
     const processProofRes = await processProofPromise;
-    expect([200, 409]).toContain(concurrent.status);
+    expect([200, 202, 409]).toContain(concurrent.status);
     const processProofJson = await processProofRes.json();
     if (processProofRes.status !== 201) {
       console.error("POST /process proof failed:", processProofJson);
@@ -655,6 +665,20 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     }
     expect(revertedStatement).toBe(true);
   });
+  it("persists the publication queue and prevents duplicate workers from claiming it", async () => {
+    const first = await publications.acquire("local-pilot", clock);
+    expect(first).not.toBeNull();
+    expect(await publications.acquire("local-pilot", clock)).toBeNull();
+    await publications.release("local-pilot", first!);
+    expect(await publications.acquire("local-pilot", clock)).not.toBeNull();
+    // A crashed worker's lease expires; its stale token cannot release its successor.
+    const successor = await publications.acquire("local-pilot", clock + 301);
+    expect(successor).not.toBeNull();
+    await publications.release("local-pilot", first!);
+    expect(await publications.acquire("local-pilot", clock + 301)).toBeNull();
+    await publications.release("local-pilot", successor!);
+  });
+
   it("rejects version, receipt, purpose and amount manipulation with a real proof", async () => {
     const witness = (await zkBatchStore.getBatchItemWitness(SINAR, tracerBatch.id, tracerContributionId))!;
     const proof = await zkProofService.generateProof(witness);
@@ -704,6 +728,157 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     await app.fetch(request()); await app.fetch(request());
     expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonce);
   });
+
+  it("automates several receipts with a budget gate, durable pending transaction, restart, duplicate workers and reorg", async () => {
+    const post = (path: string, body: any) => app.fetch(new Request(`${BASE_WORKSPACE}${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tracerToken}` },
+      body: JSON.stringify({ institutionId: SINAR, ...body }),
+    }));
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const res = await post("/contributions", { operationId: `multi-${i}`, sourceChannel: "BANK_TRANSFER", sourceReference: `MULTI-${i}`,
+        currencyUnit: "IDR", amountExact: "125000", fundType: "FITRAH", purpose: "Bantuan", receivedAt: NOW - 100,
+        donorName: "Private donor", donorContact: "private@example.org" });
+      expect(res.status).toBe(201);
+      const id = (await res.json()).contribution.id;
+      ids.push(id);
+      expect((await post(`/contributions/${id}/reconcile`, { expectedVersion: 1, operationId: `match-${i}`, proofRef: `MUTASI-${i}` })).status).toBe(200);
+      expect((await post(`/contributions/${id}/endorse`, { expectedVersion: 2, operationId: `approve-${i}` })).status).toBe(200);
+    }
+    const made = await post("/contribution-batches", { contributionIds: ids, currencyUnit: "IDR", fundType: "FITRAH", cutoff: NOW });
+    expect(made.status).toBe(201);
+    const batch = (await made.json()).batch;
+    expect(batch.cutoff).toBe(NOW);
+    expect((await post(`/contribution-batches/${batch.id}/endorse`, { snapshotRoot: "0x00" })).status).toBe(409);
+    let runtime = workspaceRuntime()!;
+    configureWorkspace({ ...runtime, zkBudget: { ...runtime.zkBudget!, maxAttempts: 0 } });
+    const gated = await (await post(`/contribution-batches/${batch.id}/endorse`, { snapshotRoot: batch.merkleRoot })).json();
+    expect(gated.operations.find((p: any) => !p.contributionId).status).toBe("BUDGET_EXHAUSTED");
+    const count = await database.rowCount("contributions");
+    configureWorkspace(runtime);
+    await post(`/contribution-batches/${batch.id}/retry`, {});
+    await runZkPublication(runtime); // root
+    // A mined out-of-gas transaction is durable history, and retry reserves a new attempt.
+    const revertId = `receipt:${ids[2]}:3`;
+    await runZkPublication({ ...runtime, zkBudget: { ...runtime.zkBudget!, gasLimit: "100000" } }, revertId);
+    expect((await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!.status).toBe("REVERTED");
+    await post(`/contribution-batches/${batch.id}/retry`, {});
+    const chainSnapshot = await publicClient.request({ method: "evm_snapshot" });
+    await publicClient.request({ method: "evm_setAutomine", params: [false] });
+    try {
+      await runZkPublication({ ...runtime, zkPublicClient: { ...publicClient,
+        async sendRawTransaction(args: any) { await publicClient.sendRawTransaction(args); throw new Error("Connection lost after broadcast"); },
+      } });
+      const pending = (await publications.list(SINAR, batch.id)).find(p => p.status === "PENDING")!;
+      expect(pending.rawTransaction).toBeTruthy();
+      expect(pending.txHash).toBe(keccak256(pending.rawTransaction!));
+      expect(pending.artifactId).toContain(registryAddress.toLowerCase());
+      const db = await database.reopen();
+      workspaceStore = createWorkspaceStore(db); contributionStore = createContributionStore(db);
+      donorAccessStore = createDonorAccessStore(db, OTP_KEY); zkBatchStore = createZkBatchStore(db);
+      publications = createZkPublicationStore(db);
+      runtime = { ...runtime, store: workspaceStore, contributions: contributionStore, donorAccess: donorAccessStore,
+        zkBatches: zkBatchStore, zkPublications: publications };
+      configureWorkspace(runtime);
+      expect((await publications.list(SINAR, batch.id)).find(p => p.id === pending.id)!.rawTransaction).toBe(pending.rawTransaction);
+      await publicClient.request({ method: "evm_mine" });
+      await database.handle().execute(sql`UPDATE operational_mandates SET is_active = false WHERE id = 'mandate-sinar-endorse'`);
+      await Promise.all([runZkPublication(runtime), runZkPublication(runtime)]);
+      expect((await publications.list(SINAR, batch.id)).find(p => p.id === pending.id)!.status).toBe("CONFIRMED");
+      await database.handle().execute(sql`UPDATE operational_mandates SET is_active = true, version = version + 1 WHERE id = 'mandate-sinar-endorse'`);
+      await runZkPublication(runtime);
+      expect((await publications.list(SINAR, batch.id)).some(p => p.status === "BLOCKED")).toBe(true);
+      expect((await post(`/contribution-batches/${batch.id}/endorse`, { snapshotRoot: batch.merkleRoot })).status).toBe(200);
+    } finally { await publicClient.request({ method: "evm_setAutomine", params: [true] }); }
+    const notifications: any[] = [];
+    runtime = { ...runtime, zkNotifications: { async send(event) { notifications.push(event); } } };
+    configureWorkspace(runtime);
+    for (let i = 0; i < 3; i++) await runZkPublication(runtime);
+    expect((await publications.list(SINAR, batch.id)).every(p => p.status === "CONFIRMED")).toBe(true);
+    expect(notifications.length).toBeGreaterThan(0);
+    expect(Object.keys(notifications[0]).sort()).toEqual(["operationId", "status"]);
+    const nonce = await publicClient.getTransactionCount({ address: deployer.address });
+    for (const id of ids) {
+      const view = await (await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/${id}`))).json();
+      expect(view.verification.onChainConfirmed).toBe(true);
+      expect(JSON.stringify(view)).not.toMatch(/Private donor|private@example|125000|pathElements|salt/);
+      await post(`/contribution-batches/${batch.id}/proofs/${id}/process`, {});
+    }
+    expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonce);
+    expect(await database.rowCount("contributions")).toBe(count);
+    await publicClient.request({ method: "evm_revert", params: [chainSnapshot] });
+    const check = await (await app.fetch(new Request(`${BASE_WORKSPACE}/contribution-batches/${batch.id}?institutionId=${SINAR}`, {
+      headers: { Authorization: `Bearer ${tracerToken}` },
+    }))).json();
+    expect(check.operations.filter((p: any) => p.contributionId).every((p: any) => p.status === "UNCONFIRMED")).toBe(true);
+    expect((await (await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/${ids[0]}`))).json()).verification.onChainConfirmed).toBe(false);
+    await post(`/contribution-batches/${batch.id}/retry`, {});
+    for (let i = 0; i < 5; i++) await runZkPublication(runtime);
+    expect((await publications.list(SINAR, batch.id)).every(p => p.status === "CONFIRMED")).toBe(true);
+    expect(await database.rowCount("contributions")).toBe(count);
+    for (const id of ids) expect((await (await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/${id}`))).json()).verification.onChainConfirmed).toBe(true);
+  }, 60000);
+
+  it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: reviews exact batch, processes automatically, shows pending and retries on desktop/mobile", async () => {
+    const built = await Bun.build({ entrypoints: [new URL("../../frontend/test/contribution-batch-smoke.tsx", import.meta.url).pathname], target: "browser" });
+    if (!built.success) throw new Error(built.logs.join("\n"));
+    const bundle = await built.outputs[0]!.text();
+    const cssProcess = Bun.spawn(["bun", "test/build-smoke-css.ts"], { cwd: join(__dirname, "../../frontend"), stdout: "pipe", stderr: "pipe" });
+    const css = await new Response(cssProcess.stdout).text();
+    expect(await cssProcess.exited).toBe(0);
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/") return new Response('<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/smoke.css"><div id="root"></div><script type="module" src="/smoke.js"></script>', { headers: { "Content-Type": "text/html" } });
+      if (path === "/smoke.js") return new Response(bundle, { headers: { "Content-Type": "application/javascript" } });
+      if (path === "/smoke.css") return new Response(css, { headers: { "Content-Type": "text/css" } });
+      return app.fetch(req);
+    } });
+    const { chromium } = await import(process.env.REGISTRY_BROWSER_MODULE!);
+    const browser = await chromium.launch({ executablePath: process.env.REGISTRY_BROWSER_EXECUTABLE, headless: true, args: ["--no-sandbox"] });
+    let runtime = workspaceRuntime()!;
+    try {
+      for (const width of [1280, 390]) {
+        const call = (path: string, body: any) => app.fetch(new Request(`${BASE_WORKSPACE}${path}`, { method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tracerToken}` }, body: JSON.stringify({ institutionId: SINAR, ...body }) }));
+        const recorded = await call("/contributions", { operationId: `browser-${width}`, sourceChannel: "CASH", sourceReference: `BROWSER-${width}`,
+          currencyUnit: "IDR", amountExact: "200000", fundType: "FITRAH", purpose: "Bantuan", receivedAt: NOW - 100 });
+        const id = (await recorded.json()).contribution.id;
+        await call(`/contributions/${id}/reconcile`, { expectedVersion: 1, operationId: `browser-match-${width}`, proofRef: `CASH-${width}` });
+        await call(`/contributions/${id}/endorse`, { expectedVersion: 2, operationId: `browser-endorse-${width}` });
+        const page = await browser.newPage({ viewport: { width, height: 900 } });
+        page.setDefaultTimeout(10000);
+        const errors: string[] = []; page.on("pageerror", (e: Error) => errors.push(e.message));
+        await page.addInitScript((token: string) => sessionStorage.setItem("workspace-test-token", token), tracerToken);
+        await page.goto(server.url.toString());
+        // Use the fixture's source cutoff rather than the wall clock of the browser.
+        await page.getByLabel("Cutoff penerimaan (UTC)").fill(new Date(NOW * 1000).toISOString().slice(0, 16));
+        await page.getByLabel(new RegExp(`BROWSER-${width}`)).check();
+        await page.getByRole("button", { name: "Tinjau snapshot batch" }).click();
+        const review = page.getByRole("region", { name: "Review snapshot" });
+        await review.getByText("1 kontribusi", { exact: false }).waitFor();
+        await page.getByLabel("Saya telah memeriksa populasi dan cutoff snapshot ini.").check();
+        configureWorkspace({ ...runtime, zkBudget: { ...runtime.zkBudget!, maxAttempts: 0 } });
+        await page.getByRole("button", { name: "Sahkan snapshot dan proses otomatis" }).click();
+        await review.getByText("Anggaran layanan habis", { exact: true }).waitFor();
+        configureWorkspace(runtime);
+        await page.getByRole("button", { name: "Coba proses lagi" }).click();
+        await review.getByText("Menunggu proses", { exact: true }).first().waitFor();
+        await runZkPublication(runtime); // root
+        await publicClient.request({ method: "evm_setAutomine", params: [false] });
+        try {
+          await runZkPublication(runtime);
+          await review.getByText("Menunggu konfirmasi", { exact: true }).waitFor();
+          await publicClient.request({ method: "evm_mine" });
+          await runZkPublication(runtime);
+          await review.getByText("Terkonfirmasi", { exact: true }).nth(1).waitFor();
+        } finally { await publicClient.request({ method: "evm_setAutomine", params: [true] }); }
+        expect(errors).toHaveLength(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await page.screenshot({ path: `/tmp/issue109-batch-${width}.png`, fullPage: true });
+        await page.close();
+      }
+    } finally { configureWorkspace(runtime); await browser.close(); server.stop(true); }
+  }, 60000);
 
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: donor opens real verified receipt and rechecks without transactions on desktop and mobile", async () => {
     const built = await Bun.build({ entrypoints: [new URL("../../frontend/test/verification-smoke.tsx", import.meta.url).pathname], target: "browser",

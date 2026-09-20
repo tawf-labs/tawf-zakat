@@ -100,6 +100,9 @@ export type WorkspaceRuntime = {
   /**
    * ZK Contribution Batch store and Merkle tree management (Spec #100, Issue #108).
    */
+  zkPublications?: import("./zk-publication-store").ZkPublicationStore;
+  zkBudget?: import("./zk-publication-store").ZkBudget;
+  zkNotifications?: { send(event: { operationId: string; status: string }): Promise<void> };
   zkBatches?: import("./zk-batch-store").ZkBatchStore;
   /**
    * ZK Prover service for real Groth16 witness and proof generation (Issue #108).

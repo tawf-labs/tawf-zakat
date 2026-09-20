@@ -35,11 +35,13 @@ import { donorOtpKeyFromEnv } from "./donor-access";
 import { donorEmailTransportFromEnv } from "./email-transport";
 import { randomBytes } from "node:crypto";
 import { createEncryptedFileStore, evidenceKeyFromEnv } from "./evidence-files";
-import { configureWorkspace, nowInSeconds } from "./workspace-runtime";
+import { configureWorkspace, nowInSeconds, workspaceRuntime } from "./workspace-runtime";
 import { AmilRulesSchema } from "./report-package";
 import { startRegistryRecovery } from "./registry-recovery";
 import { registryFromEnvironment } from "./registry-wiring";
 import { createInternalLedgerReader } from "./internal-ledger-reader";
+import { createZkPublicationStore } from "./zk-publication-store";
+import { runZkPublication } from "./zk-publication";
 import { createZkBatchStore } from "./zk-batch-store";
 import { createZkProofService } from "./zk-proof-service";
 import type { EthCall } from "./account-signature";
@@ -106,6 +108,17 @@ export function installWorkspaceRuntime(): void {
     : undefined;
   const zkBatches = createZkBatchStore(db);
   const zkProver = createZkProofService();
+  const zkPublications = createZkPublicationStore(db);
+  const zkBudget = {
+    id: "zk-pilot", maxAttempts: Number(process.env.ZK_MAX_ATTEMPTS ?? "0"),
+    maxWei: process.env.ZK_MAX_WEI ?? "0", gasLimit: process.env.ZK_GAS_LIMIT ?? "700000",
+    maxFeePerGas: process.env.ZK_MAX_FEE_PER_GAS ?? "2000000000",
+    confirmations: Number(process.env.ZK_CONFIRMATIONS ?? "1"),
+  };
+  if (!Number.isSafeInteger(zkBudget.maxAttempts) || zkBudget.maxAttempts < 0 ||
+      !Number.isSafeInteger(zkBudget.confirmations) || zkBudget.confirmations < 1 ||
+      ![zkBudget.maxWei, zkBudget.gasLimit, zkBudget.maxFeePerGas].every(v => /^\d+$/.test(v)) ||
+      BigInt(zkBudget.gasLimit) <= 0n || BigInt(zkBudget.maxFeePerGas) <= 0n) throw new Error("Anggaran ZK tidak sah.");
   // This tracer is deliberately limited to a local EVM. No implicit production relay.
   const zkRpcUrl = process.env.ZK_RPC_URL;
   const zkRegistryAddress = process.env.ZK_REGISTRY_ADDRESS;
@@ -135,6 +148,8 @@ export function installWorkspaceRuntime(): void {
     donorAccess,
     zkBatches,
     zkProver,
+    zkPublications,
+    zkBudget,
     ...(donorMessages ? { donorMessages } : {}),
     // The same chain, contract and indexer key the indexer writes under, so a
     // package names the deployment it was actually read from.
@@ -162,9 +177,17 @@ export function installWorkspaceRuntime(): void {
     .then(() => auditFindings.ensureSchema())
     .then(() => donorAccess.ensureSchema())
     .then(() => zkBatches.ensureSchema())
+    .then(() => zkPublications.ensureSchema())
     .then(() => registry?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);
+      if (zkRpcUrl && zkRegistryAddress && zkRelayKey) {
+        const timer = setInterval(() => {
+          const runtime = workspaceRuntime();
+          if (runtime) void runZkPublication(runtime).catch(() => console.error("Pemulihan antrean ZK tertunda."));
+        }, 3000);
+        timer.unref();
+      }
       if (files)
         startProposalPreviewMaintenance(disbursement, files, nowInSeconds);
       console.log("Workspace tenancy, evidence and ZK batch schema ready");
