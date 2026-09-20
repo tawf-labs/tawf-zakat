@@ -47,6 +47,28 @@ export interface DonorSession {
   lastAccessedAt: number;
 }
 
+export type DonorZkProofStatus =
+  | "NOT_AVAILABLE"
+  | "UNCONFIRMED"
+  | "PENDING"
+  | "PROVING"
+  | "VERIFIED"
+  | "FAILED"
+  | "SUPERSEDED";
+
+export interface DonorZkProofDetail {
+  status: DonorZkProofStatus;
+  batchId?: string;
+  batchNumber?: number;
+  version?: number;
+  batchRoot?: string;
+  receiptCommitment?: string;
+  txHash?: string;
+  blockNumber?: number;
+  verifiedAt?: number;
+  failureReason?: string;
+}
+
 export interface DonorContributionDetail {
   version: number;
   corrections: DonorContributionCorrection[];
@@ -64,8 +86,8 @@ export interface DonorContributionDetail {
   status: ContributionStatus;
   reconciledAt: number | null;
   endorsedAt: number | null;
-  /** No ZK pipeline exists yet (#108); anything else would be manufactured. */
-  zkProof: { status: "NOT_AVAILABLE" };
+  /** Real ZK proof of membership status (Spec #100, Issue #108). */
+  zkProof: DonorZkProofDetail;
 }
 
 export interface DonorActivityAllocation {

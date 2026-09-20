@@ -97,6 +97,17 @@ export type WorkspaceRuntime = {
    * absent means absent: the page says no channel is available.
    */
   donorMessages?: RecipientMessageTransport;
+  /**
+   * ZK Contribution Batch store and Merkle tree management (Spec #100, Issue #108).
+   */
+  zkBatches?: import("./zk-batch-store").ZkBatchStore;
+  /**
+   * ZK Prover service for real Groth16 witness and proof generation (Issue #108).
+   */
+  zkProver?: import("./zk-proof-service").ZkProofService;
+  zkRegistryAddress?: `0x${string}`;
+  zkWalletClient?: any;
+  zkPublicClient?: any;
 };
 
 let runtime: WorkspaceRuntime | null = null;

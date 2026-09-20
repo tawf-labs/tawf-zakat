@@ -1,4 +1,4 @@
-import { pgTable, primaryKey, serial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, primaryKey, uniqueIndex, serial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
 
 // 1. Merkle Batches Table
 export const merkleBatches = pgTable("merkle_batches", {
@@ -1044,3 +1044,58 @@ export const contributionEvents = pgTable("contribution_events", {
   occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
   proofSuperseded: boolean("proof_superseded").notNull().default(true),
 });
+
+// 18. Contribution Batches & ZK Proof Receipts (Spec #100, Issue #108)
+export const contributionBatches = pgTable("zk_contribution_batches", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  batchNumber: integer("batch_number").notNull(),
+  version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("DRAFT"), // 'DRAFT' | 'ENDORSED' | 'SUPERSEDED'
+  merkleRoot: text("merkle_root").notNull(),
+  totalAmountExact: text("total_amount_exact").notNull(),
+  currencyUnit: text("currency_unit").notNull(),
+  fundType: text("fund_type").notNull(),
+  itemCount: integer("item_count").notNull(),
+  leavesJson: text("leaves_json").notNull().default("[]"),
+  endorsedBy: text("endorsed_by"),
+  endorsementMandateId: text("endorsement_mandate_id"),
+  endorsedAt: bigint("endorsed_at", { mode: "number" }),
+  txHash: text("tx_hash"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const contributionBatchItems = pgTable("zk_contribution_batch_items", {
+  id: text("id").primaryKey(),
+  batchId: text("batch_id").notNull().references(() => contributionBatches.id, { onDelete: "cascade" }),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id, { onDelete: "cascade" }),
+  leafIndex: integer("leaf_index").notNull(),
+  leafHash: text("leaf_hash").notNull(),
+  receiptCommitment: text("receipt_commitment").notNull(),
+  witnessDataJson: text("witness_data_json").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+});
+
+export const contributionReceiptProofs = pgTable("zk_contribution_receipt_proofs", {
+  id: text("id").primaryKey(),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id, { onDelete: "cascade" }),
+  batchId: text("batch_id").notNull().references(() => contributionBatches.id, { onDelete: "cascade" }),
+  version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("PENDING"), // 'PENDING' | 'PROVING' | 'VERIFIED' | 'FAILED' | 'SUPERSEDED'
+  publicSignalsJson: text("public_signals_json"),
+  proofJson: text("proof_json"),
+  txHash: text("tx_hash"),
+  blockNumber: integer("block_number"),
+  verifiedAt: bigint("verified_at", { mode: "number" }),
+  failureReason: text("failure_reason"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+}, (table) => [uniqueIndex("zk_proof_receipt_version_unique").on(table.contributionId, table.version)]);
+
+export type ContributionBatchRow = typeof contributionBatches.$inferSelect;
+export type NewContributionBatchRow = typeof contributionBatches.$inferInsert;
+export type ContributionBatchItemRow = typeof contributionBatchItems.$inferSelect;
+export type NewContributionBatchItemRow = typeof contributionBatchItems.$inferInsert;
+export type ContributionReceiptProofRow = typeof contributionReceiptProofs.$inferSelect;
+export type NewContributionReceiptProofRow = typeof contributionReceiptProofs.$inferInsert;

@@ -40,6 +40,9 @@ const LEGACY_SCHEMA = `
 
 /** The tables these tickets add, newest first, for truncation between tests. */
 const WORKSPACE_TABLES = [
+  "zk_contribution_receipt_proofs",
+  "zk_contribution_batch_items",
+  "zk_contribution_batches",
   "disbursement_realization_operations",
   "disbursement_realization_expenses",
   "disbursement_realization_advances",

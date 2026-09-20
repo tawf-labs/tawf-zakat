@@ -6,7 +6,7 @@
     "start:api": "bun src/index.ts",
     "start:indexer": "bun src/indexer.ts",
     "indexer": "bun src/indexer.ts",
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/indexer.ts --outdir ./dist --target bun",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/indexer.ts --outdir ./dist --target bun && cp src/zk-prover-runner.cjs dist/zk-prover-runner.cjs",
     "demo:evidence": "NODE_ENV=test bun src/scripts/demo-evidence-snapshot.ts",
     "demo:usdc-source": "NODE_ENV=test bun src/scripts/demo-internal-usdc-source.ts",
     "seed:workspace": "bun src/scripts/seed-workspace.ts",
@@ -19,9 +19,11 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
+    "circomlibjs": "0.1.7",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.4",
     "postgres": "^3.4.9",
+    "snarkjs": "0.7.6",
     "viem": "^2.55.19",
     "xlsx": "^0.18.5",
     "zod": "^4.5.4"
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@types/bun": "latest",
+    "circomlib": "2.0.5",
     "drizzle-kit": "^0.31.10"
   }
 }

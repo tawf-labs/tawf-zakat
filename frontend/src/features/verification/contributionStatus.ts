@@ -43,7 +43,7 @@ export const STATUS_BADGES: Record<PublicContributionStatus, StatusBadge> = {
     Icon: CheckCircle2,
     label: "Disahkan Lembaga",
     tone: "bg-emerald-50 border-emerald-200 text-emerald-800",
-    explanation: "Kontribusi ini disahkan pihak berwenang lembaga. Bukti batch kriptografis belum diterbitkan.",
+    explanation: "Kontribusi ini disahkan pihak berwenang lembaga. Status bukti kriptografis diperiksa secara terpisah.",
   },
   REJECTED: {
     Icon: XCircle,

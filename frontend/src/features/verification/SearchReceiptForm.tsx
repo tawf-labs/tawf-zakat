@@ -3,6 +3,7 @@ import { Search, Loader2, Lock } from "lucide-react";
 import { Input } from "../../components/ui/Input";
 import { useContributionLookup } from "./contributionApi";
 import { LookupAlert } from "./LookupAlert";
+import { PublicReceiptProof } from "./PublicReceiptProof";
 import { CertificateCard } from "./CertificateCard";
 import { OwnerReceiptCheck } from "./OwnerReceiptCheck";
 import { DonorAccessPanel } from "../donor";
@@ -69,7 +70,10 @@ export function SearchReceiptForm({ initialTrxId = "" }: SearchReceiptFormProps)
 
           {/* Accountless donor access via OTP (#104); keyed so a new record never inherits an old session. */}
           {result.contribution.recordKind === "INSTITUTION_CONTRIBUTION" && (
-            <DonorAccessPanel key={result.contribution.trxId} reference={result.contribution.trxId} />
+            <>
+              <PublicReceiptProof key={`proof-${result.contribution.trxId}`} reference={result.contribution.trxId} />
+              <DonorAccessPanel key={result.contribution.trxId} reference={result.contribution.trxId} />
+            </>
           )}
 
           {result.contribution.recordKind === "ONLINE_DONATION" && (

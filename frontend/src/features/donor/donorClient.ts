@@ -46,9 +46,31 @@ export type DonorContribution = {
   status: ContributionStatus;
   reconciledAt: number | null;
   endorsedAt: number | null;
-  /** No ZK pipeline exists yet (#108). */
-  zkProof: { status: "NOT_AVAILABLE" };
+  /** Real ZK membership proof status (Spec #100, Issue #108). */
+  zkProof: DonorZkProofDetail;
 };
+
+export type DonorZkProofStatus =
+  | "NOT_AVAILABLE"
+  | "UNCONFIRMED"
+  | "PENDING"
+  | "PROVING"
+  | "VERIFIED"
+  | "FAILED"
+  | "SUPERSEDED";
+
+export interface DonorZkProofDetail {
+  status: DonorZkProofStatus;
+  batchId?: string;
+  batchNumber?: number;
+  version?: number;
+  batchRoot?: string;
+  receiptCommitment?: string;
+  txHash?: string;
+  blockNumber?: number;
+  verifiedAt?: number;
+  failureReason?: string;
+}
 
 export type DonorActivityAllocation = {
   allocationId: string;
@@ -238,3 +260,37 @@ export const getDonorRecoveryStatusByReference = async (
   return result.request;
 };
 
+export type PublicReceiptVerification = {
+  institutionId?: string;
+  endorsedBy?: string | null;
+  registryAddress?: string | null;
+  reference: string;
+  status: DonorZkProofStatus;
+  claimType: string;
+  endorsementSource: string;
+  batchId?: string;
+  batchNumber?: number;
+  version?: number;
+  batchRoot?: string;
+  receiptCommitment?: string;
+  txHash?: string | null;
+  blockNumber?: number | null;
+  verifiedAt?: number | null;
+  onChainConfirmed?: boolean;
+  message?: string;
+};
+
+export async function getPublicReceiptVerification(
+  reference: string
+): Promise<PublicReceiptVerification | null> {
+  try {
+    const res = await fetch(
+      `${getApiBaseUrl()}/api/public/receipt-verification/${encodeURIComponent(reference)}`
+    );
+    const data = await res.json();
+    if (!data.success) return null;
+    return data.verification;
+  } catch {
+    return null;
+  }
+}

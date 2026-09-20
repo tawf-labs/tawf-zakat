@@ -1,0 +1,7 @@
+# Only the matched proving pair and verification key are versioned.
+build/*
+!build/circuit_final.zkey
+!build/verification_key.json
+!build/contribution_membership_js/
+build/contribution_membership_js/*
+!build/contribution_membership_js/contribution_membership.wasm

@@ -19,8 +19,9 @@
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { createPublicClient, http, type Hex } from "viem";
-import { arbitrumSepolia } from "viem/chains";
+import { createPublicClient, createWalletClient, http, isAddress, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { arbitrumSepolia, foundry } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { createWorkspaceStore } from "./tenancy-store";
 import { createEvidenceStore } from "./evidence-store";
@@ -39,6 +40,8 @@ import { AmilRulesSchema } from "./report-package";
 import { startRegistryRecovery } from "./registry-recovery";
 import { registryFromEnvironment } from "./registry-wiring";
 import { createInternalLedgerReader } from "./internal-ledger-reader";
+import { createZkBatchStore } from "./zk-batch-store";
+import { createZkProofService } from "./zk-proof-service";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
@@ -101,7 +104,26 @@ export function installWorkspaceRuntime(): void {
   const files = key
     ? createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key })
     : undefined;
+  const zkBatches = createZkBatchStore(db);
+  const zkProver = createZkProofService();
+  // This tracer is deliberately limited to a local EVM. No implicit production relay.
+  const zkRpcUrl = process.env.ZK_RPC_URL;
+  const zkRegistryAddress = process.env.ZK_REGISTRY_ADDRESS;
+  const zkRelayKey = process.env.ZK_RELAY_PRIVATE_KEY;
+  let zkChain = {};
+  if (zkRpcUrl && zkRegistryAddress && zkRelayKey) {
+    const url = new URL(zkRpcUrl);
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || !isAddress(zkRegistryAddress)) {
+      throw new Error("ZK tracer memerlukan RPC lokal dan alamat registry yang sah.");
+    }
+    zkChain = {
+      zkRegistryAddress,
+      zkPublicClient: createPublicClient({ chain: foundry, transport: http(zkRpcUrl) }),
+      zkWalletClient: createWalletClient({ chain: foundry, transport: http(zkRpcUrl), account: privateKeyToAccount(zkRelayKey as Hex) }),
+    };
+  }
   configureWorkspace({
+    ...zkChain,
     registry,
     reportAmilRules,
     store,
@@ -111,6 +133,8 @@ export function installWorkspaceRuntime(): void {
     activities,
     auditFindings,
     donorAccess,
+    zkBatches,
+    zkProver,
     ...(donorMessages ? { donorMessages } : {}),
     // The same chain, contract and indexer key the indexer writes under, so a
     // package names the deployment it was actually read from.
@@ -137,12 +161,13 @@ export function installWorkspaceRuntime(): void {
     .then(() => activities.ensureSchema())
     .then(() => auditFindings.ensureSchema())
     .then(() => donorAccess.ensureSchema())
+    .then(() => zkBatches.ensureSchema())
     .then(() => registry?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);
       if (files)
         startProposalPreviewMaintenance(disbursement, files, nowInSeconds);
-      console.log("Workspace tenancy and evidence schema ready");
+      console.log("Workspace tenancy, evidence and ZK batch schema ready");
     })
     .catch((error) => console.error("Workspace schema failed:", error));
 }

@@ -29,6 +29,8 @@ import {
   type DonorRecoveryRequestInput,
   type DonorRecoveryStatus,
   type DonorSession,
+  type DonorZkProofDetail,
+  type DonorZkProofStatus,
   type PublicDonorRecoveryStatus,
 } from "./donor-access";
 import type { RecipientMessageTransport } from "./workspace-runtime";
@@ -567,7 +569,40 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         status: row.status as ContributionStatus,
         reconciledAt: row.reconciled_at ? Number(row.reconciled_at) : null,
         endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
-        zkProof: { status: "NOT_AVAILABLE" },
+        zkProof: await (async (): Promise<DonorZkProofDetail> => {
+          try {
+            const proofRes = await database.execute(sql`
+              SELECT p.status, p.batch_id, p.version, p.tx_hash, p.block_number, p.verified_at, p.failure_reason,
+                     b.batch_number, b.merkle_root, it.receipt_commitment
+              FROM zk_contribution_receipt_proofs p
+              JOIN zk_contribution_batches b ON p.batch_id = b.id
+              LEFT JOIN zk_contribution_batch_items it ON it.batch_id = b.id AND it.contribution_id = p.contribution_id
+              WHERE p.contribution_id = ${row.id}
+              ORDER BY p.version DESC, p.created_at DESC
+              LIMIT 1
+            `);
+            const pRows = rowsOf(proofRes);
+            if (pRows.length > 0) {
+              const pr = pRows[0];
+              const isSuperseded = Number(pr.version) < Number(row.version);
+              return {
+                status: isSuperseded ? "SUPERSEDED" : (pr.status as DonorZkProofStatus),
+                batchId: pr.batch_id,
+                batchNumber: pr.batch_number != null ? Number(pr.batch_number) : undefined,
+                version: Number(pr.version),
+                batchRoot: pr.merkle_root ?? undefined,
+                receiptCommitment: pr.receipt_commitment ?? undefined,
+                txHash: pr.tx_hash ?? undefined,
+                blockNumber: pr.block_number != null ? Number(pr.block_number) : undefined,
+                verifiedAt: pr.verified_at != null ? Number(pr.verified_at) : undefined,
+                failureReason: pr.failure_reason ?? undefined,
+              };
+            }
+          } catch {
+            // Tables might not exist in an unmigrated test environment
+          }
+          return { status: "NOT_AVAILABLE" };
+        })(),
       };
     },
 
