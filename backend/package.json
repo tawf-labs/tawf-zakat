@@ -15,7 +15,9 @@
     "proposal:verify": "bun src/scripts/proposal-amount-precision.ts verify",
     "proposal:migrate": "bun src/scripts/proposal-amount-precision.ts apply",
     "proposal:decisions:verify": "bun src/scripts/proposal-decided-lines.ts verify",
-    "proposal:decisions:apply": "bun src/scripts/proposal-decided-lines.ts apply"
+    "proposal:decisions:apply": "bun src/scripts/proposal-decided-lines.ts apply",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
@@ -32,6 +34,11 @@
     "@electric-sql/pglite": "^0.5.8",
     "@types/bun": "latest",
     "circomlib": "2.0.5",
-    "drizzle-kit": "^0.31.10"
+    "drizzle-kit": "^0.31.10",
+    "typescript": "6.0.2"
+  },
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.2"
   }
 }

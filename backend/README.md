@@ -112,7 +112,31 @@ key that makes a cross-institution session unstorable.
 
 ## Automated Tests vs Manual Demo
 
-Run `bun test` from `backend/`. `bunfig.toml` preloads `test/setup.ts` before test
+The backend pins **Bun 1.4.2** in `.tool-versions`. From `backend/`, run:
+
+```bash
+mise install
+mise exec -- bun install --frozen-lockfile
+mise exec -- bun run typecheck
+mise exec -- bun test
+```
+
+Without mise, install the same Bun version and run those Bun commands directly.
+Browser tests also require Playwright and Chromium:
+
+```bash
+REGISTRY_BROWSER_MODULE=/absolute/path/to/playwright-core/index.mjs \
+REGISTRY_BROWSER_EXECUTABLE=/usr/bin/chromium \
+mise exec -- bun test
+```
+
+Without `REGISTRY_BROWSER_MODULE`, browser smoke tests are skipped. Bun 1.3.6
+reproduced invalid SQL file descriptors after Playwright shutdown and garbage
+collection; the preload rejects runtimes older than 1.4.2. The regression in
+`test/browser_storage_lifecycle.test.ts` checks browser shutdown, SQL writes,
+garbage collection and database restart against real PGlite storage.
+
+`bunfig.toml` preloads `test/setup.ts` before test
 imports: the suite uses the in-memory store, clears external-service credentials,
 disables the embedded indexer and signing, and points RPC reads to loopback. The
 database module also refuses to create a persistent client under `NODE_ENV=test`.

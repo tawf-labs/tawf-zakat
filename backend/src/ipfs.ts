@@ -31,7 +31,7 @@ export async function uploadFileToIPFS(
   if (pinataJWT) {
     try {
       const formData = new FormData();
-      const fileBlob = file instanceof Blob ? file : new Blob([file], { type: mimeType });
+      const fileBlob = file instanceof Blob ? file : new Blob([new Uint8Array(file)], { type: mimeType });
       formData.append("file", fileBlob, fileName);
       formData.append(
         "pinataMetadata",
@@ -73,7 +73,7 @@ export async function uploadFileToIPFS(
   }
   // Test-only fixture; never report a fabricated CID as a successful live upload.
   const rawBytes = file instanceof Blob ? await file.arrayBuffer() : file;
-  const mockContent = typeof rawBytes === "string" ? rawBytes : Buffer.from(rawBytes as any).toString("base64");
+  const mockContent = Buffer.from(rawBytes instanceof ArrayBuffer ? new Uint8Array(rawBytes) : rawBytes).toString("base64");
   const mockCIDHash = keccak256(encodePacked(["string", "string"], [fileName, mockContent]));
   const mockCID = `QmFile${mockCIDHash.slice(2, 44)}`;
   mockIpfsStore.set(mockCID, { content: mockContent, mimeType });
@@ -81,7 +81,7 @@ export async function uploadFileToIPFS(
   return {
     cid: mockCID,
     gatewayUrl: `${PINATA_DEDICATED_GATEWAY}/${mockCID}`,
-    pinSize: typeof rawBytes === "string" ? rawBytes.length : (rawBytes as any).byteLength || 0,
+    pinSize: rawBytes.byteLength,
   };
 }
 

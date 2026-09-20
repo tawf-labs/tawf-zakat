@@ -80,6 +80,11 @@ penghapusan penerimaan dana.
 
 ## Pemeriksaan
 
+Tindak lanjut: [stabilisasi backend 2026-09-20](backend-stability-2026-09-20.md)
+menyelesaikan 22 error typecheck dan mereproduksi serta memperbaiki kegagalan
+harness registry yang dicatat di bawah. Suite backend penuh dengan browser
+kemudian lulus 1.057 tes; catatan run awal berikut tetap dipertahankan sebagai riwayat.
+
 Regresi perbaikan review: snapshot EVM diambil sebelum transaksi out-of-gas,
 kemudian retry, restart SQL dan reorg menguji pemulihan nonce pendahulu.
 Skenario mencakup budget habis setelah retry, worker ganda, mandat dicabut saat

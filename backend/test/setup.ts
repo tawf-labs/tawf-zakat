@@ -1,4 +1,7 @@
 // Runs before test imports, even when .env sets NODE_ENV=development.
+if (!Bun.semver.satisfies(Bun.version, ">=1.4.2")) {
+  throw new Error("Backend tests require Bun >=1.4.2 (older Playwright cleanup can invalidate SQL file descriptors). Run: mise exec -- bun test");
+}
 process.env.NODE_ENV = "test";
 process.env.ENABLE_EMBEDDED_INDEXER = "false";
 process.env.DEPLOYMENT_PENDING = "false";

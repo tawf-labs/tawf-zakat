@@ -212,7 +212,7 @@ app.post("/api/governance/confirm", async c => {
     }
     const action = body.action as keyof typeof GOVERNANCE_ACTIONS;
     const proposal = await dbService.confirmGovernance(action, body.txHash, body.proposalId, body.metadata, body.metadataSignature);
-    eventBus.broadcast({ propose: "PROPOSAL_CREATED", approve: "PROPOSAL_APPROVED", execute: "PROPOSAL_EXECUTED", cancel: "PROPOSAL_CANCELLED" }[action], proposal);
+    eventBus.broadcast(({ propose: "PROPOSAL_CREATED", approve: "PROPOSAL_APPROVED", execute: "PROPOSAL_EXECUTED", cancel: "PROPOSAL_CANCELLED" } as const)[action], proposal);
     return c.json({ success: true, proposal });
   } catch {
     return c.json({ success: false, error: "Receipt belum dapat diverifikasi pada kontrak aktif. Status tidak dikonfirmasi; coba sinkronkan lagi setelah transaksi berhasil." }, 409);
@@ -1911,7 +1911,6 @@ app.get("/api/ipfs/inspect/:cid", async (c) => {
 
     return c.json({
       success: true,
-      cid: cidParam,
       ...inspection,
       onChainContext,
     });

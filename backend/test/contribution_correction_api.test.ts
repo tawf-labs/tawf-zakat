@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const FILE_KEY = Buffer.alloc(32, 9);
+const OTP_KEY = Buffer.alloc(32, 10);
 let tempDir: string;
 let files: PrivateFileStore;
 
@@ -120,7 +121,7 @@ function configure(handle: any) {
     contributions: contributionStore,
     activities: activityStore,
     files,
-    donorAccess: createDonorAccessStore(handle),
+    donorAccess: createDonorAccessStore(handle, OTP_KEY),
     ethCall,
     now: () => clock,
     challengeTtlSeconds: 300,
@@ -146,7 +147,7 @@ describe("Contribution Corrections & Refunds (Ticket #106)", () => {
     await createDisbursementStore(handle).ensureSchema();
     await createContributionStore(handle).ensureSchema();
     await createActivityStore(handle).ensureSchema();
-    await createDonorAccessStore(handle).ensureSchema();
+    await createDonorAccessStore(handle, OTP_KEY).ensureSchema();
 
     configure(handle);
   });

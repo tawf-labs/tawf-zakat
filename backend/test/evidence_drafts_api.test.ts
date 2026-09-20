@@ -628,7 +628,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       const written = onDisk.filter((entry) => entry.isFile());
       expect(written.length).toBeGreaterThan(0);
       for (const entry of written) {
-        const bytes = await readFile(join(entry.parentPath ?? entry.path, entry.name));
+        const bytes = await readFile(join(entry.parentPath, entry.name));
         expect(bytes.toString("utf8")).not.toContain("TX01");
       }
     });

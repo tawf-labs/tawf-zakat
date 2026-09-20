@@ -339,7 +339,7 @@ function draftFromRow(row: any): StoredImportDraft {
     totalValidAmount: row.total_valid_amount,
     rowsJson: row.rows_json,
     issuesJson: row.issues_json,
-    status: row.status as ImportDraftStatus,
+    status: row.status as StoredImportDraft["status"],
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -504,7 +504,7 @@ async function applyTransition(
     `)
   )[0];
 
-  if (!row) throw new ContributionNotFoundError(id);
+  if (!row) throw new ContributionNotFoundError("Kontribusi", id);
   if (Number(row.version) !== expectedVersion) throw new ContributionConflictError(id);
 
   const currentStatus = row.status as ContributionStatus;

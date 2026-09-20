@@ -26,7 +26,8 @@ const validatorKey = `0x${"0".repeat(60)}5678` as Hex;
 const validator = privateKeyToAccount(validatorKey);
 const institution = "lpz-sinar-amanah";
 const rpcUrl = "http://127.0.0.1:18572";
-const rpc = createPublicClient({ chain: foundry, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
+// Anvil mines immediately; the default 4s polling nearly exhausts Bun's 5s test deadline.
+const rpc = createPublicClient({ chain: foundry, pollingInterval: 25, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
 const wallet = createWalletClient({ account, chain: foundry, transport: http(rpcUrl) });
 let node: ReturnType<typeof Bun.spawn>;
 let fileDirectory: string;
@@ -110,7 +111,16 @@ beforeAll(async () => {
   frozen = (await json(`${base}/${draft.id}/freeze`, {})).package;
   packagePath = `${base}/${frozen.id}/recording`;
 }, 30000);
-afterAll(async () => { resetWorkspace(); if (database) await database.close(); await proxy?.stop(true); if (node && node.exitCode === null) { node.kill(); await node.exited; } if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true }); });
+afterAll(async () => {
+  resetWorkspace();
+  await proxy?.stop(true);
+  try {
+    if (database) await database.close();
+  } finally {
+    if (node && node.exitCode === null) { node.kill(); await node.exited; }
+    if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true });
+  }
+});
 it("records rejected evidence through API, signature, local EVM and durable receipt history", async () => {
   expect(frozen.verdict.outcome).toBe("DITOLAK");
   const intent = (await json(packagePath, { retryId: "first-review", digest: frozen.digest })).intent;

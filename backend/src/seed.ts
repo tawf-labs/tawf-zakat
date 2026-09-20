@@ -129,14 +129,14 @@ export async function runSeeder() {
         1,
         batch1.merkleRoot,
         batch1.totalAmountIDR,
-        batch1.itemCount,
+        sampleDonations.length,
         batch1.txHash
       );
       await dbService.recordBatchSettlement(
         2,
         batch2.merkleRoot,
         batch2.totalAmountIDR,
-        batch2.itemCount,
+        1, // This fixture contains sampleDonation2 only.
         batch2.txHash
       );
 

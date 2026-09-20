@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Tawf Zakat Protocol Backend & Frontend Services
-FROM oven/bun:1.3-alpine AS base
+FROM oven/bun:1.4.2-alpine AS base
 WORKDIR /app
 
 # Stage 1: Dependencies

@@ -29,6 +29,8 @@ export interface ProposalRecord {
   approvedBy: string[];
   status: "Pending" | "Approved" | "Executed" | "Cancelled";
   cancelReason?: string;
+  createdAt?: string;
+  executedAt?: string | null;
   txHash?: string;
   // Ex-Post Auditor Attestation (Ticket #33)
   auditStatus?: "PENDING" | "AUDITED_WTP" | "DISPUTED";

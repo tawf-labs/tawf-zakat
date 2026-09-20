@@ -655,7 +655,8 @@ describe("Donor Contact & Access Recovery (Ticket #105)", () => {
     activityStore = createActivityStore(reopened);
     donorAccessStore = createDonorAccessStore(reopened, OTP_KEY);
     configureWorkspace({ store: workspaceStore, disbursement: disbursementStore, contributions: contributionStore,
-      activities: activityStore, donorAccess: donorAccessStore, donorMessages: messageTransport, ethCall, now: () => clock });
+      activities: activityStore, donorAccess: donorAccessStore, donorMessages: messageTransport, ethCall, now: () => clock,
+      challengeTtlSeconds: 300, sessionTtlSeconds: 3600 });
     const publicResult = await getDonor(`/recovery-request/${requestId}`);
     expect((await publicResult.json()).request.status).toBe('APPROVED');
     const retry = await requestWorkspace(decisionPath, amilToken, { method: 'POST', body: JSON.stringify(payload) });
