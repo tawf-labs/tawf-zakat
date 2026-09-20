@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { Button } from "../../components/ui/Button";
-import { listContributions, formatNominal, type CurrencyUnit, type ContributionRecord } from "./contributionClient";
+import { listContributions, formatNominal, type ContributionRecord } from "./contributionClient";
 
-type Batch = { id: string; status: string; merkleRoot: string; cutoff: number; itemCount: number;
-  currencyUnit: CurrencyUnit; totalAmountExact: string; endorsedBy: string | null; items: { contributionId: string }[] };
-type Operation = { id: string; contributionId: string | null; status: string; error: string | null; txHash: string | null; attempts: number };
-const states: Record<string, string> = {
-  QUEUED: "Menunggu proses", PROVING: "Membuat bukti", SUBMITTING: "Mengirim transaksi", PENDING: "Menunggu konfirmasi",
-  CONFIRMED: "Terkonfirmasi", RETRY: "Perlu dicoba lagi", BUDGET_EXHAUSTED: "Anggaran layanan habis",
-  BLOCKED: "Pemrosesan ditahan", REVERTED: "Transaksi gagal", UNCONFIRMED: "Belum terkonfirmasi saat ini",
-};
+import type { Batch } from "./contributionBatchTypes";
+import { BatchCorrectionForm } from "./BatchCorrectionForm";
+import { BatchHistory } from "./BatchHistory";
+
+import type { Operation } from "./contributionBatchTypes";
+import { BatchPublicationStatus } from "./BatchPublicationStatus";
+import { BatchEndorsementForm } from "./BatchEndorsementForm";
 
 export function ContributionBatches({ requests }: { requests: PrivateRequests }) {
   const [records, setRecords] = useState<ContributionRecord[]>([]);
@@ -18,9 +17,9 @@ export function ContributionBatches({ requests }: { requests: PrivateRequests })
   const [selected, setSelected] = useState<string[]>([]);
   const [cutoff, setCutoff] = useState(() => new Date().toISOString().slice(0, 16));
   const [detail, setDetail] = useState<{ batch: Batch; operations: Operation[] } | null>(null);
+  const [history, setHistory] = useState<Batch[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = useState(false);
   const base = "/api/workspace/contribution-batches";
   useEffect(() => {
     let disposed = false;
@@ -55,7 +54,9 @@ export function ContributionBatches({ requests }: { requests: PrivateRequests })
   };
   const load = async (id: string) => {
     const result = await requests.json<{ batch: Batch; operations: Operation[] }>(`${base}/${encodeURIComponent(id)}`);
-    requests.assertCurrent(); setDetail(result); setAcknowledged(false);
+    requests.assertCurrent(); setDetail(result);
+    const hist = await requests.json<{ history: Batch[] }>(`${base}/${encodeURIComponent(id)}/history`).catch(() => ({ history: [] }));
+    requests.assertCurrent(); setHistory(hist.history ?? []);
   };
   return <section aria-label="Batch bukti kontribusi" className="mt-6 space-y-4">
     <h3 className="text-lg font-semibold">Batch bukti kontribusi</h3>
@@ -82,26 +83,51 @@ export function ContributionBatches({ requests }: { requests: PrivateRequests })
     <div className="flex flex-wrap gap-2">{batches.map(b => <Button key={b.id} variant="outline" disabled={!!busy}
       onClick={() => run("open", () => load(b.id))}>Buka {b.id}</Button>)}</div>
     {detail && <section aria-label="Review snapshot" className="rounded-xl border p-4 space-y-3">
-      <h4 className="font-semibold">Review snapshot</h4>
+      <div className="flex items-center gap-2">
+        <h4 className="font-semibold">Review snapshot (Batch #{detail.batch.batchNumber} v{detail.batch.version})</h4>
+        <span className={`text-xs px-2 py-0.5 rounded font-medium ${detail.batch.status === "SUPERSEDED" ? "bg-amber-100 text-amber-800" : detail.batch.status === "ENDORSED" ? "bg-emerald-100 text-emerald-800" : "bg-stone-100 text-stone-800"}`}>
+          {detail.batch.status === "SUPERSEDED" ? "Digantikan (Superseded)" : detail.batch.status}
+        </span>
+      </div>
+      {detail.batch.predecessorBatchId && (
+        <p className="text-xs bg-stone-50 border p-2 rounded">
+          <strong>Koreksi dari batch:</strong> {detail.batch.predecessorBatchId} | <strong>Alasan:</strong> {detail.batch.correctionReason} | <strong>Bukti sumber:</strong> {detail.batch.sourceProofRef}
+        </p>
+      )}
+      {detail.batch.status === "SUPERSEDED" && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+          Batch ini telah digantikan oleh batch koreksi penerus dan tidak lagi berlaku sebagai batch resmi aktif.
+        </p>
+      )}
       <p>{detail.batch.itemCount} kontribusi · Cutoff {new Date(detail.batch.cutoff * 1000).toISOString()} · {formatNominal(detail.batch.totalAmountExact, detail.batch.currencyUnit)}</p>
       <ul className="text-sm break-all">{detail.batch.items.map(item => <li key={item.contributionId}>{item.contributionId}</li>)}</ul>
       <details><summary>Identitas snapshot</summary><code className="break-all">{detail.batch.merkleRoot}</code></details>
-      {(!detail.batch.endorsedBy || detail.operations.some(op => op.status === "BLOCKED")) && <>
-        <label className="flex gap-2"><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />Saya telah memeriksa populasi dan cutoff snapshot ini.</label>
-        <Button disabled={!!busy || !acknowledged} onClick={() => run("endorse", async () => {
-          await requests.json(`${base}/${encodeURIComponent(detail.batch.id)}/endorse`, { method: "POST", body: JSON.stringify({ snapshotRoot: detail.batch.merkleRoot }) });
+      {["DRAFT", "ENDORSED"].includes(detail.batch.status) && (!detail.batch.endorsedBy || detail.operations.some(op => op.status === "BLOCKED")) &&
+        <BatchEndorsementForm key={`endorse-${detail.batch.id}`} busy={!!busy} submitting={busy === "endorse"} previouslyEndorsed={!!detail.batch.endorsedBy}
+          onEndorse={() => run("endorse", async () => {
+            await requests.json(`${base}/${encodeURIComponent(detail.batch.id)}/endorse`, {
+              method: "POST", body: JSON.stringify({ snapshotRoot: detail.batch.merkleRoot }),
+            });
+            await load(detail.batch.id);
+          })} />}
+      <BatchPublicationStatus operations={detail.operations} busy={!!busy} retrying={busy === "retry"}
+        active={["DRAFT", "ENDORSED"].includes(detail.batch.status)} onRetry={() => run("retry", async () => {
+          await requests.json(`${base}/${encodeURIComponent(detail.batch.id)}/retry`, { method: "POST", body: "{}" });
           await load(detail.batch.id);
-        })}>{busy === "endorse" ? "Mengesahkan…" : (detail.batch.endorsedBy ? "Sahkan ulang snapshot" : "Sahkan snapshot dan proses otomatis")}</Button>
-      </>}
-      <ul aria-live="polite" className="space-y-2">{detail.operations.map(op => <li key={op.id} className="border rounded p-3 break-all">
-        <p>{op.contributionId ? `Receipt ${op.contributionId}` : "Pengesahan root"}: <strong>{states[op.status] ?? "Status belum tersedia"}</strong></p>
-        {op.error && <p>{op.error}</p>}
-        {op.txHash && <details><summary>Referensi transaksi</summary><code>{op.txHash}</code></details>}
-      </li>)}</ul>
-      {detail.operations.some(op => ["RETRY", "BLOCKED", "BUDGET_EXHAUSTED", "UNCONFIRMED", "REVERTED"].includes(op.status)) &&
-        <Button disabled={!!busy} onClick={() => run("retry", async () => {
-          await requests.json(`${base}/${encodeURIComponent(detail.batch.id)}/retry`, { method: "POST", body: "{}" }); await load(detail.batch.id);
-        })}>{busy === "retry" ? "Menjadwalkan…" : "Coba proses lagi"}</Button>}
+        })} />
+      {["DRAFT", "ENDORSED"].includes(detail.batch.status) && <BatchCorrectionForm key={`correct-${detail.batch.id}`}
+        draft={detail.batch.status === "DRAFT"} busy={!!busy} submitting={busy === "correct"}
+        onCorrect={(reason, sourceProofRef) => run("correct", async () => {
+          const res = await requests.json<{ batch: Batch }>(`${base}/${encodeURIComponent(detail.batch.id)}/correct`, {
+            method: "POST", body: JSON.stringify({ expectedBatchVersion: detail.batch.version, reason, sourceProofRef }),
+          });
+          const list = await requests.json<{ batches: Batch[] }>(base);
+          requests.assertCurrent(); setBatches(list.batches);
+          await load(res.batch.id);
+        })} />}
+      <BatchHistory batches={history} selected={detail.batch} busy={!!busy}
+        onSelect={id => run("open-hist", () => load(id))} />
+
     </section>}
   </section>;
 }

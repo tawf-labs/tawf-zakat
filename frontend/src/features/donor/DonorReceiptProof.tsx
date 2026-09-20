@@ -11,6 +11,7 @@ const STATUS_LABELS: Record<DonorZkProofStatus, string> = {
   PROVING: "Pembuktian sedang diproses",
   FAILED: "Pembuktian gagal",
   SUPERSEDED: "Bukti versi lama",
+  PENDING_REPROOF: "Menunggu pembuktian ulang pada batch baru",
 };
 
 export function DonorReceiptProof({ contribution }: { contribution: DonorContribution }) {

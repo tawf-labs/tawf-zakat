@@ -44,12 +44,21 @@ contract ContributionProofRegistry {
         bool exists;
     }
 
-    // institutionKey => batchId => BatchRecord
+    // institutionKey => batchId => BatchRecord (latest)
     mapping(bytes32 => mapping(uint256 => BatchRecord)) public batches;
+    // institutionKey => batchId => version => BatchRecord
+    mapping(bytes32 => mapping(uint256 => mapping(uint256 => BatchRecord))) public batchVersions;
+    // institutionKey => batchRoot => BatchRecord
+    mapping(bytes32 => mapping(bytes32 => BatchRecord)) public batchesByRoot;
+
+    // The chain cannot observe an offchain correction until publication succeeds.
+    // There is deliberately no CURRENT value: readers must check the live source.
+    enum BusinessValidity { UNKNOWN, SUPERSEDED }
 
     struct VerifiedReceipt {
         bool isVerified;
         uint256 batchId;
+        uint256 batchVersion;
         uint256 version;
         bytes32 batchRoot;
         bytes32 receiptCommitment;
@@ -66,6 +75,7 @@ contract ContributionProofRegistry {
     error InvalidAddress();
     error BatchAlreadyExists();
     error BatchNotFound();
+    error InvalidBatchVersion();
     error UnauthorizedBatchRoot();
     error InvalidStatementBinding();
     error InvalidProof();
@@ -125,6 +135,8 @@ contract ContributionProofRegistry {
 
     /**
      * @notice Endorse an authorized contribution batch root for an institution.
+     *         Supports initial version 1 and strictly monotonic successor versions (v2, v3, ...).
+     *         Prevents competing successor roots from branching (Spec #100, Issue #110).
      */
     function endorseBatchRoot(
         string calldata institutionId,
@@ -138,14 +150,26 @@ contract ContributionProofRegistry {
         }
         if (administrators[key] == address(0) || version == 0 || uint256(batchRoot) >= SNARK_SCALAR_FIELD || batchRoot == bytes32(0)) revert UnauthorizedBatchRoot();
 
-        BatchRecord storage record = batches[key][batchId];
-        if (record.exists) revert BatchAlreadyExists();
+        BatchRecord storage current = batches[key][batchId];
+        if (version == 1) {
+            if (current.exists) revert BatchAlreadyExists();
+        } else {
+            if (!current.exists || current.version + 1 != version) {
+                revert InvalidBatchVersion();
+            }
+        }
 
-        record.root = batchRoot;
-        record.version = version;
-        record.endorsedBy = msg.sender;
-        record.endorsedAt = block.timestamp;
-        record.exists = true;
+        BatchRecord memory newRecord = BatchRecord({
+            root: batchRoot,
+            version: version,
+            endorsedBy: msg.sender,
+            endorsedAt: block.timestamp,
+            exists: true
+        });
+
+        batches[key][batchId] = newRecord;
+        batchVersions[key][batchId][version] = newRecord;
+        batchesByRoot[key][batchRoot] = newRecord;
 
         emit BatchRootEndorsed(key, institutionId, batchId, version, batchRoot, msg.sender);
     }
@@ -153,7 +177,7 @@ contract ContributionProofRegistry {
     /**
      * @notice Verify a real ZK-SNARK Groth16 proof of contribution membership and record it.
      * @dev Checks statement bindings, institutional root authority, and proof validity.
-     *      Idempotent: if already verified for (institutionId, contributionId, version), records once.
+     *      Idempotent for the same version and supports reproof on successor batch versions.
      */
     function verifyAndRecordReceiptProof(
         string calldata institutionId,
@@ -167,50 +191,59 @@ contract ContributionProofRegistry {
         uint256[5] calldata publicSignals
     ) external returns (bool) {
         bytes32 instKey = keccak256(bytes(institutionId));
-        BatchRecord storage batch = batches[instKey][batchId];
-        if (!batch.exists) revert BatchNotFound();
+        if (!batches[instKey][batchId].exists) revert BatchNotFound();
 
-        // 1. Verify Statement Bindings against publicSignals
-        // publicSignals[0] = batchRoot (field representation)
-        // publicSignals[1] = receiptCommitment (field representation)
-        // publicSignals[2] = institutionKey (field)
-        // publicSignals[3] = domain-separated receipt + batch + batch version + receipt version context (field)
-        // publicSignals[4] = fundType (field)
-
+        // 1. Verify Statement Bindings against publicSignals (AC07)
         if (toField(instKey) != publicSignals[2]) {
-            revert InvalidStatementBinding();
-        }
-        if (version == 0 || toField(keccak256(abi.encode(
-            "ZKT_CONTRIBUTION_MEMBERSHIP_V1", contributionId, batchId, batch.version, version
-        ))) != publicSignals[3]) {
             revert InvalidStatementBinding();
         }
         if (fundType != publicSignals[4]) {
             revert InvalidStatementBinding();
         }
 
-        // 2. Verify Institutional Batch Root Authority (AC03, AC17)
-        if (toField(batch.root) != publicSignals[0]) {
-            revert UnauthorizedBatchRoot();
+        // 2. Verify Institutional Batch Root Authority (AC03, AC17, Issue #110)
+        bytes32 rootBytes = bytes32(publicSignals[0]);
+        BatchRecord memory batch = batchesByRoot[instKey][rootBytes];
+        if (!batch.exists) {
+            if (batches[instKey][batchId].exists && toField(batches[instKey][batchId].root) == publicSignals[0]) {
+                batch = batches[instKey][batchId];
+            } else {
+                revert UnauthorizedBatchRoot();
+            }
+        }
+        if (batch.version == 0 || batchId == 0) revert InvalidStatementBinding();
+
+        if (version == 0 || toField(keccak256(abi.encode(
+            "ZKT_CONTRIBUTION_MEMBERSHIP_V1", contributionId, batchId, batch.version, version
+        ))) != publicSignals[3]) {
+            revert InvalidStatementBinding();
         }
 
-        // 4. Verify Cryptographic Proof via Groth16Verifier
+        // 2. Verify Cryptographic Proof via Groth16Verifier
         bool proofValid = verifier.verifyProof(a, b, c, publicSignals);
         if (!proofValid) {
             revert InvalidProof();
         }
 
-        // 3. Idempotency Check (AC04, AC18)
+        // 3. Idempotency & Reproof Check (AC04, AC18, Issue #110)
         bytes32 receiptKey = keccak256(abi.encode(institutionId, contributionId, version));
-        if (verifiedReceipts[receiptKey].isVerified) {
-            if (verifiedReceipts[receiptKey].batchId != batchId || verifiedReceipts[receiptKey].receiptCommitment != bytes32(publicSignals[1])) revert InvalidStatementBinding();
-            return true; // Already verified, no duplicate transaction or state mutation
+        VerifiedReceipt storage existing = verifiedReceipts[receiptKey];
+        if (existing.isVerified) {
+            if (existing.batchId == batchId && existing.batchVersion == batch.version && existing.receiptCommitment == bytes32(publicSignals[1])) {
+                return true; // Idempotent duplicate
+            }
+            if (existing.batchId == batchId && batch.version > existing.batchVersion) {
+                // Valid reproof on successor batch root
+            } else {
+                revert InvalidStatementBinding();
+            }
         }
 
-        // 5. Store Verified Receipt Record Persistently
+        // 4. Store Verified Receipt Record Persistently
         verifiedReceipts[receiptKey] = VerifiedReceipt({
             isVerified: true,
             batchId: batchId,
+            batchVersion: batch.version,
             version: version,
             batchRoot: batch.root,
             receiptCommitment: bytes32(publicSignals[1]),
@@ -262,5 +295,78 @@ contract ContributionProofRegistry {
             record.verifiedAt,
             record.blockNumber
         );
+    }
+
+    /**
+     * @notice Read cryptographic history separately from business validity.
+     * @dev UNKNOWN includes a latest root whose successor is pending or failed.
+     *      No consumer may infer CURRENT from isLatestRegisteredRoot alone.
+     */
+    function getReceiptVerificationWithBatch(
+        string calldata institutionId,
+        string calldata contributionId,
+        uint256 version
+    )
+        external
+        view
+        returns (
+            bool isVerified,
+            uint256 batchId,
+            uint256 batchVersion,
+            bytes32 batchRoot,
+            bytes32 receiptCommitment,
+            uint256 verifiedAt,
+            uint256 blockNumber,
+            bool isLatestRegisteredRoot,
+            BusinessValidity businessValidity
+        )
+    {
+        bytes32 receiptKey = keccak256(abi.encode(institutionId, contributionId, version));
+        VerifiedReceipt storage record = verifiedReceipts[receiptKey];
+        bytes32 key = keccak256(bytes(institutionId));
+        bool latest = record.isVerified && batches[key][record.batchId].exists && batches[key][record.batchId].root == record.batchRoot;
+        return (
+            record.isVerified,
+            record.batchId,
+            record.batchVersion,
+            record.batchRoot,
+            record.receiptCommitment,
+            record.verifiedAt,
+            record.blockNumber,
+            latest,
+            record.isVerified && !latest ? BusinessValidity.SUPERSEDED : BusinessValidity.UNKNOWN
+        );
+    }
+
+    /**
+     * @notice Check only whether a root is the latest registered root, NOT whether it is business-current.
+     * @dev Pending offchain corrections are unknowable here; check the institution source as well.
+     */
+    function isLatestRegisteredBatchRoot(
+        string calldata institutionId,
+        uint256 batchId,
+        bytes32 batchRoot
+    ) external view returns (bool) {
+        bytes32 key = keccak256(bytes(institutionId));
+        return batches[key][batchId].exists && batches[key][batchId].root == batchRoot;
+    }
+
+    /**
+     * @notice Read a specific historical or current batch version record.
+     */
+    function getBatchVersion(
+        string calldata institutionId,
+        uint256 batchId,
+        uint256 version
+    ) external view returns (
+        bytes32 root,
+        uint256 ver,
+        address endorsedBy,
+        uint256 endorsedAt,
+        bool exists
+    ) {
+        bytes32 key = keccak256(bytes(institutionId));
+        BatchRecord storage record = batchVersions[key][batchId][version];
+        return (record.root, record.version, record.endorsedBy, record.endorsedAt, record.exists);
     }
 }

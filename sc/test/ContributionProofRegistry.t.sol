@@ -257,4 +257,73 @@ contract ContributionProofRegistryTest is Test, ContributionProofFixture {
         // Groth16 verification + persistent storage is ~433k gas
         assertLt(gasUsed, 500000, "Gas used must be economical (< 500,000 gas)");
     }
+
+    function test_EndorseBatchRoot_SuccessorVersion_Success() public {
+        vm.startPrank(officer);
+        // Endorse Version 1
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 1, BATCH_ROOT);
+        assertTrue(registry.isLatestRegisteredBatchRoot(INSTITUTION_ID, BATCH_ID, BATCH_ROOT));
+
+        // Endorse Version 2 (successor)
+        bytes32 rootV2 = bytes32(uint256(778899));
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 2, rootV2);
+
+        // Version 2 is latest registered; business currency also requires the live source.
+        assertTrue(registry.isLatestRegisteredBatchRoot(INSTITUTION_ID, BATCH_ID, rootV2));
+        assertFalse(registry.isLatestRegisteredBatchRoot(INSTITUTION_ID, BATCH_ID, BATCH_ROOT));
+
+        (bytes32 v1Root, uint256 v1Ver,,,) = registry.getBatchVersion(INSTITUTION_ID, BATCH_ID, 1);
+        assertEq(v1Root, BATCH_ROOT);
+        assertEq(v1Ver, 1);
+
+        (bytes32 v2Root, uint256 v2Ver,,,) = registry.getBatchVersion(INSTITUTION_ID, BATCH_ID, 2);
+        assertEq(v2Root, rootV2);
+        assertEq(v2Ver, 2);
+        vm.stopPrank();
+    }
+
+    function test_EndorseBatchRoot_TwoCompetingCorrections_RevertsSecond() public {
+        vm.startPrank(officer);
+        // Endorse Version 1
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 1, BATCH_ROOT);
+
+        // First officer endorses Version 2
+        bytes32 rootV2A = bytes32(uint256(111222));
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 2, rootV2A);
+
+        // Competing officer tries to endorse another Version 2 for the same batch
+        bytes32 rootV2B = bytes32(uint256(333444));
+        vm.expectRevert(ContributionProofRegistry.InvalidBatchVersion.selector);
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 2, rootV2B);
+        vm.stopPrank();
+    }
+
+    function test_EndorseBatchRoot_SkipVersion_Reverts() public {
+        vm.startPrank(officer);
+        // Endorse Version 1
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 1, BATCH_ROOT);
+
+        // Try to skip to Version 3
+        bytes32 rootV3 = bytes32(uint256(999888));
+        vm.expectRevert(ContributionProofRegistry.InvalidBatchVersion.selector);
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 3, rootV3);
+        vm.stopPrank();
+    }
+    function test_IndependentCheckNeverInfersBusinessCurrentFromLatestRoot() public {
+        vm.startPrank(officer);
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, VERSION, BATCH_ROOT);
+        registry.verifyAndRecordReceiptProof(INSTITUTION_ID, BATCH_ID, VERSION, CONTRIBUTION_ID,
+            FUND_TYPE, a, b, c, pubSignals);
+        (,,,,,,, bool latest, ContributionProofRegistry.BusinessValidity validity) =
+            registry.getReceiptVerificationWithBatch(INSTITUTION_ID, CONTRIBUTION_ID, VERSION);
+        assertTrue(latest);
+        assertEq(uint8(validity), uint8(ContributionProofRegistry.BusinessValidity.UNKNOWN));
+        registry.endorseBatchRoot(INSTITUTION_ID, BATCH_ID, 2, bytes32(uint256(778899)));
+        (,,,,,,, latest, validity) =
+            registry.getReceiptVerificationWithBatch(INSTITUTION_ID, CONTRIBUTION_ID, VERSION);
+        assertFalse(latest);
+        assertEq(uint8(validity), uint8(ContributionProofRegistry.BusinessValidity.SUPERSEDED));
+        vm.stopPrank();
+    }
+
 }

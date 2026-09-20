@@ -24,6 +24,7 @@ function map(r: any): Publication {
 export function createZkPublicationStore(db: any) {
   return {
     async ensureSchema() {
+      await db.execute(sql.raw(`DROP INDEX IF EXISTS zk_publication_receipt_unique`));
       for (const statement of `CREATE TABLE IF NOT EXISTS zk_publication_budgets (
         id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, reserved_wei NUMERIC(78,0) NOT NULL DEFAULT 0,
         lease_token TEXT, lease_until BIGINT NOT NULL DEFAULT 0);
@@ -40,7 +41,7 @@ export function createZkPublicationStore(db: any) {
         operation_id TEXT NOT NULL REFERENCES zk_publications(id), attempt INTEGER NOT NULL,
         status TEXT NOT NULL, artifact_id TEXT, tx_hash TEXT, raw_transaction TEXT, error TEXT, updated_at BIGINT NOT NULL,
         PRIMARY KEY(operation_id, attempt));
-        CREATE UNIQUE INDEX IF NOT EXISTS zk_publication_receipt_unique ON zk_publications(contribution_id, version) WHERE contribution_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS zk_publication_receipt_batch_unique ON zk_publications(batch_id, contribution_id, version) WHERE contribution_id IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS zk_publication_root_unique ON zk_publications(batch_id) WHERE contribution_id IS NULL;`.split(";").filter(s => s.trim())) await db.execute(sql.raw(statement));
     },
     async acquire(id: string, now: number) {
@@ -59,13 +60,21 @@ export function createZkPublicationStore(db: any) {
     async approve(batch: { id: string; institutionId: string; merkleRoot: string }, account: string, mandateId: string, mandateVersion: number, now: number) {
       await db.transaction(async (tx: any) => {
         const b = rows(await tx.execute(sql`SELECT * FROM zk_contribution_batches WHERE id = ${batch.id} AND institution_id = ${batch.institutionId} FOR UPDATE`))[0];
-        if (!b || b.merkle_root !== batch.merkleRoot) throw new Error("SNAPSHOT_CHANGED");
+        if (!b || ["SUPERSEDED", "ABANDONED"].includes(b.status) || b.merkle_root !== batch.merkleRoot) throw new Error("SNAPSHOT_CHANGED");
         const items = rows(await tx.execute(sql`SELECT i.contribution_id, i.witness_data_json, c.version, c.status FROM zk_contribution_batch_items i
           JOIN contributions c ON c.id = i.contribution_id WHERE i.batch_id = ${batch.id} FOR UPDATE OF c`));
         if (!items.length || items.some(r => r.status !== 'ENDORSED' || Number(r.version) !== JSON.parse(r.witness_data_json).version)) throw new Error("SNAPSHOT_CHANGED");
         for (const item of items) {
-          const conflict = rows(await tx.execute(sql`SELECT batch_id FROM zk_publications WHERE contribution_id = ${item.contribution_id} AND version = ${Number(item.version)}`))[0];
-          if (conflict && conflict.batch_id !== batch.id) throw new Error("RECEIPT_ALREADY_QUEUED");
+          const conflict = rows(await tx.execute(sql`SELECT p.batch_id FROM zk_publications p
+            JOIN zk_contribution_batches cb ON cb.id = p.batch_id
+            WHERE p.contribution_id = ${item.contribution_id} AND p.version = ${Number(item.version)}
+            AND p.batch_id <> ${batch.id} AND cb.status NOT IN ('SUPERSEDED', 'ABANDONED')
+            AND NOT EXISTS (SELECT 1 FROM zk_contribution_batches succ WHERE succ.predecessor_batch_id = cb.id)`))[0];
+          if (conflict) throw new Error("RECEIPT_ALREADY_QUEUED");
+        }
+        if (b.predecessor_batch_id) {
+          await tx.execute(sql`UPDATE zk_publications SET status = 'BLOCKED', error = 'Batch digantikan oleh versi koreksi baru.', updated_at = ${now}
+            WHERE batch_id = ${b.predecessor_batch_id} AND status IN ('QUEUED','PROVING','RETRY','BUDGET_EXHAUSTED')`);
         }
         const approvalChanged = b.endorsed_by !== account || b.endorsement_mandate_id !== mandateId || Number(b.endorsement_mandate_version) !== mandateVersion;
         if (approvalChanged) {
@@ -77,7 +86,9 @@ export function createZkPublicationStore(db: any) {
             WHERE batch_id = ${batch.id} AND status IN ('BLOCKED','RETRY','BUDGET_EXHAUSTED')`);
         }
         for (const item of [null, ...items]) {
-          const id = item ? `receipt:${item.contribution_id}:${item.version}` : `root:${batch.id}`;
+          const id = item
+            ? (Number(b.version) === 1 && !b.replaces_draft_id ? `receipt:${item.contribution_id}:${item.version}` : `receipt:${batch.id}:${item.contribution_id}:${item.version}`)
+            : `root:${batch.id}`;
           await tx.execute(sql`INSERT INTO zk_publications(id,batch_id,institution_id,contribution_id,version,updated_at)
             VALUES (${id},${batch.id},${batch.institutionId},${item?.contribution_id ?? null},${item ? Number(item.version) : Number(b.version)},${now}) ON CONFLICT(id) DO NOTHING`);
         }
@@ -116,10 +127,14 @@ export function createZkPublicationStore(db: any) {
     },
     async save(op: Publication, budgetId: string, token: string, now: number) {
       await db.transaction(async (db: any) => {
+        await db.execute(sql`SELECT id FROM zk_contribution_batches WHERE id = ${op.batchId} FOR UPDATE`);
         const updated = rows(await db.execute(sql`UPDATE zk_publications SET status = ${op.status}, artifact_id = ${op.artifactId},
           proof_json = ${op.proof ? JSON.stringify(op.proof) : null}, raw_transaction = ${op.rawTransaction}, tx_hash = ${op.txHash},
           block_hash = ${op.blockHash}, block_number = ${op.blockNumber}, error = ${op.error}, notified = ${op.notified}, updated_at = ${now}
-          WHERE id = ${op.id} AND EXISTS (SELECT 1 FROM zk_publication_budgets WHERE id = ${budgetId} AND lease_token = ${token} AND lease_until > ${now}) RETURNING id`));
+          WHERE id = ${op.id}
+          AND (${op.rawTransaction}::text IS NULL OR EXISTS (
+            SELECT 1 FROM zk_contribution_batches b WHERE b.id = zk_publications.batch_id AND b.status <> 'ABANDONED'))
+          AND EXISTS (SELECT 1 FROM zk_publication_budgets WHERE id = ${budgetId} AND lease_token = ${token} AND lease_until > ${now}) RETURNING id`));
         if (!updated.length) throw new Error("LEASE_LOST");
         await db.execute(sql`INSERT INTO zk_publication_attempts(operation_id,attempt,status,artifact_id,tx_hash,raw_transaction,error,updated_at)
           SELECT id,attempts,status,artifact_id,tx_hash,raw_transaction,error,updated_at FROM zk_publications WHERE id = ${op.id}

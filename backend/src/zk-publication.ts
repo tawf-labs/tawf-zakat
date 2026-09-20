@@ -55,7 +55,7 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
     // Never allocate a second nonce while any signed transaction is unresolved.
     op = all.filter(p => p.rawTransaction && !["CONFIRMED", "REVERTED"].includes(p.status))
       .sort((a, b) => Number(parseTransaction(a.rawTransaction!).nonce) - Number(parseTransaction(b.rawTransaction!).nonce))[0] ??
-      all.find(p => (!targetId || p.id === targetId) && ["QUEUED", "PROVING", "SUBMITTING", "PENDING"].includes(p.status)
+      all.find(p => (!targetId || p.id === targetId || (p.contributionId && targetId === `receipt:${p.contributionId}:${p.version}`)) && ["QUEUED", "PROVING", "SUBMITTING", "PENDING"].includes(p.status)
         && (!p.contributionId || all.some(r => r.batchId === p.batchId && !r.contributionId && r.status === "CONFIRMED")));
     // A reorg can remove the failed transaction that consumed a retry's previous
     // nonce. Replay its original, already-budgeted bytes before the newer attempt.
@@ -105,12 +105,35 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
     }
     const root = await client.readContract({ address: registry, abi: authorityAbi, functionName: "batches",
       args: [keccak256(Buffer.from(op.institutionId)), BigInt(batch.batchNumber)] });
-    if (root[4] && (root[0] !== batch.merkleRoot || root[1] !== BigInt(batch.version))) throw new PublicationBlocked("Root registry tidak cocok.");
-    if (op.contributionId && !root[4]) throw new PublicationBlocked("Root belum terkonfirmasi; kemungkinan reorganisasi chain.");
+    if (!op.contributionId) {
+      if (root[4]) {
+        if (root[1] === BigInt(batch.version)) {
+          if (root[0] !== batch.merkleRoot) throw new PublicationBlocked("Root registry tidak cocok.");
+        } else if (root[1] > BigInt(batch.version)) {
+          throw new PublicationBlocked("Root registry sudah berada di versi lebih baru.");
+        } else if (root[1] !== BigInt(batch.version - 1)) {
+          throw new PublicationBlocked("Versi registry tidak berurutan.");
+        }
+      } else if (batch.version !== 1) {
+        throw new PublicationBlocked("Versi batch awal harus 1.");
+      }
+    } else {
+      if (!root[4]) throw new PublicationBlocked("Root belum terkonfirmasi; kemungkinan reorganisasi chain.");
+      const isCurrent = (root[0] === batch.merkleRoot && root[1] === BigInt(batch.version));
+      if (!isCurrent) {
+        const historical = await client.readContract({
+          address: registry,
+          abi: CONTRIBUTION_PROOF_REGISTRY_ABI,
+          functionName: "batchesByRoot",
+          args: [keccak256(Buffer.from(op.institutionId)), batch.merkleRoot as Hex],
+        });
+        if (!historical[4]) throw new PublicationBlocked("Root batch belum terdaftar pada registry.");
+      }
+    }
 
     if (!op.rawTransaction && !receipt) {
       // Adopt canonical results from the #108 tracer or a lost SQL checkpoint without spending again.
-      if (!op.contributionId && root[4]) {
+      if (!op.contributionId && root[4] && root[0] === batch.merkleRoot && root[1] === BigInt(batch.version)) {
         const logs = await client.getLogs({ address: registry,
           event: parseAbiItem("event BatchRootEndorsed(bytes32 indexed institutionKey, string institutionId, uint256 indexed batchId, uint256 indexed version, bytes32 batchRoot, address endorsedBy)"),
           args: { institutionKey: keccak256(Buffer.from(op.institutionId)), batchId: BigInt(batch.batchNumber), version: BigInt(batch.version) }, fromBlock: 0n, toBlock: "latest" });
@@ -121,11 +144,11 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
       } else if (op.contributionId) {
         const existing = await client.readContract({ address: registry, abi: CONTRIBUTION_PROOF_REGISTRY_ABI, functionName: "getReceiptVerification",
           args: [op.institutionId, op.contributionId, BigInt(op.version)] });
-        if (existing[0]) {
+        if (existing[0] && existing[2] === batch.merkleRoot) {
           const item = batch.items.find(i => i.contributionId === op!.contributionId)!;
-          if (existing[1] !== BigInt(batch.batchNumber) || existing[2] !== batch.merkleRoot || existing[3] !== item.receiptCommitment) throw new PublicationBlocked("Versi receipt sudah dicatat untuk snapshot lain.");
+          if (existing[1] !== BigInt(batch.batchNumber) || existing[3] !== item.receiptCommitment) throw new PublicationBlocked("Versi receipt sudah dicatat untuk snapshot lain.");
           const logs = await client.getLogs({ address: registry, event: receiptEvent, fromBlock: existing[5], toBlock: existing[5] });
-          const event = logs.find((log: any) => log.args.institutionId === op!.institutionId && log.args.contributionId === op!.contributionId && log.args.version === BigInt(op!.version));
+          const event = logs.find((log: any) => log.args.institutionId === op!.institutionId && log.args.contributionId === op!.contributionId && log.args.version === BigInt(op!.version) && log.args.batchRoot === batch.merkleRoot);
           if (!event) throw new Error("EVENT_UNAVAILABLE");
           op.txHash = event.transactionHash;
           receipt = await client.getTransactionReceipt({ hash: op.txHash });
@@ -190,7 +213,7 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
       const logs = await client.getLogs({ address: registry,
         event: receiptEvent,
         fromBlock: current[5], toBlock: current[5] });
-      const event = logs.find((l: any) => l.args.institutionId === op!.institutionId && l.args.contributionId === op!.contributionId && l.args.version === BigInt(op!.version));
+      const event = logs.find((l: any) => l.args.institutionId === op!.institutionId && l.args.contributionId === op!.contributionId && l.args.version === BigInt(op!.version) && l.args.batchRoot === batch.merkleRoot);
       if (!event?.transactionHash) throw new Error("EVENT_UNAVAILABLE");
       await batches.saveReceiptProof({ contributionId: op.contributionId, batchId: op.batchId, version: op.version, status: "VERIFIED",
         publicSignals: op.proof?.publicSignals, proof: op.proof?.proof, txHash: event.transactionHash,

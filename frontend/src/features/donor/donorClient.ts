@@ -57,13 +57,15 @@ export type DonorZkProofStatus =
   | "PROVING"
   | "VERIFIED"
   | "FAILED"
-  | "SUPERSEDED";
+  | "SUPERSEDED"
+  | "PENDING_REPROOF";
 
 export interface DonorZkProofDetail {
   status: DonorZkProofStatus;
   batchId?: string;
   batchNumber?: number;
   version?: number;
+  batchVersion?: number;
   batchRoot?: string;
   receiptCommitment?: string;
   txHash?: string;
@@ -277,6 +279,22 @@ export type PublicReceiptVerification = {
   blockNumber?: number | null;
   verifiedAt?: number | null;
   onChainConfirmed?: boolean;
+  mathematicalValidity?: "VALID" | "VALID_HISTORICAL" | "UNVERIFIED";
+  businessValidity?: "CURRENT" | "PENDING_REPROOF" | "SUPERSEDED" | "PENDING";
+  isCurrent?: boolean;
+  isLatestRegisteredRoot?: boolean;
+  chainBusinessValidity?: "UNKNOWN" | "SUPERSEDED";
+  explanation?: string;
+  batchIsCurrent?: boolean;
+  history?: Array<{
+    batchId: string;
+    version: number;
+    batchVersion: number;
+    status: string;
+    txHash?: string | null;
+    blockNumber?: number | null;
+    verifiedAt?: number | null;
+  }>;
   message?: string;
 };
 

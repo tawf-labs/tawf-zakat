@@ -219,12 +219,14 @@ contributionBatchRoutes.post("/contribution-batches/:id/proofs/:contributionId/p
     return c.json({ success: false, error: "Layanan dan anggaran ZK belum dikonfigurasi." }, 503);
   }
   const id = `receipt:${contributionId}:${targetVersion}`;
-  const before = (await inspectPublications(runtime, institutionId, batchId)).find(p => p.id === id);
+  const before = (await inspectPublications(runtime, institutionId, batchId)).find(
+    p => p.id === id || (p.contributionId === contributionId && p.version === targetVersion)
+  );
   if (!before) return c.json({ success: false, error: "Receipt belum masuk antrean yang disahkan." }, 409);
   if (before.status === "CONFIRMED") return c.json({ success: true, proofRecord: await runtime.zkBatches!.getReceiptProof(contributionId, targetVersion) });
   await runtime.zkPublications.retry(institutionId, batchId, runtime.now());
-  await runZkPublication(runtime, id);
-  const operation = (await inspectPublications(runtime, institutionId, batchId)).find(p => p.id === id)!;
+  await runZkPublication(runtime, before.id);
+  const operation = (await inspectPublications(runtime, institutionId, batchId)).find(p => p.id === before.id)!;
   if (operation.status === "CONFIRMED") return c.json({ success: true, proofRecord: await runtime.zkBatches!.getReceiptProof(contributionId, targetVersion) }, 201);
   return c.json({ success: true, operation, proofRecord: { status: operation.status } }, 202);
 });
@@ -247,7 +249,7 @@ contributionBatchRoutes.get("/contribution-batches/:id/proofs/:contributionId", 
 
   const witness = await gate.runtime.zkBatches!.getBatchItemWitness(institutionId, batchId, contributionId);
   if (!witness) return c.json({ success: false, error: "Kontribusi tidak ditemukan dalam batch lembaga ini." }, 404);
-  const proof = await gate.runtime.zkBatches!.getReceiptProof(contributionId, witness.version);
+  const proof = await gate.runtime.zkBatches!.getReceiptProof(contributionId, witness.version, batchId);
   if (!proof || proof.batchId !== batchId) {
     return c.json({ success: true, proofRecord: { status: "NOT_AVAILABLE" } });
   }
@@ -262,9 +264,64 @@ contributionBatchRoutes.post("/contribution-batches/:id/retry", async c => {
   if ("response" in gate) return gate.response;
   const { runtime, session } = gate;
   const batchId = c.req.param("id");
-  if (!await runtime.zkBatches!.getBatch(session.institutionId, batchId)) return c.json({ success: false, error: "Batch tidak ditemukan." }, 404);
+  const batch = await runtime.zkBatches!.getBatch(session.institutionId, batchId);
+  if (!batch) return c.json({ success: false, error: "Batch tidak ditemukan." }, 404);
+  if (["SUPERSEDED", "ABANDONED"].includes(batch.status)) return c.json({ success: false, error: "Gunakan batch pengganti yang aktif." }, 409);
   if (!runtime.zkPublications) return c.json({ success: false, error: "Antrean belum tersedia." }, 503);
   await runtime.zkPublications.retry(session.institutionId, batchId, runtime.now());
   return c.json({ success: true, operations: await inspectPublications(runtime, session.institutionId, batchId) }, 202);
 });
+
+/**
+ * 8. Create a replacement batch to correct an existing batch (Issue #110).
+ */
+contributionBatchRoutes.post("/contribution-batches/:id/correct", async (c) => {
+  const batchId = c.req.param("id")?.trim();
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  let institutionId = text(body.institutionId) || undefined;
+
+  const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
+  if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
+
+  const expectedBatchVersion = typeof body.expectedBatchVersion === "number" ? body.expectedBatchVersion : undefined;
+  const reason = text(body.reason);
+  const sourceProofRef = text(body.sourceProofRef);
+
+  if (expectedBatchVersion === undefined || !reason || !sourceProofRef) {
+    return badRequest(c, "expectedBatchVersion, reason, dan sourceProofRef wajib disertakan.");
+  }
+
+  try {
+    const replacement = await gate.runtime.zkBatches!.createReplacementBatch({
+      institutionId,
+      predecessorBatchId: batchId,
+      expectedBatchVersion,
+      reason,
+      sourceProofRef,
+      now: gate.runtime.now(),
+    });
+    return c.json({ success: true, batch: replacement }, 201);
+  } catch (error: any) {
+    const msg = error?.message || "Gagal membuat batch koreksi.";
+    const status = msg.includes("stale version") || msg.includes("koreksi bersaing") || msg.includes("sudah ada") || msg.includes("telah memiliki batch koreksi") ? 409 : 400;
+    return c.json({ success: false, error: msg }, status);
+  }
+});
+
+/**
+ * 9. Inspect batch version history / lineage (Issue #110).
+ */
+contributionBatchRoutes.get("/contribution-batches/:id/history", async (c) => {
+  const batchId = c.req.param("id")?.trim();
+  let institutionId = c.req.query("institutionId")?.trim();
+
+  const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
+  if ("response" in gate) return gate.response;
+  institutionId = gate.session.institutionId;
+
+  const history = await gate.runtime.zkBatches!.getBatchHistory(institutionId, batchId);
+  return c.json({ success: true, history });
+});
+
 export default contributionBatchRoutes;
