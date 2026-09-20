@@ -195,6 +195,34 @@ export interface ZkBatchStore {
   }): Promise<ReceiptProofRecord>;
 }
 
+function mapContributionBatch(row: any, iRows: any[]): ContributionBatchDetail {
+  return {
+    id: row.id,
+    institutionId: row.institution_id,
+    batchNumber: Number(row.batch_number),
+    version: Number(row.version),
+    status: row.status,
+    merkleRoot: row.merkle_root,
+    totalAmountExact: row.total_amount_exact,
+    currencyUnit: row.currency_unit,
+    fundType: row.fund_type,
+    itemCount: Number(row.item_count),
+    endorsedBy: row.endorsed_by,
+    endorsementMandateId: row.endorsement_mandate_id,
+    endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
+    txHash: row.tx_hash,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    items: iRows.map((it: any) => ({
+      id: it.id,
+      contributionId: it.contribution_id,
+      leafIndex: Number(it.leaf_index),
+      leafHash: it.leaf_hash,
+      receiptCommitment: it.receipt_commitment,
+    })),
+  };
+}
+
 export function createZkBatchStore(db: any): ZkBatchStore {
   return {
     async batchIsCurrent(institutionId: string, batchId: string) {
@@ -534,31 +562,7 @@ export function createZkBatchStore(db: any): ZkBatchStore {
       `);
       const iRows = itemsRes.rows ?? itemsRes;
 
-      return {
-        id: row.id,
-        institutionId: row.institution_id,
-        batchNumber: Number(row.batch_number),
-        version: Number(row.version),
-        status: row.status,
-        merkleRoot: row.merkle_root,
-        totalAmountExact: row.total_amount_exact,
-        currencyUnit: row.currency_unit,
-        fundType: row.fund_type,
-        itemCount: Number(row.item_count),
-        endorsedBy: row.endorsed_by,
-        endorsementMandateId: row.endorsement_mandate_id,
-        endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
-        txHash: row.tx_hash,
-        createdAt: Number(row.created_at),
-        updatedAt: Number(row.updated_at),
-        items: iRows.map((it: any) => ({
-          id: it.id,
-          contributionId: it.contribution_id,
-          leafIndex: Number(it.leaf_index),
-          leafHash: it.leaf_hash,
-          receiptCommitment: it.receipt_commitment,
-        })),
-      };
+      return mapContributionBatch(row, iRows);
     },
 
     async listBatches(institutionId: string): Promise<ContributionBatchDetail[]> {
@@ -579,31 +583,7 @@ export function createZkBatchStore(db: any): ZkBatchStore {
         `);
         const iRows = itemsRes.rows ?? itemsRes;
 
-        result.push({
-          id: row.id,
-          institutionId: row.institution_id,
-          batchNumber: Number(row.batch_number),
-          version: Number(row.version),
-          status: row.status,
-          merkleRoot: row.merkle_root,
-          totalAmountExact: row.total_amount_exact,
-          currencyUnit: row.currency_unit,
-          fundType: row.fund_type,
-          itemCount: Number(row.item_count),
-          endorsedBy: row.endorsed_by,
-          endorsementMandateId: row.endorsement_mandate_id,
-          endorsedAt: row.endorsed_at ? Number(row.endorsed_at) : null,
-          txHash: row.tx_hash,
-          createdAt: Number(row.created_at),
-          updatedAt: Number(row.updated_at),
-          items: iRows.map((it: any) => ({
-            id: it.id,
-            contributionId: it.contribution_id,
-            leafIndex: Number(it.leaf_index),
-            leafHash: it.leaf_hash,
-            receiptCommitment: it.receipt_commitment,
-          })),
-        });
+        result.push(mapContributionBatch(row, iRows));
       }
       return result;
     },

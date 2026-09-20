@@ -739,13 +739,44 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
         await page.getByLabel(/Masukkan 6 digit kode/).waitFor();
         const code = outbox.at(-1)!.body.match(/\b(\d{6})\b/)![1];
         await page.getByLabel(/Masukkan 6 digit kode/).fill(code);
+        // A stored VERIFIED receipt must not appear confirmed when the initial check fails.
+        const proofUrl = "**/api/public/receipt-verification/**";
+        await page.route(proofUrl, (route: any) => route.abort());
         await page.getByRole("button", { name: "Verifikasi", exact: true }).click();
         await page.getByRole("heading", { name: "Kontribusi Anda" }).waitFor();
-        await page.getByText("Terverifikasi ZK On-Chain (Groth16)", { exact: true }).first().waitFor();
+        const panel = page.getByRole("region", { name: "Bukti kontribusi Anda", exact: true });
+        const confirmed = panel.getByText("Bukti keanggotaan terkonfirmasi", { exact: true });
+        const unconfirmed = panel.getByText("Bukti belum terkonfirmasi saat ini", { exact: true });
+        await panel.getByRole("alert").waitFor();
+        await unconfirmed.waitFor();
+        expect(await confirmed.count()).toBe(0);
+        expect(await panel.locator("details").getAttribute("open")).toBeNull();
+        await panel.locator("summary").click();
+        expect(await panel.getByText("Transaksi hasil verifikasi", { exact: true }).count()).toBe(1);
+        expect(await panel.locator("code").allTextContents()).toContain(
+          (await zkBatchStore.getReceiptProof(tracerContributionId))!.txHash,
+        );
+        await panel.locator("summary").click();
+        await page.unroute(proofUrl);
         const response = page.waitForResponse((r: any) => r.url().includes("/receipt-verification/"));
-        await page.getByRole("button", { name: "Verifikasi Ulang On-Chain", exact: true }).click();
+        await page.getByRole("button", { name: "Periksa ulang bukti", exact: true }).click();
         expect((await (await response).json()).verification.onChainConfirmed).toBe(true);
         expect(await page.getByText("Pemeriksaan belum tersedia. Coba lagi nanti.").count()).toBe(0);
+        await confirmed.waitFor();
+        expect(await panel.locator("details").getAttribute("open")).toBeNull();
+        // Network failure and HTTP failure both remove a previously green badge.
+        for (const failure of ["network", "http"]) {
+          await page.route(proofUrl, (route: any) => failure === "network" ? route.abort() :
+            route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ success: false }) }));
+          await panel.getByRole("button", { name: "Periksa ulang bukti", exact: true }).click();
+          await panel.getByRole("alert").waitFor();
+          await unconfirmed.waitFor();
+          expect(await confirmed.count()).toBe(0);
+          await page.unroute(proofUrl);
+          await panel.getByRole("button", { name: "Periksa ulang bukti", exact: true }).click();
+          await confirmed.waitFor();
+          expect(await panel.getByRole("alert").count()).toBe(0);
+        }
         expect(errors).toHaveLength(0);
         expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonce);
         await page.screenshot({ path: `/tmp/issue108-receipt-${viewport.width}.png`, fullPage: true });

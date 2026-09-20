@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { ContributionDetailModal } from "./ContributionDetailModal";
@@ -59,9 +60,9 @@ describe("Contribution lifecycle UI", () => {
   });
   it("shows donor correction amounts and reasons without internal source locators", () => {
     const { fromVersion, toVersion, correctionType, fromAmountExact, toAmountExact, reason, createdAt } = detail.corrections![0];
-    const html = renderToStaticMarkup(<DonorContributionSummary contribution={{ ...detail.contribution,
+    const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><DonorContributionSummary contribution={{ ...detail.contribution,
       donorContactMasked: "d***@example.com", zkProof: { status: "NOT_AVAILABLE" },
-      corrections: [{ fromVersion, toVersion, correctionType, fromAmountExact, toAmountExact, reason, createdAt }] }} />);
+      corrections: [{ fromVersion, toVersion, correctionType, fromAmountExact, toAmountExact, reason, createdAt }] }} /></QueryClientProvider>);
     expect(html).toContain("Riwayat Kontribusi");
     expect(html).toContain("Koreksi mutasi bank");
     expect(html).toContain("Rp 500.000");

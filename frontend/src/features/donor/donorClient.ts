@@ -287,6 +287,7 @@ export async function getPublicReceiptVerification(
     const res = await fetch(
       `${getApiBaseUrl()}/api/public/receipt-verification/${encodeURIComponent(reference)}`
     );
+    if (!res.ok) return null;
     const data = await res.json();
     if (!data.success) return null;
     return data.verification;

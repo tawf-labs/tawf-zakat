@@ -109,7 +109,8 @@ bun test test/contribution_zk_receipt.test.ts
 
 Ukuran 1280×900 dan 390×844: periksa proof publik, masuk OTP, lihat kontribusi,
 lihat hasil ZK, periksa ulang; jumlah transaksi relay tetap. Screenshot disimpan
-ke `/tmp/issue108-receipt-{1280,390}.png`. Tidak ada fixture respons proof/browser.
+ke `/tmp/issue108-receipt-{1280,390}.png`. Hasil proof sukses berasal dari API/EVM
+asli; regresi kegagalan jaringan memakai request abort dan respons HTTP 503.
 
 ## SQL, rollout dan handoff #109
 
@@ -146,3 +147,18 @@ tracer menolak pemrosesan snapshot yang telah berubah.
 - Solidity full suite: **160 pass, 0 fail, 0 skip**, termasuk seluruh invariant
   (18 suite, 363 detik). Script deploy lokal juga berhasil diuji dengan akun
   sementara pada Anvil terpisah; gas deployment cocok dengan hasil integrasi.
+
+## Perbaikan setelah code review 2026-09-20
+
+- Halaman donatur memeriksa EVM saat dibuka. Status VERIFIED historis dari SQL
+  tidak menjadi konfirmasi saat ini; pemeriksaan awal/ulang yang gagal menampilkan
+  belum terkonfirmasi, dengan referensi transaksi historis tetap tersedia.
+- Panel proof memakai TanStack Query dengan identitas kontribusi/versi, label
+  operasional, serta rincian teknis yang tertutup secara default. Proyeksi SQL
+  daftar/detail batch memakai mapper yang sama.
+- Frontend: **216 pass, 0 fail**, typecheck lulus. Integrasi #108 dengan browser
+  desktop/ponsel: **5 pass, 0 fail, 107 assertions**, termasuk kegagalan awal,
+  kegagalan pemeriksaan ulang karena jaringan/HTTP, pemulihan status setelah
+  pemeriksaan berhasil, dan jumlah transaksi relay yang tidak bertambah.
+- Full suite backend/Solidity dan build di bagian sebelumnya merupakan hasil
+  validasi implementasi awal, bukan pengujian ulang setelah perbaikan review.
