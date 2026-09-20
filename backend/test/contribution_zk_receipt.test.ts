@@ -720,6 +720,19 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
       expect(result.verification.checkStatus).toBe("UNAVAILABLE");
       expect(result.verification.status).toBe("UNCONFIRMED");
     } finally { configureWorkspace(runtime); }
+    const stored = (await zkBatchStore.getReceiptProof(tracerContributionId, 3))!;
+    const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+    configureWorkspace({ ...runtime, zkBudget: { ...runtime.zkBudget!, confirmations: Number(head) - stored.blockNumber! + 2 } });
+    try {
+      const inspect = async () => (await (await app.fetch(new Request(`${BASE_WORKSPACE}/contribution-batches/${tracerBatch.id}`, {
+        headers: { Authorization: `Bearer ${tracerToken}` },
+      }))).json()).operations.find((op: any) => op.contributionId === tracerContributionId);
+      expect((await (await app.fetch(request())).json()).verification.onChainConfirmed).toBe(false);
+      expect((await inspect()).status).toBe("UNCONFIRMED");
+      await publicClient.request({ method: "evm_mine" });
+      expect((await (await app.fetch(request())).json()).verification.onChainConfirmed).toBe(true);
+      expect((await inspect()).status).toBe("CONFIRMED");
+    } finally { configureWorkspace(runtime); }
     expect((await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/BCA-TRACER-108-001`))).status).toBe(404);
     const wrongBatch = await app.fetch(new Request(`${BASE_WORKSPACE}/contribution-batches/not-your-batch/proofs/${tracerContributionId}?institutionId=${SINAR}`, {
       headers: { Authorization: `Bearer ${tracerToken}` },
@@ -758,12 +771,18 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     configureWorkspace(runtime);
     await post(`/contribution-batches/${batch.id}/retry`, {});
     await runZkPublication(runtime); // root
+    // Reorg must also recover the nonce consumed by the failed attempt.
+    const chainSnapshot = await publicClient.request({ method: "evm_snapshot" });
     // A mined out-of-gas transaction is durable history, and retry reserves a new attempt.
     const revertId = `receipt:${ids[2]}:3`;
     await runZkPublication({ ...runtime, zkBudget: { ...runtime.zkBudget!, gasLimit: "100000" } }, revertId);
-    expect((await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!.status).toBe("REVERTED");
+    const reverted = (await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!;
+    expect(reverted.status).toBe("REVERTED");
     await post(`/contribution-batches/${batch.id}/retry`, {});
-    const chainSnapshot = await publicClient.request({ method: "evm_snapshot" });
+    // A failed budget reservation must not erase the previous signed attempt.
+    await runZkPublication({ ...runtime, zkBudget: { ...runtime.zkBudget!, maxAttempts: 0 } }, revertId);
+    expect((await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!.status).toBe("BUDGET_EXHAUSTED");
+    await post(`/contribution-batches/${batch.id}/retry`, {});
     await publicClient.request({ method: "evm_setAutomine", params: [false] });
     try {
       await runZkPublication({ ...runtime, zkPublicClient: { ...publicClient,
@@ -813,7 +832,21 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     expect(check.operations.filter((p: any) => p.contributionId).every((p: any) => p.status === "UNCONFIRMED")).toBe(true);
     expect((await (await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/${ids[0]}`))).json()).verification.onChainConfirmed).toBe(false);
     await post(`/contribution-batches/${batch.id}/retry`, {});
-    for (let i = 0; i < 5; i++) await runZkPublication(runtime);
+    const beforeRecovery = (await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!;
+    const nonceBeforeRecovery = await publicClient.getTransactionCount({ address: deployer.address });
+    // Replays spend the existing reservation, and still require current authority.
+    const recoveryRuntime = { ...runtime, zkBudget: { ...runtime.zkBudget!, maxAttempts: 0, maxWei: "0" } };
+    await database.handle().execute(sql`UPDATE operational_mandates SET is_active = false WHERE id = 'mandate-sinar-endorse'`);
+    await runZkPublication(recoveryRuntime);
+    expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonceBeforeRecovery);
+    await database.handle().execute(sql`UPDATE operational_mandates SET is_active = true WHERE id = 'mandate-sinar-endorse'`);
+    await Promise.all([runZkPublication(recoveryRuntime), runZkPublication(recoveryRuntime)]);
+    expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonceBeforeRecovery + 1);
+    expect((await publicClient.getTransactionReceipt({ hash: reverted.txHash })).status).toBe("reverted");
+    const afterRecovery = (await publications.list(SINAR, batch.id)).find(p => p.id === revertId)!;
+    expect(afterRecovery.txHash).toBe(beforeRecovery.txHash);
+    expect(afterRecovery.attempts).toBe(beforeRecovery.attempts);
+    for (let i = 0; i < 5; i++) await runZkPublication(recoveryRuntime);
     expect((await publications.list(SINAR, batch.id)).every(p => p.status === "CONFIRMED")).toBe(true);
     expect(await database.rowCount("contributions")).toBe(count);
     for (const id of ids) expect((await (await app.fetch(new Request(`${BASE_PUBLIC}/receipt-verification/${id}`))).json()).verification.onChainConfirmed).toBe(true);

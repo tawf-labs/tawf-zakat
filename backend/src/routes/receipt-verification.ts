@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { workspaceRuntime } from "../workspace-runtime";
 import { CONTRIBUTION_PROOF_REGISTRY_ABI } from "../zk-proof-service";
+import { receiptIsFinal } from "../zk-finality";
 
 export const receiptVerificationRoutes = new Hono();
 receiptVerificationRoutes.use("*", async (c, next) => {
@@ -36,10 +37,8 @@ receiptVerificationRoutes.get("/receipt-verification/:reference", async (c) => {
           data[5] === BigInt(record.block_number);
         if (onChainConfirmed) {
           const receipt = await runtime.zkPublicClient.getTransactionReceipt({ hash: record.tx_hash });
-          const block = await runtime.zkPublicClient.getBlock({ blockNumber: receipt.blockNumber });
-          const head = await runtime.zkPublicClient.getBlockNumber({ cacheTime: 0 });
-          onChainConfirmed = receipt.status === "success" && block.hash === receipt.blockHash &&
-            receipt.blockNumber === BigInt(record.block_number) && BigInt(head) - BigInt(receipt.blockNumber) + 1n >= BigInt(runtime.zkBudget?.confirmations ?? 1);
+          onChainConfirmed = receipt.status === "success" &&
+            receipt.blockNumber === BigInt(record.block_number) && await receiptIsFinal(runtime, receipt);
         }
         checkStatus = onChainConfirmed ? "CONFIRMED" : "MISMATCH";
       } catch { onChainConfirmed = false; /* Historical SQL result is separate from this live check. */ }

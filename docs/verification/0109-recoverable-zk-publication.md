@@ -33,6 +33,13 @@ reorg memulihkan urutan nonce yang sama. Nonce signer tidak boleh digunakan oleh
 aplikasi lain. Konfirmasi selalu diperiksa melalui RPC; proyeksi HTTP menggunakan
 `Cache-Control: no-store`, dan status gagal/RPC tidak tersedia tidak hijau dari cache.
 
+Perbaikan review #109: recovery juga membaca transaksi bertanda tangan dalam
+riwayat attempt, termasuk transaksi revert sebelum retry. Bila reorg menghapus
+nonce pendahulu, worker mengirim ulang bytes lama lebih dulu tanpa mengganti
+operasi terbaru atau menambah reservasi anggaran. Replay tetap memeriksa mandat,
+snapshot, artefak dan lease. Retry yang tertahan anggaran tidak menghapus bytes
+attempt lama. Worker dan pemeriksaan publik memakai pemeriksaan finalitas yang sama.
+
 Penerimaan dana tidak diubah oleh antrean. Donatur tidak perlu wallet atau gas.
 Notifikasi memakai adapter `zkNotifications.send({ operationId, status })` tanpa
 kontak/witness/nominal. Pengiriman minimal ini bersifat at-least-once; transport
@@ -73,6 +80,26 @@ penghapusan penerimaan dana.
 
 ## Pemeriksaan
 
+Regresi perbaikan review: snapshot EVM diambil sebelum transaksi out-of-gas,
+kemudian retry, restart SQL dan reorg menguji pemulihan nonce pendahulu.
+Skenario mencakup budget habis setelah retry, worker ganda, mandat dicabut saat
+replay, pemulihan tanpa reservasi tambahan, serta ambang konfirmasi yang sama
+pada HTTP internal dan publik. Verifikasi akhir perbaikan: **8 tes lulus,
+0 gagal, 0 skip, 166 assertion**, termasuk smoke batch dan donor pada desktop
+1280 px dan ponsel 390 px. Chromium tidak melaporkan page error maupun overflow
+horizontal. Screenshot batch diperiksa pada `/tmp/issue109-batch-390.png`.
+Typecheck masih memiliki 22 error baseline; output sebelum dan sesudah perbaikan
+identik. Pengujian memakai SQL PGlite terisolasi dan Anvil, bukan database
+kerja Docker atau deployment pilot.
+
+Perintah verifikasi akhir:
+
+```bash
+REGISTRY_BROWSER_MODULE=/home/harkon666/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright-core/index.mjs \
+REGISTRY_BROWSER_EXECUTABLE=/usr/bin/chromium \
+bun test test/contribution_zk_receipt.test.ts
+```
+
 `bun test test/contribution_zk_receipt.test.ts` menjalankan HTTP, SQL PGlite,
 prover sungguhan dan EVM lokal: banyak receipt, budget gate, lease ganda, transaksi
 revert dan retry, broadcast ambigu, pencabutan/pembaruan mandat, pengesahan ulang, restart
@@ -81,7 +108,7 @@ dan pemeriksaan publik tanpa transaksi tambahan. Set `REGISTRY_BROWSER_MODULE`
 ke instalasi Playwright serta `REGISTRY_BROWSER_EXECUTABLE` ke Chromium untuk
 smoke review–pengesahan–budget/retry–pending–confirmed pada 1280 dan 390 pixel.
 
-Hasil run terfokus: 8 tes lulus, 156 assertion, termasuk smoke batch dan donor pada
+Hasil run implementasi awal (sebelum perbaikan review): 8 tes lulus, 156 assertion, termasuk smoke batch dan donor pada
 laptop/ponsel. Frontend: 216 tes lulus; typecheck lulus. Typecheck backend masih
 memiliki 22 error baseline; hasilnya dibandingkan dengan worktree commit
 `f94ef2a` dan identik, tanpa tambahan error dari #109.

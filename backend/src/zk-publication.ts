@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkspaceRuntime } from "./workspace-runtime";
-import type { Publication } from "./zk-publication-store";
+import type { Publication, SignedPublicationAttempt } from "./zk-publication-store";
 import { operationalActor, OperationalAccessDenied } from "./operational-access";
 import { CONTRIBUTION_PROOF_REGISTRY_ABI } from "./zk-proof-service";
+import { receiptIsFinal } from "./zk-finality";
 
 const receiptEvent = parseAbiItem("event ReceiptProofVerified(bytes32 indexed receiptKey, string institutionId, string contributionId, uint256 batchId, uint256 version, bytes32 batchRoot, bytes32 receiptCommitment, address submitter)");
 const authorityAbi = parseAbi([
@@ -30,11 +31,15 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
   const token = await store.acquire(budget.id, runtime.now());
   if (!token) return;
   let op: Publication | undefined;
+  let retired: SignedPublicationAttempt | undefined;
+  const save = () => retired
+    ? store.saveRecoveredAttempt(retired, op!, budget.id, token, runtime.now())
+    : store.save(op!, budget.id, token, runtime.now());
   try {
     const all = await store.list();
-    // Reconcile confirmed history against canonical blocks before selecting new work.
-    for (const previous of all.filter(p => p.status === "CONFIRMED")) {
-      if (!await publicationConfirmed(runtime, previous)) {
+    // Reconcile final receipts, including reverted transactions, before selecting work.
+    for (const previous of all.filter(p => ["CONFIRMED", "REVERTED"].includes(p.status))) {
+      if (!await publicationHasFinalReceipt(runtime, previous)) {
         previous.status = "UNCONFIRMED";
         previous.error = "Konfirmasi chain belum tersedia; periksa ulang.";
         await store.save(previous, budget.id, token, runtime.now());
@@ -52,8 +57,20 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
       .sort((a, b) => Number(parseTransaction(a.rawTransaction!).nonce) - Number(parseTransaction(b.rawTransaction!).nonce))[0] ??
       all.find(p => (!targetId || p.id === targetId) && ["QUEUED", "PROVING", "SUBMITTING", "PENDING"].includes(p.status)
         && (!p.contributionId || all.some(r => r.batchId === p.batchId && !r.contributionId && r.status === "CONFIRMED")));
+    // A reorg can remove the failed transaction that consumed a retry's previous
+    // nonce. Replay its original, already-budgeted bytes before the newer attempt.
+    // Keep the current operation intact: history is not a replacement attempt.
+    const chainNonce = await client.getTransactionCount({ address: wallet.account.address, blockTag: "latest" });
+    retired = (await store.retiredTransactions())
+      .filter(a => Number(parseTransaction(a.rawTransaction).nonce) >= chainNonce || a.status === "PENDING")
+      .sort((a, b) => Number(parseTransaction(a.rawTransaction).nonce) - Number(parseTransaction(b.rawTransaction).nonce))[0];
+    if (retired && (!op?.rawTransaction ||
+        Number(parseTransaction(retired.rawTransaction).nonce) < Number(parseTransaction(op.rawTransaction).nonce))) {
+      const current = all.find(p => p.id === retired!.operationId)!;
+      op = { ...current, rawTransaction: retired.rawTransaction, txHash: retired.txHash,
+        artifactId: retired.artifactId, status: "PENDING", blockHash: null, blockNumber: null };
+    } else { retired = undefined; }
     if (!op) return;
-    const save = () => store.save(op!, budget.id, token, runtime.now());
     const batch = await batches.getBatch(op.institutionId, op.batchId);
     if (!batch || !batch.endorsedBy) throw new PublicationBlocked("Pengesahan batch belum tersedia.");
     let receipt: any;
@@ -184,7 +201,7 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
     }
     op.status = "CONFIRMED"; op.error = null; op.blockHash = receipt.blockHash; op.blockNumber = Number(receipt.blockNumber);
     await save();
-    if (runtime.zkNotifications && !op.notified) {
+    if (!retired && runtime.zkNotifications && !op.notified) {
       try {
         await runtime.zkNotifications.send({ operationId: op.id, status: op.status });
         op.notified = true; await save();
@@ -194,25 +211,17 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
     if (op && await store.owns(budget.id, token, runtime.now())) {
       op.status = error instanceof PublicationBlocked || error instanceof OperationalAccessDenied ? "BLOCKED" : op.rawTransaction ? "PENDING" : "RETRY";
       op.error = error instanceof PublicationBlocked ? error.message : "Pemrosesan belum terkonfirmasi; periksa atau coba lagi.";
-      await store.save(op, budget.id, token, runtime.now());
+      await save();
     }
   } finally { await store.release(budget.id, token); }
 }
 
-async function receiptIsFinal(runtime: WorkspaceRuntime, receipt: any): Promise<boolean> {
-  const block = await runtime.zkPublicClient.getBlock({ blockNumber: receipt.blockNumber });
-  const head = await runtime.zkPublicClient.getBlockNumber({ cacheTime: 0 });
-  return block.hash === receipt.blockHash && BigInt(head) - BigInt(receipt.blockNumber) + 1n >= BigInt(runtime.zkBudget!.confirmations);
-}
-
-async function publicationConfirmed(runtime: WorkspaceRuntime, op: Publication): Promise<boolean> {
+async function publicationHasFinalReceipt(runtime: WorkspaceRuntime, op: Publication): Promise<boolean> {
   try {
     await runtime.zkProver!.assertDeployment(runtime.zkPublicClient, runtime.zkRegistryAddress!);
     const receipt = await runtime.zkPublicClient.getTransactionReceipt({ hash: op.txHash });
-    const block = await runtime.zkPublicClient.getBlock({ blockNumber: receipt.blockNumber });
-    const head = await runtime.zkPublicClient.getBlockNumber({ cacheTime: 0 });
-    return receipt.status === "success" && block.hash === op.blockHash && receipt.blockHash === op.blockHash &&
-      BigInt(head) - BigInt(receipt.blockNumber) + 1n >= BigInt(runtime.zkBudget!.confirmations);
+    return receipt.status === (op.status === "REVERTED" ? "reverted" : "success") &&
+      receipt.blockHash === op.blockHash && await receiptIsFinal(runtime, receipt);
   } catch { return false; }
 }
 
@@ -220,7 +229,7 @@ async function publicationConfirmed(runtime: WorkspaceRuntime, op: Publication):
 export async function inspectPublications(runtime: WorkspaceRuntime, institutionId: string, batchId: string) {
   const operations = await runtime.zkPublications!.list(institutionId, batchId);
   for (const op of operations) {
-    if (op.status === "CONFIRMED" && !await publicationConfirmed(runtime, op)) {
+    if (op.status === "CONFIRMED" && !await publicationHasFinalReceipt(runtime, op)) {
       op.status = "UNCONFIRMED"; op.error = "Konfirmasi chain belum tersedia; periksa ulang.";
     }
   }

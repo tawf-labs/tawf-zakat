@@ -10,6 +10,10 @@ export type Publication = {
   rawTransaction: `0x${string}` | null; txHash: `0x${string}` | null; blockHash: string | null;
   blockNumber: number | null; error: string | null; notified: boolean;
 };
+export type SignedPublicationAttempt = {
+  operationId: string; attempt: number; artifactId: string;
+  rawTransaction: `0x${string}`; txHash: `0x${string}`; status: PublicationState;
+};
 const rows = (result: any): any[] => result.rows ?? result;
 function map(r: any): Publication {
   return { id: r.id, batchId: r.batch_id, institutionId: r.institution_id, contributionId: r.contribution_id,
@@ -84,6 +88,21 @@ export function createZkPublicationStore(db: any) {
         WHERE (${institutionId ?? null}::text IS NULL OR institution_id = ${institutionId ?? null})
         AND (${batchId ?? null}::text IS NULL OR batch_id = ${batchId ?? null}) ORDER BY updated_at, id`)).map(map);
     },
+    async retiredTransactions(): Promise<SignedPublicationAttempt[]> {
+      return rows(await db.execute(sql`SELECT a.* FROM zk_publication_attempts a
+        JOIN zk_publications p ON p.id = a.operation_id
+        WHERE a.raw_transaction IS NOT NULL AND a.raw_transaction IS DISTINCT FROM p.raw_transaction`))
+        .map(r => ({ operationId: r.operation_id, attempt: Number(r.attempt), artifactId: r.artifact_id,
+          rawTransaction: r.raw_transaction, txHash: r.tx_hash, status: r.status }));
+    },
+    async saveRecoveredAttempt(attempt: SignedPublicationAttempt, op: Publication, budgetId: string, token: string, now: number) {
+      const updated = rows(await db.execute(sql`UPDATE zk_publication_attempts SET status = ${op.status},
+        error = ${op.error}, updated_at = ${now}
+        WHERE operation_id = ${attempt.operationId} AND attempt = ${attempt.attempt}
+        AND EXISTS (SELECT 1 FROM zk_publication_budgets WHERE id = ${budgetId} AND lease_token = ${token} AND lease_until > ${now})
+        RETURNING operation_id`));
+      if (!updated.length) throw new Error("LEASE_LOST");
+    },
     async reserve(budget: ZkBudget, token: string, op: Publication, now: number) {
       return db.transaction(async (tx: any) => {
         const reserved = rows(await tx.execute(sql`UPDATE zk_publication_budgets SET attempts = attempts + 1,
@@ -104,8 +123,11 @@ export function createZkPublicationStore(db: any) {
         if (!updated.length) throw new Error("LEASE_LOST");
         await db.execute(sql`INSERT INTO zk_publication_attempts(operation_id,attempt,status,artifact_id,tx_hash,raw_transaction,error,updated_at)
           SELECT id,attempts,status,artifact_id,tx_hash,raw_transaction,error,updated_at FROM zk_publications WHERE id = ${op.id}
-          ON CONFLICT(operation_id,attempt) DO UPDATE SET status = EXCLUDED.status, artifact_id = EXCLUDED.artifact_id,
-          tx_hash = EXCLUDED.tx_hash, raw_transaction = EXCLUDED.raw_transaction, error = EXCLUDED.error, updated_at = EXCLUDED.updated_at`);
+          ON CONFLICT(operation_id,attempt) DO UPDATE SET status = EXCLUDED.status,
+          artifact_id = COALESCE(EXCLUDED.artifact_id, zk_publication_attempts.artifact_id),
+          tx_hash = COALESCE(EXCLUDED.tx_hash, zk_publication_attempts.tx_hash),
+          raw_transaction = COALESCE(EXCLUDED.raw_transaction, zk_publication_attempts.raw_transaction),
+          error = EXCLUDED.error, updated_at = EXCLUDED.updated_at`);
       });
     },
     async retry(institutionId: string, batchId: string, now: number) {
