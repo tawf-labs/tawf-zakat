@@ -10,6 +10,7 @@ import {ERC5192} from "@tawf-gov/identity/ERC5192.sol";
 interface IMandateSource {
     function signatories(bytes32 institutionKey, address signer) external view returns (bool active, uint256 epoch);
     function administrators(bytes32 institutionKey) external view returns (address);
+    function administratorEpochs(bytes32 institutionKey) external view returns (uint256);
 }
 
 /// @notice One official, non-transferable certificate per distribution-stage version, minted to an
@@ -28,7 +29,7 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
     bytes32 public constant ISSUE_CERTIFICATE = keccak256("ISSUE_CERTIFICATE");
     bytes32 public constant RECOVER_CUSTODY = keccak256("RECOVER_CUSTODY");
     bytes32 public constant RECOVERY_TYPEHASH = keccak256(
-        "CustodyRecovery(bytes32 action,string institutionId,string certificateId,string version,address newCustodian,bytes32 basisDigest,address signer,uint256 authorityEpoch,bytes32 nonce,uint256 deadline)"
+        "CustodyRecovery(bytes32 action,string institutionId,string certificateId,string version,address newCustodian,uint256 previousTokenId,uint256 custodyEpoch,uint256 administratorEpoch,bytes32 basisDigest,address signer,uint256 authorityEpoch,bytes32 nonce,uint256 deadline)"
     );
     bytes32 public constant CERTIFICATION_TYPEHASH = keccak256(
         "Certification(bytes32 action,string institutionId,string activityId,string certificateId,string version,string predecessor,bytes32 digest,address signer,uint256 authorityEpoch,bytes32 nonce,uint256 deadline)"
@@ -57,6 +58,9 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         string certificateId;
         string version;
         address newCustodian;
+        uint256 previousTokenId;
+        uint256 custodyEpoch;
+        uint256 administratorEpoch;
         bytes32 basisDigest;
         address signer;
         uint256 authorityEpoch;
@@ -80,6 +84,7 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
     mapping(uint256 tokenId => uint256 successorTokenId) public successorOf;
     mapping(uint256 tokenId => uint256 predecessorTokenId) public predecessorOf;
     mapping(bytes32 institutionKey => address custodian) public custodianOf;
+    mapping(bytes32 institutionKey => uint256 epoch) public custodyEpochs;
 
     error Unauthorized();
     error InvalidAuthorization();
@@ -134,6 +139,7 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         if (custodian == address(0)) revert InvalidAuthorization();
         address previous = custodianOf[key];
         custodianOf[key] = custodian;
+        custodyEpochs[key]++;
         emit CustodianUpdated(key, previous, custodian);
     }
 
@@ -224,6 +230,11 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         if (custodian == address(0)) custodian = registry.administrators(institutionKey);
     }
 
+    /// @notice Both authority histories are bound even when a designated custodian overrides the administrator.
+    function recoveryEpochs(bytes32 institutionKey) public view returns (uint256 custodyEpoch, uint256 administratorEpoch) {
+        return (custodyEpochs[institutionKey], registry.administratorEpochs(institutionKey));
+    }
+
     function recoveryDigest(CustodyRecovery calldata r) public view returns (bytes32) {
         return _hashTypedDataV4(
             keccak256(
@@ -234,6 +245,9 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
                     keccak256(bytes(r.certificateId)),
                     keccak256(bytes(r.version)),
                     r.newCustodian,
+                    r.previousTokenId,
+                    r.custodyEpoch,
+                    r.administratorEpoch,
                     r.basisDigest,
                     r.signer,
                     r.authorityEpoch,
@@ -255,13 +269,16 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         if (!active || epoch != r.authorityEpoch) revert Unauthorized();
         if (block.timestamp > r.deadline) revert Expired();
         if (usedNonces[institutionKey][r.signer][r.nonce]) revert Replayed();
+        // Bind the authority history, not just its current address: a round trip cannot revive a signature.
+        (uint256 custodyEpoch, uint256 administratorEpoch) = recoveryEpochs(institutionKey);
+        if (r.custodyEpoch != custodyEpoch || r.administratorEpoch != administratorEpoch) revert Unauthorized();
         // The target must be what the institution's own administrator has designated (or is).
         if (r.newCustodian != resolvedCustodian(institutionKey)) revert Unauthorized();
         bytes32 certificateKey = keccak256(bytes(r.certificateId));
         // Only the line's official head moves; superseded versions stay as history with their holder.
         if (keccak256(bytes(latestVersions[institutionKey][certificateKey])) != keccak256(bytes(r.version))) revert NotRecoverable();
         uint256 token = certificateVersions[institutionKey][certificateKey][keccak256(bytes(r.version))];
-        if (token == 0 || ownerOf(token) == r.newCustodian) revert NotRecoverable();
+        if (token == 0 || token != r.previousTokenId || ownerOf(token) == r.newCustodian) revert NotRecoverable();
         if (!SignatureChecker.isValidSignatureNow(r.signer, recoveryDigest(r), signature)) revert InvalidAuthorization();
     }
 

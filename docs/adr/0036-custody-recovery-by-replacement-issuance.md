@@ -22,8 +22,17 @@ yang tersembunyi (larangan Q38).
   resmi terkini yang dapat dipulihkan; versi yang sudah digantikan koreksi tetap sebagai riwayat.
 - Pengesahan pemulihan memakai action dan tipe EIP-712 sendiri, sehingga pengesahan penerbitan
   tidak dapat diputar ulang sebagai pemulihan (dan sebaliknya). Nonce berbagi ruang dengan penerbitan.
+- Pengesahan mengikat `previousTokenId`, `custodyEpoch` dan `administratorEpoch`, selain epoch
+  mandat penandatangan. Setiap `setCustodian` menaikkan epoch custody, termasuk penetapan ulang
+  alamat yang sama. Epoch administrator dibaca dari registry. Kontrak menolak pengesahan lama
+  setelah rotasi bolak-balik atau penggantian token asal, tanpa bergantung pada polling API.
 - Pengesahan menjadi usang (dan ditandai `voided`, tidak pernah hidup lagi) bila epoch mandat,
-  pengendali terselesaikan, versi resmi terkini, atau pemegang berubah.
+  epoch custody/administrator, pengendali terselesaikan, versi resmi terkini, atau pemegang berubah.
+  Invalidasi disimpan juga bila sudah ada transaksi tersimpan; hasil transaksi tetap diperiksa
+  dari receipt kanonis sehingga invalidasi tidak menghapus riwayat eksekusi yang sudah sah.
+- Pengesahan yang melewati deadline tidak digunakan kembali oleh persiapan baru. Operator
+  meninjau dan menandatangani intent baru; transaksi/signature lama tidak ditimpa. Pemulihan
+  berikutnya tetap tersedia ketika riwayat pemulihan sebelumnya sudah selesai.
 
 ## Batas
 

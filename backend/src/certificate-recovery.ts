@@ -28,28 +28,43 @@ export function createCertificateRecovery(runtime: { now(): number }, registry: 
   async function read(id: string) {
     const intent = await store.getRecovery(institution, id);
     if (!intent) throw new CertificateError("Pemulihan pemegang tidak ditemukan.", 404);
-    if (JSON.stringify(intent.domain) !== JSON.stringify(chain.domain)) throw new CertificateError("Deployment berbeda dari yang ditinjau.", 409);
+    if (intent.domain.name !== chain.domain.name || intent.domain.version !== chain.domain.version
+      || intent.domain.chainId !== chain.domain.chainId
+      || intent.domain.verifyingContract.toLowerCase() !== chain.domain.verifyingContract.toLowerCase()) {
+      throw new CertificateError("Deployment berbeda dari yang ditinjau.", 409);
+    }
     if (hashTypedData(recoveryTypedData(intent.domain, intent.recovery)) !== intent.recoveryDigest
       || intent.recovery.institutionId !== institution || intent.recovery.certificateId !== intent.certificateId
       || intent.recovery.version !== intent.version || keccak256(toHex(intent.decisionRef)) !== intent.recovery.basisDigest) {
       throw new CertificateError("Catatan pemulihan tidak cocok dengan pengesahan. Tindakan ditahan.", 503);
     }
+    // previousCustodian is display metadata, not a signed field. Verify it against the immutable
+    // holder of the signed source token, including when reading a historical receipt.
+    const source = (await chain.custodyTokens(BigInt(intent.recovery.previousTokenId)))
+      .find((token) => String(token.tokenId) === intent.recovery.previousTokenId);
+    if (!source || source.holder.toLowerCase() !== intent.previousCustodian.toLowerCase()) {
+      throw new CertificateError("Pemegang asal tidak cocok dengan token yang disahkan. Tindakan ditahan.", 503);
+    }
     return intent;
   }
 
-  /** Whether the endorsement still means what was signed: same mandate epoch, same designated
-   * custodian, same official version, and the holder still differs. Any change makes it STALE. */
+  /** A live endorsement binds the deadline, all authority/designation epochs, official version,
+   * exact source token and holder. Matching addresses after rotation cannot revive it. */
   async function stillValid(intent: CustodyRecoveryIntent): Promise<"CURRENT" | "STALE" | "UNAVAILABLE"> {
     try {
       const r = intent.recovery;
+      if (BigInt(r.deadline) < BigInt(runtime.now())) return "STALE";
+      const epochs = await chain.recoveryEpochs(institution);
+      if (String(epochs.custodyEpoch) !== r.custodyEpoch || String(epochs.administratorEpoch) !== r.administratorEpoch) return "STALE";
       const authority = await chain.authority(institution, r.signer);
       if (!authority.active || String(authority.epoch) !== r.authorityEpoch) return "STALE";
       if ((await chain.resolvedCustodian(institution)).toLowerCase() !== r.newCustodian.toLowerCase()) return "STALE";
       if ((await chain.latestVersion(institution, r.certificateId)) !== r.version) return "STALE";
       const token = await chain.tokenOf(institution, r.certificateId, r.version);
-      if (token === 0n) return "STALE";
-      const holder = (await chain.custodyTokens(token)).find((t) => t.status === "ACTIVE")!.holder;
-      return holder.toLowerCase() === r.newCustodian.toLowerCase() ? "STALE" : "CURRENT";
+      if (token === 0n || String(token) !== r.previousTokenId) return "STALE";
+      const active = (await chain.custodyTokens(token)).find((t) => t.status === "ACTIVE");
+      if (!active || String(active.tokenId) !== r.previousTokenId || active.holder.toLowerCase() !== intent.previousCustodian.toLowerCase()) return "STALE";
+      return active.holder.toLowerCase() === r.newCustodian.toLowerCase() ? "STALE" : "CURRENT";
     } catch { return "UNAVAILABLE"; }
   }
 
@@ -60,7 +75,7 @@ export function createCertificateRecovery(runtime: { now(): number }, registry: 
     if (["CONFIRMED", "INCLUDED"].includes(current.observation.state)) return { ...current, signingAuthority: "HISTORICAL" };
     if (current.voided) return { ...current, signingAuthority: "STALE" };
     const validity = await stillValid(current);
-    if (validity === "STALE" && !attempt) {
+    if (validity === "STALE") {
       // Remember it: matching the chain again later does not make an old endorsement live again.
       const voided = { ...current, voided: true as const };
       await store.saveRecovery(institution, voided);
@@ -116,8 +131,10 @@ export function createCertificateRecovery(runtime: { now(): number }, registry: 
         return reviewed;
       }
 
+      const epochs = await chain.recoveryEpochs(institution);
       const recovery: CustodyRecovery = {
         action, institutionId: institution, certificateId, version, newCustodian: resolved,
+        previousTokenId: String(tokenId), custodyEpoch: String(epochs.custodyEpoch), administratorEpoch: String(epochs.administratorEpoch),
         basisDigest: keccak256(toHex(decisionRef)), signer: account, authorityEpoch: String(authority.epoch),
         nonce: toHex(randomBytes(32)), deadline: String(runtime.now() + 600),
       };
@@ -127,7 +144,10 @@ export function createCertificateRecovery(runtime: { now(): number }, registry: 
         recoveryDigest: hashTypedData(recoveryTypedData(chain.domain, recovery)), decisionRef,
         previousCustodian: active.holder, accountKind: authority.accountKind, observation: observation("PREPARED"),
       };
-      await store.createRecovery(intent, institution, runtime.now());
+      const stored = await store.createRecovery(intent, institution, runtime.now());
+      if (stored.recoveryDigest !== intent.recoveryDigest) {
+        throw new CertificateError("Pemulihan telah disiapkan oleh permintaan lain. Muat ulang riwayat sebelum meninjau kembali.", 409);
+      }
       return status(id);
     },
 
@@ -140,8 +160,11 @@ export function createCertificateRecovery(runtime: { now(): number }, registry: 
       if (attempt && !["SUBMITTED", "NONCANONICAL", "PREPARED"].includes(current.observation.state)) return current;
       // The mandate, designated custodian or official version may have changed since it was signed;
       // a late wallet response or a retry must not revive that context.
+      if (current.signingAuthority === "UNAVAILABLE") {
+        throw new CertificateError("Keabsahan pemulihan belum dapat diperiksa. Periksa status sebelum mengulang.", 503);
+      }
       if (current.signingAuthority !== "CURRENT") {
-        throw new CertificateError("Pemulihan tidak lagi sah karena kewenangan, pengendali institusi, atau versi resmi berubah. Mulai persiapan baru.", 409);
+        throw new CertificateError("Pemulihan tidak lagi sah: masa berlaku habis atau kewenangan, pengendali institusi, token asal, atau versi resmi berubah. Mulai persiapan baru.", 409);
       }
       try { await chain.validateRecovery(intent, signature); }
       catch { throw new CertificateError("Pengesahan pemulihan ditolak oleh kontrak. Periksa akun, masa berlaku dan pengendali institusi.", 409); }

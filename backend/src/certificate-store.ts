@@ -84,7 +84,11 @@ export function createCertificateStore(db: CertificateDatabase) {
       return row ? JSON.parse(row.intent) : null;
     },
     async saveRecovery(institution: string, intent: CustodyRecoveryIntent): Promise<void> {
-      await db.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify(intent)} WHERE institution_id=${institution} AND id=${intent.id}`);
+      // Merge at the SQL write boundary: a late observer must never erase a durable void.
+      await db.execute(sql`UPDATE certificate_recoveries SET intent=(
+        ${JSON.stringify(intent)}::jsonb || CASE WHEN intent::jsonb->>'voided' = 'true'
+        THEN '{"voided":true}'::jsonb ELSE '{}'::jsonb END)::text
+        WHERE institution_id=${institution} AND id=${intent.id}`);
     },
     async recoveries(institution: string, certificateId: string): Promise<CustodyRecoveryIntent[]> {
       return rows(await db.execute(sql`SELECT intent FROM certificate_recoveries WHERE institution_id=${institution} AND certificate_id=${certificateId} ORDER BY created_at, id`))
@@ -92,8 +96,11 @@ export function createCertificateStore(db: CertificateDatabase) {
     },
     async observeRecovery(intent: CustodyRecoveryIntent, institution: string, observation: CertificateMintObservation, hash?: Hex): Promise<CustodyRecoveryIntent> {
       const next = { ...intent, observation, ...(hash ? { transactionHash: hash } : {}) };
-      await db.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify(next)} WHERE institution_id=${institution} AND id=${intent.id}`);
-      return next;
+      const updated = rows(await db.execute(sql`UPDATE certificate_recoveries SET intent=(
+        ${JSON.stringify(next)}::jsonb || CASE WHEN intent::jsonb->>'voided' = 'true'
+        THEN '{"voided":true}'::jsonb ELSE '{}'::jsonb END)::text
+        WHERE institution_id=${institution} AND id=${intent.id} RETURNING intent`));
+      return updated[0] ? JSON.parse(updated[0].intent) : next;
     },
     async successorClaim(institution: string, certificateId: string, predecessor: string): Promise<string | null> {
       return rows(await db.execute(sql`SELECT intent_id FROM certificate_successor_claims

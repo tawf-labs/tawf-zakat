@@ -42,6 +42,16 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     }
   }
 
+  /** Issuance and recovery share one fee/gas policy and the same durable attempt format. */
+  async function buildAttempt(data: Hex, signature: Hex, nonce: number): Promise<CertificateAttempt> {
+    // Estimate/simulate before signing; never let RPC-selected fees expand the reservation.
+    const request = { account, to: config.address, data, nonce, value: 0n, maxFeePerGas, maxPriorityFeePerGas: 0n };
+    const estimated = await rpc.estimateGas(request);
+    if (estimated > gas) throw new CertificateBudgetError("Batas gas anggaran layanan sertifikat tidak mencukupi.");
+    const raw = await wallet.signTransaction({ ...request, chain, type: "eip1559", gas });
+    return { raw, hash: keccak256(raw), nonce, signature };
+  }
+
   /** Which log in the receipt proves this transaction did what the intent says, and the token it minted. */
   type LogMatcher = (log: any) => { tokenId: bigint } | null;
   async function observe(intent: CertificateIssuanceIntent, hash: Hex, atBlock?: bigint): Promise<CertificateMintObservation> {
@@ -62,6 +72,7 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     return observeTransaction(intent.observation, hash, atBlock, (log) => {
       const event = decodeEventLog({ abi, eventName: "CustodyRecovered", topics: log.topics, data: log.data, strict: true });
       return event.args.institutionKey === institutionKey && event.args.certificateKey === certificateKey
+        && event.args.replacedTokenId === BigInt(r.previousTokenId)
         && event.args.newCustodian.toLowerCase() === r.newCustodian.toLowerCase() && event.args.signer.toLowerCase() === r.signer.toLowerCase()
         && event.args.basisDigest === r.basisDigest ? { tokenId: event.args.newTokenId } : null;
     });
@@ -125,12 +136,7 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     pendingNonce: () => rpc.getTransactionCount({ address: account.address, blockTag: "pending" }),
     async build(intent: CertificateIssuanceIntent, signature: Hex, nonce: number): Promise<CertificateAttempt> {
       const data = encodeFunctionData({ abi, functionName: "issueCertificate", args: [contractCertification(intent.certification), signature] });
-      // Estimate/simulate before signing; never let RPC-selected fees expand the reservation.
-      const request = { account, to: config.address, data, nonce, value: 0n, maxFeePerGas, maxPriorityFeePerGas: 0n };
-      const estimated = await rpc.estimateGas(request);
-      if (estimated > gas) throw new CertificateBudgetError("Batas gas anggaran layanan sertifikat tidak mencukupi.");
-      const raw = await wallet.signTransaction({ ...request, chain, type: "eip1559", gas });
-      return { raw, hash: keccak256(raw), nonce, signature };
+      return buildAttempt(data, signature, nonce);
     },
     async broadcast(attempt: CertificateAttempt) {
       const hash = await rpc.sendRawTransaction({ serializedTransaction: attempt.raw });
@@ -170,11 +176,15 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     },
     async buildRecovery(intent: CustodyRecoveryIntent, signature: Hex, nonce: number): Promise<CertificateAttempt> {
       const data = encodeFunctionData({ abi, functionName: "recoverCustody", args: [contractRecovery(intent.recovery), signature] });
-      const request = { account, to: config.address, data, nonce, value: 0n, maxFeePerGas, maxPriorityFeePerGas: 0n };
-      const estimated = await rpc.estimateGas(request);
-      if (estimated > gas) throw new CertificateBudgetError("Batas gas anggaran layanan sertifikat tidak mencukupi.");
-      const raw = await wallet.signTransaction({ ...request, chain, type: "eip1559", gas });
-      return { raw, hash: keccak256(raw), nonce, signature };
+      return buildAttempt(data, signature, nonce);
+    },
+    /** Both custody and registry administrator epochs are read through the NFT's mandate source. */
+    async recoveryEpochs(institutionId: string) {
+      await assertDeployment();
+      const [custodyEpoch, administratorEpoch] = await rpc.readContract({
+        address: config.address, abi, functionName: "recoveryEpochs", args: [keccak256(toHex(institutionId))],
+      });
+      return { custodyEpoch, administratorEpoch };
     },
     /** The custodian new tokens would go to right now: the designated one, else the registry administrator. */
     async resolvedCustodian(institutionId: string) {

@@ -180,7 +180,7 @@ afterAll(async () => {
   finally { if (node && node.exitCode === null) { node.kill(); await node.exited; } }
 });
 
-import { recoveryTypedData } from "../../shared/certificate-nft";
+import { recoveryTypedData, contractRecovery } from "../../shared/certificate-nft";
 
 const mine = () => rpc.request({ method: "evm_mine" as any });
 const baseOf = (activityId: string, id: string) => `workspace/activities/${activityId}/certificates/${id}`;
@@ -289,7 +289,7 @@ it("recovers to the newly designated custodian by replacement, keeping issuer, c
   const replay = await request(recoveriesPath(seed), { institutionId: institution, decisionRef: "SK/PEMULIHAN/001" });
   expect(replay.status).toBe(409);
   await expect(rpc.simulateContract({ address: certificateAddress, abi: certificateNftAbi, functionName: "recoverCustody", account,
-    args: [{ ...prepared.recovery, authorityEpoch: BigInt(prepared.recovery.authorityEpoch), deadline: BigInt(prepared.recovery.deadline) }, signature] })).rejects.toThrow();
+    args: [contractRecovery(prepared.recovery), signature] })).rejects.toThrow();
 
   await designate(account.address);
 });
@@ -368,6 +368,110 @@ it("voids an endorsement when the designated custodian, the mandate or the offic
   await designate(account.address);
 });
 
+it("does not silently replace a concurrent preparation with another decision", async () => {
+  await grantRecoveryMandate();
+  const seed = await issueFirst();
+  await designate(newCustodian(29));
+  const responses = await Promise.all(["SK/CONCURRENT/A", "SK/CONCURRENT/B"].map((decisionRef) =>
+    request(recoveriesPath(seed), { institutionId: institution, decisionRef })));
+  expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
+  const listed = await json(recoveriesPath(seed));
+  expect(listed.recoveries).toHaveLength(1);
+  await designate(account.address);
+});
+
+it("expires prepared endorsements and permits a fresh review without rewriting the old signed message", async () => {
+  await grantRecoveryMandate();
+  const seed = await issueFirst();
+  await designate(newCustodian(30));
+  const old = (await prepareRecovery(seed)).recovery;
+  const signature = await signRecovery(old);
+  const snapshot = await rpc.request({ method: "evm_snapshot" as any });
+  try {
+    clockOffset = 601;
+    await rpc.request({ method: "evm_increaseTime" as any, params: [601] as any }); await mine();
+    const expired = (await json(`${recoveriesPath(seed)}/${old.id}`)).recovery;
+    expect(expired).toMatchObject({ signingAuthority: "STALE", voided: true });
+    expect(expired.recovery).toEqual(old.recovery);
+    expect((await submitRecovery(seed, old, signature)).status).toBe(409);
+    await expect(rpc.simulateContract({ address: certificateAddress, abi: certificateNftAbi, functionName: "recoverCustody", account,
+      args: [contractRecovery(old.recovery), signature] })).rejects.toThrow();
+    const fresh = (await prepareRecovery(seed)).recovery;
+    expect(fresh.id).not.toBe(old.id);
+    expect(fresh.signingAuthority).toBe("CURRENT");
+  } finally {
+    clockOffset = 0;
+    await rpc.request({ method: "evm_revert" as any, params: [snapshot] as any });
+    await designate(account.address);
+  }
+});
+
+it("rejects a B-C-B custodian rotation even without an intermediate API observation", async () => {
+  await grantRecoveryMandate();
+  const seed = await issueFirst();
+  const target = newCustodian(31);
+  await designate(target);
+  const old = (await prepareRecovery(seed)).recovery;
+  await designate(newCustodian(32)); await designate(target);
+  expect((await json(`${recoveriesPath(seed)}/${old.id}`)).recovery).toMatchObject({ signingAuthority: "STALE", voided: true });
+  expect((await submitRecovery(seed, old)).status).toBe(409);
+  await designate(account.address);
+});
+
+it("permanently voids stored attempts, including after the pointer is restored and stale observation saves race", async () => {
+  await grantRecoveryMandate();
+  const seed = await issueFirst();
+  const target = newCustodian(33);
+  await designate(target);
+  const old = (await prepareRecovery(seed)).recovery;
+  rejectBroadcast = true;
+  try { expect((await submitRecovery(seed, old)).status).toBe(503); }
+  finally { rejectBroadcast = false; }
+  const handle = database.handle();
+  const store = createCertificateStore({ execute: (q) => handle.execute(q), transaction: (run) => handle.transaction((tx) => run({ execute: (q) => tx.execute(q) })) });
+  const staleCopy = (await store.getRecovery(institution, old.id))!;
+  const bytes = await store.attempt(institution, old.id);
+  await designate(newCustodian(34));
+  try {
+    expect((await json(`${recoveriesPath(seed)}/${old.id}`)).recovery).toMatchObject({ signingAuthority: "STALE", voided: true });
+    await store.observeRecovery(staleCopy, institution, staleCopy.observation);
+    await store.saveRecovery(institution, staleCopy);
+    await designate(target);
+    expect((await json(`${recoveriesPath(seed)}/${old.id}`)).recovery).toMatchObject({ signingAuthority: "STALE", voided: true });
+    expect((await request(`${recoveriesPath(seed)}/${old.id}/retry`, { institutionId: institution })).status).toBe(409);
+    expect(await store.attempt(institution, old.id)).toEqual(bytes);
+  } finally {
+    // Release the reserved relayer nonce using the original immutable transaction; it must revert.
+    const hash = await wallet.sendRawTransaction({ serializedTransaction: bytes!.raw });
+    const receipt = await rpc.waitForTransactionReceipt({ hash });
+    await designate(account.address);
+    expect(receipt.status).toBe("reverted");
+  }
+});
+
+it("binds recovery to the exact source token and verifies unsigned previous-holder metadata", async () => {
+  await grantRecoveryMandate();
+  const seed = await issueFirst();
+  await designate(newCustodian(35));
+  const old = (await prepareRecovery(seed)).recovery;
+  const handle = database.handle();
+  try {
+    await handle.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify({ ...old, previousCustodian: readerAccount.address })} WHERE institution_id=${institution} AND id=${old.id}`);
+    expect((await request(`${recoveriesPath(seed)}/${old.id}`)).status).toBe(503);
+  } finally {
+    await handle.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify(old)} WHERE institution_id=${institution} AND id=${old.id}`);
+  }
+  // A distinct, valid endorsement executes directly onchain before the stored one is submitted.
+  const other = { ...old.recovery, nonce: keccak256(toHex("independent-source-recovery")) };
+  await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: certificateAddress, abi: certificateNftAbi,
+    functionName: "recoverCustody", args: [contractRecovery(other), await account.signTypedData(recoveryTypedData(old.domain, other))] }) });
+  const activeToken = await rpc.readContract({ address: certificateAddress, abi: certificateNftAbi, functionName: "certificateVersionToken", args: [institution, seed.certificateId, "1"] });
+  expect(String(activeToken)).not.toBe(old.recovery.previousTokenId);
+  expect((await json(`${recoveriesPath(seed)}/${old.id}`)).recovery).toMatchObject({ signingAuthority: "STALE", voided: true });
+  expect((await submitRecovery(seed, old)).status).toBe(409);
+  await designate(account.address);
+});
+
 it("retains the signed bytes when the broadcast acknowledgement is lost and retries them without a second recovery", async () => {
   await grantRecoveryMandate();
   const seed = await issueFirst();
@@ -384,12 +488,22 @@ it("retains the signed bytes when the broadcast acknowledgement is lost and retr
   expect((await submitRecovery(seed, prepared, otherSignature)).status).toBe(409);
   const recovered = (await json(`${recoveriesPath(seed)}/${prepared.id}`)).recovery;
   expect(recovered.observation.state).toBe("INCLUDED");
+  clockOffset = 601;
+  try {
+    expect((await json(`${recoveriesPath(seed)}/${prepared.id}`)).recovery).toMatchObject({ signingAuthority: "HISTORICAL", observation: { state: "INCLUDED" } });
+  } finally { clockOffset = 0; }
   const retried = (await json(`${recoveriesPath(seed)}/${prepared.id}/retry`, { institutionId: institution }, 200)).recovery;
   expect(retried.transactionHash).toBe(recovered.transactionHash);
   expect(await attempts()).toBe(attemptsBefore + 1);
   await mine();
+  // Receipt reconciliation remains historical even after expiry and another designation.
+  clockOffset = 601;
+  try {
+    expect((await json(`${recoveriesPath(seed)}/${prepared.id}`)).recovery).toMatchObject({ signingAuthority: "HISTORICAL", observation: { state: "CONFIRMED" } });
+  } finally { clockOffset = 0; }
   expect((await publicOf(seed.certificateId)).body.certificate.custody.current).toBe(true);
   await designate(account.address);
+  expect((await json(`${recoveriesPath(seed)}/${prepared.id}`)).recovery).toMatchObject({ signingAuthority: "HISTORICAL", observation: { state: "CONFIRMED" } });
 });
 
 it("shows a stale holder honestly and withholds recovery from a reorged endorsement's success", async () => {
@@ -436,7 +550,7 @@ it("keeps the historical verifier failing closed if a recovered token's issuer o
   await designate(account.address);
 });
 
-it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: stale endorsement is refused, a fresh recovery is signed, and the verifier shows old and replacement tokens", async () => {
+it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: repeated desktop/mobile recovery, mandate/conflict errors, lost response retry, delayed wallet/access expiry and historical verifier", async () => {
   await grantRecoveryMandate();
   const seed = await issueFirst();
   const first = newCustodian(20);
@@ -478,6 +592,16 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: stale endorsemen
     expect(await page.getByLabel(/Dasar keputusan lembaga/).count()).toBe(1);
     expect(await page.getByLabel(/alamat|address/i).count()).toBe(0);
     await page.getByLabel(/Dasar keputusan lembaga/).fill("SK/PEMULIHAN/UI-1");
+    // Mandates are checked at the real HTTP boundary, not inferred from the visible form.
+    await database.handle().execute(sql`UPDATE operational_mandates SET is_active=false WHERE id='mandate-recover-cert'`);
+    await page.getByRole("button", { name: "Siapkan pemulihan" }).click();
+    await page.getByRole("alert").filter({ hasText: /mandat/i }).waitFor();
+    await database.handle().execute(sql`UPDATE operational_mandates SET is_active=true WHERE id='mandate-recover-cert'`);
+    // Another tab's different decision remains a visible conflict, never silently overwritten.
+    await prepareRecovery(seed, "SK/PEMULIHAN/OTHER-TAB");
+    await page.getByRole("button", { name: "Siapkan pemulihan" }).click();
+    await page.getByRole("alert").filter({ hasText: /dasar atau pengesah berbeda/ }).waitFor();
+    await page.getByLabel(/Dasar keputusan lembaga/).fill("SK/PEMULIHAN/OTHER-TAB");
     await page.getByRole("button", { name: "Siapkan pemulihan" }).click();
     const sign = page.getByRole("button", { name: "Tandatangani dan terbitkan token pengganti" });
     await sign.waitFor({ timeout: 8000 }).catch(async (error: Error) => { throw new Error(`${error.message}\n${(await page.locator("body").innerText()).slice(-900)}`); });
@@ -515,7 +639,91 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: stale endorsemen
     expect(text?.toLowerCase()).toContain(second.toLowerCase());
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.screenshot({ path: new URL("../../.scratch/issue113-custody-recovery-browser.png", import.meta.url).pathname, fullPage: true });
+    // A historical CONFIRMED record must not trap the operator after another rotation.
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const nextCustodian = newCustodian(width);
+      await designate(nextCustodian);
+      await page.getByRole("button", { name: "Mulai persiapan baru" }).click();
+      await page.getByLabel(/Dasar keputusan lembaga/).fill(`SK/PEMULIHAN/REPEAT-${width}`);
+      await page.getByRole("button", { name: "Siapkan pemulihan" }).click();
+      await sign.waitFor();
+      expect(await sign.isDisabled()).toBe(true);
+      await page.getByLabel(/Saya telah meninjau pengendali baru/).check();
+      const attemptsBefore = await attempts();
+      if (width === 1280) {
+        let release!: () => void;
+        let arrived!: () => void;
+        const waiting = new Promise<void>((resolve) => { arrived = resolve; });
+        const resume = new Promise<void>((resolve) => { release = resolve; });
+        await page.route("**/wallet-rpc", async (route: any) => {
+          if (route.request().postDataJSON().method === "eth_signTypedData_v4") { arrived(); await resume; }
+          await route.continue();
+        });
+        await sign.click(); await waiting;
+        await designate(newCustodian(1281)); await designate(nextCustodian);
+        release();
+        await page.getByRole("alert").filter({ hasText: "tidak lagi sah" }).waitFor();
+        await page.unroute("**/wallet-rpc");
+        expect(await attempts()).toBe(attemptsBefore);
+        await page.getByRole("button", { name: "Periksa status pemulihan" }).click();
+        await page.getByRole("button", { name: "Mulai persiapan baru" }).click();
+        await page.getByLabel(/Dasar keputusan lembaga/).fill("SK/PEMULIHAN/DELAY-REVIEW");
+        await page.getByRole("button", { name: "Siapkan pemulihan" }).click();
+        await sign.waitFor(); expect(await sign.isDisabled()).toBe(true);
+        await page.getByLabel(/Saya telah meninjau pengendali baru/).check();
+      }
+      if (width === 390) {
+        rejectBroadcast = true;
+        await page.route("**/recoveries/*/submit", async (route: any) => { await route.fetch(); await route.abort("failed"); });
+        await sign.click();
+        await page.getByRole("alert").filter({ hasText: /Hasil belum dapat dipastikan/ }).waitFor();
+        rejectBroadcast = false;
+        await page.unroute("**/recoveries/*/submit");
+        await page.getByRole("button", { name: "Periksa status pemulihan" }).click();
+        await page.getByRole("button", { name: "Kirim ulang transaksi tersimpan" }).click();
+        await page.getByRole("button", { name: "Periksa status pemulihan" }).click();
+        await page.getByRole("status").filter({ hasText: "Pemulihan tercatat dalam blok" }).waitFor();
+      } else {
+        await sign.click();
+        await page.getByText("Transaksi diajukan", { exact: false }).first().waitFor();
+      }
+      expect(await attempts()).toBe(attemptsBefore + 1);
+      await mine();
+      await page.getByRole("button", { name: "Periksa status pemulihan" }).click();
+      await page.getByRole("status").filter({ hasText: "Token pengganti terbit" }).waitFor();
+      expect((await publicOf(seed.certificateId)).body.certificate.custodian).toBe(nextCustodian);
+      expect(await page.getByText("Riwayat pemulihan", { exact: true }).count()).toBe(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+    // The access owner expires while the wallet is open: its delayed answer cannot send HTTP.
+    await designate(newCustodian(1290));
+    const pending = (await prepareRecovery(seed, "SK/PEMULIHAN/ACCESS-EXPIRED")).recovery;
+    // History ordering must not hide the usable pending intent behind historical successes.
+    await database.handle().execute(sql`UPDATE certificate_recoveries SET created_at=created_at+1000 WHERE certificate_id=${seed.certificateId} AND id<>${pending.id}`);
+    await page.reload();
+    await page.getByLabel("Kegiatan penyaluran").selectOption(seed.activityId);
+    await page.getByLabel("Identitas sertifikat").fill(seed.certificateId);
+    await page.getByRole("button", { name: "Mulai persiapan sertifikat" }).click();
+    await sign.waitFor(); expect(await sign.isDisabled()).toBe(true);
+    await page.getByLabel(/Saya telah meninjau pengendali baru/).check();
+    let releaseWallet!: () => void;
+    let walletArrived!: () => void;
+    const waitingWallet = new Promise<void>((resolve) => { walletArrived = resolve; });
+    const resumeWallet = new Promise<void>((resolve) => { releaseWallet = resolve; });
+    let sends = 0;
+    page.on("request", (req: any) => { if (/\/recoveries\/[^/]+\/submit$/.test(new URL(req.url()).pathname)) sends++; });
+    await page.route("**/wallet-rpc", async (route: any) => {
+      if (route.request().postDataJSON().method === "eth_signTypedData_v4") { walletArrived(); await resumeWallet; }
+      await route.continue();
+    });
+    await sign.click(); await waitingWallet;
+    clockOffset = 3601;
+    await page.getByRole("button", { name: "Periksa status chain", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: /berakhir|kedaluwarsa|expired/i }).waitFor();
+    releaseWallet();
+    await page.waitForTimeout(200);
+    expect(sends).toBe(0);
     expect(errors).toEqual([]);
-  } finally { await browser.close(); await server.stop(true); await designate(account.address); }
+  } finally { clockOffset = 0; rejectBroadcast = false; await browser.close(); await server.stop(true); await designate(account.address); }
 }, 90000);

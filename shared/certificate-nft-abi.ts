@@ -293,6 +293,25 @@ export const certificateNftAbi = [
   },
   {
     "type": "function",
+    "name": "custodyEpochs",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "epoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "custodyReplacedBy",
     "inputs": [
       {
@@ -682,6 +701,21 @@ export const certificateNftAbi = [
             "internalType": "address"
           },
           {
+            "name": "previousTokenId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "custodyEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "administratorEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
             "name": "basisDigest",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -777,6 +811,21 @@ export const certificateNftAbi = [
             "internalType": "address"
           },
           {
+            "name": "previousTokenId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "custodyEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "administratorEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
             "name": "basisDigest",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -809,6 +858,30 @@ export const certificateNftAbi = [
         "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "recoveryEpochs",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "custodyEpoch",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "administratorEpoch",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1181,6 +1254,21 @@ export const certificateNftAbi = [
             "name": "newCustodian",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "previousTokenId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "custodyEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "administratorEpoch",
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
             "name": "basisDigest",

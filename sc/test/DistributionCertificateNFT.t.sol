@@ -365,6 +365,9 @@ contract DistributionCertificateNFTTest is Test {
             certificateId: "stage-1",
             version: "1",
             newCustodian: newCustodian,
+            previousTokenId: cert.certificateVersionToken("institution-a", "stage-1", "1"),
+            custodyEpoch: cert.custodyEpochs(keccak256("institution-a")),
+            administratorEpoch: registry.administratorEpochs(keccak256("institution-a")),
             basisDigest: keccak256("SK-pemulihan-1"),
             signer: signer,
             authorityEpoch: 1,
@@ -500,6 +503,116 @@ contract DistributionCertificateNFTTest is Test {
         bytes memory oldSig = signRecovery(old);
         vm.expectRevert(Certificate.NotRecoverable.selector);
         cert.recoverCustody(old, oldSig);
+    }
+
+    function test_RecoveryBindsSourceTokenIndependentlyOfCurrentEpochs() public {
+        uint256 first = issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 33);
+        uint256 replacement = cert.recoverCustody(r, signRecovery(r));
+        vm.prank(admin);
+        cert.setCustodian("institution-a", address(0xC0DB));
+        // Current epochs and target, but a decision referring to an already replaced source.
+        Certificate.CustodyRecovery memory staleSource = recovery(address(0xC0DB), 34);
+        staleSource.previousTokenId = first;
+        bytes memory sig = signRecovery(staleSource);
+        vm.expectRevert(Certificate.NotRecoverable.selector);
+        cert.recoverCustody(staleSource, sig);
+        staleSource.previousTokenId = replacement;
+        uint256 next = cert.recoverCustody(staleSource, signRecovery(staleSource));
+        assertEq(cert.custodyReplacementOf(next), replacement);
+        assertEq(cert.originalTokenOf(next), first);
+    }
+
+    function test_RecoverySignatureBindsPreviousTokenBeforeAndAfterSigning() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 35);
+        bytes memory sig = signRecovery(r);
+        r.previousTokenId++;
+        vm.expectRevert(Certificate.NotRecoverable.selector);
+        cert.recoverCustody(r, sig);
+        // Repairing a wrong source after signing also cannot repair the signature.
+        sig = signRecovery(r);
+        r.previousTokenId--;
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_RecoverySignatureBindsBothAuthorityEpochs() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 36);
+        r.custodyEpoch++;
+        bytes memory sig = signRecovery(r);
+        r.custodyEpoch--;
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.recoverCustody(r, sig);
+        r.administratorEpoch++;
+        sig = signRecovery(r);
+        r.administratorEpoch--;
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_RecoveryExpiryStillRejectsCurrentAuthority() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 37);
+        bytes memory sig = signRecovery(r);
+        vm.warp(r.deadline + 1);
+        vm.expectRevert(Certificate.Expired.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_CustodianRoundTripNeverReactivatesRecovery() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 30);
+        bytes memory sig = signRecovery(r);
+        vm.prank(admin);
+        cert.setCustodian("institution-a", address(0xC0DB));
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        // No intervening validation/poll is needed to invalidate the old endorsement.
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_SameCustodianDesignationInvalidatesRecovery() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 31);
+        bytes memory sig = signRecovery(r);
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function rotateAdministrator(address previous, address next) internal {
+        vm.prank(previous);
+        registry.proposeAdministrator("institution-a", next);
+        vm.prank(next);
+        registry.acceptAdministrator("institution-a");
+    }
+
+    function test_AdministratorFallbackRoundTripNeverReactivatesRecovery() public {
+        issueFirst();
+        address next = address(0xAD02);
+        rotateAdministrator(admin, next);
+        Certificate.CustodyRecovery memory r = recovery(next, 32);
+        bytes memory sig = signRecovery(r);
+        rotateAdministrator(next, admin);
+        rotateAdministrator(admin, next);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
     }
 
     function test_AdministratorRotationAloneMakesTheNewAdministratorTheRecoveryTarget() public {

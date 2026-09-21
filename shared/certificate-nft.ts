@@ -51,6 +51,9 @@ export const recoveryTypes = { CustodyRecovery: [
   { name: "certificateId", type: "string" },
   { name: "version", type: "string" },
   { name: "newCustodian", type: "address" },
+  { name: "previousTokenId", type: "uint256" },
+  { name: "custodyEpoch", type: "uint256" },
+  { name: "administratorEpoch", type: "uint256" },
   { name: "basisDigest", type: "bytes32" },
   { name: "signer", type: "address" },
   { name: "authorityEpoch", type: "uint256" },
@@ -59,9 +62,13 @@ export const recoveryTypes = { CustodyRecovery: [
 ] } as const;
 export type CustodyRecovery = {
   action: Hex; institutionId: string; certificateId: string; version: string; newCustodian: Hex;
+  previousTokenId: string; custodyEpoch: string; administratorEpoch: string;
   basisDigest: Hex; signer: Hex; authorityEpoch: string; nonce: Hex; deadline: string;
 };
-export const contractRecovery = (r: CustodyRecovery) => ({ ...r, authorityEpoch: BigInt(r.authorityEpoch), deadline: BigInt(r.deadline) });
+export const contractRecovery = (r: CustodyRecovery) => ({
+  ...r, previousTokenId: BigInt(r.previousTokenId), custodyEpoch: BigInt(r.custodyEpoch),
+  administratorEpoch: BigInt(r.administratorEpoch), authorityEpoch: BigInt(r.authorityEpoch), deadline: BigInt(r.deadline),
+});
 export const recoveryTypedData = (domain: CertificateDomain, r: CustodyRecovery) => ({
   domain, primaryType: "CustodyRecovery" as const, types: recoveryTypes, message: contractRecovery(r),
 });
