@@ -41,6 +41,44 @@ export type CertificateIssuanceIntent = {
   accountKind: "EOA" | "ERC1271"; observation: CertificateMintObservation; transactionHash?: Hex;
 };
 
+/** EIP-712 wire protocol for custody recovery (#113): a signatory endorses minting a replacement
+ * token to the institution's resolved custodian. A distinct action and type from issuance, so an
+ * issuance endorsement can never be replayed as a recovery. */
+export const RECOVER_CUSTODY = "RECOVER_CUSTODY" as const;
+export const recoveryTypes = { CustodyRecovery: [
+  { name: "action", type: "bytes32" },
+  { name: "institutionId", type: "string" },
+  { name: "certificateId", type: "string" },
+  { name: "version", type: "string" },
+  { name: "newCustodian", type: "address" },
+  { name: "basisDigest", type: "bytes32" },
+  { name: "signer", type: "address" },
+  { name: "authorityEpoch", type: "uint256" },
+  { name: "nonce", type: "bytes32" },
+  { name: "deadline", type: "uint256" },
+] } as const;
+export type CustodyRecovery = {
+  action: Hex; institutionId: string; certificateId: string; version: string; newCustodian: Hex;
+  basisDigest: Hex; signer: Hex; authorityEpoch: string; nonce: Hex; deadline: string;
+};
+export const contractRecovery = (r: CustodyRecovery) => ({ ...r, authorityEpoch: BigInt(r.authorityEpoch), deadline: BigInt(r.deadline) });
+export const recoveryTypedData = (domain: CertificateDomain, r: CustodyRecovery) => ({
+  domain, primaryType: "CustodyRecovery" as const, types: recoveryTypes, message: contractRecovery(r),
+});
+export type CustodyRecoveryIntent = {
+  id: string; certificateId: string; version: string; domain: CertificateDomain;
+  recovery: CustodyRecovery; recoveryDigest: Hex;
+  /** Reference to the institution's decision (for example a letter number). The chain only sees its hash. */
+  decisionRef: string; previousCustodian: Hex;
+  /** Set once the endorsement was seen to be stale; it is never reactivated, even if the chain later matches again. */
+  voided?: true;
+  /** STALE once mandate, designated custodian or official version no longer match what was signed. */
+  signingAuthority?: "CURRENT" | "STALE" | "UNAVAILABLE" | "HISTORICAL";
+  accountKind: "EOA" | "ERC1271"; observation: CertificateMintObservation; transactionHash?: Hex;
+};
+/** Chain-only custody facts of one token, oldest replaced token first. */
+export type PublicCustodyToken = { tokenId: string; holder: Hex; status: "ACTIVE" | "REPLACED" };
+
 /** Why a successor version exists. Validated server-side against what the source actually shows:
  * a reason that the current source does not support is refused, not stored. */
 export const CORRECTION_REASONS = ["SOURCE_CORRECTION", "DISPUTE_DISCLOSURE"] as const;
@@ -83,6 +121,8 @@ export type PublicCertificateSummary = {
   /** Only the reason code is public; the officer's free-text note stays in the workspace view. */
   correction?: { reason: CorrectionReason };
   history?: PublicCertificateVersion[];
+  /** Present when the token was replaced by custody recovery: original issuer/content are unchanged. */
+  custody?: { current: boolean; tokens: PublicCustodyToken[]; recoveryReason?: "CUSTODY_RECOVERY" };
 };
 
 /** What a workspace operator sees for one version, including the scope drift that would justify a correction. */
@@ -91,6 +131,8 @@ export type CertificateLineVersion = PublicCertificateVersion & {
 };
 export type CertificateLineStatus = {
   certificateId: string; headVersion: string | null; headTokenId?: string;
+  /** Holder of the official token versus the institution's resolved custodian on the contract. */
+  custody?: { holder: Hex; resolvedCustodian: Hex; recoveryNeeded: boolean };
   versions: CertificateLineVersion[];
   scope: { sourceStatus: ScopeSourceStatus; disputedCount: number; changedCount: number } | null;
   correctionAllowed: boolean;

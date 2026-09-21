@@ -63,6 +63,22 @@ export function CertificateResult({ certificate: c, onSelectVersion, viewingVers
         Akun pemegang (lembaga) {c.custodian}<br />
         Keterikatan isi {c.contentDigest}
       </p>
+      {c.custody && (
+        <section aria-label="Pemegang token" className="space-y-1 text-xs">
+          <h4 className="text-[11px] font-semibold uppercase text-[#5e7a70]">Pemegang token</h4>
+          <p>
+            {c.custody.current ? "Pemegang sesuai dengan pengendali institusi saat ini." : "Pemegang berbeda dari pengendali institusi saat ini; pemulihan belum selesai."}
+            {c.custody.tokens.length > 1 && " Token ini menggantikan token lama melalui pemulihan; penerbit dan isi tidak berubah."}
+          </p>
+          <ul className="space-y-1">
+            {c.custody.tokens.map((t) => (
+              <li key={t.tokenId} className="break-all rounded-lg border border-[#dbe7dd] bg-white px-2.5 py-1.5 font-mono text-[11px]">
+                Token #{t.tokenId} · {t.status === "ACTIVE" ? "aktif" : "digantikan (riwayat)"} · pemegang {t.holder}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {history.length > 1 && (
         <section aria-label="Riwayat versi" className="space-y-1.5">
           <h4 className="text-[11px] font-semibold uppercase text-[#5e7a70]">Riwayat versi</h4>

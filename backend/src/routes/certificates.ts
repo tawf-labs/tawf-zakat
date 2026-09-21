@@ -8,6 +8,8 @@
  *   POST /api/activities/:activityId/certificates/:certificateId/retry   resend the same signed bytes
  *   POST /api/activities/:activityId/certificates/:certificateId/correct prepare the next version (#112); signed via submit
  *   GET  /api/activities/:activityId/certificates/:certificateId/history read-only version history (any workspace reader)
+ *   POST /api/activities/:activityId/certificates/:certificateId/recoveries       prepare custody recovery (#113; own mandate)
+ *   GET  …/recoveries[/:recoveryId], POST …/recoveries/:recoveryId/submit|retry
  *   GET  /api/public/certificates/:institutionId/:certificateId          public verifier: official head, allowlisted aggregate only
  *   GET  /api/public/certificates/:institutionId/:certificateId/versions/:version   one historical version
  */
@@ -19,6 +21,8 @@ import { authenticateWorkspace, badRequest, refuse } from "../workspace-session"
 import { authorize } from "../tenancy";
 import { operationalActor, OperationalAccessDenied } from "../operational-access";
 import { createCertificateIssuance, CertificateError } from "../certificate-issuance";
+import { createCertificateRecovery } from "../certificate-recovery";
+import type { OperationalFunction } from "../operational-mandate";
 import { CertificateBudgetError } from "../certificate-budget";
 
 export const certificateRoutes = new Hono();
@@ -42,13 +46,13 @@ function runtimeOf(): WorkspaceRuntime {
   return runtime;
 }
 
-async function certificateActor(c: Context, institutionId: string | undefined) {
+async function certificateActor(c: Context, institutionId: string | undefined, mandate: OperationalFunction = "ISSUE_CERTIFICATES") {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, institutionId);
   if (!auth.ok) return { response: auth.response } as const;
   if (!authorize(auth.session.role, "manageDisbursement")) return { response: refuse(c, 403, "forbidden") } as const;
   const actor = await operationalActor(runtime, auth.session);
-  actor.require("ISSUE_CERTIFICATES");
+  actor.require(mandate);
   const issuance = createCertificateIssuance(
     runtime, { store: runtime.certificateStore!, chain: runtime.certificateChain! },
     runtime.activities!, runtime.disbursement!, auth.session.institutionId,
@@ -136,6 +140,42 @@ certificateRoutes.post("/activities/:activityId/certificates/:certificateId/retr
   const certificate = await gate.issuance.retry(gate.account, c.req.param("certificateId")!);
   return c.json({ success: true, certificate });
 });
+
+/** Custody recovery (#113) needs its own mandate, distinct from issuing certificates. */
+async function recoveryActor(c: Context, institutionId: string | undefined) {
+  const gate = await certificateActor(c, institutionId, "RECOVER_CERTIFICATE_CUSTODY");
+  if ("response" in gate) return { response: gate.response } as const;
+  const recovery = createCertificateRecovery(gate.runtime, { store: gate.runtime.certificateStore!, chain: gate.runtime.certificateChain! }, gate.session.institutionId);
+  return { account: gate.account, recovery } as const;
+}
+const recoveriesPath = "/activities/:activityId/certificates/:certificateId/recoveries";
+certificateRoutes.get(recoveriesPath, async (c) => {
+  const gate = await recoveryActor(c, c.req.query("institutionId")?.trim());
+  if ("response" in gate) return gate.response;
+  return c.json({ success: true, recoveries: await gate.recovery.list(c.req.param("certificateId")!) });
+});
+certificateRoutes.get(`${recoveriesPath}/:recoveryId`, async (c) => {
+  const gate = await recoveryActor(c, c.req.query("institutionId")?.trim());
+  if ("response" in gate) return gate.response;
+  return c.json({ success: true, recovery: await gate.recovery.status(c.req.param("recoveryId")!) });
+});
+certificateRoutes.post(recoveriesPath, async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const gate = await recoveryActor(c, typeof body.institutionId === "string" ? body.institutionId : undefined);
+  if ("response" in gate) return gate.response;
+  return c.json({ success: true, recovery: await gate.recovery.prepare(gate.account, c.req.param("certificateId")!.trim(), body.decisionRef) }, 201);
+});
+for (const step of ["submit", "retry"] as const) {
+  certificateRoutes.post(`${recoveriesPath}/:recoveryId/${step}`, async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const signature = typeof body.signature === "string" ? (body.signature as Hex) : undefined;
+    if (step === "submit" && !signature) return badRequest(c, "signature wajib disertakan.");
+    const gate = await recoveryActor(c, typeof body.institutionId === "string" ? body.institutionId : undefined);
+    if ("response" in gate) return gate.response;
+    const id = c.req.param("recoveryId")!;
+    return c.json({ success: true, recovery: step === "submit" ? await gate.recovery.submit(gate.account, id, signature!) : await gate.recovery.retry(gate.account, id) });
+  });
+}
 
 export const publicCertificateRoutes = new Hono();
 publicCertificateRoutes.use("*", async (c, next) => {

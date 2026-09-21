@@ -11,7 +11,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { certificateNftAbi as abi } from "../../shared/certificate-nft-abi";
-import { contractCertification, type CertificateDomain, type CertificateIssuanceIntent, type CertificateMintObservation } from "../../shared/certificate-nft";
+import { contractCertification, contractRecovery, type CertificateDomain, type CertificateIssuanceIntent, type CertificateMintObservation, type CustodyRecoveryIntent } from "../../shared/certificate-nft";
 import type { RegistryChain } from "./registry-chain";
 import type { CertificateAttempt } from "./certificate-store";
 
@@ -42,7 +42,32 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     }
   }
 
+  /** Which log in the receipt proves this transaction did what the intent says, and the token it minted. */
+  type LogMatcher = (log: any) => { tokenId: bigint } | null;
   async function observe(intent: CertificateIssuanceIntent, hash: Hex, atBlock?: bigint): Promise<CertificateMintObservation> {
+    const c = intent.certification;
+    const institutionKey = keccak256(toHex(c.institutionId));
+    const certificateKey = keccak256(toHex(c.certificateId));
+    return observeTransaction(intent.observation, hash, atBlock, (log) => {
+      const event = decodeEventLog({ abi, eventName: "CertificateIssued", topics: log.topics, data: log.data, strict: true });
+      return event.args.institutionKey === institutionKey && event.args.certificateKey === certificateKey
+        && event.args.version === c.version && event.args.digest === c.digest && event.args.signer.toLowerCase() === c.signer.toLowerCase()
+        ? { tokenId: event.args.tokenId } : null;
+    });
+  }
+  async function observeRecovery(intent: CustodyRecoveryIntent, hash: Hex, atBlock?: bigint): Promise<CertificateMintObservation> {
+    const r = intent.recovery;
+    const institutionKey = keccak256(toHex(r.institutionId));
+    const certificateKey = keccak256(toHex(r.certificateId));
+    return observeTransaction(intent.observation, hash, atBlock, (log) => {
+      const event = decodeEventLog({ abi, eventName: "CustodyRecovered", topics: log.topics, data: log.data, strict: true });
+      return event.args.institutionKey === institutionKey && event.args.certificateKey === certificateKey
+        && event.args.newCustodian.toLowerCase() === r.newCustodian.toLowerCase() && event.args.signer.toLowerCase() === r.signer.toLowerCase()
+        && event.args.basisDigest === r.basisDigest ? { tokenId: event.args.newTokenId } : null;
+    });
+  }
+  async function observeTransaction(previous: CertificateMintObservation, hash: Hex, atBlock: bigint | undefined, match: LogMatcher): Promise<CertificateMintObservation> {
+    const intent = { observation: previous };
     await assertDeployment();
     let receipt;
     try { receipt = await rpc.getTransactionReceipt({ hash }); }
@@ -66,19 +91,14 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     const timed = { ...evidence, blockTimestamp: block.timestamp.toString() };
     if (receipt.status !== "success") return { ...base, ...timed, state: "REVERTED" };
     if (receipt.transactionHash !== hash || receipt.to?.toLowerCase() !== config.address.toLowerCase()) return { ...base, ...timed, state: "INVALID_EVENT" };
-    const c = intent.certification;
-    const institutionKey = keccak256(toHex(c.institutionId));
-    const certificateKey = keccak256(toHex(c.certificateId));
     const uniqueLogs = [...new Map(receipt.logs.map((log) => [JSON.stringify(log, (_, v) => typeof v === "bigint" ? v.toString() : v), log])).values()];
     let tokenId: bigint | undefined;
     const matches = uniqueLogs.filter((log) => {
       if (log.removed || log.address.toLowerCase() !== config.address.toLowerCase() || log.transactionHash !== hash || log.blockHash !== receipt.blockHash || log.blockNumber !== receipt.blockNumber) return false;
       try {
-        const event = decodeEventLog({ abi, eventName: "CertificateIssued", topics: log.topics, data: log.data, strict: true });
-        const found = event.args.institutionKey === institutionKey && event.args.certificateKey === certificateKey
-          && event.args.version === c.version && event.args.digest === c.digest && event.args.signer.toLowerCase() === c.signer.toLowerCase();
-        if (found) tokenId = event.args.tokenId;
-        return found;
+        const found = match(log);
+        if (found) tokenId = found.tokenId;
+        return !!found;
       } catch { return false; }
     });
     if (matches.length !== 1 || matches[0]!.logIndex === null) return { ...base, ...timed, state: "INVALID_EVENT" };
@@ -129,7 +149,8 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
         rpc.readContract({ address: config.address, abi, functionName: "successorOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "predecessorOf", args: [tokenId] }),
       ]);
-      return { issuer, contentDigest, custodian, successorTokenId, predecessorTokenId };
+      const originalTokenId = await rpc.readContract({ address: config.address, abi, functionName: "originalTokenOf", args: [tokenId] });
+      return { issuer, contentDigest, custodian, successorTokenId, predecessorTokenId, originalTokenId };
     },
     /** The line's official head as the chain sees it now. Empty until the first version mints. */
     async latestVersion(institutionId: string, certificateId: string) {
@@ -142,6 +163,38 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
       return { activityId, certificateId, version };
     },
     observe,
+    observeRecovery,
+    async validateRecovery(intent: CustodyRecoveryIntent, signature: Hex) {
+      await assertDeployment();
+      await rpc.readContract({ address: config.address, abi, functionName: "validateRecovery", args: [contractRecovery(intent.recovery), signature] });
+    },
+    async buildRecovery(intent: CustodyRecoveryIntent, signature: Hex, nonce: number): Promise<CertificateAttempt> {
+      const data = encodeFunctionData({ abi, functionName: "recoverCustody", args: [contractRecovery(intent.recovery), signature] });
+      const request = { account, to: config.address, data, nonce, value: 0n, maxFeePerGas, maxPriorityFeePerGas: 0n };
+      const estimated = await rpc.estimateGas(request);
+      if (estimated > gas) throw new CertificateBudgetError("Batas gas anggaran layanan sertifikat tidak mencukupi.");
+      const raw = await wallet.signTransaction({ ...request, chain, type: "eip1559", gas });
+      return { raw, hash: keccak256(raw), nonce, signature };
+    },
+    /** The custodian new tokens would go to right now: the designated one, else the registry administrator. */
+    async resolvedCustodian(institutionId: string) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "resolvedCustodian", args: [keccak256(toHex(institutionId))] });
+    },
+    /** Holders of every token that has represented this version, oldest first, and which one is active. */
+    async custodyTokens(activeTokenId: bigint) {
+      await assertDeployment();
+      const chainOfTokens: bigint[] = [activeTokenId];
+      for (;;) {
+        const before = await rpc.readContract({ address: config.address, abi, functionName: "custodyReplacementOf", args: [chainOfTokens[0]!] });
+        if (before === 0n) break;
+        chainOfTokens.unshift(before);
+      }
+      return Promise.all(chainOfTokens.map(async (tokenId) => ({
+        tokenId, status: tokenId === activeTokenId ? "ACTIVE" as const : "REPLACED" as const,
+        holder: await rpc.readContract({ address: config.address, abi, functionName: "ownerOf", args: [tokenId] }),
+      })));
+    },
   };
 }
 export type CertificateChain = ReturnType<typeof createCertificateChain>;

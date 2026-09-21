@@ -6,7 +6,7 @@
 import { sql } from "drizzle-orm";
 import { keccak256, parseTransaction, recoverTransactionAddress } from "viem";
 import { CertificateBudgetError, positiveBudgetWei, type CertificateBudgetPolicy } from "./certificate-budget";
-import type { CertificateIssuanceIntent, CertificateMintObservation, Hex } from "../../shared/certificate-nft";
+import type { CertificateIssuanceIntent, CertificateMintObservation, CustodyRecoveryIntent, Hex } from "../../shared/certificate-nft";
 
 type Executor = { execute: (query: any) => Promise<unknown> };
 export type CertificateDatabase = Executor & { transaction: <T>(run: (tx: Executor) => Promise<T>) => Promise<T> };
@@ -50,6 +50,10 @@ export function createCertificateStore(db: CertificateDatabase) {
         // competing corrections cannot both hold signed bytes for the same official line.
         `CREATE TABLE IF NOT EXISTS certificate_successor_claims (institution_id TEXT NOT NULL, certificate_id TEXT NOT NULL,
          predecessor TEXT NOT NULL, intent_id TEXT NOT NULL, PRIMARY KEY(institution_id,certificate_id,predecessor))`,
+        // #113: custody recovery endorsements. Signed transactions reuse `certificate_attempts` and
+        // the shared budget/nonce accounting, keyed by the recovery id (never equal to an intent id).
+        `CREATE TABLE IF NOT EXISTS certificate_recoveries (institution_id TEXT NOT NULL, id TEXT NOT NULL, certificate_id TEXT NOT NULL,
+         version TEXT NOT NULL, intent TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(institution_id,id))`,
       ]) await db.execute(sql.raw(statement));
     },
     /** Content stays server-side: the salt in particular must never reach an HTTP response. */
@@ -69,6 +73,27 @@ export function createCertificateStore(db: CertificateDatabase) {
       const found: CertificateIssuanceIntent[] = rows(await db.execute(sql`SELECT intent FROM certificate_intents
         WHERE institution_id=${institution} AND certificate_id=${certificateId}`)).map((r) => JSON.parse(r.intent));
       return found.sort((a, b) => Number(a.certification.version) - Number(b.certification.version) || a.id.localeCompare(b.id));
+    },
+    async createRecovery(intent: CustodyRecoveryIntent, institution: string, now: number): Promise<CustodyRecoveryIntent> {
+      await db.execute(sql`INSERT INTO certificate_recoveries (institution_id,id,certificate_id,version,intent,created_at)
+        VALUES (${institution},${intent.id},${intent.certificateId},${intent.version},${JSON.stringify(intent)},${now}) ON CONFLICT DO NOTHING`);
+      return (await this.getRecovery(institution, intent.id))!;
+    },
+    async getRecovery(institution: string, id: string): Promise<CustodyRecoveryIntent | null> {
+      const row = rows(await db.execute(sql`SELECT intent FROM certificate_recoveries WHERE institution_id=${institution} AND id=${id}`))[0];
+      return row ? JSON.parse(row.intent) : null;
+    },
+    async saveRecovery(institution: string, intent: CustodyRecoveryIntent): Promise<void> {
+      await db.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify(intent)} WHERE institution_id=${institution} AND id=${intent.id}`);
+    },
+    async recoveries(institution: string, certificateId: string): Promise<CustodyRecoveryIntent[]> {
+      return rows(await db.execute(sql`SELECT intent FROM certificate_recoveries WHERE institution_id=${institution} AND certificate_id=${certificateId} ORDER BY created_at, id`))
+        .map((r) => JSON.parse(r.intent));
+    },
+    async observeRecovery(intent: CustodyRecoveryIntent, institution: string, observation: CertificateMintObservation, hash?: Hex): Promise<CustodyRecoveryIntent> {
+      const next = { ...intent, observation, ...(hash ? { transactionHash: hash } : {}) };
+      await db.execute(sql`UPDATE certificate_recoveries SET intent=${JSON.stringify(next)} WHERE institution_id=${institution} AND id=${intent.id}`);
+      return next;
     },
     async successorClaim(institution: string, certificateId: string, predecessor: string): Promise<string | null> {
       return rows(await db.execute(sql`SELECT intent_id FROM certificate_successor_claims

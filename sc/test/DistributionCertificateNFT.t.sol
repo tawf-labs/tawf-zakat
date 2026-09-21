@@ -358,6 +358,162 @@ contract DistributionCertificateNFTTest is Test {
         cert.issueCertificate(restart, restartSignature);
     }
 
+    function recovery(address newCustodian, uint256 nonce) internal view returns (Certificate.CustodyRecovery memory) {
+        return Certificate.CustodyRecovery({
+            action: keccak256("RECOVER_CUSTODY"),
+            institutionId: "institution-a",
+            certificateId: "stage-1",
+            version: "1",
+            newCustodian: newCustodian,
+            basisDigest: keccak256("SK-pemulihan-1"),
+            signer: signer,
+            authorityEpoch: 1,
+            nonce: bytes32(nonce),
+            deadline: block.timestamp + 300
+        });
+    }
+
+    function signRecovery(Certificate.CustodyRecovery memory r) internal view returns (bytes memory) {
+        (uint8 v, bytes32 rr, bytes32 s) = vm.sign(KEY, cert.recoveryDigest(r));
+        return abi.encodePacked(rr, s, v);
+    }
+
+    function issueFirst() internal returns (uint256) {
+        Certificate.Certification memory c = certification();
+        return cert.issueCertificate(c, sign(c));
+    }
+
+    function test_RecoveryMintsReplacementToNewCustodianAndKeepsHistory() public {
+        uint256 oldToken = issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 10);
+        vm.prank(address(0xBEEF));
+        uint256 newToken = cert.recoverCustody(r, signRecovery(r));
+
+        assertEq(cert.ownerOf(newToken), custodian);
+        assertEq(cert.ownerOf(oldToken), admin); // history stays with the old holder
+        assertTrue(cert.locked(newToken));
+        assertTrue(cert.locked(oldToken));
+        assertEq(cert.issuerOf(newToken), cert.issuerOf(oldToken));
+        assertEq(cert.contentDigestOf(newToken), certification().digest);
+        assertEq(cert.custodyReplacedBy(oldToken), newToken);
+        assertEq(cert.custodyReplacementOf(newToken), oldToken);
+        assertEq(cert.recoverySignerOf(newToken), signer);
+        assertEq(cert.originalTokenOf(newToken), oldToken);
+        assertEq(cert.activeTokenOf(oldToken), newToken);
+        assertEq(cert.certificateVersionToken("institution-a", "stage-1", "1"), newToken);
+        assertEq(cert.latestCertificateVersion("institution-a", "stage-1"), "1");
+        assertTrue(cert.isLatestVersion(oldToken));
+    }
+
+    function test_RecoveryIsNotATransferDoorAndNobodyCanMoveTokens() public {
+        uint256 oldToken = issueFirst();
+        vm.startPrank(admin);
+        vm.expectRevert(ERC5192.ErrLocked.selector);
+        cert.transferFrom(admin, custodian, oldToken);
+        vm.expectRevert(ERC5192.ErrLocked.selector);
+        cert.safeTransferFrom(admin, custodian, oldToken);
+        vm.stopPrank();
+        // No function moves a token to an address the institution did not designate.
+        Certificate.CustodyRecovery memory r = recovery(address(0xBAD1), 11);
+        bytes memory sig = signRecovery(r);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_RecoveryRequiresSignatoryMandateAndValidSignatureAndFreshNonce() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+
+        Certificate.CustodyRecovery memory fake = recovery(custodian, 12);
+        fake.signer = address(0xFACE);
+        (uint8 v, bytes32 rr, bytes32 s) = vm.sign(0xFEED, cert.recoveryDigest(fake));
+        bytes memory fakeSig = abi.encodePacked(rr, s, v);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(fake, fakeSig);
+
+        Certificate.CustodyRecovery memory r = recovery(custodian, 13);
+        bytes memory sig = signRecovery(r);
+        r.basisDigest = keccak256("other basis");
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.recoverCustody(r, sig);
+
+        // An issuance endorsement is not a recovery endorsement and vice versa.
+        Certificate.CustodyRecovery memory wrongAction = recovery(custodian, 14);
+        wrongAction.action = keccak256("ISSUE_CERTIFICATE");
+        bytes memory wrongSig = signRecovery(wrongAction);
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.recoverCustody(wrongAction, wrongSig);
+
+        Certificate.CustodyRecovery memory ok = recovery(custodian, 15);
+        bytes memory okSig = signRecovery(ok);
+        cert.recoverCustody(ok, okSig);
+        // Replay of the same endorsement, and any second recovery to the same holder, are refused.
+        vm.expectRevert(Certificate.Replayed.selector);
+        cert.recoverCustody(ok, okSig);
+        Certificate.CustodyRecovery memory again = recovery(custodian, 16);
+        bytes memory againSig = signRecovery(again);
+        vm.expectRevert(Certificate.NotRecoverable.selector);
+        cert.recoverCustody(again, againSig);
+    }
+
+    function test_RevokedSignatoryEndorsementOrStaleCustodianIsRefused() public {
+        issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 17);
+        bytes memory sig = signRecovery(r);
+        // The designation changes before the endorsement is used: the old target is no longer valid.
+        vm.prank(admin);
+        cert.setCustodian("institution-a", address(0xC0DB));
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        vm.prank(admin);
+        registry.setSignatory("institution-a", signer, false);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.recoverCustody(r, sig);
+    }
+
+    function test_OnlyOfficialHeadIsRecoverableAndCorrectionAfterRecoveryKeepsLinks() public {
+        uint256 first = issueFirst();
+        vm.prank(admin);
+        cert.setCustodian("institution-a", custodian);
+        Certificate.CustodyRecovery memory r = recovery(custodian, 18);
+        uint256 replacement = cert.recoverCustody(r, signRecovery(r));
+
+        // A correction after recovery finds the active token as its predecessor.
+        Certificate.Certification memory next = successor("2", "1", 2);
+        uint256 second = cert.issueCertificate(next, sign(next));
+        assertEq(cert.successorOf(replacement), second);
+        assertEq(cert.predecessorOf(second), replacement);
+        assertFalse(cert.isLatestVersion(first)); // the replaced token resolves to its active token
+        assertEq(cert.ownerOf(second), custodian);
+
+        // The superseded version is no longer recoverable; it stays with its holder as history.
+        vm.prank(admin);
+        cert.setCustodian("institution-a", address(0xC0DB));
+        Certificate.CustodyRecovery memory old = recovery(address(0xC0DB), 19);
+        bytes memory oldSig = signRecovery(old);
+        vm.expectRevert(Certificate.NotRecoverable.selector);
+        cert.recoverCustody(old, oldSig);
+    }
+
+    function test_AdministratorRotationAloneMakesTheNewAdministratorTheRecoveryTarget() public {
+        issueFirst();
+        address next = address(0xAD02);
+        vm.prank(admin);
+        registry.proposeAdministrator("institution-a", next);
+        vm.prank(next);
+        registry.acceptAdministrator("institution-a");
+        Certificate.CustodyRecovery memory r = recovery(next, 20);
+        uint256 t = cert.recoverCustody(r, signRecovery(r));
+        assertEq(cert.ownerOf(t), next);
+    }
+
     function test_ReportRegistrySignatureCannotBeReplayedAsCertificateIssuance() public {
         Registry.Authorization memory a = Registry.Authorization({
             action: keccak256("RECORD_EVIDENCE"),

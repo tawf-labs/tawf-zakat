@@ -7,9 +7,9 @@
  * reachable through this module by accident.
  */
 import type { PrivateRequests } from "./privateRequests";
-import type { CertificateIssuanceIntent, CertificateLineStatus, CorrectionReason } from "../../../../shared/certificate-nft";
+import type { CertificateIssuanceIntent, CertificateLineStatus, CorrectionReason, CustodyRecoveryIntent } from "../../../../shared/certificate-nft";
 
-export type { CertificateIssuanceIntent, CertificateLineStatus, PublicCertificateSummary } from "../../../../shared/certificate-nft";
+export type { CertificateIssuanceIntent, CertificateLineStatus, CustodyRecoveryIntent, PublicCertificateSummary } from "../../../../shared/certificate-nft";
 
 /** Confirmed vs. disputed/unconfirmed counts for the frozen scope; null until a certificate has
  * been prepared (nothing frozen yet). Never a realization or beneficiary reference. */
@@ -57,3 +57,23 @@ export async function retryCertificate(requests: PrivateRequests, institutionId:
 
 // Compatibility export; the public-only client is owned by the certificate feature.
 export { fetchPublicCertificate } from "../certificates/certificateClient";
+
+/** Custody recovery (#113): the target custodian is read from the contract by the server, never sent. */
+const recoveriesPath = (activityId: string, certificateId: string) => `${path(activityId, certificateId)}/recoveries`;
+
+export async function listRecoveries(requests: PrivateRequests, activityId: string, certificateId: string): Promise<CustodyRecoveryIntent[]> {
+  return (await requests.json<{ recoveries: CustodyRecoveryIntent[] }>(recoveriesPath(activityId, certificateId))).recoveries;
+}
+export async function prepareRecovery(requests: PrivateRequests, institutionId: string, activityId: string, certificateId: string, decisionRef: string): Promise<CustodyRecoveryIntent> {
+  return (await requests.json<{ recovery: CustodyRecoveryIntent }>(recoveriesPath(activityId, certificateId), {
+    method: "POST", body: JSON.stringify({ institutionId, decisionRef }),
+  })).recovery;
+}
+export async function getRecovery(requests: PrivateRequests, activityId: string, certificateId: string, recoveryId: string): Promise<CustodyRecoveryIntent> {
+  return (await requests.json<{ recovery: CustodyRecoveryIntent }>(`${recoveriesPath(activityId, certificateId)}/${encodeURIComponent(recoveryId)}`)).recovery;
+}
+export async function sendRecovery(requests: PrivateRequests, step: "submit" | "retry", institutionId: string, activityId: string, certificateId: string, recoveryId: string, signature?: string): Promise<CustodyRecoveryIntent> {
+  return (await requests.json<{ recovery: CustodyRecoveryIntent }>(`${recoveriesPath(activityId, certificateId)}/${encodeURIComponent(recoveryId)}/${step}`, {
+    method: "POST", body: JSON.stringify({ institutionId, ...(signature ? { signature } : {}) }),
+  })).recovery;
+}

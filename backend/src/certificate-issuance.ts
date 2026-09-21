@@ -34,7 +34,7 @@ const NOTE_MAX = 500;
 type Entry = {
   intent: CertificateIssuanceIntent; observed: CertificateIssuanceIntent; endorsed: boolean;
   tokenId: bigint; content: CertificateContent;
-  chain?: { issuer: Hex; contentDigest: Hex; custodian: Hex; successorTokenId: bigint; predecessorTokenId: bigint };
+  chain?: { issuer: Hex; contentDigest: Hex; custodian: Hex; successorTokenId: bigint; predecessorTokenId: bigint; originalTokenId: bigint };
 };
 
 export type CertificateRuntime = { store: CertificateStore; chain: CertificateChain };
@@ -129,7 +129,8 @@ export function createCertificateIssuance(
         if (view.contentDigest !== intent.certification.digest || view.issuer.toLowerCase() !== intent.certification.signer.toLowerCase()) {
           throw new CertificateError("Isi atau penerbit sertifikat tidak cocok dengan bukti chain. Verifikasi ditahan.", 503);
         }
-        if (["CONFIRMED", "INCLUDED"].includes(observed.observation.state) && observed.observation.tokenId !== tokenId.toString()) {
+        if (["CONFIRMED", "INCLUDED"].includes(observed.observation.state) && observed.observation.tokenId !== view.originalTokenId.toString()) {
+          // The receipt is for the token first minted; a custody replacement keeps that link on chain.
           throw new CertificateError("Token sertifikat tidak cocok dengan receipt penerbitan.", 503);
         }
       }
@@ -153,8 +154,21 @@ export function createCertificateIssuance(
     const chainSuccessor = entry.chain?.successorTokenId ?? 0n;
     // The chain has a successor that the institution's own records cannot vouch for, or that differs
     // from the one this service published: withhold "current" and say why.
-    if (chainSuccessor !== 0n && (!best || best.tokenId !== chainSuccessor)) return { state: "UNVERIFIED_CHAIN_SUCCESSOR" };
+    if (chainSuccessor !== 0n && (!best || (best.chain?.originalTokenId ?? best.tokenId) !== chainSuccessor)) return { state: "UNVERIFIED_CHAIN_SUCCESSOR" };
     return best ? { state: rank(best).state, entry: best } : { state: "NONE" };
+  }
+
+  /** Who holds the token now, which tokens have represented this version, and whether the holder is
+   * still the institution's resolved custodian. Stale holders are visible, never hidden. */
+  async function custodyOf(activeTokenId: bigint): Promise<NonNullable<PublicCertificateSummary["custody"]>> {
+    const tokens = await chain.custodyTokens(activeTokenId);
+    const active = tokens.find((t) => t.status === "ACTIVE")!;
+    const resolved = await chain.resolvedCustodian(institution);
+    return {
+      current: active.holder.toLowerCase() === resolved.toLowerCase(),
+      tokens: tokens.map((t) => ({ tokenId: t.tokenId.toString(), holder: t.holder, status: t.status })),
+      ...(tokens.length > 1 ? { recoveryReason: "CUSTODY_RECOVERY" as const } : {}),
+    };
   }
 
   function describe(entry: Entry, entries: Entry[], scope: ScopeAssessment, publicView: boolean): CertificateLineVersion {
@@ -323,6 +337,7 @@ export function createCertificateIssuance(
         ...(entry.intent.certification.predecessor ? { predecessor: { version: entry.intent.certification.predecessor,
           ...(predecessorEntry && predecessorEntry.tokenId !== 0n ? { tokenId: predecessorEntry.tokenId.toString() } : {}) } } : {}),
         ...(entry.content.correction ? { correction: { reason: entry.content.correction.reason } } : {}),
+        custody: await custodyOf(entry.tokenId),
         history: entries.filter((e) => e.endorsed || e.tokenId !== 0n)
           .map((e) => publicVersion(describe(e, entries, assessScope(e.content, realizations), true))),
       };
@@ -338,8 +353,11 @@ export function createCertificateIssuance(
       const scope = head ? assessScope(head.content, realizations) : null;
       const versions = entries.map((e) => describe(e, entries, assessScope(e.content, realizations), false));
       const headView = head ? versions.find((v) => v.intentId === head.intent.id)! : null;
+      const custody = head ? await custodyOf(head.tokenId) : null;
+      const resolved = custody ? await chain.resolvedCustodian(institution) : null;
       return {
         certificateId, headVersion, ...(head ? { headTokenId: head.tokenId.toString() } : {}), versions,
+        ...(custody && resolved ? { custody: { holder: custody.tokens.find((t) => t.status === "ACTIVE")!.holder, resolvedCustodian: resolved, recoveryNeeded: !custody.current } } : {}),
         scope: scope ? { sourceStatus: scope.sourceStatus, disputedCount: scope.disputedIds.length, changedCount: scope.changedIds.length } : null,
         correctionAllowed: !!head && head.observed.observation.state === "CONFIRMED" && scope!.changedIds.length > 0
           && !!headView && !["REPLACEMENT_PENDING", "SUPERSEDED"].includes(headView.validity),

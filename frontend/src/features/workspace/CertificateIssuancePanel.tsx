@@ -6,6 +6,7 @@ import type { PrivateRequests } from "./privateRequests";
 import { useCertificateIssuance } from "./useCertificateIssuance";
 import { listActivities, type DistributionActivity } from "../activities/activityClient";
 import { CertificateLineSection } from "./CertificateLineSection";
+import { CertificateRecoverySection } from "./CertificateRecoverySection";
 
 const STATE_LABELS: Record<string, string> = {
   PREPARED: "Pengesahan disiapkan; belum dikirim",
@@ -167,6 +168,9 @@ function CertificateFlow({ requests, institutionId, activityId, certificateId, o
       {intent && line && (
         <CertificateLineSection requests={requests} institutionId={institutionId} activityId={activityId}
           line={line} viewingVersion={intent.certification.version} disabled={locked} onOpen={onOpen} />
+      )}
+      {intent && line && intent.certification.version === line.headVersion && (
+        <CertificateRecoverySection requests={requests} institutionId={institutionId} activityId={activityId} line={line} disabled={locked} />
       )}
 
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
