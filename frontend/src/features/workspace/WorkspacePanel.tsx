@@ -11,6 +11,7 @@ import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
 import { ActivityPanel } from "../activities";
 import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
+import { CertificateIssuancePanel } from "./CertificateIssuancePanel";
 
 /**
  * The door to an institution's workspace (Spec #68, ticket #69).
@@ -195,6 +196,8 @@ function WorkspaceContents() {
 
       <ActivityPanel key={`activity:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement}
         allocationRevision={allocationRevision} />
+
+      <CertificateIssuancePanel key={`certificate:${requests.contextId}`} requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />
 
       <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
       <AuditFindingQueuePanel key={`audit-findings:${requests.contextId}`} requests={requests} />

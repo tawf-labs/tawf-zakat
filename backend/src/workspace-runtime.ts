@@ -111,6 +111,12 @@ export type WorkspaceRuntime = {
   zkRegistryAddress?: `0x${string}`;
   zkWalletClient?: any;
   zkPublicClient?: any;
+  /**
+   * Distribution-stage certificate issuance (Spec #100, Issue #111). A separate contract,
+   * store and chain adapter from the report registry above; this ticket never touches that gate.
+   */
+  certificateStore?: import("./certificate-store").CertificateStore;
+  certificateChain?: import("./certificate-chain").CertificateChain;
 };
 
 let runtime: WorkspaceRuntime | null = null;

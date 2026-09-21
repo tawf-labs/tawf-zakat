@@ -45,6 +45,7 @@ import registryRecoveryRoutes from "./routes/registry-recovery";
 import registryRecordingRoutes from "./routes/registry-recording";
 import donorAccessRoutes from "./routes/donor-access";
 import contributionBatchRoutes from "./routes/contribution-batches";
+import { certificateRoutes, publicCertificateRoutes } from "./routes/certificates";
 import receiptVerificationRoutes from "./routes/receipt-verification";
 import { installWorkspaceRuntime } from "./workspace-wiring";
 import { GOVERNANCE_ACTIONS } from "./governance-chain";
@@ -238,8 +239,10 @@ app.route("/api/workspace", disbursementRoutes);
 app.route("/api/workspace", contributionRoutes);
 app.route("/api/workspace", contributionBatchRoutes);
 app.route("/api/workspace", activityRoutes);
+app.route("/api/workspace", certificateRoutes);
 app.route("/api/donor", donorAccessRoutes);
 app.route("/api/public", receiptVerificationRoutes);
+app.route("/api/public", publicCertificateRoutes);
 app.use("/api/evidence/*", async (c, next) => {
   c.header("Cache-Control", "private, no-store");
   c.header("Vary", "Authorization");

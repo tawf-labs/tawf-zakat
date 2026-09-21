@@ -44,6 +44,7 @@ import { createZkPublicationStore } from "./zk-publication-store";
 import { runZkPublication } from "./zk-publication";
 import { createZkBatchStore } from "./zk-batch-store";
 import { createZkProofService } from "./zk-proof-service";
+import { certificateFromEnvironment } from "./certificate-wiring";
 import type { EthCall } from "./account-signature";
 
 /** Five minutes to sign a challenge; eight hours of workspace before signing in again. */
@@ -103,6 +104,7 @@ export function installWorkspaceRuntime(): void {
   // Server-only onboarding configuration; HTTP callers cannot supply policy flags.
   const reportAmilRules = AmilRulesSchema.parse(JSON.parse(process.env.REPORT_AMIL_RULES_JSON ?? "[]"));
   const registry = registryFromEnvironment(db);
+  const certificate = certificateFromEnvironment(db, registry?.chain);
   const files = key
     ? createEncryptedFileStore({ directory: EVIDENCE_FILE_DIRECTORY, key })
     : undefined;
@@ -150,6 +152,7 @@ export function installWorkspaceRuntime(): void {
     zkProver,
     zkPublications,
     zkBudget,
+    ...(certificate ? { certificateStore: certificate.store, certificateChain: certificate.chain } : {}),
     ...(donorMessages ? { donorMessages } : {}),
     // The same chain, contract and indexer key the indexer writes under, so a
     // package names the deployment it was actually read from.
@@ -179,6 +182,7 @@ export function installWorkspaceRuntime(): void {
     .then(() => zkBatches.ensureSchema())
     .then(() => zkPublications.ensureSchema())
     .then(() => registry?.store.ensureSchema())
+    .then(() => certificate?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);
       if (zkRpcUrl && zkRegistryAddress && zkRelayKey) {
