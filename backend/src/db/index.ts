@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { databasePoolMaxFromEnvironment } from "../database-pool";
 import * as schema from "./schema";
 import { dataStore, type SettledBatch, type ProposalRecord } from "../store";
 import { computeDonationLeaf, MerkleTree, type DonationRecord } from "../merkle";
@@ -88,10 +89,12 @@ const NO_DATABASE =
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 if (databaseUrl) {
+  // Invalid configuration must fail startup, not fall back to the local store.
+  const max = databasePoolMaxFromEnvironment("DATABASE_POOL_MAX");
   try {
-    const client = postgres(databaseUrl, { max: 10 });
+    const client = postgres(databaseUrl, { max });
     dbInstance = drizzle(client, { schema });
-    console.log("Connected to Neon PostgreSQL database via Drizzle ORM");
+    console.log("PostgreSQL pool configured via Drizzle ORM");
     // Ensure new columns & indexer tables exist
     const initStatements = [
       `CREATE UNIQUE INDEX IF NOT EXISTS disbursement_proposals_proposal_id_on_chain_unique ON disbursement_proposals (proposal_id_on_chain);`,

@@ -1,3 +1,5 @@
+import { validateRegistryBudget, type RegistryBudget, type RegistryBudgetConfig } from "./registry-budget";
+import { parseTransaction, recoverTransactionAddress } from "viem";
 import type { RegistryReference } from "./registry-read";
 import { authorityScope, type AuthorityChange } from "../../shared/report-authority";
 import { createPublicClient, createWalletClient, defineChain, http, encodeFunctionData, decodeEventLog, keccak256, toHex, TransactionReceiptNotFoundError, BlockNotFoundError, type Hex } from "viem";
@@ -6,7 +8,7 @@ import { reportRegistryAbi as abi } from "../../shared/report-registry-abi";
 import { contractAttestation, contractAuthorization, type AttestationIntent, type AttestationStatement, type RecordingIntent, type RegistryDomain, type RecordingObservation } from "../../shared/report-registry";
 import { isAttestation, type RegistryAttempt } from "./registry-store";
 
-export type RegistryConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number };
+export type RegistryConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number; budgetConfig?: RegistryBudgetConfig; budget?: RegistryBudget };
 /** Everything the relayer can carry: recording, publication and attestation share one durable path. */
 export type RegistryIntent = RecordingIntent | AttestationIntent;
 function registryAdapter(config: RegistryConfig, reference?: RegistryReference) {
@@ -30,6 +32,21 @@ function registryAdapter(config: RegistryConfig, reference?: RegistryReference) 
     if (await rpc.getChainId() !== config.chainId) throw new Error("Chain registry tidak cocok.");
     const [, name, version, chainId, address] = await rpc.readContract({ address: config.address, abi, functionName: "eip712Domain" });
     if (name !== domain.name || version !== domain.version || chainId !== BigInt(domain.chainId) || address.toLowerCase() !== domain.verifyingContract.toLowerCase()) throw new Error("Domain registry tidak cocok.");
+  }
+  async function boundedTransaction(intent: RegistryIntent, signature: Hex, nonce?: number) {
+    if (reference || !config.budgetConfig || !config.budget) throw new Error("Relay REPORT dinonaktifkan tanpa anggaran eksplisit.");
+    validateRegistryBudget(config.budgetConfig);
+    await assertDeployment();
+    const data = isAttestation(intent)
+      ? encodeFunctionData({ abi, functionName: "attestReport", args: [contractAttestation(intent.statement), signature] })
+      : intent.validator
+      ? encodeFunctionData({ abi, functionName: "publishReport", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] })
+      : encodeFunctionData({ abi, functionName: "recordEvidence", args: [contractAuthorization(intent.authorization), signature] });
+    const { gasLimit: gas, maxFeePerGas } = config.budgetConfig;
+    // RPC total gas includes Arbitrum's L1 posting component. No local-EVM substitution.
+    const estimate = await rpc.estimateGas({ account: account.address, prepare: false, to: config.address, data, value: 0n, nonce, maxFeePerGas, maxPriorityFeePerGas: 0n });
+    if (estimate > gas) throw new Error("Estimasi gas REPORT melebihi batas.");
+    return { chainId: config.chainId, to: config.address, data, gas, maxFeePerGas, maxPriorityFeePerGas: 0n, value: 0n, type: "eip1559" as const };
   }
   async function observe(intent: RegistryIntent, hash: Hex, atBlock: bigint | undefined = blockNumber): Promise<RecordingObservation> {
       await assertDeployment();
@@ -280,17 +297,24 @@ function registryAdapter(config: RegistryConfig, reference?: RegistryReference) 
       return (await rpc.call({ to: to as Hex, data })).data ?? "0x";
     },
     pendingNonce: () => rpc.getTransactionCount({ address: account.address, blockTag: "pending" }),
+    // Pure checks run before nonce allocation; build repeats them against the allocated nonce.
+    async preflight(intent: RegistryIntent, signature: Hex) { await boundedTransaction(intent, signature); },
     async build(intent: RegistryIntent, signature: Hex, nonce: number): Promise<RegistryAttempt> {
-      const data = isAttestation(intent)
-        ? encodeFunctionData({ abi, functionName: "attestReport", args: [contractAttestation(intent.statement), signature] })
-        : intent.validator
-        ? encodeFunctionData({ abi, functionName: "publishReport", args: [contractAuthorization(intent.authorization), signature, contractAuthorization(intent.validator.authorization), intent.validator.signature] })
-        : encodeFunctionData({ abi, functionName: "recordEvidence", args: [contractAuthorization(intent.authorization), signature] });
-      const tx = await wallet.prepareTransactionRequest({ to: config.address, data, nonce });
-      const raw = await wallet.signTransaction(tx);
+      const tx = { ...await boundedTransaction(intent, signature, nonce), nonce };
+      await config.budget!.reserve({ ...tx, sender: account.address });
+      const raw = await config.budget!.signed({ ...tx, sender: account.address }, () => wallet.signTransaction(tx));
       return { raw, hash: keccak256(raw), nonce, signature };
     },
     async broadcast(attempt: RegistryAttempt) {
+      if (reference || !config.budgetConfig || !config.budget) throw new Error("Relay REPORT dinonaktifkan tanpa anggaran eksplisit.");
+      await assertDeployment();
+      const tx = parseTransaction(attempt.raw);
+      if (tx.type !== "eip1559" || tx.accessList?.length || tx.chainId !== config.chainId || tx.to?.toLowerCase() !== config.address.toLowerCase()
+        || tx.nonce !== Number(attempt.nonce) || keccak256(attempt.raw) !== attempt.hash) throw new Error("Transaksi REPORT tidak diizinkan.");
+      const sender = await recoverTransactionAddress({ serializedTransaction: attempt.raw as `0x02${string}` });
+      if (sender.toLowerCase() !== account.address.toLowerCase()) throw new Error("Transaksi REPORT tidak diizinkan.");
+      await config.budget.authorize({ chainId: tx.chainId, to: tx.to!, sender, nonce: tx.nonce!, data: tx.data ?? "0x",
+        gas: tx.gas!, maxFeePerGas: tx.maxFeePerGas!, maxPriorityFeePerGas: tx.maxPriorityFeePerGas ?? 0n, value: tx.value ?? 0n }, attempt.raw);
       const hash = await rpc.sendRawTransaction({ serializedTransaction: attempt.raw });
       if (hash !== attempt.hash) throw new Error("Identitas transaksi berubah.");
     },

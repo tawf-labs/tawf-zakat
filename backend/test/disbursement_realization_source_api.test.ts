@@ -42,6 +42,7 @@ import { recoverDecidedAidLines } from "../src/proposal-decision-lines";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
 import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
 import { createRegistryStore } from "../src/registry-store";
+import { createRegistryBudgetStore } from "../src/registry-budget";
 import { createRegistryChain } from "../src/registry-chain";
 import { createReportEndorsement } from "../src/report-endorsement";
 
@@ -2088,7 +2089,6 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
     await write("enrollInstitution", [SINAR, deployer.address]);
     await write("setSignatory", [SINAR, amilSinar.address, true]);
     await write("setAuditor", [SINAR, auditor.address, true, "Surat penugasan audit realisasi 2024"]);
-    chain = createRegistryChain({ rpcUrl, chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: relayerKey });
     // Chain time is wall-clock time; signed authorizations expire against it.
     clock = Math.floor(Date.now() / 1000);
   }, 30000);
@@ -2097,6 +2097,10 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
   beforeEach(async () => {
     const registryStore = createRegistryStore(database.handle());
     await registryStore.ensureSchema();
+    const budgetConfig = { maxWei: 10n ** 20n, gasLimit: 5_000_000n, maxFeePerGas: 2_000_000_000n }; // Isolated Anvil only.
+    const budget = createRegistryBudgetStore(database.handle(), budgetConfig, `31337:${registry.toLowerCase()}:${privateKeyToAccount(relayerKey).address.toLowerCase()}`);
+    await budget.ensureSchema();
+    chain = createRegistryChain({ rpcUrl, chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: relayerKey, budgetConfig, budget });
     configureRuntime(disbursement, { store: registryStore, chain, endorsement: createReportEndorsement(validatorKey) });
   });
 

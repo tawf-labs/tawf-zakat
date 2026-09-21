@@ -14,7 +14,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFileSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseAbiItem, type Hex } from "viem";
 import type { BatchItemWitness } from "./zk-batch-store";
 
@@ -145,7 +146,10 @@ export interface ZkProofServiceConfig {
 }
 
 export function createZkProofService(config?: ZkProofServiceConfig) {
-  const rootDir = join(__dirname, "../..");
+  // import.meta.url remains runtime-relative in Bun bundles; __dirname is baked
+  // to the build machine's source directory. src/ and dist/ have the same depth.
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = join(moduleDir, "../..");
   const wasmPath =
     config?.wasmPath ??
     join(rootDir, "sc/circuits/build/contribution_membership_js/contribution_membership.wasm");
@@ -154,7 +158,7 @@ export function createZkProofService(config?: ZkProofServiceConfig) {
     join(rootDir, "sc/circuits/build/circuit_final.zkey");
   const runnerScriptPath =
     config?.runnerScriptPath ??
-    join(__dirname, "zk-prover-runner.cjs");
+    join(moduleDir, "zk-prover-runner.cjs");
 
   return {
     assertArtifacts(): void {

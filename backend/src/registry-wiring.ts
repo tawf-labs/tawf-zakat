@@ -1,5 +1,7 @@
 import { createReportEndorsement } from "./report-endorsement";
 import { z } from "zod";
+import { privateKeyToAccount } from "viem/accounts";
+import { createRegistryBudgetStore, type RegistryBudgetConfig } from "./registry-budget";
 import { createRegistryChain } from "./registry-chain";
 import { createRegistryStore } from "./registry-store";
 import type { EvidenceDatabase } from "./evidence-store";
@@ -18,5 +20,15 @@ export function registryFromEnvironment(db: EvidenceDatabase) {
   if (!config.success) throw new Error("Konfigurasi REPORT_REGISTRY_* harus lengkap dan sah.");
   const validatorKey = process.env.REPORT_REGISTRY_VALIDATOR_KEY;
   if (validatorKey && !/^0x[0-9a-fA-F]{64}$/.test(validatorKey)) throw new Error("REPORT_REGISTRY_VALIDATOR_KEY tidak sah.");
-  return { endorsement: validatorKey ? createReportEndorsement(validatorKey as `0x${string}`) : undefined, store: createRegistryStore(db), chain: createRegistryChain({ ...config.data, address: config.data.address as `0x${string}`, privateKey: config.data.privateKey as `0x${string}` }) };
+  const settings = [process.env.REPORT_REGISTRY_BUDGET_WEI, process.env.REPORT_REGISTRY_GAS_LIMIT, process.env.REPORT_REGISTRY_MAX_FEE_PER_GAS_WEI];
+  let budgetConfig: RegistryBudgetConfig | undefined;
+  if (settings.some(value => value !== undefined)) {
+    if (!settings.every(value => value && /^[1-9][0-9]{0,77}$/.test(value))) throw new Error("Konfigurasi anggaran REPORT harus lengkap dan sah.");
+    budgetConfig = { maxWei: BigInt(settings[0]!), gasLimit: BigInt(settings[1]!), maxFeePerGas: BigInt(settings[2]!) };
+  }
+  const address = config.data.address as `0x${string}`, privateKey = config.data.privateKey as `0x${string}`;
+  const budget = budgetConfig ? createRegistryBudgetStore(db, budgetConfig,
+    `${config.data.chainId}:${address.toLowerCase()}:${privateKeyToAccount(privateKey).address.toLowerCase()}`) : undefined;
+  return { budget, endorsement: validatorKey ? createReportEndorsement(validatorKey as `0x${string}`) : undefined,
+    store: createRegistryStore(db), chain: createRegistryChain({ ...config.data, address, privateKey, budgetConfig, budget }) };
 }

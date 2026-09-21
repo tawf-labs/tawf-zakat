@@ -41,6 +41,8 @@ export function createRegistryStore(db: EvidenceDatabase) {
         `CREATE TABLE IF NOT EXISTS registry_intents (institution_id TEXT NOT NULL, id TEXT NOT NULL, package_id TEXT NOT NULL, intent TEXT NOT NULL,
          PRIMARY KEY(institution_id,id), FOREIGN KEY(institution_id,package_id) REFERENCES report_packages(institution_id,id))`,
         `CREATE TABLE IF NOT EXISTS registry_relayer_nonces (deployment TEXT PRIMARY KEY, next_nonce BIGINT NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS registry_nonce_allocations (institution_id TEXT NOT NULL, intent_id TEXT NOT NULL, deployment TEXT NOT NULL, nonce BIGINT NOT NULL,
+          PRIMARY KEY(institution_id,intent_id), UNIQUE(deployment,nonce), FOREIGN KEY(institution_id,intent_id) REFERENCES registry_intents(institution_id,id))`,
         `CREATE TABLE IF NOT EXISTS registry_attempts (institution_id TEXT NOT NULL, intent_id TEXT NOT NULL, raw TEXT NOT NULL, hash TEXT NOT NULL, signature TEXT NOT NULL, nonce BIGINT NOT NULL,
          PRIMARY KEY(institution_id,intent_id), FOREIGN KEY(institution_id,intent_id) REFERENCES registry_intents(institution_id,id))`,
         // Added for attestations; existing rows are recording or publication intents.
@@ -64,20 +66,40 @@ export function createRegistryStore(db: EvidenceDatabase) {
     async attempt(institution: string, id: string): Promise<RegistryAttempt | null> {
       return rows(await db.execute(sql`SELECT raw,hash,signature,nonce FROM registry_attempts WHERE institution_id=${institution} AND intent_id=${id}`))[0] ?? null;
     },
-    /** Lock the deployment's nonce allocation and persist signed bytes before any broadcast. */
+    /** Commit intent-bound nonce allocation before build opens its durable budget transaction. */
     async reserve(institution: string, id: string, deployment: string, pendingNonce: number, build: (nonce: number) => Promise<RegistryAttempt>) {
-      return db.transaction(async tx => {
+      const allocation = await db.transaction(async tx => {
         await tx.execute(sql`INSERT INTO registry_relayer_nonces(deployment,next_nonce) VALUES (${deployment},${pendingNonce}) ON CONFLICT DO NOTHING`);
         const lock = rows(await tx.execute(sql`SELECT next_nonce FROM registry_relayer_nonces WHERE deployment=${deployment} FOR UPDATE`))[0];
         const existing = rows(await tx.execute(sql`SELECT raw,hash,signature,nonce FROM registry_attempts WHERE institution_id=${institution} AND intent_id=${id}`))[0];
-        if (existing) return existing as RegistryAttempt;
+        if (existing) return { attempt: existing as RegistryAttempt };
+        const allocated = rows(await tx.execute(sql`SELECT deployment,nonce FROM registry_nonce_allocations WHERE institution_id=${institution} AND intent_id=${id}`))[0];
+        // An unfinished allocation may already have signed bytes in the budget store.
+        // Never delete/reassign it or skip past it: its owning intent must recover first.
+        const unfinished = rows(await tx.execute(sql`SELECT a.nonce FROM registry_nonce_allocations a
+          LEFT JOIN registry_attempts r ON r.institution_id=a.institution_id AND r.intent_id=a.intent_id
+          WHERE a.deployment=${deployment} AND r.intent_id IS NULL ORDER BY a.nonce LIMIT 1`))[0];
+        if (unfinished && (!allocated || BigInt(unfinished.nonce) < BigInt(allocated.nonce)))
+          throw new Error("Alokasi nonce relay sebelumnya harus dipulihkan sebelum pengesahan lain.");
+        if (allocated) {
+          if (allocated.deployment !== deployment) throw new Error("Deployment relay berubah.");
+          return { nonce: Number(allocated.nonce) };
+        }
         const nonce = Math.max(pendingNonce, Number(lock.next_nonce));
-        const attempt = await build(nonce);
-        await tx.execute(sql`INSERT INTO registry_attempts(institution_id,intent_id,raw,hash,signature,nonce)
-          VALUES (${institution},${id},${attempt.raw},${attempt.hash},${attempt.signature},${nonce})`);
+        if (!Number.isSafeInteger(nonce) || nonce < 0 || nonce >= Number.MAX_SAFE_INTEGER) throw new Error("Nonce relay tidak sah.");
+        await tx.execute(sql`INSERT INTO registry_nonce_allocations(institution_id,intent_id,deployment,nonce) VALUES(${institution},${id},${deployment},${nonce})`);
         await tx.execute(sql`UPDATE registry_relayer_nonces SET next_nonce=${nonce + 1} WHERE deployment=${deployment}`);
-        return attempt;
+        return { nonce };
       });
+      if (allocation.attempt) return allocation.attempt;
+      // The chain's committed budget reservation serializes signing and retains the
+      // bytes; a different payload for this nonce cannot obtain another reservation.
+      const attempt = await build(allocation.nonce!);
+      await db.execute(sql`INSERT INTO registry_attempts(institution_id,intent_id,raw,hash,signature,nonce)
+        VALUES (${institution},${id},${attempt.raw},${attempt.hash},${attempt.signature},${allocation.nonce!}) ON CONFLICT DO NOTHING`);
+      const stored = rows(await db.execute(sql`SELECT raw,hash,signature,nonce FROM registry_attempts WHERE institution_id=${institution} AND intent_id=${id}`))[0] as RegistryAttempt;
+      if (stored.raw !== attempt.raw || stored.hash !== attempt.hash || stored.signature !== attempt.signature) throw new Error("Retry relay berbeda dari transaksi tersimpan.");
+      return stored;
     },
     async observe<T extends StoredIntent>(intent: T, observation: RecordingObservation, hash?: Hex): Promise<T> {
       const next = { ...intent, observation, ...(hash ? { transactionHash: hash } : {}) };

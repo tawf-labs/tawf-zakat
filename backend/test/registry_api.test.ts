@@ -16,6 +16,7 @@ import { createEvidenceStore } from "../src/evidence-store";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
 import { createRegistryStore } from "../src/registry-store";
+import { createRegistryBudgetStore } from "../src/registry-budget";
 import { createRegistryChain } from "../src/registry-chain";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
 import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
@@ -67,7 +68,11 @@ async function configure(clockOffset = 0) {
     } })),
   });
   await store.ensureSchema(); await evidence.ensureSchema(); await registryStore.ensureSchema();
-  const chain = createRegistryChain({ rpcUrl: String(proxy.url), chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" });
+  const privateKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+  const budgetConfig = { maxWei: 10n ** 20n, gasLimit: 5_000_000n, maxFeePerGas: 2_000_000_000n }; // Isolated Anvil allowance only.
+  const budget = createRegistryBudgetStore(handle, budgetConfig, `31337:${registry.toLowerCase()}:${privateKeyToAccount(privateKey).address.toLowerCase()}`);
+  await budget.ensureSchema();
+  const chain = createRegistryChain({ rpcUrl: String(proxy.url), chainId: 31337, address: registry, requiredConfirmations: 2, privateKey, budgetConfig, budget });
   configureWorkspace({ store, evidence, files, registry: { store: registryStore, chain, endorsement: validatorAvailable ? createReportEndorsement(validatorKey) : undefined }, now: () => Math.floor(Date.now() / 1000) + clockOffset, challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
     ethCall: chain.accountSignatureCall });
   return store;

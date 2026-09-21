@@ -19,9 +19,10 @@
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { createPublicClient, createWalletClient, http, isAddress, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { arbitrumSepolia, foundry } from "viem/chains";
+import { databasePoolMaxFromEnvironment } from "./database-pool";
+import { createPublicClient, http, type Hex } from "viem";
+import { arbitrumSepolia } from "viem/chains";
+import { zkNetworkFromEnvironment } from "./zk-network";
 import { CONTRACT_CONFIG } from "./config";
 import { createWorkspaceStore } from "./tenancy-store";
 import { createEvidenceStore } from "./evidence-store";
@@ -58,7 +59,7 @@ export function installWorkspaceRuntime(): void {
   const databaseUrl = process.env.NODE_ENV === "test" ? undefined : process.env.DATABASE_URL;
   if (!databaseUrl || process.env.DEPLOYMENT_PENDING === "true") return;
 
-  const db = drizzle(postgres(databaseUrl, { max: 5 }));
+  const db = drizzle(postgres(databaseUrl, { max: databasePoolMaxFromEnvironment("WORKSPACE_DATABASE_POOL_MAX") }));
   const store = createWorkspaceStore(db);
 
   const rpc = createPublicClient({ chain: arbitrumSepolia, transport: http(CONTRACT_CONFIG.RPC_URL) });
@@ -121,22 +122,9 @@ export function installWorkspaceRuntime(): void {
       !Number.isSafeInteger(zkBudget.confirmations) || zkBudget.confirmations < 1 ||
       ![zkBudget.maxWei, zkBudget.gasLimit, zkBudget.maxFeePerGas].every(v => /^\d+$/.test(v)) ||
       BigInt(zkBudget.gasLimit) <= 0n || BigInt(zkBudget.maxFeePerGas) <= 0n) throw new Error("Anggaran ZK tidak sah.");
-  // This tracer is deliberately limited to a local EVM. No implicit production relay.
-  const zkRpcUrl = process.env.ZK_RPC_URL;
-  const zkRegistryAddress = process.env.ZK_REGISTRY_ADDRESS;
-  const zkRelayKey = process.env.ZK_RELAY_PRIVATE_KEY;
-  let zkChain = {};
-  if (zkRpcUrl && zkRegistryAddress && zkRelayKey) {
-    const url = new URL(zkRpcUrl);
-    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || !isAddress(zkRegistryAddress)) {
-      throw new Error("ZK tracer memerlukan RPC lokal dan alamat registry yang sah.");
-    }
-    zkChain = {
-      zkRegistryAddress,
-      zkPublicClient: createPublicClient({ chain: foundry, transport: http(zkRpcUrl) }),
-      zkWalletClient: createWalletClient({ chain: foundry, transport: http(zkRpcUrl), account: privateKeyToAccount(zkRelayKey as Hex) }),
-    };
-  }
+  // Explicit testnet opt-in; client boundaries check the actual RPC chain before
+  // signing, broadcasting and receipt reads, including publication recovery.
+  const zkChain = zkNetworkFromEnvironment();
   configureWorkspace({
     ...zkChain,
     registry,
@@ -182,10 +170,11 @@ export function installWorkspaceRuntime(): void {
     .then(() => zkBatches.ensureSchema())
     .then(() => zkPublications.ensureSchema())
     .then(() => registry?.store.ensureSchema())
+    .then(() => registry?.budget?.ensureSchema())
     .then(() => certificate?.store.ensureSchema())
     .then(() => {
       if (registry) startRegistryRecovery(registry);
-      if (zkRpcUrl && zkRegistryAddress && zkRelayKey) {
+      if (zkChain) {
         const timer = setInterval(() => {
           const runtime = workspaceRuntime();
           if (runtime) void runZkPublication(runtime).catch(() => console.error("Pemulihan antrean ZK tertunda."));

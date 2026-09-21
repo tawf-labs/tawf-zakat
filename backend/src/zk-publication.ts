@@ -1,7 +1,7 @@
 import { encodeFunctionData, keccak256, parseTransaction, parseAbi, parseAbiItem, type Hex } from "viem";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { WorkspaceRuntime } from "./workspace-runtime";
 import type { Publication, SignedPublicationAttempt } from "./zk-publication-store";
 import { operationalActor, OperationalAccessDenied } from "./operational-access";
@@ -19,7 +19,7 @@ export function publicationView(op: Publication) {
     attempts: op.attempts, txHash: op.txHash, blockNumber: op.blockNumber, error: op.error };
 }
 export function publicationArtifactId() {
-  return createHash("sha256").update(readFileSync(join(__dirname, "../../sc/circuits/artifacts.sha256"))).digest("hex");
+  return createHash("sha256").update(readFileSync(fileURLToPath(new URL("../../sc/circuits/artifacts.sha256", import.meta.url)))).digest("hex");
 }
 class PublicationBlocked extends Error {}
 

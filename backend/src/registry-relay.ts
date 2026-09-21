@@ -52,7 +52,10 @@ export function createRelay(store: RegistryStore, chain: RegistryChain, institut
 
   async function send<T extends StoredIntent>(intent: T, signature: Hex): Promise<T> {
     let attempt = await store.attempt(institution, intent.id);
-    if (!attempt) attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), nonce => chain.build(intent, signature, nonce));
+    if (!attempt) {
+      await chain.preflight(intent, signature);
+      attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), nonce => chain.build(intent, signature, nonce));
+    }
     if (attempt.signature !== signature) throw fail("Retry berbeda dari percobaan tersimpan.", 409);
     // Broadcast ambiguity is recoverable: exact signed bytes and hash are already durable.
     await chain.broadcast(attempt);
