@@ -98,7 +98,7 @@ certificateRoutes.post("/activities/:activityId/certificates/:certificateId/corr
   if ("response" in gate) return gate.response;
   const activityId = c.req.param("activityId")!.trim();
   const certificateId = c.req.param("certificateId")!.trim();
-  const certificate = await gate.issuance.prepareCorrection(gate.account, activityId, certificateId, body.reason, body.note);
+  const certificate = await gate.issuance.prepareCorrection(gate.account, activityId, certificateId, body.reason, body.note, body.expectedPredecessorVersion);
   return c.json({
     success: true, certificate, contentTotals: await gate.issuance.contentTotals(certificate.id),
     line: await gate.issuance.line(certificateId),

@@ -35,9 +35,9 @@ export async function prepareCertificate(requests: PrivateRequests, institutionI
 }
 
 /** Prepare the next version of an issued certificate; the officer then signs it like a first issuance. */
-export async function prepareCorrection(requests: PrivateRequests, institutionId: string, activityId: string, certificateId: string, reason: CorrectionReason, note: string): Promise<CertificateStatus> {
+export async function prepareCorrection(requests: PrivateRequests, institutionId: string, activityId: string, certificateId: string, reason: CorrectionReason, note: string, expectedPredecessorVersion: string): Promise<CertificateStatus> {
   return requests.json<CertificateStatus>(`${path(activityId, certificateId)}/correct`, {
-    method: "POST", body: JSON.stringify({ institutionId, reason, note }),
+    method: "POST", body: JSON.stringify({ institutionId, reason, note, expectedPredecessorVersion }),
   });
 }
 

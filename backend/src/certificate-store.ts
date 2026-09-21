@@ -16,6 +16,8 @@ const rows = (result: any): any[] => result.rows ?? result;
 export class SuccessorClaimedError extends Error {
   constructor(readonly holder: string) { super("Koreksi lain sudah mengunci versi resmi yang sama."); }
 }
+/** A concurrent preparation already owns this immutable version. Retry from fresh history. */
+export class CertificatePreparationConflictError extends Error {}
 export type SuccessorClaim = { certificateId: string; predecessor: string; reclaimable: readonly string[] };
 export type CertificateAttempt = { raw: Hex; hash: Hex; signature: Hex; nonce: number };
 
@@ -52,9 +54,10 @@ export function createCertificateStore(db: CertificateDatabase) {
     },
     /** Content stays server-side: the salt in particular must never reach an HTTP response. */
     async create(intent: CertificateIssuanceIntent, activityId: string, contentCanonical: string, contentSalt: string, now: number): Promise<CertificateIssuanceIntent> {
-      await db.execute(sql`INSERT INTO certificate_intents (institution_id,id,activity_id,intent,content_canonical,content_salt,created_at,certificate_id,version)
-        VALUES (${intent.certification.institutionId},${intent.id},${activityId},${JSON.stringify(intent)},${contentCanonical},${contentSalt},${now},${intent.certification.certificateId},${intent.certification.version}) ON CONFLICT DO NOTHING`);
-      return (await get(intent.certification.institutionId, intent.id))!;
+      const inserted = rows(await db.execute(sql`INSERT INTO certificate_intents (institution_id,id,activity_id,intent,content_canonical,content_salt,created_at,certificate_id,version)
+        VALUES (${intent.certification.institutionId},${intent.id},${activityId},${JSON.stringify(intent)},${contentCanonical},${contentSalt},${now},${intent.certification.certificateId},${intent.certification.version}) ON CONFLICT DO NOTHING RETURNING id`));
+      if (!inserted.length) throw new CertificatePreparationConflictError();
+      return intent;
     },
     async list(institution: string, activityId?: string): Promise<CertificateIssuanceIntent[]> {
       return rows(await db.execute(sql`SELECT intent FROM certificate_intents

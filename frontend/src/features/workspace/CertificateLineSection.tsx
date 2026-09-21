@@ -6,7 +6,7 @@ import { prepareCorrection, type CertificateLineStatus } from "./certificateClie
 import type { PrivateRequests } from "./privateRequests";
 
 type Props = {
-  requests: PrivateRequests; institutionId: string; activityId: string; certificateId: string;
+  requests: PrivateRequests; institutionId: string; activityId: string;
   line: CertificateLineStatus; viewingVersion: string; disabled: boolean;
   /** Open another version's intent (a prepared successor, or an older version to read). */
   onOpen: (intentId: string) => void;
@@ -14,19 +14,18 @@ type Props = {
 
 /** Version history of one certificate line, the source drift that would justify a correction, and
  * the form to prepare the next version (#112). Preparing never publishes: the officer still signs. */
-export function CertificateLineSection({ requests, institutionId, activityId, certificateId, line, viewingVersion, disabled, onOpen }: Props) {
+export function CertificateLineSection({ requests, institutionId, activityId, line, viewingVersion, disabled, onOpen }: Props) {
   const [reason, setReason] = useState<CorrectionReason>("SOURCE_CORRECTION");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const bareId = certificateId.split("@")[0]!;
   const viewingHead = viewingVersion === line.headVersion;
   const drift = line.scope && line.scope.sourceStatus !== "MATCHES" ? line.scope : null;
 
   async function prepare() {
     setBusy(true); setError(null);
     try {
-      const status = await prepareCorrection(requests, institutionId, activityId, bareId, reason, note);
+      const status = await prepareCorrection(requests, institutionId, activityId, line.certificateId, reason, note, viewingVersion);
       onOpen(status.certificate.id);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Koreksi ditolak.");

@@ -165,7 +165,7 @@ function CertificateFlow({ requests, institutionId, activityId, certificateId, o
       )}
 
       {intent && line && (
-        <CertificateLineSection requests={requests} institutionId={institutionId} activityId={activityId} certificateId={certificateId}
+        <CertificateLineSection requests={requests} institutionId={institutionId} activityId={activityId}
           line={line} viewingVersion={intent.certification.version} disabled={locked} onOpen={onOpen} />
       )}
 

@@ -44,8 +44,14 @@ chain yang tak dikenal catatan lembaga; head publik ditahan 503).
 
 ## API
 
-- `POST …/certificates/:id/correct` `{institutionId, reason, note}` → 201,
+- `POST …/certificates/:id/correct`
+  `{institutionId, reason, note, expectedPredecessorVersion}` → 201,
   disahkan lewat `submit`/`retry` yang ada (butuh ISSUE_CERTIFICATES + mandat).
+  `expectedPredecessorVersion` wajib membawa versi yang ditinjau pengguna;
+  versi yang sudah tertinggal ditolak 409, bukan dialihkan ke pendahulu baru.
+  Persiapan paralel yang berbenturan ditolak 409, bukan mengembalikan draf
+  dengan alasan/catatan/pengesah milik permintaan lain. Retry draf serupa hanya
+  dipakai ulang jika deadline dan epoch mandatnya masih berlaku.
 - `GET …/certificates/:id/history` — baca saja untuk pembaca ruang kerja
   (mis. auditor); tidak ada kemampuan menyiapkan/menandatangani/mengoreksi.
 - Publik: `GET /api/public/certificates/:inst/:id` (versi resmi terkini) dan
@@ -55,12 +61,15 @@ chain yang tak dikenal catatan lembaga; head publik ditahan 503).
 ## Verifikasi
 
 `backend/test/distribution_certificate_correction.test.ts` (HTTP + PGlite +
-tanda tangan EIP-712 + Anvil; 11 tes + smoke browser 1280→390 dengan CSS nyata),
+tanda tangan EIP-712 + Anvil, termasuk smoke browser 1280→390 dengan CSS nyata),
 Foundry `DistributionCertificateNFTTest` (18 tes), suite #111 tetap lulus.
 Mencakup sengketa setelah mint, dokumen kurang bukan sengketa, penyelesaian dan
 koreksi berantai, dua penerus bersaing (HTTP paralel dan kontrak), penerus
 liar di chain, reorg/gagal, issuer/mandat dicabut, pembaca tak bisa mengoreksi,
-integritas isi historis, restart. Perintah:
+integritas isi historis, restart, benturan persiapan paralel, draf kedaluwarsa,
+pembaruan epoch mandat, penolakan versi pendahulu usang tanpa draf tambahan,
+dan allowlist field riwayat publik tanpa catatan koreksi privat. Smoke browser
+juga memeriksa versi pendahulu pada request koreksi. Perintah:
 
 ```sh
 cd sc && forge test --match-contract DistributionCertificateNFTTest

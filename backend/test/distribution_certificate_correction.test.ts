@@ -46,6 +46,7 @@ let rejectBroadcast = false;
 let mutateRpc: ((method: string, response: any) => any) | null = null;
 let proxy: ReturnType<typeof Bun.serve>;
 let sequence = 0;
+let clockOffset = 0;
 
 const request = (path: string, body?: unknown, auth = token) => app.fetch(new Request(`http://localhost/api/${path}`, {
   method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json", ...(auth ? { Authorization: `Bearer ${auth}` } : {}) },
@@ -72,7 +73,7 @@ function configure(budget = serviceBudget) {
     store, disbursement, contributions, activities,
     certificateStore, certificateChain,
     files: undefined as any, ethCall: mandateChain.accountSignatureCall,
-    now: () => Math.floor(Date.now() / 1000), challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
+    now: () => Math.floor(Date.now() / 1000) + clockOffset, challengeTtlSeconds: 300, sessionTtlSeconds: 3600,
   });
   return { store, disbursement, activities, contributions };
 }
@@ -208,8 +209,10 @@ async function resolve(seed: Awaited<ReturnType<typeof issueFirst>>, disputeId: 
   await seed.stores.disbursement.examineDispute(institution, seed.proposalId, seed.realizationId, disputeId,
     { outcome: "RESOLVED", notes: "Selisih dijelaskan" }, { account: account.address, officerId: "off-examiner" }, Math.floor(Date.now() / 1000), operation());
 }
-async function correct(seed: { activityId: string; certificateId: string }, reason: string, note = "Koreksi sesuai sumber", status = 201) {
-  return json(`${baseOf(seed, seed.certificateId)}/correct`, { institutionId: institution, reason, note }, status);
+async function correct(seed: { activityId: string; certificateId: string }, reason: string, note = "Koreksi sesuai sumber", status = 201, expectedPredecessorVersion?: string) {
+  const base = baseOf(seed, seed.certificateId);
+  expectedPredecessorVersion ??= (await json(`${base}/history`)).line.headVersion;
+  return json(`${base}/correct`, { institutionId: institution, reason, note, expectedPredecessorVersion }, status);
 }
 async function endorse(seed: { activityId: string }, prepared: any) {
   return json(`${baseOf(seed, prepared.id)}/submit`, { institutionId: institution, signature: await sign(prepared) }, 200);
@@ -241,15 +244,15 @@ it("shows a dispute raised after mint on the covered scope, but never a missing 
 it("refuses a correction without a supported reason, a note, or any change in the source", async () => {
   const seed = await issueFirst();
   const path = `${baseOf(seed, seed.certificateId)}/correct`;
-  expect((await request(path, { institutionId: institution, reason: "BECAUSE", note: "x" })).status).toBe(400);
-  expect((await request(path, { institutionId: institution, reason: "SOURCE_CORRECTION", note: "  " })).status).toBe(400);
-  const unchanged = await request(path, { institutionId: institution, reason: "SOURCE_CORRECTION", note: "tanpa perubahan" });
+  expect((await request(path, { institutionId: institution, expectedPredecessorVersion: "1", reason: "BECAUSE", note: "x" })).status).toBe(400);
+  expect((await request(path, { institutionId: institution, expectedPredecessorVersion: "1", reason: "SOURCE_CORRECTION", note: "  " })).status).toBe(400);
+  const unchanged = await request(path, { institutionId: institution, expectedPredecessorVersion: "1", reason: "SOURCE_CORRECTION", note: "tanpa perubahan" });
   expect(unchanged.status).toBe(409);
   expect((await unchanged.json()).error).toMatch(/tidak berbeda/);
   expect(await database.handle().execute(sql`SELECT 1 FROM certificate_intents WHERE certificate_id=${seed.certificateId}`).then((r: any) => (r.rows ?? r).length)).toBe(1);
   // A dispute must exist to be disclosed.
   await database.handle().execute(sql`UPDATE disbursement_realizations SET amount_idr='900000', version=version+1 WHERE id=${seed.realizationId}`);
-  const noDispute = await request(path, { institutionId: institution, reason: "DISPUTE_DISCLOSURE", note: "tidak ada sengketa" });
+  const noDispute = await request(path, { institutionId: institution, expectedPredecessorVersion: "1", reason: "DISPUTE_DISCLOSURE", note: "tidak ada sengketa" });
   expect(noDispute.status).toBe(409);
   expect((await noDispute.json()).error).toMatch(/sengketa/i);
 });
@@ -304,10 +307,60 @@ it("issues a linked replacement NFT, keeps the old token readable and never lets
   const final = (await publicOf(seed.certificateId)).body.certificate;
   expect(final).toMatchObject({ version: "3", validity: "CURRENT", totals: { disputedCount: 0, unconfirmedCount: 1 } });
   expect(final.history.map((h: any) => [h.version, h.validity])).toEqual([["1", "SUPERSEDED"], ["2", "SUPERSEDED"], ["3", "CURRENT"]]);
+  const privateHistory = (await json(`${seed.base}/history`)).line.versions;
+  expect(privateHistory.find((v: any) => v.version === "2").correction.note).toBe("Sengketa jumlah diterima");
+  for (const summary of [final, (await publicOf(seed.certificateId, "1")).body.certificate]) {
+    for (const version of summary.history) {
+      expect(Object.keys(version).sort()).toEqual(["version", "predecessor", "tokenId", "validity", "replacement", "observationState"].sort());
+    }
+    expect(JSON.stringify(summary)).not.toContain("Sengketa jumlah diterima");
+    expect(JSON.stringify(summary)).not.toContain("Sengketa selesai");
+  }
   // Restart: everything is re-derived from SQL and the chain.
   await database.reopen(); configure();
   expect((await publicOf(seed.certificateId)).body.certificate.history).toEqual(final.history);
   expect((await publicOf(seed.certificateId, "1")).body.certificate.totals).toEqual(v1.body.certificate.totals);
+});
+
+it("requires the reviewed predecessor and rejects a stale head without creating a draft", async () => {
+  const seed = await issueFirst();
+  const raised = await dispute(seed);
+  const body = { institutionId: institution, reason: "DISPUTE_DISCLOSURE", note: "Expected predecessor" };
+  const before = await database.rowCount("certificate_intents");
+  for (const expectedPredecessorVersion of [undefined, null, "", "  ", 1, {}, "0", "1.5"]) {
+    expect((await request(`${seed.base}/correct`, { ...body, expectedPredecessorVersion })).status).toBe(400);
+  }
+  expect(await database.rowCount("certificate_intents")).toBe(before);
+  const next = (await correct(seed, body.reason, body.note)).certificate;
+  await endorse(seed, next); await mine();
+  await resolve(seed, raised.id);
+  const advanced = await database.rowCount("certificate_intents");
+  expect((await request(`${seed.base}/correct`, { ...body, reason: "SOURCE_CORRECTION", expectedPredecessorVersion: "1" })).status).toBe(409);
+  expect(await database.rowCount("certificate_intents")).toBe(advanced);
+  const fresh = (await correct(seed, "SOURCE_CORRECTION", "Reviewed head", 201, "2")).certificate;
+  expect(fresh.certification.predecessor).toBe("2");
+});
+
+it("never returns another parallel preparation's private payload as success", async () => {
+  const seed = await issueFirst();
+  await dispute(seed);
+  const inputs = [
+    { reason: "DISPUTE_DISCLOSURE", note: "Parallel private note A" },
+    { reason: "SOURCE_CORRECTION", note: "Parallel private note B" },
+  ];
+  const results = await Promise.all(inputs.map(async (input) => {
+    const response = await request(`${seed.base}/correct`, { institutionId: institution, expectedPredecessorVersion: "1", ...input });
+    return { status: response.status, body: await response.json(), input };
+  }));
+  expect(results.some((r) => r.status === 201)).toBe(true);
+  for (const result of results) {
+    expect([201, 409]).toContain(result.status);
+    if (result.status !== 201) continue;
+    const version = result.body.line.versions.find((v: any) => v.intentId === result.body.certificate.id);
+    expect(version.correction).toEqual(result.input);
+    const retry = (await correct(seed, result.input.reason, result.input.note)).certificate;
+    expect(retry.certificationDigest).toBe(result.body.certificate.certificationDigest);
+  }
 });
 
 it("lets only one of two competing corrections win the same official line", async () => {
@@ -354,7 +407,7 @@ it("does not trust a chain successor that this institution's records cannot vouc
   expect(head.body.certificate).toBeUndefined();
   // The service's own correction can no longer be submitted against the moved line.
   expect((await request(`${baseOf(seed, prepared.id)}/submit`, { institutionId: institution, signature: await sign(prepared) })).status).toBe(409);
-  expect((await request(`${baseOf(seed, seed.certificateId)}/correct`, { institutionId: institution, reason: "DISPUTE_DISCLOSURE", note: "lagi" })).status).toBe(409);
+  expect((await request(`${baseOf(seed, seed.certificateId)}/correct`, { institutionId: institution, expectedPredecessorVersion: "1", reason: "DISPUTE_DISCLOSURE", note: "lagi" })).status).toBe(409);
 });
 
 it("keeps the predecessor non-current while a successor is pending, reorged or failed", async () => {
@@ -401,7 +454,7 @@ it("lets a reader follow the history but not correct on behalf of the institutio
   expect(line).toMatchObject({ certificateId: seed.certificateId, headVersion: "1", scope: { sourceStatus: "DISPUTED" } });
   expect(line.versions).toHaveLength(1);
   for (const suffix of ["correct", "prepare", "submit", "retry"]) {
-    const denied = await request(`${baseOf(seed, seed.certificateId)}/${suffix}`, { institutionId: institution, reason: "DISPUTE_DISCLOSURE", note: "x", signature: "0x00" }, readerToken);
+    const denied = await request(`${baseOf(seed, seed.certificateId)}/${suffix}`, { institutionId: institution, expectedPredecessorVersion: "1", reason: "DISPUTE_DISCLOSURE", note: "x", signature: "0x00" }, readerToken);
     expect(denied.status).toBe(403);
   }
   expect(await database.rowCount("certificate_intents")).toBe(intentsBefore);
@@ -442,6 +495,22 @@ it("fails the whole line closed when any historical version's frozen content is 
   expect((await publicOf(seed.certificateId)).status).toBe(200);
 });
 
+it("replaces an expired unsigned draft with a fresh mintable endorsement and retains history", async () => {
+  const seed = await issueFirst();
+  await dispute(seed);
+  const expired = (await correct(seed, "DISPUTE_DISCLOSURE")).certificate;
+  clockOffset = Number(expired.certification.deadline) - Math.floor(Date.now() / 1000) + 1;
+  try {
+    const fresh = (await correct(seed, "DISPUTE_DISCLOSURE")).certificate;
+    expect(fresh.certification.version).toBe("3");
+    expect(fresh.certificationDigest).not.toBe(expired.certificationDigest);
+    expect(Number(fresh.certification.deadline)).toBeGreaterThan(Number(expired.certification.deadline));
+    expect((await json(`${seed.base}/history`)).line.versions.map((v: any) => v.version)).toEqual(["1", "2", "3"]);
+    await endorse(seed, fresh); await mine();
+    expect((await publicOf(seed.certificateId)).body.certificate).toMatchObject({ version: "3", observation: { state: "CONFIRMED" } });
+  } finally { clockOffset = 0; }
+});
+
 it("refuses a correction from an account whose signatory mandate has lapsed", async () => {
   const seed = await issueFirst();
   await dispute(seed);
@@ -450,12 +519,18 @@ it("refuses a correction from an account whose signatory mandate has lapsed", as
   await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registryAddress, abi: reportRegistryAbi, functionName: "setSignatory", args: [institution, account.address, false] }) });
   try {
     expect((await request(`${baseOf(seed, prepared.id)}/submit`, { institutionId: institution, signature })).status).toBe(409);
-    expect((await request(`${baseOf(seed, seed.certificateId)}/correct`, { institutionId: institution, reason: "DISPUTE_DISCLOSURE", note: "sesudah pencabutan" })).status).toBe(403);
+    expect((await request(`${baseOf(seed, seed.certificateId)}/correct`, { institutionId: institution, expectedPredecessorVersion: "1", reason: "DISPUTE_DISCLOSURE", note: "sesudah pencabutan" })).status).toBe(403);
   } finally {
     await rpc.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registryAddress, abi: reportRegistryAbi, functionName: "setSignatory", args: [institution, account.address, true] }) });
   }
   // Re-enabling bumps the epoch, so the pre-revocation endorsement stays unusable.
   expect((await request(`${baseOf(seed, prepared.id)}/submit`, { institutionId: institution, signature })).status).toBe(409);
+  const fresh = (await correct(seed, "DISPUTE_DISCLOSURE", "Sebelum pencabutan")).certificate;
+  expect(fresh.certification.version).toBe("3");
+  expect(fresh.certification.authorityEpoch).not.toBe(prepared.certification.authorityEpoch);
+  expect((await json(`${seed.base}/history`)).line.versions.map((v: any) => v.version)).toEqual(["1", "2", "3"]);
+  await endorse(seed, fresh); await mine();
+  expect((await publicOf(seed.certificateId)).body.certificate).toMatchObject({ version: "3", observation: { state: "CONFIRMED" } });
 });
 
 it("hands the single signed-successor slot to another correction only when the holder failed for good", async () => {
@@ -508,6 +583,10 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: old version, dis
   try {
     const page = await browser.newPage();
     const errors: string[] = [];
+    const correctionRequests: any[] = [];
+    page.on("request", (request: any) => {
+      if (request.method() === "POST" && request.url().endsWith("/correct")) correctionRequests.push(request.postDataJSON());
+    });
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto("http://127.0.0.1:18614");
     await page.getByLabel("Kegiatan penyaluran").selectOption(seed.activityId);
@@ -524,6 +603,8 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: old version, dis
     await page.getByRole("button", { name: "Siapkan versi pengganti" }).click();
     const sign = page.getByRole("button", { name: "Tandatangani dan terbitkan sertifikat" });
     await sign.waitFor();
+    expect(correctionRequests).toHaveLength(1);
+    expect(correctionRequests[0].expectedPredecessorVersion).toBe("1");
     expect(await page.getByText(`${seed.certificateId}@2`).count()).toBeGreaterThan(0);
     await page.getByLabel("Saya telah meninjau cakupan realisasi, totalnya, dan parameter pengesahan di atas.").check();
     await sign.click();

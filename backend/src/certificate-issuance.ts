@@ -14,7 +14,7 @@ import {
 import { assessScope, correctionJustified, replacementStateOf, validityOf, type ScopeAssessment } from "./certificate-lifecycle";
 import type { CertificateContent } from "./certificate-content";
 import type { RealizationRecord } from "./disbursement";
-import { SuccessorClaimedError } from "./certificate-store";
+import { CertificatePreparationConflictError, SuccessorClaimedError } from "./certificate-store";
 import type { CertificateChain } from "./certificate-chain";
 import type { CertificateStore } from "./certificate-store";
 import { createCertificateRelay } from "./certificate-relay";
@@ -104,7 +104,13 @@ export function createCertificateIssuance(
       certificationDigest: hashTypedData(certificationTypedData(chain.domain, certification)),
       accountKind: authority.accountKind, observation: relay.prepared(),
     };
-    return store.create(intent, activityId, canonical, salt, frozenAt);
+    try { return await store.create(intent, activityId, canonical, salt, frozenAt); }
+    catch (error) {
+      if (error instanceof CertificatePreparationConflictError) {
+        throw new CertificateError("Versi sertifikat telah disiapkan oleh permintaan lain. Muat ulang riwayat dan ulangi persiapan.", 409);
+      }
+      throw error;
+    }
   }
 
   /** Read every version of one line together with what the chain and the source say about each. */
@@ -163,7 +169,10 @@ export function createCertificateIssuance(
       ...(entry.content.correction ? { correction: { reason: entry.content.correction.reason, note: entry.content.correction.note } } : {}),
     };
   }
-  const publicVersion = ({ intentId: _i, endorsed: _e, correction: _c, ...rest }: CertificateLineVersion): PublicCertificateVersion => rest;
+  const publicVersion = (version: CertificateLineVersion): PublicCertificateVersion => ({
+    version: version.version, predecessor: version.predecessor, tokenId: version.tokenId,
+    validity: version.validity, replacement: version.replacement, observationState: version.observationState,
+  });
 
   return {
     status,
@@ -195,7 +204,10 @@ export function createCertificateIssuance(
      * the source really differs for the stated reason. Nothing is published until the endorsement
      * is signed and submitted, and the predecessor is untouched until a successor confirms.
      */
-    async prepareCorrection(account: Hex, activityId: string, certificateId: string, reasonInput: unknown, noteInput: unknown) {
+    async prepareCorrection(account: Hex, activityId: string, certificateId: string, reasonInput: unknown, noteInput: unknown, expectedPredecessorVersion: unknown) {
+      if (typeof expectedPredecessorVersion !== "string" || !/^[1-9][0-9]*$/.test(expectedPredecessorVersion)) {
+        throw new CertificateError("Versi pendahulu yang ditinjau wajib disertakan dan harus sah.", 400);
+      }
       if (!isCorrectionReason(reasonInput)) throw new CertificateError("Alasan koreksi tidak dikenal.", 400);
       const reason: CorrectionReason = reasonInput;
       const note = typeof noteInput === "string" ? noteInput.trim() : "";
@@ -208,8 +220,11 @@ export function createCertificateIssuance(
       const authority = await chain.authority(institution, account);
       if (!authority.active) throw new CertificateError("Akun tidak memiliki kewenangan pengesah lembaga pada registry.", 403);
 
-      const { entries, realizations } = await inspectLine(certificateId);
       const headVersion = await chain.latestVersion(institution, certificateId);
+      if (expectedPredecessorVersion !== headVersion) {
+        throw new CertificateError("Versi resmi terkini berubah. Muat ulang dan tinjau versi pendahulu sebelum mengoreksi.", 409);
+      }
+      const { entries, realizations } = await inspectLine(certificateId);
       const head = entries.find((e) => e.intent.certification.version === headVersion && e.tokenId !== 0n);
       if (!headVersion || !head) {
         throw new CertificateError("Versi resmi terkini tidak dapat dipastikan dari chain dan riwayat lembaga. Koreksi ditahan.", 409);
@@ -232,8 +247,11 @@ export function createCertificateIssuance(
       // An unsigned draft by the same signer for the same reason is reused while it is still fresh;
       // otherwise a new version number is taken, leaving the older draft as unpublished history.
       for (const draft of successors.filter((e) => !e.endorsed && e.intent.certification.signer.toLowerCase() === account.toLowerCase())) {
-        if (draft.content.correction?.reason === reason && draft.content.correction.note === note
-          && assessScope(draft.content, realizations).changedIds.length === 0) return reviewedExisting(draft.intent.id);
+        if (draft.observed.observation.state === "PREPARED" && draft.observed.signingAuthority === "CURRENT"
+          && draft.intent.certification.authorityEpoch === authority.epoch
+          && BigInt(draft.intent.certification.deadline) > BigInt(runtime.now())
+          && draft.content.correction?.reason === reason && draft.content.correction.note === note
+          && assessScope(draft.content, realizations).changedIds.length === 0) return draft.observed;
       }
       const version = String(Math.max(...entries.map((e) => Number(e.intent.certification.version) || 0)) + 1);
       const frozenAt = runtime.now();
