@@ -46,10 +46,15 @@ const runtimeOf = (): WorkspaceRuntime => {
   return runtime;
 };
 
+type BatchFunction = "RECORD_CONTRIBUTIONS" | "ENDORSE_CONTRIBUTIONS";
+// The endorser must review the exact snapshot root it endorses, so reading a
+// batch is open to either mandate; every write keeps its single owner.
+const BATCH_READERS = ["RECORD_CONTRIBUTIONS", "ENDORSE_CONTRIBUTIONS"] as const;
+
 async function batchActor(
   c: Context,
   institutionId: string | undefined,
-  requiredFunction: "RECORD_CONTRIBUTIONS" | "ENDORSE_CONTRIBUTIONS"
+  required: BatchFunction | readonly BatchFunction[]
 ) {
   const runtime = runtimeOf();
   const auth = await authenticateWorkspace(c, runtime, institutionId);
@@ -57,7 +62,10 @@ async function batchActor(
   if (!authorize(auth.session.role, "prepareEvidence")) return { response: refuse(c, 403, "forbidden") } as const;
 
   const actor = await operationalActor(runtime, auth.session);
-  const mandate = actor.require(requiredFunction);
+  const functions = typeof required === "string" ? [required] : required;
+  const granted = functions.find((fn) => actor.allows(fn, {}));
+  // `require` produces the mandate check's own refusal wording when none is held.
+  const mandate = actor.require(granted ?? functions[0]);
   return {
     runtime,
     session: auth.session,
@@ -111,7 +119,7 @@ contributionBatchRoutes.post("/contribution-batches", async (c) => {
 contributionBatchRoutes.get("/contribution-batches", async (c) => {
   let institutionId = c.req.query("institutionId")?.trim();
 
-  const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
+  const gate = await batchActor(c, institutionId, BATCH_READERS);
   if ("response" in gate) return gate.response;
   institutionId = gate.session.institutionId;
 
@@ -129,7 +137,7 @@ contributionBatchRoutes.get("/contribution-batches/:id", async (c) => {
     return badRequest(c, "batchId dan institutionId wajib disertakan.");
   }
 
-  const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
+  const gate = await batchActor(c, institutionId, BATCH_READERS);
   if ("response" in gate) return gate.response;
   institutionId = gate.session.institutionId;
 
@@ -316,7 +324,7 @@ contributionBatchRoutes.get("/contribution-batches/:id/history", async (c) => {
   const batchId = c.req.param("id")?.trim();
   let institutionId = c.req.query("institutionId")?.trim();
 
-  const gate = await batchActor(c, institutionId, "RECORD_CONTRIBUTIONS");
+  const gate = await batchActor(c, institutionId, BATCH_READERS);
   if ("response" in gate) return gate.response;
   institutionId = gate.session.institutionId;
 

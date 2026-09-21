@@ -1,4 +1,4 @@
-import { encodeFunctionData, keccak256, parseTransaction, parseAbi, parseAbiItem, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, keccak256, parseTransaction, parseAbi, parseAbiItem, type Hex } from "viem";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,13 @@ import { CONTRIBUTION_PROOF_REGISTRY_ABI } from "./zk-proof-service";
 import { receiptIsFinal } from "./zk-finality";
 
 const receiptEvent = parseAbiItem("event ReceiptProofVerified(bytes32 indexed receiptKey, string institutionId, string contributionId, uint256 batchId, uint256 version, bytes32 batchRoot, bytes32 receiptCommitment, address submitter)");
+/** The registry's indexed key, so its event can be found without knowing the block. */
+export const receiptKeyOf = (institutionId: string, contributionId: string, version: bigint): Hex =>
+  keccak256(encodeAbiParameters([{ type: "string" }, { type: "string" }, { type: "uint256" }], [institutionId, contributionId, version]));
+// The registry stores `block.number`, which on Arbitrum is the L1 block, so it cannot
+// address an L2 log query. Filter by the indexed key over the whole history instead.
+const receiptLogs = (client: any, registry: Hex, key: Hex) =>
+  client.getLogs({ address: registry, event: receiptEvent, args: { receiptKey: key }, fromBlock: 0n, toBlock: "latest" });
 const authorityAbi = parseAbi([
   "function batches(bytes32,uint256) view returns (bytes32 root,uint256 version,address endorsedBy,uint256 endorsedAt,bool exists)",
   "function authorizedSigners(bytes32,address) view returns (bool)",
@@ -147,7 +154,7 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
         if (existing[0] && existing[2] === batch.merkleRoot) {
           const item = batch.items.find(i => i.contributionId === op!.contributionId)!;
           if (existing[1] !== BigInt(batch.batchNumber) || existing[3] !== item.receiptCommitment) throw new PublicationBlocked("Versi receipt sudah dicatat untuk snapshot lain.");
-          const logs = await client.getLogs({ address: registry, event: receiptEvent, fromBlock: existing[5], toBlock: existing[5] });
+          const logs = await receiptLogs(client, registry, receiptKeyOf(op.institutionId, op.contributionId, BigInt(op.version)));
           const event = logs.find((log: any) => log.args.institutionId === op!.institutionId && log.args.contributionId === op!.contributionId && log.args.version === BigInt(op!.version) && log.args.batchRoot === batch.merkleRoot);
           if (!event) throw new Error("EVENT_UNAVAILABLE");
           op.txHash = event.transactionHash;
@@ -210,9 +217,7 @@ export async function runZkPublication(runtime: WorkspaceRuntime, targetId?: str
       const item = batch.items.find(i => i.contributionId === op!.contributionId)!;
       if (!current[0] || current[1] !== BigInt(batch.batchNumber) || current[2] !== batch.merkleRoot || current[3] !== item.receiptCommitment) throw new PublicationBlocked("Hasil registry tidak cocok.");
       // Use the event that first recorded this receipt, not a replay transaction.
-      const logs = await client.getLogs({ address: registry,
-        event: receiptEvent,
-        fromBlock: current[5], toBlock: current[5] });
+      const logs = await receiptLogs(client, registry, receiptKeyOf(op.institutionId, op.contributionId, BigInt(op.version)));
       const event = logs.find((l: any) => l.args.institutionId === op!.institutionId && l.args.contributionId === op!.contributionId && l.args.version === BigInt(op!.version) && l.args.batchRoot === batch.merkleRoot);
       if (!event?.transactionHash) throw new Error("EVENT_UNAVAILABLE");
       await batches.saveReceiptProof({ contributionId: op.contributionId, batchId: op.batchId, version: op.version, status: "VERIFIED",

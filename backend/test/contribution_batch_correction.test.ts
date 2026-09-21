@@ -621,7 +621,7 @@ describe("Batch Corrections & ZK Receipt Validity (Issue #110)", () => {
     expect(histRes.json.history[1].version).toBe(2);
     expect(histRes.json.history.find((b: any) => b.id === batch2.id).status).toBe("ENDORSED");
     expect(histRes.json.history[1].predecessorBatchId).toBe(batch1.id);
-  });
+  }, 60000); // real Groth16 proofs: 3.5-7s per scenario, above the 5s default
 
   it("Refund decision preserves receipt and actual payment leads to a real successor proof (AC04)", async () => {
     const handle = database.handle();
