@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useWallet } from "../../lib/WalletContext";
 import { useWebSocket } from "../../lib/WebSocketContext";
 import { payWithSnap } from "../../lib/snapClient";
+import { syncPaymentUntilPaid } from "./syncPayment";
 import {
   depositUSDCOnChain,
   approveUSDCOnChain,
@@ -34,6 +35,9 @@ export function DonationForm({
   const [amountIDR, setAmountIDR] = useState<number>(initialAmount);
   const [usdcAmount, setUsdcAmount] = useState<string>("50");
   const [donorName, setDonorName] = useState<string>("");
+  const [donorEmail, setDonorEmail] = useState<string>("");
+  const paymentSync = useRef<AbortController | null>(null);
+  useEffect(() => () => paymentSync.current?.abort(), []);
   const [nik, setNik] = useState<string>("");
   const [isAnonymous, setIsAnonymous] = useState<boolean>(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>("qris");
@@ -180,6 +184,7 @@ export function DonationForm({
             amountIDR,
             zakatType,
             paymentMethod: paymentMethod.toUpperCase(),
+            donorContact: donorEmail.trim() || undefined,
           }),
         });
 
@@ -204,6 +209,13 @@ export function DonationForm({
         // Open Midtrans Snap Popup if token returned
         if (snapToken) {
           setStatusMessage("Menampilkan jendela pembayaran...");
+          // The webhook may not reach this backend; keep checking the payment on the payer's behalf.
+          paymentSync.current?.abort();
+          const sync = new AbortController();
+          paymentSync.current = sync;
+          void syncPaymentUntilPaid(trxId, { baseUrl: getApiBaseUrl(), signal: sync.signal }).then((result) => {
+            if (result === "PAID") toast.success("Pembayaran diterima dan tercatat di lembaga.");
+          });
           payWithSnap(snapToken, {
             onSuccess: () => {
               setSuccessModalOpen(true);
@@ -333,6 +345,14 @@ export function DonationForm({
             value={nik}
             onChange={(e) => setNik(e.target.value)}
             helperText="Digunakan untuk menghasilkan salted hash anti-doxxing"
+          />
+          <Input
+            label="Email (Opsional — untuk melacak penyaluran)"
+            type="email"
+            placeholder="nama@contoh.com"
+            value={donorEmail}
+            onChange={(e) => setDonorEmail(e.target.value)}
+            helperText="Kode OTP dikirim ke email ini agar Anda dapat melihat ke mana dana Anda disalurkan. Tidak ditampilkan ke publik."
           />
           <div className="sm:col-span-2">
             <label className="inline-flex items-center gap-2.5 text-xs font-semibold text-[#17332c] cursor-pointer">
