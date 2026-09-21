@@ -24,7 +24,7 @@ function BuktiPage() {
       <PageHeader
         badgeText="Universal Evidence Inspector"
         title="Pusat Pembuktian Berkas IPFS"
-        description="Pemeriksaan dokumen fisik Berita Acara Serah Terima (BAST), berkas survei mustahik, metadata terstruktur v1.1.0, dan rekonsiliasi integritas smart contract Sepolia L1."
+        description="Pemeriksaan dokumen fisik Berita Acara Serah Terima (BAST), berkas survei mustahik, metadata terstruktur v1.1.0, dan pencocokan keaslian dengan catatan publik di jaringan uji Sepolia."
       />
 
       <Container>

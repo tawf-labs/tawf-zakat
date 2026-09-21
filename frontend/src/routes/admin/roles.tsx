@@ -58,7 +58,7 @@ const ROLE_DEFINITIONS = [
     badge: "Otoritas Sistem",
     color: "emerald",
     description:
-      "Memegang wewenang konfigurasi parameter smart contract, alokasi operasional amil, dan manajemen pemberian/pencabutan peran on-chain.",
+      "Memegang wewenang mengatur parameter sistem, alokasi operasional amil, dan pemberian atau pencabutan peran di catatan publik.",
     mandate: "Administrasi Protokol & Keuangan",
   },
   {
@@ -274,7 +274,7 @@ function AdminRolesPage() {
                 Otorisasi & Manajemen Peran On-Chain
               </h1>
               <p className="text-sm sm:text-base text-emerald-100/80 max-w-2xl leading-relaxed">
-                Transparansi mutlak hak akses keabsahan fikih (DPS), audit independen, dan amil operasional yang tercatat secara permanen di smart contract Sepolia.
+                Transparansi mutlak hak akses keabsahan fikih (DPS), audit independen, dan amil operasional yang tercatat permanen di catatan publik (jaringan uji Sepolia).
               </p>
             </div>
 
@@ -611,7 +611,7 @@ function AdminRolesPage() {
               Konfirmasi Cabut Hak Akses
             </h3>
             <p className="text-xs text-[#5e7a70] text-center mb-4 leading-relaxed">
-              Anda akan mencabut peran <strong>{revokeTarget.roleName}</strong> dari alamat berikut pada smart contract Sepolia L1:
+              Anda akan mencabut peran <strong>{revokeTarget.roleName}</strong> dari alamat berikut di catatan publik (jaringan uji Sepolia):
             </p>
 
             <div className="p-3 bg-gray-50 rounded-xl font-mono text-xs text-gray-700 break-all mb-6 text-center border border-gray-100">

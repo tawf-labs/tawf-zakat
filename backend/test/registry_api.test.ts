@@ -330,20 +330,20 @@ for (const publication of [false, true]) it.skipIf(!process.env.REGISTRY_BROWSER
     expect(await sign.isDisabled()).toBe(true);
     await panel.getByText('Cakupan sumber dan temuan paket beku', { exact: true }).click();
     expect(await page.locator('body').innerText()).toContain(publication ? 'LOLOS' : 'DITOLAK');
-    await panel.getByLabel('Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.').check();
+    await panel.getByLabel('Saya telah meninjau isi, cakupan sumber, temuan, ringkasan digital, tujuan, dan parameter pengesahan di atas.').check();
     const snapshot = await rpc.request({ method: 'evm_snapshot' as any });
     await sign.click();
-    await panel.getByText(publication ? 'Penerbitan masuk blok; menunggu konfirmasi' : 'Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Penerbitan sudah tercatat; menunggu konfirmasi' : 'Bukti sudah tercatat; menunggu konfirmasi cukup', { exact: true }).waitFor();
     await rpc.request({ method: 'evm_mine' as any });
-    await panel.getByText(publication ? 'Laporan terbit; tingkat konfirmasi tercapai' : 'Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Laporan terbit dan terkonfirmasi' : 'Bukti tercatat dan terkonfirmasi', { exact: true }).waitFor();
     await page.evaluate(() => sessionStorage.clear());
     await page.reload();
     await page.getByLabel('Paket tersimpan').selectOption(saved.id);
-    await panel.getByText(publication ? 'Laporan terbit; tingkat konfirmasi tercapai' : 'Bukti tercatat; tingkat konfirmasi tercapai', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Laporan terbit dan terkonfirmasi' : 'Bukti tercatat dan terkonfirmasi', { exact: true }).waitFor();
     await rpc.request({ method: 'evm_revert' as any, params: [snapshot] as any });
-    await panel.getByText(publication ? 'Blok berubah; penerbitan perlu diperiksa ulang' : 'Blok berubah; pencatatan perlu diperiksa ulang', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Catatan publik berubah; penerbitan perlu diperiksa ulang' : 'Catatan publik berubah; pencatatan perlu diperiksa ulang', { exact: true }).waitFor();
     await panel.getByRole('button', { name: 'Kirim ulang transaksi tersimpan' }).click();
-    await panel.getByText(publication ? 'Penerbitan masuk blok; menunggu konfirmasi' : 'Bukti tercatat dalam blok; konfirmasi belum cukup', { exact: true }).waitFor();
+    await panel.getByText(publication ? 'Penerbitan sudah tercatat; menunggu konfirmasi' : 'Bukti sudah tercatat; menunggu konfirmasi cukup', { exact: true }).waitFor();
     await page.screenshot({ path: `/tmp/ticket73-browser-${publication ? 'publication' : 'recording'}.png`, fullPage: true });
   } finally { await browser.close(); await server.stop(true); }
 }, 60000);
@@ -994,11 +994,11 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: publishes a first vers
     await page.getByText("· versi 2 · LOLOS · Dibekukan").waitFor();
 
     await publicationPanel.getByRole("button", { name: "Minta pengesahan validator" }).click();
-    await publicationPanel.getByLabel("Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.").check();
+    await publicationPanel.getByLabel("Saya telah meninjau isi, cakupan sumber, temuan, ringkasan digital, tujuan, dan parameter pengesahan di atas.").check();
     await publicationPanel.getByRole("button", { name: "Tandatangani penerbitan laporan" }).click();
-    await publicationPanel.getByText("Penerbitan masuk blok; menunggu konfirmasi", { exact: true }).waitFor();
+    await publicationPanel.getByText("Penerbitan sudah tercatat; menunggu konfirmasi", { exact: true }).waitFor();
     await rpc.request({ method: "evm_mine" as any });
-    await publicationPanel.getByText("Laporan terbit; tingkat konfirmasi tercapai", { exact: true }).waitFor();
+    await publicationPanel.getByText("Laporan terbit dan terkonfirmasi", { exact: true }).waitFor();
     await publicationPanel.getByText("Versi 2 · resmi terkini", { exact: true }).waitFor();
     await publicationPanel.getByText("Versi 1 · digantikan", { exact: true }).waitFor();
     expect(await publicationPanel.innerText()).toContain("Narasi versi pertama keliru");
@@ -1258,7 +1258,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: an auditor signs a con
     page.on("pageerror", (error: Error) => console.error("Browser:", error.message));
     await page.goto("http://127.0.0.1:18576/");
     await page.getByLabel("Paket tersimpan").selectOption(version.id);
-    const panel = page.getByRole("heading", { name: "Atestasi auditor", exact: true }).locator("..");
+    const panel = page.getByRole("heading", { name: "Atestasi auditor (pendapat resmi auditor)", exact: true }).locator("..");
     await panel.getByText("Belum diperiksa.", { exact: true }).waitFor();
     expect(await panel.innerText()).toContain("bukan bukti independensi");
 
@@ -1282,7 +1282,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: an auditor signs a con
     expect(await sign.isDisabled()).toBe(true);
     await panel.getByLabel("Saya telah meninjau identitas versi, digest, lingkup, kesimpulan, dan bukti pemeriksaan di atas.").check();
     await sign.click();
-    await panel.getByText("Atestasi masuk blok; konfirmasi belum cukup", { exact: true }).waitFor();
+    await panel.getByText("Atestasi sudah tercatat; menunggu konfirmasi cukup", { exact: true }).waitFor();
     await rpc.request({ method: "evm_mine" as any });
     await panel.getByText("Atestasi tercatat pada versi ini", { exact: true }).waitFor();
     // The recorded list re-reads itself, so the version stops saying it was never examined.

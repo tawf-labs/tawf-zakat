@@ -100,9 +100,9 @@ export function OfficerMandatesCard({ mandates = [], officerName }: OfficerManda
       <div className="mt-5 flex items-start gap-2 rounded-xl bg-amber-50/70 p-3 text-xs text-amber-900 border border-amber-200">
         <AlertCircle className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
         <p>
-          <strong>Kewenangan Offchain:</strong> Mandat operasional ini hanya mengatur kewenangan alur kerja
-          internal lembaga (pembuatan draf, pemeriksaan, pengesahan usulan) dan <em>tidak memberikan</em> peran
-          smart contract onchain seperti Auditor atau Vault Governance.
+          <strong>Batas wewenang ini:</strong> Mandat di sini hanya berlaku untuk pekerjaan di dalam aplikasi lembaga
+          (menyusun draf, memeriksa, mengesahkan usulan). Mandat ini <em>tidak otomatis memberi</em> peran sebagai
+          Auditor atau pengelola dana di catatan publik; peran itu diberikan secara terpisah.
         </p>
       </div>
     </div>

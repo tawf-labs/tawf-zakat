@@ -32,7 +32,7 @@ export function AmilCeilingCard({ amilShare }: { amilShare: WireAmilShare }) {
 
       <p className={within ? "mt-1 text-xs text-[#5e7a70]" : "mt-1 text-xs text-red-800"}>
         {within
-          ? "Porsi hak amil berada di dalam plafon 12,5% yang dikunci smart contract."
+          ? "Porsi hak amil berada di dalam batas 12,5% yang dijaga otomatis oleh sistem."
           : "Porsi hak amil melampaui plafon 12,5%. Laporan periode ini tidak dapat ditandatangani sampai selisihnya dijelaskan."}
       </p>
 

@@ -31,7 +31,7 @@ export function OnChainIntegrityBadge({ cid, onChainContext }: OnChainIntegrityB
               Status Keterikatan On-Chain (Sepolia L1)
             </h4>
             <span className="text-[11px] text-[#5e7a70]">
-              Pencocokan hash berkas bukti terhadap catatan proposal pada smart contract
+              Pencocokan sidik jari digital berkas bukti dengan catatan usulan di pencatatan publik
             </span>
           </div>
         </div>

@@ -30,10 +30,10 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 const states: Record<string, string> = {
-  PREPARED: "Atestasi disiapkan; belum dikirim", SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
-  INCLUDED: "Atestasi masuk blok; konfirmasi belum cukup", CONFIRMED: "Atestasi tercatat pada versi ini",
-  REVERTED: "Transaksi gagal; atestasi tidak tercatat", INVALID_EVENT: "Event tidak cocok; atestasi tidak diakui",
-  NONCANONICAL: "Blok berubah; atestasi perlu diperiksa ulang",
+  PREPARED: "Atestasi disiapkan; belum dikirim", SUBMITTED: "Sudah dikirim; belum terbukti tercatat",
+  INCLUDED: "Atestasi sudah tercatat; menunggu konfirmasi cukup", CONFIRMED: "Atestasi tercatat pada versi ini",
+  REVERTED: "Pengiriman gagal; atestasi tidak tercatat", INVALID_EVENT: "Catatan tidak cocok; atestasi tidak diakui",
+  NONCANONICAL: "Catatan publik berubah; atestasi perlu diperiksa ulang",
 };
 
 export type VersionAttestation = { id: string; auditor: string; scope: string; conclusion: string;
@@ -86,13 +86,13 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
   const mine = (recorded ?? []).filter(note => note.auditor.toLowerCase() === address?.toLowerCase());
   return <section className="space-y-3 rounded border p-3">
-    <h5 className="font-semibold">Atestasi auditor</h5>
-    <p className="text-sm">Atestasi adalah pendapat atas satu versi, dicatat di samping versi tersebut. Ia tidak mengubah angka paket, pengesahan lembaga, atau vonis validator.</p>
+    <h5 className="font-semibold">Atestasi auditor (pendapat resmi auditor)</h5>
+    <p className="text-sm">Atestasi adalah pendapat auditor atas satu versi laporan, dicatat di samping versi tersebut. Ia tidak mengubah angka di paket, pengesahan lembaga, atau hasil pemeriksaan otomatis layanan.</p>
     {basis && <p className="text-sm">{basis}</p>}
 
     <div className="text-xs">
       <p className="font-semibold">Kesimpulan tercatat pada versi ini</p>
-      {!recorded ? <p role="status">Belum dapat dibaca dari registry.</p>
+      {!recorded ? <p role="status">Belum dapat dibaca dari pencatatan publik.</p>
         : recorded.length === 0 ? <p role="status">Belum diperiksa.</p>
         : <ul className="mt-1 space-y-2">{recorded.map(note => <li key={note.id} className="rounded border p-2">
             <p className="font-semibold">{conclusionLabel(note.conclusion)}</p>
@@ -128,7 +128,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
         </select></label>}
       <label className="block">Bukti pemeriksaan (kertas kerja)
         <input type="file" multiple className="block w-full" onChange={e => void attach(e.target.files)} /></label>
-      <p className="text-xs">{evidence.length === 0 ? "Bukti pemeriksaan wajib dilampirkan. Bukti disimpan terbatas dan hanya commitment-nya tercatat pada registry." : `${evidence.length} berkas akan disimpan dan di-commit sebelum penandatanganan.`}</p>
+      <p className="text-xs">{evidence.length === 0 ? "Bukti pemeriksaan wajib dilampirkan. Bukti disimpan terbatas; yang tercatat di pencatatan publik hanya sidik jari digitalnya." : `${evidence.length} berkas akan disimpan dan dikunci (sidik jarinya dicatat) sebelum penandatanganan.`}</p>
       <Button disabled={!!busy || !conclusion || evidence.length === 0 || !address} onClick={prepare}>Siapkan atestasi untuk versi ini</Button>
     </fieldset>}
 
@@ -136,7 +136,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
       <p role="status">{statusUnavailable ? "Status chain belum dapat dipastikan" : states[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {intent.observation.confirmations} / {intent.observation.requiredConfirmations}. Kebijakan {intent.observation.confirmationPolicy}.</p>
       <p className="text-xs">Kesimpulan yang akan ditandatangani: {conclusionLabel(intent.statement.conclusion)} · lingkup {scopeLabel(intent.statement.scope)}.</p>
-      <p className="text-sm">Masa kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat live diperiksa ulang sebelum signing."}</p>
+      <p className="text-sm">Periode kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat Anda dicek ulang sebelum penandatanganan."}</p>
       <p className="break-all text-xs">Commitment bukti pemeriksaan {intent.statement.evidenceCommitment}<br />Berkas: {intent.evidence.files.map(file => file.fileName).join(", ")}</p>
       {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async assertCurrent => {
         const blob = await requests.blob(`/api/evidence/${path}/${intent.id}/files/${file.id}`);
@@ -152,9 +152,9 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
         <label className="flex gap-2"><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} />Saya telah meninjau identitas versi, digest, lingkup, kesimpulan, dan bukti pemeriksaan di atas.</label>
         {intent.accountKind === "ERC1271" && <label className="block">Tanda tangan akun kontrak atas parameter ini (dari alur persetujuan auditor)
           <textarea className="block w-full rounded border p-2 font-mono text-xs" value={contractSignature} onChange={e => setContractSignature(e.target.value.trim())} />
-          <span className="text-xs">Registry memeriksa ERC-1271 saat pengiriman. Salin parameter di atas ke alur penandatanganan akun kontrak jika wallet tidak dapat menandatangani langsung.</span></label>}
+          <span className="text-xs">Sistem memeriksa tanda tangan ini saat pengiriman. Salin parameter di atas ke alur penandatanganan akun bersama bila dompet digital tidak dapat menandatangani langsung.</span></label>}
         {chainId !== intent.domain.chainId
-          ? <Button disabled={!!busy || switching} onClick={() => switchChainAsync({ chainId: intent.domain.chainId }).catch(() => setError("Ganti jaringan di wallet ke chain registry."))}>{switching ? "Mengganti jaringan…" : "Ganti ke jaringan registry"}</Button>
+          ? <Button disabled={!!busy || switching} onClick={() => switchChainAsync({ chainId: intent.domain.chainId }).catch(() => setError("Ganti jaringan di dompet digital ke jaringan yang dipakai lembaga."))}>{switching ? "Mengganti jaringan…" : "Ganti ke jaringan yang benar"}</Button>
           : <Button disabled={!!busy || switching || loading || !reviewed || !address || statusUnavailable} onClick={sign}>Tandatangani atestasi versi ini</Button>}
       </>}
       {!["SUBMITTED", "INCLUDED"].includes(intent.observation.state) && <Button variant="outline" disabled={!!busy || statusUnavailable} onClick={() => {

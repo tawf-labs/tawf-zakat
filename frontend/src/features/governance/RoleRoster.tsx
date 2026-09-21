@@ -66,7 +66,7 @@ export function RoleRoster() {
             Roster Otoritas & Pemegang Peran On-Chain
           </h3>
           <p className="text-xs text-[#5e7a70] mt-0.5">
-            Daftar entitas terverifikasi yang memegang kunci otorisasi pada smart contract Sepolia.
+            Daftar pihak terverifikasi yang memegang wewenang di catatan publik (jaringan uji Sepolia).
           </p>
         </div>
         <Link

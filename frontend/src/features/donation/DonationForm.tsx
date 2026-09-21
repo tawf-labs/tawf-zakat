@@ -141,7 +141,7 @@ export function DonationForm({
         }
 
         // 2. Deposit USDC into Smart Contract
-        setStatusMessage("Mengirim transaksi deposit zakat ke smart contract...");
+        setStatusMessage("Mengirim setoran zakat ke catatan publik...");
         const salt = "0x" + Array.from(crypto.getRandomValues(new Uint8Array(32)))
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
@@ -290,7 +290,7 @@ export function DonationForm({
                 helperText={
                   usdcBalance !== null
                     ? `Saldo USDC Anda: ${usdcBalance} USDC (Sepolia Testnet)`
-                    : "Deposit langsung ke smart contract Sepolia L1"
+                    : "Setor langsung lewat dompet digital ke jaringan uji Sepolia"
                 }
               />
             </div>

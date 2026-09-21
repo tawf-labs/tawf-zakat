@@ -9,15 +9,15 @@ import { conclusionLabel, formatBlockInstant, VERSION_STATE_LABELS } from "./evi
 import { AttestationPanel } from "./AttestationPanel";
 
 const labels = {
-  PREPARED: "Pengesahan disiapkan; belum dikirim", SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
-  INCLUDED: "Bukti tercatat dalam blok; konfirmasi belum cukup", CONFIRMED: "Bukti tercatat; tingkat konfirmasi tercapai",
-  REVERTED: "Transaksi gagal; bukti tidak tercatat", INVALID_EVENT: "Event tidak cocok; pencatatan tidak diakui",
-  NONCANONICAL: "Blok berubah; pencatatan perlu diperiksa ulang",
+  PREPARED: "Pengesahan disiapkan; belum dikirim", SUBMITTED: "Sudah dikirim; belum terbukti tercatat",
+  INCLUDED: "Bukti sudah tercatat; menunggu konfirmasi cukup", CONFIRMED: "Bukti tercatat dan terkonfirmasi",
+  REVERTED: "Pengiriman gagal; bukti tidak tercatat", INVALID_EVENT: "Catatan tidak cocok; pencatatan tidak diakui",
+  NONCANONICAL: "Catatan publik berubah; pencatatan perlu diperiksa ulang",
 };
 const publicationLabels = { ...labels,
-  INCLUDED: "Penerbitan masuk blok; menunggu konfirmasi", CONFIRMED: "Laporan terbit; tingkat konfirmasi tercapai",
-  REVERTED: "Transaksi gagal; laporan belum terbit", INVALID_EVENT: "Event tidak cocok; penerbitan tidak diakui",
-  NONCANONICAL: "Blok berubah; penerbitan perlu diperiksa ulang",
+  INCLUDED: "Penerbitan sudah tercatat; menunggu konfirmasi", CONFIRMED: "Laporan terbit dan terkonfirmasi",
+  REVERTED: "Pengiriman gagal; laporan belum terbit", INVALID_EVENT: "Catatan tidak cocok; penerbitan tidak diakui",
+  NONCANONICAL: "Catatan publik berubah; penerbitan perlu diperiksa ulang",
 };
 type Props = { saved: SavedReportPackage; preparationId: string; requests: PrivateRequests; publication?: boolean; onCorrect?: (packageId: string) => void };
 export function RecordingPanel(props: Props) {
@@ -45,29 +45,29 @@ function RecordingView({ saved, preparationId, requests, publication = false, on
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
   return <section className="space-y-3 rounded border p-3">
     <h5 className="font-semibold">{publication ? "Penerbitan laporan" : "Pengesahan pencatatan bukti"}</h5>
-    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan layanan validator untuk paket yang sama. Kontrak memverifikasi pernyataan layanan; perhitungan bergantung pada layanan dan sumber bank, bukan komputasi trustless. Atestasi auditor diperiksa terpisah dan dibaca per versi." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
+    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan pemeriksaan otomatis layanan untuk paket yang sama. Sistem memeriksa pernyataan layanan itu; hasil hitungan bergantung pada layanan dan sumber bank, bukan pembuktian matematis penuh. Pendapat auditor (atestasi) diperiksa terpisah dan dibaca per versi." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
     <details><summary>Cakupan sumber dan temuan paket beku</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ snapshot: saved.snapshot, reconciliation: saved.reconciliation, disclosure: saved.disclosure, policy: saved.policy }, null, 2)}</pre></details>
     {history.length > 0 && <label className="block text-sm">Riwayat pengesahan paket<select className="block w-full rounded border p-2" value={intent?.id ?? ""} disabled={locked || checking} onChange={e => {
       task.select(e.target.value);
     }}><option value="">Pilih percobaan</option>{history.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>}
     {!intent && <Button disabled={locked || !address} onClick={prepare}>{preparing ? "Memeriksa kewenangan…" : publication ? "Minta pengesahan validator" : "Siapkan pengesahan pencatatan"}</Button>}
     {intent && <>
-      <p className="text-sm">Masa kewenangan {intent.authorization.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Otoritas historis pada blok penerimaan; bukan izin tindakan baru." : intent.signingAuthority === "STALE" ? "Otoritas berubah. Mulai tinjauan baru." : "Otoritas live diperiksa ulang sebelum signing."}</p>
-      <p role="status">{statusUnavailable ? "Status chain belum dapat dipastikan" : (publication ? publicationLabels : labels)[intent.observation.state]}</p>
+      <p className="text-sm">Periode kewenangan {intent.authorization.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu; bukan izin untuk tindakan baru." : intent.signingAuthority === "STALE" ? "Wewenang berubah. Mulai tinjauan baru." : "Wewenang Anda dicek ulang sebelum penandatanganan."}</p>
+      <p role="status">{statusUnavailable ? "Status pencatatan belum dapat dipastikan" : (publication ? publicationLabels : labels)[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {statusUnavailable ? "belum diketahui" : intent.observation.confirmations} / {intent.observation.requiredConfirmations}. {publication ? `Laporan ${saved.reportId} · versi ${saved.version}` : "Pengesahan ini hanya untuk pencatatan bukti."}</p>
-      <p className="text-xs">Kebijakan {intent.observation.confirmationPolicy}. Kedalaman blok ini bukan finalitas settlement L1. {intent.domain.chainId === 31337 ? "EVM lokal, data uji." : intent.domain.chainId === 421614 ? "Arbitrum Sepolia, testnet." : "Periksa jaringan deployment sebelum menandatangani."}</p>
-      <p className="break-all text-xs">Chain {intent.domain.chainId} · Registry {intent.domain.verifyingContract} <button onClick={() => navigator.clipboard.writeText(intent.domain.verifyingContract)}>Salin registry</button><br />Pengesah {intent.authorization.signer} <button onClick={() => navigator.clipboard.writeText(intent.authorization.signer)}>Salin akun</button><br />Berlaku sampai {new Date(Number(intent.authorization.deadline) * 1000).toLocaleString()}</p>
-      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Validator: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}; kewenangan diperiksa kembali saat eksekusi` : "belum tersedia"}. Auditor: {version?.attestations?.entries.length ? version.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ") : "belum diperiksa"}.</p>}
-      {publication && intent.validator && <details><summary>Pernyataan layanan validator</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(intent.validator, null, 2)}</pre></details>}
+      <p className="text-xs">Kebijakan {intent.observation.confirmationPolicy}. Konfirmasi yang tercapai belum berarti pencatatan sudah final di jaringan induk (Ethereum). {intent.domain.chainId === 31337 ? "Jaringan uji lokal, data percobaan." : intent.domain.chainId === 421614 ? "Arbitrum Sepolia (jaringan uji, bukan uang sungguhan)." : "Pastikan jaringan sudah benar sebelum menandatangani."}</p>
+      <p className="break-all text-xs">Jaringan {intent.domain.chainId} · Alamat pencatatan {intent.domain.verifyingContract} <button onClick={() => navigator.clipboard.writeText(intent.domain.verifyingContract)}>Salin alamat pencatatan</button><br />Pengesah {intent.authorization.signer} <button onClick={() => navigator.clipboard.writeText(intent.authorization.signer)}>Salin akun</button><br />Berlaku sampai {new Date(Number(intent.authorization.deadline) * 1000).toLocaleString()}</p>
+      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Pemeriksaan otomatis: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}; wewenang dicek ulang saat pengiriman` : "belum tersedia"}. Auditor: {version?.attestations?.entries.length ? version.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ") : "belum diperiksa"}.</p>}
+      {publication && intent.validator && <details><summary>Pernyataan layanan pemeriksa (detail teknis)</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(intent.validator, null, 2)}</pre></details>}
       <details><summary>Parameter pengesahan yang akan ditandatangani</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value, 2)}</pre></details>
       <Button variant="outline" onClick={() => navigator.clipboard.writeText(JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value))}>Salin data pengesahan untuk wallet</Button>
       {intent.transactionHash && <p className="break-all text-xs">Transaksi {intent.transactionHash}<br />Blok {intent.observation.blockNumber ?? "belum tersedia"} · {intent.observation.blockHash} · Log {intent.observation.logIndex ?? "belum tersedia"}</p>}
       <Button variant="outline" disabled={checking || locked} onClick={check}>{checking ? "Memeriksa receipt…" : "Periksa status chain"}</Button>
       {intent.transactionHash && ["SUBMITTED", "NONCANONICAL"].includes(intent.observation.state) && <Button disabled={locked || checking || intent.authorization.signer.toLowerCase() !== address?.toLowerCase()} onClick={retry}>{retrying ? "Mengirim ulang transaksi…" : "Kirim ulang transaksi tersimpan"}</Button>}
       {!sent && <>
-        <label className="flex gap-2 text-sm"><input type="checkbox" checked={reviewed} disabled={locked} onChange={e => setReviewed(e.target.checked)} />Saya telah meninjau isi, cakupan sumber, temuan, digest, tujuan, dan parameter pengesahan di atas.</label>
-        {intent.accountKind === "ERC1271" && <label className="block text-sm">Tanda tangan akun kontrak atas parameter ini (dari alur persetujuan lembaga)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={signature} disabled={locked} onChange={e => setSignature(e.target.value.trim())} /><span className="text-xs">Registry memeriksa ERC-1271 saat pengiriman. Salin parameter di atas ke alur penandatanganan akun kontrak jika wallet tidak dapat menandatangani langsung.</span></label>}
-        {chainId !== intent.domain.chainId ? <Button disabled={locked} onClick={() => switchChainAsync({ chainId: intent.domain.chainId }).catch(() => setError("Ganti jaringan di wallet ke chain registry."))}>{switching ? "Mengganti jaringan…" : "Ganti ke jaringan registry"}</Button>
+        <label className="flex gap-2 text-sm"><input type="checkbox" checked={reviewed} disabled={locked} onChange={e => setReviewed(e.target.checked)} />Saya telah meninjau isi, cakupan sumber, temuan, ringkasan digital, tujuan, dan parameter pengesahan di atas.</label>
+        {intent.accountKind === "ERC1271" && <label className="block text-sm">Tanda tangan akun bersama lembaga atas parameter ini (hasil persetujuan beberapa pihak)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={signature} disabled={locked} onChange={e => setSignature(e.target.value.trim())} /><span className="text-xs">Sistem memeriksa tanda tangan ini saat pengiriman. Salin parameter di atas ke alur penandatanganan akun bersama bila dompet digital tidak dapat menandatangani langsung.</span></label>}
+        {chainId !== intent.domain.chainId ? <Button disabled={locked} onClick={() => switchChainAsync({ chainId: intent.domain.chainId }).catch(() => setError("Ganti jaringan di dompet digital ke jaringan yang dipakai lembaga."))}>{switching ? "Mengganti jaringan…" : "Ganti ke jaringan yang benar"}</Button>
           : <Button disabled={locked || !reviewed || !address || statusUnavailable} onClick={submit}>{submitting ? "Memproses pengesahan…" : signature ? "Kirim ulang pengesahan yang sama" : publication ? "Tandatangani penerbitan laporan" : "Tandatangani pencatatan bukti"}</Button>}
         <Button variant="outline" disabled={locked || checking} onClick={() => { task.newReview(); }}>Mulai tinjauan pengesahan baru</Button>
       </>}

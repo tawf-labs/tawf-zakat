@@ -27,7 +27,7 @@ export function UniversalEvidenceModal({
               {title}
             </DialogTitle>
             <p className="text-xs text-[#5e7a70] mt-0.5">
-              Pemeriksaan berkas otentik IPFS, metadata terstruktur, dan validasi smart contract L1.
+              Pemeriksaan keaslian berkas bukti, data terstruktur, dan pencocokan dengan catatan publik.
             </p>
           </div>
 
