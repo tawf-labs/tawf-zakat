@@ -888,14 +888,14 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
         await page.addInitScript((token: string) => sessionStorage.setItem("workspace-test-token", token), tracerToken);
         await page.goto(server.url.toString());
         // Use the fixture's source cutoff rather than the wall clock of the browser.
-        await page.getByLabel("Cutoff penerimaan (UTC)").fill(new Date(NOW * 1000).toISOString().slice(0, 16));
+        await page.getByLabel("Batas waktu penerimaan (UTC)").fill(new Date(NOW * 1000).toISOString().slice(0, 16));
         await page.getByLabel(new RegExp(`BROWSER-${width}`)).check();
-        await page.getByRole("button", { name: "Tinjau snapshot batch" }).click();
-        const review = page.getByRole("region", { name: "Review snapshot" });
+        await page.getByRole("button", { name: "Tinjau daftar penerimaan" }).click();
+        const review = page.getByRole("region", { name: "Tinjau daftar penerimaan" });
         await review.getByText("1 kontribusi", { exact: false }).waitFor();
-        await page.getByLabel("Saya telah memeriksa populasi dan cutoff snapshot ini.").check();
+        await page.getByLabel("Saya sudah memeriksa daftar kontribusi dan batas waktu penerimaan ini.").check();
         configureWorkspace({ ...runtime, zkBudget: { ...runtime.zkBudget!, maxAttempts: 0 } });
-        await page.getByRole("button", { name: "Sahkan snapshot dan proses otomatis" }).click();
+        await page.getByRole("button", { name: "Sahkan daftar dan proses otomatis" }).click();
         await review.getByText("Anggaran layanan habis", { exact: true }).waitFor();
         configureWorkspace(runtime);
         await page.getByRole("button", { name: "Coba proses lagi" }).click();
@@ -944,8 +944,8 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
         const errors: string[] = [];
         page.on("pageerror", (error: Error) => errors.push(error.message));
         await page.goto(`${server.url}?trxId=${tracerContributionId}`);
-        await page.getByRole("button", { name: "Periksa bukti ZK", exact: true }).click();
-        await page.getByText("Bukti ZK terkonfirmasi di EVM", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Periksa keaslian catatan", exact: true }).click();
+        await page.getByText("Keaslian catatan terkonfirmasi di catatan publik", { exact: true }).waitFor();
         expect(await page.getByText("Hamba Allah", { exact: true }).count()).toBe(0);
         await page.getByRole("button", { name: "Kirim Kode OTP" }).click();
         await page.getByLabel(/Masukkan 6 digit kode/).waitFor();
@@ -957,8 +957,8 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
         await page.getByRole("button", { name: "Verifikasi", exact: true }).click();
         await page.getByRole("heading", { name: "Kontribusi Anda" }).waitFor();
         const panel = page.getByRole("region", { name: "Bukti kontribusi Anda", exact: true });
-        const confirmed = panel.getByText("Bukti keanggotaan terkonfirmasi", { exact: true });
-        const unconfirmed = panel.getByText("Bukti belum terkonfirmasi saat ini", { exact: true });
+        const confirmed = panel.getByText("Keaslian catatan terkonfirmasi", { exact: true });
+        const unconfirmed = panel.getByText("Keaslian belum dapat dikonfirmasi saat ini", { exact: true });
         await panel.getByRole("alert").waitFor();
         await unconfirmed.waitFor();
         expect(await confirmed.count()).toBe(0);

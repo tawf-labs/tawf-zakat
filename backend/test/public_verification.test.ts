@@ -213,7 +213,7 @@ describe("verification page in a browser", () => {
 
         await page.getByLabel("Kode rahasia kuitansi").fill(SEEDED.salt);
         await page.getByRole("button", { name: "Cocokkan Kuitansi" }).click();
-        await page.getByText(/Kuitansi cocok dengan catatan batch #/).waitFor();
+        await page.getByText(/Kuitansi cocok dengan catatan penerimaan kelompok #/).waitFor();
 
         await page.route("**/api/verify-receipt", (route: any) => route.fulfill({ status: 503, body: "{}" }));
         await page.getByLabel("Nominal (Rp)").fill("1");
