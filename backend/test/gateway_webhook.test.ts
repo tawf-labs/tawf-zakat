@@ -9,7 +9,8 @@ import { sql } from "drizzle-orm";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
 import { createWorkspaceStore } from "../src/tenancy-store";
-import { createContributionStore, type ContributionStore } from "../src/contribution-store";
+import { createContributionStore, CONTRIBUTION_SCHEMA_STATEMENTS, type ContributionStore } from "../src/contribution-store";
+import { createDonorAccessStore, DONOR_ACCESS_SCHEMA_STATEMENTS } from "../src/donor-access-store";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
 
@@ -41,8 +42,9 @@ describe("gateway webhook to ledger", () => {
     await workspace.ensureSchema();
     contributions = createContributionStore(database.handle());
     await contributions.ensureSchema();
+    for (const statement of DONOR_ACCESS_SCHEMA_STATEMENTS) await database.handle().execute(sql.raw(statement));
     for (const institution of SYNTHETIC_INSTITUTIONS) await workspace.upsertInstitution(institutionRecordOf(institution));
-    configureWorkspace({ store: workspace, contributions, ethCall: async () => "0x", now: () => NOW, challengeTtlSeconds: 300, sessionTtlSeconds: 3600 });
+    configureWorkspace({ store: workspace, contributions, donorAccess: createDonorAccessStore(database.handle(), Buffer.alloc(32, 9)), ethCall: async () => "0x", now: () => NOW, challengeTtlSeconds: 300, sessionTtlSeconds: 3600 });
   });
   beforeEach(async () => {
     process.env.GATEWAY_INSTITUTION_ID = INSTITUTION;
@@ -114,5 +116,29 @@ describe("gateway webhook to ledger", () => {
     process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
     await settle(body.trxId, { transaction_status: "pending", signature_key: signature(body.trxId, "200", "250000.00") });
     expect(await contributions.listContributions(INSTITUTION)).toHaveLength(0);
+  });
+
+  describe("public lookup", () => {
+    const lookup = async (reference: string) => (await (await app.fetch(new Request(`http://localhost:3001/api/public/contributions/${encodeURIComponent(reference)}`))).json()).contribution;
+
+    it("shows the payment as an online donation until it reaches the ledger", async () => {
+      const { body } = await invoice({ donorContact: "donor@example.test" });
+      expect((await lookup(body.trxId)).recordKind).toBe("ONLINE_DONATION");
+    });
+
+    it("shows the ledger contribution, which offers OTP access, once the payment is recorded", async () => {
+      const { body } = await invoice({ donorContact: "donor@example.test" });
+      process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
+      await settle(body.trxId);
+      expect((await lookup(body.trxId)).recordKind).toBe("INSTITUTION_CONTRIBUTION");
+    });
+
+    it("keeps showing the online donation when the institution never recorded it", async () => {
+      delete process.env.GATEWAY_INSTITUTION_ID;
+      const { body } = await invoice();
+      process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
+      await settle(body.trxId);
+      expect((await lookup(body.trxId)).recordKind).toBe("ONLINE_DONATION");
+    });
   });
 });

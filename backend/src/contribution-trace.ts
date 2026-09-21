@@ -125,6 +125,10 @@ export async function lookupContribution(
     const donation = await dbService.getDonationByTrxId(trxId);
     if (donation) {
       await beforeProjection?.(donation);
+      // A settled online payment is recorded in the institution's ledger under the same reference.
+      // That record is the one the donor can open with an OTP, so it takes precedence.
+      const recorded = await workspaceRuntime()?.donorAccess?.publicState(trxId).catch(() => null);
+      if (recorded) return { lookupStatus: "FOUND", contribution: toPublicInstitutionContribution(trxId, recorded) };
       return { lookupStatus: "FOUND", contribution: await toPublicContribution(donation) };
     }
 
