@@ -50,10 +50,10 @@ function WorkspaceContents() {
     return (
       <section className="rounded-2xl border border-stone-200 bg-white p-8 text-center">
         <KeyRound className="mx-auto h-10 w-10 text-stone-400" />
-        <h2 className="mt-4 text-xl font-semibold text-stone-900">Hubungkan wallet lembaga</h2>
+        <h2 className="mt-4 text-xl font-semibold text-stone-900">Hubungkan dompet digital lembaga</h2>
         <p className="mx-auto mt-2 max-w-lg text-sm text-stone-600">
-          Ruang kerja dibuka dengan menandatangani tantangan sekali pakai. Alamat wallet saja tidak
-          cukup — server memverifikasi tanda tangannya sebelum membuka sesi.
+          Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak
+          cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.
         </p>
       </section>
     );
@@ -158,7 +158,7 @@ function WorkspaceContents() {
         </ul>
         <p className="mt-4 border-t border-stone-100 pt-4 text-xs text-stone-500">
           Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan
-          diperiksa registry di rantai, dan keanggotaan di sini tidak menggantikannya.
+          diperiksa di catatan publik, dan keanggotaan di sini tidak menggantikannya.
         </p>
       </div>
 
@@ -190,6 +190,7 @@ function WorkspaceContents() {
       <AuthorityPanel key={`authority:${requests.contextId}`} requests={requests} workspace={workspace} />
 
       <ContributionPanel key={`contribution:${requests.contextId}`} requests={requests} canManage={capabilities.prepareEvidence}
+        canRecord={workspace.mandates?.some(m => m.isActive && m.function === "RECORD_CONTRIBUTIONS") ?? false}
         onAllocated={() => setAllocationRevision(value => value + 1)} />
 
       <DisbursementPanel key={`disbursement:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />

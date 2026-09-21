@@ -43,8 +43,10 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-export function ContributionPanel({ requests, canManage, onAllocated }: {
+export function ContributionPanel({ requests, canManage, canRecord = true, onAllocated }: {
   requests: PrivateRequests; canManage: boolean; onAllocated?: () => void;
+  /** Holds the recording mandate. Import drafts require it, so an endorser is not asked for them. */
+  canRecord?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<Tab>("list");
   const [contributions, setContributions] = useState<ContributionRecord[]>([]);
@@ -74,7 +76,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
         status: filters.status === "ALL" ? undefined : filters.status,
         currencyUnit: filters.currencyUnit === "ALL" ? undefined : filters.currencyUnit,
       }),
-      listImportDrafts(requests),
+      canRecord ? listImportDrafts(requests) : Promise.resolve([]),
       canManage ? listRecoveryRequests(requests) : Promise.resolve([]),
     ]);
     if (list.status === "fulfilled") setContributions(list.value);
@@ -82,7 +84,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
     setDrafts(draftList.status === "fulfilled" ? draftList.value : []);
     if (recoveryList.status === "fulfilled") setRecoveryRequests(recoveryList.value);
     setLoading(false);
-  }, [requests, filters, canManage]);
+  }, [requests, filters, canManage, canRecord]);
 
   useEffect(() => {
     refresh();

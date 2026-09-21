@@ -5,6 +5,7 @@ import { deleteProposalDocument, downloadProposalFile, listProposalDocuments,
   type Beneficiary, type ProposalDocument } from "./disbursementClient";
 import { ProposalDocumentList } from "./ProposalDocumentList";
 import { ProposalDocumentUpload } from "./ProposalDocumentUpload";
+import { ProposalRequiredDocuments } from "./ProposalRequiredDocuments";
 
 export function ProposalDocumentManager({ requests, proposalId, beneficiaries, readOnly = false,
   proposalVersion, onDocumentsChanged }: {
@@ -60,6 +61,7 @@ export function ProposalDocumentManager({ requests, proposalId, beneficiaries, r
         Berkas disimpan terenkripsi AES-256-GCM dan diperiksa integritasnya saat diunduh.
       </details>
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
+      {!readOnly && !loading && !error && <ProposalRequiredDocuments requests={requests} beneficiaries={beneficiaries} documents={documents} />}
       {!readOnly && <ProposalDocumentUpload requests={requests} proposalId={proposalId} beneficiaries={beneficiaries} onUploaded={changed} />}
       {loading ? <p className="text-xs">Memuat dokumen…</p> : !error &&
         <ProposalDocumentList documents={documents} beneficiaries={beneficiaries} readOnly={readOnly} onDownload={download} onDelete={remove} />}

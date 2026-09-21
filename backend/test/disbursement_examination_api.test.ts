@@ -1276,7 +1276,7 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
       await switchTo(examinerSinar);
       await openExamination();
       let dialog = page.getByRole("dialog");
-      expect(await dialog.getByText(/Rp150.000/).count()).toBe(1);
+      expect(await dialog.getByText(/Rp\s?150\.000/).count()).toBe(1);
       const downloadEvent = page.waitForEvent("download");
       await dialog.getByRole("button", { name: "Unduh", exact: true }).first().click();
       const download = await downloadEvent;

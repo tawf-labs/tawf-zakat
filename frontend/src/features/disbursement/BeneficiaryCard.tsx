@@ -2,6 +2,9 @@ import { Trash2 } from "lucide-react";
 import type { Beneficiary, ProposalIssue } from "./disbursementClient";
 import { issuesFor, IssueList } from "./ProposalIssues";
 
+/** The eight recipient categories; offered as suggestions, since imported files may carry other wording. */
+export const ASNAF_OPTIONS = ["Fakir", "Miskin", "Amil", "Muallaf", "Riqab", "Gharimin", "Fisabilillah", "Ibnu Sabil"];
+
 export function BeneficiaryCard({
   beneficiary,
   index,
@@ -35,12 +38,17 @@ export function BeneficiaryCard({
           />
         </label>
         <label className="block text-xs font-medium text-stone-600">
-          Asnaf
+          Asnaf (golongan penerima)
           <input
             className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+            list={`asnaf-${beneficiary.id}`}
+            placeholder="Pilih atau ketik, mis. Fakir"
             value={beneficiary.asnaf}
             onChange={(e) => onChange({ ...beneficiary, asnaf: e.target.value })}
           />
+          <datalist id={`asnaf-${beneficiary.id}`}>
+            {ASNAF_OPTIONS.map((name) => <option key={name} value={name} />)}
+          </datalist>
         </label>
         <label className="block text-xs font-medium text-stone-600 sm:col-span-2">
           Alamat/cakupan

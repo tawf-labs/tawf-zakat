@@ -195,8 +195,8 @@ export function Navbar() {
                             setTimeout(() => setCopiedAddress(false), 2000);
                           }}
                           className="shrink-0 p-1 text-stone-500 hover:text-[#1b765e] transition-colors"
-                          title="Salin alamat wallet"
-                          aria-label="Salin alamat wallet"
+                          title="Salin alamat dompet"
+                          aria-label="Salin alamat dompet"
                         >
                           {copiedAddress ? (
                             <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -307,7 +307,7 @@ export function Navbar() {
                       ? truncatedAddress || address?.slice(0, 6) + "..." + address?.slice(-4)
                       : isConnecting
                       ? "Menghubungkan..."
-                      : <><span className="sm:hidden">Dompet</span><span className="hidden sm:inline">Dompet Web3</span></>}
+                      : <><span className="sm:hidden">Dompet</span><span className="hidden sm:inline">Dompet Digital</span></>}
                   </span>
                 </button>
               );

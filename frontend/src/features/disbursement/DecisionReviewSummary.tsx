@@ -1,5 +1,5 @@
 import { AlertTriangle, Info, ShieldAlert } from "lucide-react";
-import { formatQuantity } from "../../lib/reporting";
+import { formatIdrAmount } from "../workspace/mandateLabels";
 import type { DecisionReviewData } from "./disbursementClient";
 
 const check = (ok: boolean | undefined) => (ok ? "Terpenuhi" : "Belum terpenuhi");
@@ -28,7 +28,7 @@ export function DecisionReviewSummary({ review, signerAccount }: { review: Decis
       <div><dt className="text-stone-500">Versi pengajuan</dt><dd className="font-semibold">v{draft.version}</dd></div>
       <div><dt className="text-stone-500">Periode bantuan</dt><dd>{draft.aidPeriod?.start} s/d {draft.aidPeriod?.end}</dd></div>
       <div><dt className="text-stone-500">Pagu referensi</dt>
-        <dd>{ceiling ? formatQuantity({ amount: ceiling, unit: "IDR" }) : "Tidak ditetapkan"}</dd></div>
+        <dd>{ceiling ? formatIdrAmount(ceiling) : "Tidak ditetapkan"}</dd></div>
     </dl>
 
     <section aria-label="Hasil pemeriksaan" className="rounded-lg border border-stone-200 bg-white p-3">

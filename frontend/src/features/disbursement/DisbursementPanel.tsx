@@ -200,6 +200,7 @@ function DisbursementPanelContent({ requests, canManage }: { requests: PrivateRe
               }}
             />
           </div>
+          {!selectedProgram && <p className="text-xs text-stone-500">Pilih program di atas (atau buat program baru). Tombol “Pengajuan baru” muncul setelah sebuah program dipilih.</p>}
           {selectedProgram && <ProgramDetails program={selectedProgram} onArchive={archive} />}
           {selectedProgram && <ProposalList drafts={drafts} onOpen={openExisting} onNew={openNew} />}
           {openDraft && (

@@ -102,6 +102,7 @@ export function ActivityPanel({ requests, canManage, allocationRevision = 0 }: {
       {creating && (
         <CreateActivityModal
           requests={requests}
+          existing={activities}
           onClose={() => setCreating(false)}
           onCreated={() => {
             setCreating(false);

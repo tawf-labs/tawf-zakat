@@ -13,7 +13,7 @@ function RuangKerjaPage() {
       <PageHeader
         badgeText="Ruang Kerja Lembaga"
         title="Satu Lembaga, Satu Ruang Kerja"
-        description="Petugas masuk dengan menandatangani tantangan sekali pakai, bukan dengan menyebutkan alamat wallet. Lembaga yang Anda wakili ditentukan oleh keanggotaan Anda — bukan oleh isi permintaan — dan setiap penolakan terjadi di API, bukan sekadar disembunyikan tampilan."
+        description="Petugas masuk dengan menandatangani pesan sekali pakai di dompet digital, bukan dengan mengetik alamat. Lembaga yang Anda wakili ditentukan oleh keanggotaan Anda — bukan oleh isi permintaan — dan setiap penolakan terjadi di server, bukan sekadar disembunyikan di tampilan."
       />
 
       <Container>

@@ -705,11 +705,11 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
         await page.getByLabel("Asal permohonan", { exact: true }).fill("Permohonan RT 04");
         await page.getByRole("button", { name: "Tambah penerima", exact: true }).click();
         await page.getByLabel("Nama", { exact: true }).fill("Mustahik Sintetis");
-        await page.getByLabel("Asnaf", { exact: true }).fill("Fakir");
+        await page.getByLabel("Asnaf (golongan penerima)", { exact: true }).fill("Fakir");
         await page.getByLabel("Alamat/cakupan", { exact: true }).fill("Desa Uji");
         await page.getByRole("button", { name: "Simpan draf", exact: true }).click();
         await page.getByText(/NIK harus 16 digit/).waitFor({ timeout: 5000 });
-        await page.getByText(/Draf server · versi 1/).waitFor({ timeout: 5000 });
+        await page.getByText(/Draf tersimpan · versi 1/).waitFor({ timeout: 5000 });
 
         // Existing drafts become dirty after editing; aid references work before any save.
         await page.getByLabel("Tujuan pengajuan", { exact: true }).fill("Draf A");
@@ -727,7 +727,7 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
           const response = page.waitForResponse((r: any) => new URL(r.url()).pathname === "/api/workspace/proposals" && r.request().method() === "POST");
           await page.getByRole("button", { name: "Simpan draf", exact: true }).click();
           const result = await (await response).json();
-          await page.getByText(`Draf server · versi ${result.draft.version}`, { exact: true }).waitFor();
+          await page.getByText(`Draf tersimpan · versi ${result.draft.version}`, { exact: true }).waitFor();
           return result.draft;
         };
         const draftA = await save();
@@ -778,7 +778,7 @@ describe("Program bantuan and draf pengajuan (Ticket #89)", () => {
         await page.getByRole("button", { name: "Pengajuan baru", exact: true }).click();
         await page.getByText("Selesaikan pemeriksaan penyimpanan draf sebelum berpindah.", { exact: true }).waitFor();
         await page.getByRole("button", { name: "Periksa penyimpanan", exact: true }).click();
-        await page.getByText("Draf server · versi 1", { exact: true }).waitFor();
+        await page.getByText("Draf tersimpan · versi 1", { exact: true }).waitFor();
         const recovered = await disbursement.listProposalDrafts(SINAR, secondProgram.id);
         expect(recovered).toHaveLength(1);
         expect(recovered[0]?.purpose).toBe("Respons hilang");

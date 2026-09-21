@@ -1,3 +1,4 @@
+import { formatIdrAmount } from "../workspace/mandateLabels";
 import { Download, FileSpreadsheet, Plus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { newAidLine, newBeneficiary, type ProposalDraft, type ProposalTotals, type TabularFormat } from "./disbursementClient";
@@ -160,7 +161,7 @@ export function ProposalSummary({ summary }: { summary: ProposalTotals | null })
       <p>{summary.uniqueBeneficiaryCount} penerima unik · {summary.aidLineCount} baris bantuan
         {summary.isPartial ? " · sebagian nilai belum diketahui" : ""}</p>
       <ul className="mt-1 space-y-0.5">
-        {Object.entries(summary.totalsByUnit).map(([unit, amount]) => <li key={unit}>{unit}: {amount}</li>)}
+        {Object.entries(summary.totalsByUnit).map(([unit, amount]) => <li key={unit}>{unit === "IDR" ? `Total ${formatIdrAmount(amount)}` : `${unit}: ${amount}`}</li>)}
       </ul>
     </section>
   );

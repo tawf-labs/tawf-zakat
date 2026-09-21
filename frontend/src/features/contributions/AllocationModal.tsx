@@ -9,6 +9,12 @@ import { errorMessage, useOperationIds } from "./contributionUi";
 const fieldClass =
   "mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white";
 
+/** The whole remainder, capped at what the activity still needs when that is known and positive. */
+export function suggestedAllocation(available: string, need: string | null | undefined): string {
+  if (!/^\d+$/.test(available) || !need || !/^\d+$/.test(need) || BigInt(need) === 0n) return available;
+  return (BigInt(need) < BigInt(available) ? BigInt(need) : BigInt(available)).toString();
+}
+
 /** Allocates part of an endorsed contribution to one activity, against the version on screen. */
 export function AllocationModal({
   contribution,
@@ -25,6 +31,7 @@ export function AllocationModal({
   const [activityId, setActivityId] = useState("");
   const available = contribution.unallocatedAmount ?? "0";
   const [amount, setAmount] = useState(available);
+  const [amountEdited, setAmountEdited] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +51,13 @@ export function AllocationModal({
       cancelled = true;
     };
   }, [requests, contribution.currencyUnit]);
+
+  // Offer what the chosen activity still needs, or the whole remainder if that is smaller. The user may change it.
+  useEffect(() => {
+    if (amountEdited || !activities) return;
+    const need = activities.find((a) => a.id === activityId)?.unallocatedNeed;
+    setAmount(suggestedAllocation(available, need));
+  }, [activities, activityId, available, amountEdited]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,8 +137,9 @@ export function AllocationModal({
           </label>
 
           <label className="block font-semibold text-stone-700">
-            Nominal (unit minor) <span className="text-red-500">*</span>
-            <input required value={amount} onChange={(e) => setAmount(e.target.value)} className={`${fieldClass} font-mono`} />
+            {contribution.currencyUnit === "IDR" ? "Nominal (Rupiah, angka bulat)" : "Nominal (satuan terkecil USDC, 6 desimal)"} <span className="text-red-500">*</span>
+            <input required inputMode="numeric" value={amount} onChange={(e) => { setAmountEdited(true); setAmount(e.target.value); }} className={`${fieldClass} font-mono`} />
+            <span className="mt-1 block font-normal text-stone-500">Terisi otomatis sebesar kebutuhan kegiatan atau sisa kontribusi, mana yang lebih kecil. Boleh diubah.</span>
           </label>
 
           <label className="block font-semibold text-stone-700">

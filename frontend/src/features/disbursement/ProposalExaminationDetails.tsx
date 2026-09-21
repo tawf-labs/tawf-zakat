@@ -1,5 +1,5 @@
 import type { ProposalDraft, RecurringAidWarning } from "./disbursementClient";
-import { formatQuantity } from "../../lib/reporting";
+import { formatIdrAmount } from "../workspace/mandateLabels";
 
 export function ProposalExaminationDetails({ draft, warnings }: { draft: ProposalDraft; warnings: RecurringAidWarning[] }) {
   return <div className="space-y-4 text-sm">
@@ -19,10 +19,10 @@ export function ProposalExaminationDetails({ draft, warnings }: { draft: Proposa
         <ul className="mt-2 list-disc pl-4">
           {draft.aidLines.filter(line => line.beneficiaryId === beneficiary.id).map(line =>
             <li key={line.id}>{line.aidType} · {line.period} · {line.value.kind === "MONEY"
-              ? formatQuantity({ amount: line.value.amountRequestedIdr, unit: "IDR" })
+              ? formatIdrAmount(line.value.amountRequestedIdr)
               : `${line.value.quantityRequested} ${line.value.unit}`}
               {line.value.kind === "GOODS" && line.value.valuedAmountIdr != null && line.value.valuationBasis &&
-                <p>Estimasi pengajuan {formatQuantity({ amount: line.value.valuedAmountIdr, unit: "IDR" })}.
+                <p>Estimasi pengajuan {formatIdrAmount(line.value.valuedAmountIdr)}.
                   Dasar: {line.value.valuationBasis}. Biaya aktual dicatat terpisah.</p>}
             </li>)}
         </ul>

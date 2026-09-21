@@ -645,7 +645,7 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
       await page.getByRole("heading", { name: "LPZ Sinar Amanah (sintetis)" }).waitFor();
       await page.getByRole("button", { name: "Buat Kegiatan", exact: true }).click();
       const create = page.getByRole("dialog", { name: "Buat kegiatan penyaluran", exact: true });
-      await create.getByLabel(/ID pengajuan yang disahkan/).fill("prop-browser");
+      await create.getByLabel(/Pengajuan yang sudah disahkan/).selectOption({ value: "prop-browser" });
       await create.getByLabel("Nama kegiatan (opsional)", { exact: true }).fill("Kegiatan Smoke 103");
       await create.getByRole("button", { name: "Buat Kegiatan", exact: true }).click();
       await create.waitFor({ state: "detached" });
@@ -656,11 +656,11 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
       const allocation = page.getByRole("dialog", { name: "Alokasikan kontribusi", exact: true });
       const activities = (await (await get("/activities", tokens.amil)).json()).activities;
       await allocation.getByLabel(/Kegiatan penyaluran/).selectOption(activities[0].id);
-      await allocation.getByLabel(/Nominal \(unit minor\)/).fill("700001");
+      await allocation.getByLabel(/Nominal \(Rupiah/).fill("700001");
       await allocation.getByLabel(/Alasan alokasi/).fill("Smoke tahap pertama");
       await allocation.getByRole("button", { name: "Konfirmasi Alokasi", exact: true }).click();
       await allocation.getByText(/Nominal melebihi sisa kontribusi/).waitFor();
-      await allocation.getByLabel(/Nominal \(unit minor\)/).fill("300000");
+      await allocation.getByLabel(/Nominal \(Rupiah/).fill("300000");
       await allocation.getByRole("button", { name: "Konfirmasi Alokasi", exact: true }).click();
       await allocation.waitFor({ state: "detached" });
       await contributionRow.getByText(/Teralokasi:.*300\.000/).waitFor();

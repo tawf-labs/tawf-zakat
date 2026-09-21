@@ -36,6 +36,18 @@ const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "
   REMAINDER_CLOSED: { variant: "neutral", label: "Sisa Ditutup" },
 };
 
+/** Says exactly where a locked proposal stands, instead of one message that fits several states. */
+function readOnlyMessage(status: ProposalDraft["status"]): string {
+  switch (status) {
+    case "SUBMITTED": return "Pengajuan sudah diajukan dan menunggu pemeriksa memulai pemeriksaan.";
+    case "UNDER_EXAMINATION": return "Pengajuan sedang diperiksa. Pemeriksa akan menyatakannya siap diputus atau mengembalikannya untuk revisi.";
+    case "READY_FOR_DECISION": return "Pemeriksaan selesai. Pengajuan menunggu keputusan pengesah.";
+    case "APPROVED": return "Pengajuan sudah disahkan. Langkah berikutnya: buat kegiatan penyaluran dari pengajuan ini.";
+    case "REJECTED": return "Pengajuan ditolak dan tidak dapat diubah.";
+    default: return "Pengajuan tidak dapat diubah pada status ini.";
+  }
+}
+
 export function ProposalDraftForm({
   requests,
   initial,
@@ -148,7 +160,7 @@ export function ProposalDraftForm({
     ? "Menyimpan…"
     : dirty
     ? `Belum tersimpan${draft.version ? ` · berdasarkan versi ${draft.version}` : ""}`
-    : `Draf server · versi ${draft.version}`;
+    : `Draf tersimpan · versi ${draft.version}`;
 
   return (
     <div className="space-y-4 rounded-2xl border border-stone-200 bg-stone-50 p-4">
@@ -323,7 +335,7 @@ export function ProposalDraftForm({
       <p className="text-xs text-stone-500">
         {!isReadOnly
           ? "Draf dapat disimpan berkali-kali. Saat diajukan, kelengkapan administrasi dan dokumen wajib akan diverifikasi secara otomatis sebelum masuk antrean pemeriksaan."
-          : "Pengajuan sedang berada dalam proses pemeriksaan kelayakan atau telah selesai ditinjau."}
+          : readOnlyMessage(draft.status)}
       </p>
 
       {/* Withdrawal dialog */}

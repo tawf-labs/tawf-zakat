@@ -1,5 +1,5 @@
 import { Input } from "../../components/ui/Input";
-import { formatQuantity } from "../../lib/reporting";
+import { formatIdrAmount } from "../workspace/mandateLabels";
 import type { ProposalDraft } from "./disbursementClient";
 import type { DecisionForm } from "./useProposalDecision";
 
@@ -23,7 +23,7 @@ export function DecisionAidLinesTable({ draft, form, disabled, onChange }: {
             const beneficiary = draft.beneficiaries.find(b => b.id === line.beneficiaryId);
             const isMoney = line.value.kind === "MONEY";
             const requested = line.value.kind === "MONEY"
-              ? formatQuantity({ amount: line.value.amountRequestedIdr, unit: "IDR" })
+              ? formatIdrAmount(line.value.amountRequestedIdr)
               : `${line.value.quantityRequested} ${line.value.unit}`;
             return <tr key={line.id}>
               <td className="p-2.5"><strong>{beneficiary?.name ?? line.beneficiaryId}</strong>
@@ -31,7 +31,7 @@ export function DecisionAidLinesTable({ draft, form, disabled, onChange }: {
               <td className="p-2.5">{line.aidType} · {line.period}</td>
               <td className="p-2.5 text-stone-600">{requested}
                 {line.value.kind === "GOODS" && line.value.valuedAmountIdr != null && line.value.valuationBasis &&
-                  <p className="mt-1">Estimasi pengajuan {formatQuantity({ amount: line.value.valuedAmountIdr, unit: "IDR" })}.
+                  <p className="mt-1">Estimasi pengajuan {formatIdrAmount(line.value.valuedAmountIdr)}.
                     Dasar: {line.value.valuationBasis}. Biaya aktual dicatat terpisah.</p>}
               </td>
               <td className="p-2.5">{form.action === "APPROVE"
