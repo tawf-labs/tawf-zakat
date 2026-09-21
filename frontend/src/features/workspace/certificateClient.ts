@@ -7,7 +7,7 @@
  * reachable through this module by accident.
  */
 import type { PrivateRequests } from "./privateRequests";
-import type { CertificateIssuanceIntent, PublicCertificateSummary } from "../../../../shared/certificate-nft";
+import type { CertificateIssuanceIntent } from "../../../../shared/certificate-nft";
 
 export type { CertificateIssuanceIntent, PublicCertificateSummary } from "../../../../shared/certificate-nft";
 
@@ -48,10 +48,5 @@ export async function retryCertificate(requests: PrivateRequests, institutionId:
   return res.certificate;
 }
 
-/** Unauthenticated by design: the same allowlisted aggregate any public reader may see. */
-export async function fetchPublicCertificate(origin: string, institutionId: string, certificateId: string): Promise<PublicCertificateSummary> {
-  const response = await fetch(`${origin}/api/public/certificates/${encodeURIComponent(institutionId)}/${encodeURIComponent(certificateId)}`, { cache: "no-store" });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload?.success) throw new Error(typeof payload?.error === "string" ? payload.error : "Sertifikat tidak ditemukan.");
-  return payload.certificate as PublicCertificateSummary;
-}
+// Compatibility export; the public-only client is owned by the certificate feature.
+export { fetchPublicCertificate } from "../certificates/certificateClient";

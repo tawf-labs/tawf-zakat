@@ -141,7 +141,6 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         bytes32 certificateKey = keccak256(bytes(c.certificateId));
 
         tokenId = ++tokenIdCounter;
-        _safeMint(custodian, tokenId);
         tokenDigests[tokenId] = c.digest;
         tokenIssuers[tokenId] = c.signer;
         tokenActivities[tokenId] = c.activityId;
@@ -149,6 +148,9 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         tokenVersions[tokenId] = c.version;
         certificateVersions[institutionKey][certificateKey][keccak256(bytes(c.version))] = tokenId;
         latestVersions[institutionKey][certificateKey] = c.version;
+
+        // Reserve the certificate and initialize its content before the receiver callback.
+        _safeMint(custodian, tokenId);
 
         emit CertificateIssued(institutionKey, certificateKey, tokenId, c.version, c.digest, c.signer, custodian);
     }

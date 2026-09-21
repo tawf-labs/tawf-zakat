@@ -7,6 +7,7 @@ import { connect } from "@wagmi/core";
 import { foundry } from "viem/chains";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CertificateIssuancePanel } from "../src/features/workspace/CertificateIssuancePanel";
+import { CertificateVerifier } from "../src/features/certificates/CertificateVerifier";
 const provider = { on() {}, removeListener() {}, async request(input: unknown) {
   const response = await fetch('/wallet-rpc', { method: 'POST', body: JSON.stringify(input) });
   return response.json();
@@ -15,4 +16,4 @@ const config = createConfig({ chains: [foundry], connectors: [injected({ target:
 await connect(config, { connector: config.connectors[0]! });
 const props = await (await fetch('/smoke-config')).json();
 const access = await fixtureAccess(props.token);
-createRoot(document.getElementById('root')!).render(<WagmiProvider config={config}><QueryClientProvider client={new QueryClient()}><FixtureAccess access={access}>{requests => <CertificateIssuancePanel requests={requests} institutionId={props.institutionId} canManage />}</FixtureAccess></QueryClientProvider></WagmiProvider>);
+createRoot(document.getElementById('root')!).render(<WagmiProvider config={config}><QueryClientProvider client={new QueryClient()}><FixtureAccess access={access}>{requests => <CertificateIssuancePanel requests={requests} institutionId={props.institutionId} canManage />}</FixtureAccess><CertificateVerifier institutionId={props.institutionId} /></QueryClientProvider></WagmiProvider>);

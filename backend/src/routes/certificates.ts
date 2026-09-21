@@ -16,6 +16,7 @@ import { authenticateWorkspace, badRequest, refuse } from "../workspace-session"
 import { authorize } from "../tenancy";
 import { operationalActor, OperationalAccessDenied } from "../operational-access";
 import { createCertificateIssuance, CertificateError } from "../certificate-issuance";
+import { CertificateBudgetError } from "../certificate-budget";
 
 export const certificateRoutes = new Hono();
 certificateRoutes.use("*", async (c, next) => {
@@ -24,6 +25,7 @@ certificateRoutes.use("*", async (c, next) => {
 });
 certificateRoutes.onError((error, c) => {
   if (error instanceof CertificateError) return c.json({ success: false, error: error.message }, error.status);
+  if (error instanceof CertificateBudgetError) return c.json({ success: false, error: error.message }, 503);
   if (error instanceof OperationalAccessDenied) return c.json({ success: false, error: error.message }, 403);
   if (error instanceof SyntaxError) return c.json({ success: false, error: "JSON tidak sah." }, 400);
   return c.json({ success: false, error: "Registry atau layanan sertifikat tidak dapat diperiksa. Muat ulang status sebelum mengulang." }, 503);
@@ -101,6 +103,12 @@ certificateRoutes.post("/activities/:activityId/certificates/:certificateId/retr
 });
 
 export const publicCertificateRoutes = new Hono();
+publicCertificateRoutes.use("*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
+  await next();
+});
+publicCertificateRoutes.onError((error, c) => c.json({ success: false, error: error instanceof CertificateError
+  ? error.message : "Isi atau bukti chain sertifikat tidak dapat diperiksa. Verifikasi ditahan." }, 503));
 publicCertificateRoutes.get("/certificates/:institutionId/:certificateId", async (c) => {
   const runtime = workspaceRuntime();
   if (!runtime?.certificateChain || !runtime.certificateStore) return c.json({ success: false, error: "Layanan sertifikat belum dikonfigurasi." }, 503);

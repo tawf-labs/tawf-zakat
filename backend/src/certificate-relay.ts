@@ -32,7 +32,7 @@ export function createCertificateRelay(store: CertificateStore, chain: Certifica
 
   async function send(intent: CertificateIssuanceIntent, signature: Hex): Promise<CertificateIssuanceIntent> {
     let attempt = await store.attempt(institution, intent.id);
-    if (!attempt) attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), (nonce) => chain.build(intent, signature, nonce));
+    if (!attempt) attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), chain.budget, (nonce) => chain.build(intent, signature, nonce));
     if (attempt.signature !== signature) throw fail("Retry berbeda dari percobaan tersimpan.", 409);
     // Broadcast ambiguity is recoverable: exact signed bytes and hash are already durable.
     await chain.broadcast(attempt);

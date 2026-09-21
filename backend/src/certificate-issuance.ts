@@ -13,7 +13,8 @@ import {
 import type { CertificateChain } from "./certificate-chain";
 import type { CertificateStore } from "./certificate-store";
 import { createCertificateRelay } from "./certificate-relay";
-import { freezeCertificateContent, parseCertificateContent, certificateCommitment, newCommitmentSalt } from "./certificate-content";
+import { freezeCertificateContent, parseCertificateContent, certificateCommitment, newCommitmentSalt, totalsOf, CERTIFICATE_CONTENT_FORMAT, CERTIFICATE_CONTENT_VERSION } from "./certificate-content";
+import { canonicalJson } from "../../shared/canonical-json";
 import type { ActivityStore } from "./activity-store";
 import type { DisbursementStore } from "./disbursement-store";
 
@@ -38,7 +39,29 @@ export function createCertificateIssuance(
     const intent = await store.get(institution, id);
     if (!intent) throw new CertificateError("Percobaan penerbitan sertifikat tidak ditemukan.", 404);
     if (JSON.stringify(intent.domain) !== JSON.stringify(chain.domain)) throw new CertificateError("Deployment berbeda dari yang ditinjau.", 409);
+    await verifiedContent(intent);
     return intent;
+  }
+  // Verify the exact stored bytes before projecting totals or accepting an endorsement.
+  // A real receipt is not evidence that the SQL snapshot has remained intact.
+  async function verifiedContent(intent: CertificateIssuanceIntent) {
+    const stored = await store.content(institution, intent.id);
+    try {
+      if (!stored) throw new Error("Missing content");
+      const c = intent.certification;
+      const digest = certificateCommitment(new TextEncoder().encode(stored.canonical), stored.salt);
+      const content = parseCertificateContent(stored.canonical);
+      if (digest !== c.digest || hashTypedData(certificationTypedData(intent.domain, c)) !== intent.certificationDigest
+        || content.format !== CERTIFICATE_CONTENT_FORMAT || content.version !== CERTIFICATE_CONTENT_VERSION
+        || content.institutionId !== institution || content.institutionId !== c.institutionId
+        || content.activityId !== c.activityId || content.certificateId !== intent.id || content.certificateId !== c.certificateId
+        || content.certificateVersion !== c.version || canonicalJson(content.totals) !== canonicalJson(totalsOf(content.realizations))) {
+        throw new Error("Content binding mismatch");
+      }
+      return content;
+    } catch {
+      throw new CertificateError("Isi beku sertifikat tidak tersedia atau tidak cocok dengan commitment pengesahan. Verifikasi ditahan.", 503);
+    }
   }
   const status = async (id: string) => relay.status(await readIntent(id));
 
@@ -105,8 +128,7 @@ export function createCertificateIssuance(
     /** So the officer's own preparation screen can show confirmed vs. disputed/unconfirmed before
      * signing (AC: an unconfirmed part must never read as final) without exposing the salt. */
     async contentTotals(certificateId: string) {
-      const stored = await store.content(institution, certificateId);
-      return stored ? totalsOfCanonical(stored.canonical) : null;
+      return publicTotals((await verifiedContent(await readIntent(certificateId))).totals);
     },
 
     /** Allowlisted aggregate only: totals and chain proof, never a realization or beneficiary reference. */
@@ -115,12 +137,18 @@ export function createCertificateIssuance(
       if (!intent) return null;
       const tokenId = await chain.tokenOf(institution, certificateId, intent.certification.version);
       if (!tokenId) return null;
-      const [{ issuer, contentDigest, custodian }, stored] = await Promise.all([
+      const [{ issuer, contentDigest, custodian }, content] = await Promise.all([
         chain.publicView(tokenId),
-        store.content(institution, certificateId),
+        verifiedContent(intent),
       ]);
+      if (contentDigest !== intent.certification.digest || issuer.toLowerCase() !== intent.certification.signer.toLowerCase()) {
+        throw new CertificateError("Isi atau penerbit sertifikat tidak cocok dengan bukti chain. Verifikasi ditahan.", 503);
+      }
       const observed = await status(certificateId);
-      const totals = stored ? totalsOfCanonical(stored.canonical) : { confirmedCount: 0, disputedCount: 0, unconfirmedCount: 0, totalRealizedIdr: "0" };
+      if (["CONFIRMED", "INCLUDED"].includes(observed.observation.state) && observed.observation.tokenId !== tokenId.toString()) {
+        throw new CertificateError("Token sertifikat tidak cocok dengan receipt penerbitan.", 503);
+      }
+      const totals = publicTotals(content.totals);
       return {
         tokenId: tokenId.toString(), institutionId: institution, activityId: intent.certification.activityId,
         certificateId, version: intent.certification.version, issuer, contentDigest, custodian,
@@ -130,8 +158,7 @@ export function createCertificateIssuance(
   };
 }
 
-function totalsOfCanonical(canonical: string) {
-  const content = parseCertificateContent(canonical);
-  return { confirmedCount: content.totals.confirmedCount, disputedCount: content.totals.disputedCount,
-    unconfirmedCount: content.totals.unconfirmedCount, totalRealizedIdr: content.totals.totalRealizedIdr };
+function publicTotals(totals: PublicCertificateSummary["totals"]) {
+  return { confirmedCount: totals.confirmedCount, disputedCount: totals.disputedCount,
+    unconfirmedCount: totals.unconfirmedCount, totalRealizedIdr: totals.totalRealizedIdr };
 }

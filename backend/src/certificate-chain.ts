@@ -15,7 +15,9 @@ import { contractCertification, type CertificateDomain, type CertificateIssuance
 import type { RegistryChain } from "./registry-chain";
 import type { CertificateAttempt } from "./certificate-store";
 
-export type CertificateChainConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number };
+import { certificateBudget, CertificateBudgetError, type CertificateBudgetConfig } from "./certificate-budget";
+
+export type CertificateChainConfig = { rpcUrl: string; chainId: number; address: Hex; privateKey: Hex; requiredConfirmations: number; budget: CertificateBudgetConfig };
 
 export function createCertificateChain(config: CertificateChainConfig, mandateChain: RegistryChain) {
   if (!Number.isSafeInteger(config.chainId) || config.chainId < 1 || !Number.isSafeInteger(config.requiredConfirmations) || config.requiredConfirmations < 1) {
@@ -23,6 +25,9 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
   }
   const chain = defineChain({ id: config.chainId, name: "Distribution certificate", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
   const account = privateKeyToAccount(config.privateKey);
+  const budget = certificateBudget(config.budget, config.chainId, account.address);
+  const gas = BigInt(config.budget.gasLimit);
+  const maxFeePerGas = BigInt(config.budget.maxFeePerGas);
   const rpc = createPublicClient({ chain, transport: http(config.rpcUrl, { retryCount: 0 }) });
   const wallet = createWalletClient({ account, chain, transport: http(config.rpcUrl) });
   const domain: CertificateDomain = { name: "Tawf Distribution Certificate", version: "1", chainId: config.chainId, verifyingContract: config.address };
@@ -87,6 +92,7 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
   return {
     readOnly: false,
     domain,
+    budget,
     requiredConfirmations: config.requiredConfirmations,
     confirmationPolicy,
     deployment: `${config.chainId}:${config.address.toLowerCase()}:${account.address.toLowerCase()}`,
@@ -99,8 +105,11 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     pendingNonce: () => rpc.getTransactionCount({ address: account.address, blockTag: "pending" }),
     async build(intent: CertificateIssuanceIntent, signature: Hex, nonce: number): Promise<CertificateAttempt> {
       const data = encodeFunctionData({ abi, functionName: "issueCertificate", args: [contractCertification(intent.certification), signature] });
-      const tx = await wallet.prepareTransactionRequest({ to: config.address, data, nonce });
-      const raw = await wallet.signTransaction(tx);
+      // Estimate/simulate before signing; never let RPC-selected fees expand the reservation.
+      const request = { account, to: config.address, data, nonce, value: 0n, maxFeePerGas, maxPriorityFeePerGas: 0n };
+      const estimated = await rpc.estimateGas(request);
+      if (estimated > gas) throw new CertificateBudgetError("Batas gas anggaran layanan sertifikat tidak mencukupi.");
+      const raw = await wallet.signTransaction({ ...request, chain, type: "eip1559", gas });
       return { raw, hash: keccak256(raw), nonce, signature };
     },
     async broadcast(attempt: CertificateAttempt) {

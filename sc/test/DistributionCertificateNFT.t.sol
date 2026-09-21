@@ -5,6 +5,50 @@ import {ReportEvidenceRegistry as Registry} from "../src/ReportEvidenceRegistry.
 import {DistributionCertificateNFT as Certificate} from "../src/DistributionCertificateNFT.sol";
 import {RegistryWallet} from "./ReportEvidenceRegistry.t.sol";
 import {ERC5192} from "@tawf-gov/identity/ERC5192.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+
+contract CertificateReceiver is IERC721Receiver {
+    Certificate immutable cert;
+    Certificate.Certification private second;
+    bytes private signature;
+    bool immutable reject;
+    uint256 public callbacks;
+    bool public coherentState;
+    bool public duplicateMinted;
+    bytes public duplicateError;
+
+    error Rejected();
+
+    constructor(Certificate certificate, Certificate.Certification memory c, bytes memory sig, bool rejectMint) {
+        cert = certificate;
+        second = c;
+        signature = sig;
+        reject = rejectMint;
+    }
+
+    function onERC721Received(address, address, uint256 tokenId, bytes calldata) external returns (bytes4) {
+        require(msg.sender == address(cert));
+        callbacks++;
+        if (callbacks == 1) {
+            (string memory activityId, string memory certificateId, string memory version) = cert.certificateOf(tokenId);
+            coherentState = cert.ownerOf(tokenId) == address(this) && cert.locked(tokenId)
+                && cert.issuerOf(tokenId) == second.signer && cert.contentDigestOf(tokenId) == second.digest
+                && keccak256(bytes(activityId)) == keccak256(bytes(second.activityId))
+                && keccak256(bytes(certificateId)) == keccak256(bytes(second.certificateId))
+                && keccak256(bytes(version)) == keccak256(bytes(second.version))
+                && cert.certificateVersionToken(second.institutionId, second.certificateId, second.version) == tokenId
+                && keccak256(bytes(cert.latestCertificateVersion(second.institutionId, second.certificateId)))
+                    == keccak256(bytes(second.version));
+            try cert.issueCertificate(second, signature) returns (uint256) {
+                duplicateMinted = true;
+            } catch (bytes memory reason) {
+                duplicateError = reason;
+            }
+        }
+        if (reject) revert Rejected();
+        return IERC721Receiver.onERC721Received.selector;
+    }
+}
 
 contract DistributionCertificateNFTTest is Test {
     Registry registry;
@@ -121,6 +165,68 @@ contract DistributionCertificateNFTTest is Test {
         bytes memory signature = sign(again);
         vm.expectRevert(Certificate.AlreadyIssued.selector);
         cert.issueCertificate(again, signature);
+    }
+
+    function receiverFor(Certificate.Certification memory second, bool rejectMint)
+        internal
+        returns (CertificateReceiver receiver)
+    {
+        second.nonce = bytes32(uint256(2));
+        bytes memory signature = sign(second);
+        // Both endorsements are independently valid before the first mint begins.
+        cert.validateCertification(second, signature);
+        receiver = new CertificateReceiver(cert, second, signature, rejectMint);
+        vm.prank(admin);
+        cert.setCustodian("institution-a", address(receiver));
+    }
+
+    function test_ReceiverCannotReenterWithAnotherAuthorizedNonceForSameVersion() public {
+        CertificateReceiver receiver = receiverFor(certification(), false);
+        Certificate.Certification memory c = certification();
+        uint256 tokenId = cert.issueCertificate(c, sign(c));
+
+        assertFalse(receiver.duplicateMinted(), "receiver minted duplicate certificate/version");
+        assertEq(receiver.duplicateError(), abi.encodeWithSelector(Certificate.AlreadyIssued.selector));
+        assertEq(receiver.callbacks(), 1);
+        assertEq(cert.balanceOf(address(receiver)), 1);
+        assertEq(cert.certificateVersionToken(c.institutionId, c.certificateId, c.version), tokenId);
+        assertTrue(cert.usedNonces(keccak256(bytes(c.institutionId)), signer, c.nonce));
+        assertFalse(cert.usedNonces(keccak256(bytes(c.institutionId)), signer, bytes32(uint256(2))));
+    }
+
+    function test_ReceiverReadsCoherentCertificateStateDuringMint() public {
+        CertificateReceiver receiver = receiverFor(certification(), false);
+        Certificate.Certification memory c = certification();
+        bytes memory signature = sign(c);
+        vm.expectEmit(true, true, true, true, address(cert));
+        emit Certificate.CertificateIssued(
+            keccak256(bytes(c.institutionId)), keccak256(bytes(c.certificateId)), 1,
+            c.version, c.digest, signer, address(receiver)
+        );
+        cert.issueCertificate(c, signature);
+        assertTrue(receiver.coherentState(), "callback observed incomplete certificate state");
+    }
+
+    function test_ReceiverRejectionRollsBackIssuanceAndAllowsRetry() public {
+        CertificateReceiver receiver = receiverFor(certification(), true);
+        Certificate.Certification memory c = certification();
+        bytes memory signature = sign(c);
+        vm.expectRevert(CertificateReceiver.Rejected.selector);
+        cert.issueCertificate(c, signature);
+
+        assertEq(cert.balanceOf(address(receiver)), 0);
+        assertEq(cert.certificateVersionToken(c.institutionId, c.certificateId, c.version), 0);
+        assertEq(cert.latestCertificateVersion(c.institutionId, c.certificateId), "");
+        assertFalse(cert.usedNonces(keccak256(bytes(c.institutionId)), signer, c.nonce));
+        assertFalse(cert.usedNonces(keccak256(bytes(c.institutionId)), signer, bytes32(uint256(2))));
+        vm.expectRevert(ERC5192.ErrNotFound.selector);
+        cert.contentDigestOf(1);
+
+        vm.prank(admin);
+        cert.setCustodian(c.institutionId, custodian);
+        assertEq(cert.issueCertificate(c, signature), 1); // counter and endorsement rolled back too
+        assertEq(cert.ownerOf(1), custodian);
+        assertEq(cert.contentDigestOf(1), c.digest);
     }
 
     function test_ExpiredSignatureIsRejected() public {

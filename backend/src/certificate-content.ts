@@ -58,7 +58,7 @@ export type CertificateContent = {
 
 const addIdr = (a: string, b: string): string => (BigInt(a) + BigInt(b)).toString();
 
-export function totalsOf(realizations: RealizationRecord[]): CertificateTotals {
+export function totalsOf(realizations: CertificateRealizationLine[]): CertificateTotals {
   const goods = new Map<string, { totalQuantity: string; count: number }>();
   let totalRealizedIdr = "0";
   let confirmedCount = 0;
@@ -126,7 +126,7 @@ export function freezeCertificateContent(input: {
     currencyUnit: input.activity.currencyUnit,
     frozenAt: input.frozenAt,
     realizations,
-    totals: totalsOf(input.realizations),
+    totals: totalsOf(realizations),
   };
 
   const canonical = canonicalJson(content);

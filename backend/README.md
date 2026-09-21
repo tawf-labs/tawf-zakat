@@ -110,6 +110,90 @@ source of truth for the two constraints Drizzle cannot express: the partial
 unique index giving an account one active membership, and the composite foreign
 key that makes a cross-institution session unstorable.
 
+## Distribution certificate publication (#111)
+
+Certificate publication uses its own service-funded relayer, not donor contributions.
+Enable it only with a configured `REPORT_REGISTRY_*` mandate source and all of:
+`CERTIFICATE_NFT_RPC_URL`, `CERTIFICATE_NFT_CHAIN_ID`, `CERTIFICATE_NFT_ADDRESS`,
+`CERTIFICATE_NFT_RELAYER_KEY`, `CERTIFICATE_NFT_CONFIRMATIONS`, and the three budget
+settings below. Keep the signing key in the server secret environment, never Git
+or a `VITE_` variable. Missing/invalid settings fail startup rather than enabling
+unbounded publication. With **all** `CERTIFICATE_NFT_*` settings absent, the
+certificate service remains disabled.
+
+- `CERTIFICATE_NFT_BUDGET_WEI`: positive decimal lifetime ceiling for reserved gas
+  liability, in native-currency wei. This is **not** a daily allowance or measured
+  gas spending; there is no automatic reset.
+- `CERTIFICATE_NFT_GAS_LIMIT`: positive decimal maximum gas units per mint. Gas
+  estimation must fit this limit before the transaction is signed.
+- `CERTIFICATE_NFT_MAX_FEE_PER_GAS`: positive decimal EIP-1559 fee cap, in wei per
+  gas. Priority fee is zero. If the network base fee exceeds the cap, publication
+  may remain pending or fail; do not silently increase it during retries.
+- `CERTIFICATE_NFT_CONFIRMATIONS`: positive block depth required for `CONFIRMED`.
+  Choose it explicitly for the pilot chain. A later reorg can still invalidate
+  that observation; physical distribution status is separate.
+
+For example, **local synthetic tests only** use a ceiling of `1000000000000000000`,
+gas limit `1500000`, and fee cap `2000000000`. Each newly signed attempt reserves
+`3000000000000000` wei. These are not recommended production fee or budget values.
+The operator must approve limits for the actual chain and pilot funding, including
+separate provider/storage costs. Use a dedicated certificate relayer; other apps
+spending from the same key are not accounted by this ledger.
+
+### Upgrade, recovery and rollback
+
+1. Stop certificate writers on **every instance**. Take and verify a private backup
+   of the database and evidence storage, retaining frozen content/salts, intents,
+   signed attempts, nonce allocation and any existing budget ledger. A signed raw
+   transaction remains spendable even if RPC never acknowledged it; never publish
+   these backups or transaction bytes.
+2. Deploy the updated contract if the current deployment predates the receiver-
+   callback fix. This contract is not an upgradeable proxy; updating backend code
+   alone does not patch an already deployed NFT. Preserve the old deployment and
+   its history. Do not repoint its intents to the new address: domain-bound retries
+   belong to their original deployment. Stop/drain or explicitly reconcile old
+   attempts before cutover; multi-deployment historical lookup is not automated.
+3. Supply the three new budget values consistently on all writers using the same
+   database. Startup performs additive, idempotent schema changes: the
+   `certificate_service_budgets(scope,reserved_wei)` table and nullable
+   `budget_scope`/`reserved_wei` columns on `certificate_attempts`. No history is
+   deleted. Do not use a destructive schema push/reset to apply this migration.
+4. Before the first **new** attempt, under the shared chain+relayer row lock,
+   recover legacy transaction chain/sender and maximum fee liability from signed
+   bytes and verify their hash. Matching liabilities are backfilled atomically
+   with the new reservation, bytes and nonce. If legacy liability exhausts the
+   ceiling, new publication returns 503 without signing; if legacy bytes cannot
+   be verified, it also fails closed. Repair from a verified backup/reconcile with
+   the responsible operator, never delete the attempts to make space. A rejected
+   transaction rolls back its backfill too, so the next attempt checks it again.
+5. Exact-byte retries do not reserve again. Included, confirmed, reverted and
+   noncanonical attempts retain their conservative maximum reservation permanently;
+   confirmation **does not refund** capacity. Explicitly approving a larger
+   lifetime ceiling is the way to add capacity. Changing the contract address
+   does not reset a budget for the same chain+relayer. Do not edit counters to
+   match a transient receipt or restore an older database while writers are live.
+6. For rollback, stop writers and retain all additive schema/data. Prefer rolling
+   back UI or other services while keeping certificate writes disabled. The old
+   backend has no budget enforcement: do not resume its certificate relayer.
+   Restore a verified backup only after reconciling every subsequently signed
+   transaction and its nonce/liability; otherwise retain the latest durable state.
+   Validate a restart and same-byte retry in an isolated environment before reopening.
+
+Verification commands from `backend/`:
+
+```sh
+bun run typecheck
+bun test test/distribution_certificate_api.test.ts
+REGISTRY_BROWSER_MODULE=/absolute/path/to/playwright-core/index.mjs \
+REGISTRY_BROWSER_EXECUTABLE=/usr/bin/chromium \
+  bun test test/distribution_certificate_api.test.ts
+```
+
+These use isolated SQL storage, synthetic signatures and a local EVM. They cover
+budget exhaustion/concurrency, restart/reorg, legacy accounting, tampered content
+and independent chain bindings; the optional browser run also checks public
+re-verification after stored content changes. No deployment or live mint is implied.
+
 ## Automated Tests vs Manual Demo
 
 The backend pins **Bun 1.4.2** in `.tool-versions`. From `backend/`, run:
