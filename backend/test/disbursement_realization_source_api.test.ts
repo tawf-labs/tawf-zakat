@@ -1311,6 +1311,13 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
       return drill.unreadable[0].reason as string;
     };
 
+    expect((await post("/activities", { id: "act-integrity", proposalId: draft.id, name: "Kegiatan", operationId: crypto.randomUUID() }, amilToken)).status).toBe(201);
+    const recapSource = async () => {
+      const res = await get(`${BASE}/activities/act-integrity/trace`, amilToken);
+      expect(res.status).toBe(200);
+      return (await res.json()).trace.reportSources.data[0];
+    };
+
     // Diubah: isi lain di lokasi yang sama.
     await fileStore.put({
       institutionId: SINAR,
@@ -1319,10 +1326,14 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
       bytes: new TextEncoder().encode(JSON.stringify({ format: "tawf.realization.provenance", realizations: [] })),
     });
     expect(await expectFailed()).toContain("tidak cocok");
+    expect((await recapSource()).status).toBe("FAILED");
+    expect((await recapSource()).reason).toContain("Integritas");
 
     // Hilang.
     await unlink(file.storageRef!);
     expect(await expectFailed()).toContain("tidak ditemukan");
+    expect((await recapSource()).status).toBe("UNAVAILABLE");
+    expect((await recapSource()).reason).toContain("tidak ditemukan");
   });
 
   it("koreksi laporan dari sumber realisasi merujuk versi pendahulu; versi lama dan sumber bekunya tetap", async () => {
@@ -1531,6 +1542,107 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
     expect(publicSummary.sides.every((side: any) => side.rows === undefined)).toBe(true);
   });
 
+  it("rekap amil memisahkan snapshot laporan historis dari status kegiatan terkini dengan identitas yang sama (#114)", async () => {
+    const { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-1", name: "Penerima Kegiatan", nik: "3201123456780061" }],
+      lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "400000" }],
+    });
+    clock = 1713000000;
+    let amilToken = await signIn(amilSinar);
+    let approverToken = await signIn(approverSinar);
+    const mutate = (path: string, body: Record<string, unknown>, token: string) =>
+      post(path, { operationId: crypto.randomUUID(), ...body }, token);
+    expect((await mutate("/activities", { id: "act-rekap", proposalId: draft.id, name: "Santunan rekap" }, amilToken)).status).toBe(201);
+    const contribute = async (id: string, amount: string) => {
+      await mutate("/contributions", { id, sourceChannel: "BANK_TRANSFER", sourceReference: `TRX-${id}`, currencyUnit: "IDR",
+        amountExact: amount, fundType: "ZAKAT", purpose: "Santunan", receivedAt: clock - 100, donorName: null }, amilToken);
+      await mutate(`/contributions/${id}/reconcile`, { expectedVersion: 1, proofRef: `Mutasi ${id}` }, amilToken);
+      const endorsed = await mutate(`/contributions/${id}/endorse`, { expectedVersion: 2, notes: "Disahkan" }, approverToken);
+      const version = (await endorsed.json()).contribution.version;
+      expect((await mutate(`/contributions/${id}/allocate`, { activityId: "act-rekap", amountExact: amount, expectedVersion: version, reason: "Alokasi" }, amilToken)).status).toBe(200);
+    };
+    await contribute("c-rekap-1", "300000");
+    const realized = await post(`/proposals/${draft.id}/realizations`,
+      { expectedVersion: draft.version, items: [{ aidLineId: "line-1", beneficiaryId: "ben-1", method: "CASH", amountIdr: "400000", reportedAt: clock }] }, amilToken);
+    expect(realized.status).toBe(201);
+
+    const freezeRes = await post(EVIDENCE, {
+      label: "Paket rekap", period: { kind: "SEMESTER", year: 2024 }, currencyUnit: "IDR", balanceSheetScope: "ON",
+      claim: pastedClaim("400000"), source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff: CUT_OFF_ISO } },
+    }, amilToken);
+    expect(freezeRes.status).toBe(201);
+    const preparation = (await freezeRes.json()).preparation;
+
+    // The activity moves on after the freeze: more funding is allocated.
+    clock = CUT_OFF_SECONDS + 3600;
+    amilToken = await signIn(amilSinar);
+    approverToken = await signIn(approverSinar);
+    await contribute("c-rekap-2", "100000");
+
+    const traceRes = await get(`${BASE}/activities/act-rekap/trace`, amilToken);
+    expect(traceRes.status).toBe(200);
+    const { trace } = await traceRes.json();
+    // Live state: both allocations count now.
+    expect(trace.activity.funds.data.totalAllocatedAmount).toBe("400000");
+    expect(trace.activity.identity).toMatchObject({ activityId: "act-rekap", proposalId: draft.id, proposalVersion: 1 });
+
+    expect(trace.reportSources.status).toBe("OK");
+    const [source] = trace.reportSources.data;
+    expect(trace.reportSources.data).toHaveLength(1);
+    // Same identity as the frozen package, marked historical, and its own frozen figure.
+    expect(source).toMatchObject({
+      status: "READ", preparationId: preparation.id, currentness: "HISTORICAL_SNAPSHOT",
+      frozen: { proposalVersion: 1, allocatedByUnit: { IDR: "300000" }, allocationCount: 1, realizationCount: 1 },
+    });
+    expect(source.commitment).toBe(preparation.commitment);
+    expect(source.differsFromCurrent).toEqual(["ALLOCATED_TOTAL"]);
+    // Nothing private from the frozen file leaks through the recap.
+    const text = JSON.stringify(trace);
+    for (const secret of ["Penerima Kegiatan", "3201123456780061", "storageRef", "salt"]) expect(text).not.toContain(secret);
+  });
+
+  it("recap rejects malformed committed provenance rather than reporting an empty match", async () => {
+    const { commitmentFor } = await import("../src/evidence-snapshot");
+    const { draft } = await prepareApprovedProposal({ lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "100000" }] });
+    const { preparation, amilToken } = await freezeRealizationPackage(draft, "line-1", "ben-1", "100000", "Malformed provenance");
+    expect((await post("/activities", { id: "act-malformed", proposalId: draft.id, name: "Kegiatan", operationId: crypto.randomUUID() }, amilToken)).status).toBe(201);
+    const stored = (await evidence.getPreparation(SINAR, preparation.id))!;
+    const file = stored.files.find((f) => f.fileName === PROVENANCE_FILE_NAMES.SOURCE)!;
+    const original = JSON.parse(Buffer.from((await fileStore.get(file.storageRef!))!).toString());
+    const malformed = { ...original, activityTrace: { available: true, activities: [], allocations: "not-an-array" } };
+    const bytes = Buffer.from(JSON.stringify(malformed));
+    const saved = await fileStore.put({ institutionId: SINAR, preparationId: preparation.id, fileId: `malformed-${file.id}`, bytes });
+    const snapshot = JSON.parse(stored.canonicalSnapshot);
+    snapshot.files = snapshot.files.map((f: { id: string }) => f.id === file.id ? { ...f, sizeBytes: saved.sizeBytes, contentSha256: saved.contentSha256 } : f);
+    const canonical = JSON.stringify(snapshot);
+    const commitment = commitmentFor(Buffer.from(canonical), stored.commitmentSalt);
+    await database.handle().execute(sql`UPDATE evidence_preparations SET canonical_snapshot = ${canonical}, commitment = ${commitment} WHERE id = ${preparation.id}`);
+    await database.handle().execute(sql`UPDATE evidence_files SET storage_ref = ${saved.storageRef}, size_bytes = ${bytes.length}, content_sha256 = ${saved.contentSha256} WHERE id = ${file.id}`);
+    const response = await get(`${BASE}/activities/act-malformed/trace`, amilToken);
+    expect(response.status).toBe(200);
+    const { trace } = await response.json();
+    expect(trace.reportSources.status).toBe("OK");
+    expect(trace.reportSources.data[0].status).toBe("FAILED");
+    expect(trace.reportSources.data[0].reason).toContain("struktur");
+  });
+
+  it("recap preserves failed and missing source states when provenance files are absent", async () => {
+    const { draft } = await prepareApprovedProposal({ lines: [{ id: "line-1", beneficiaryId: "ben-1", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "100000" }] });
+    const { preparation, amilToken } = await freezeRealizationPackage(draft, "line-1", "ben-1", "100000", "Unread source");
+    expect((await post("/activities", { id: "act-missing", proposalId: draft.id, name: "Kegiatan", operationId: crypto.randomUUID() }, amilToken)).status).toBe(201);
+    await database.handle().execute(sql`DELETE FROM evidence_files WHERE preparation_id = ${preparation.id} AND role = 'SOURCE'`);
+    for (const status of ["FAILED", "MISSING", "READ"]) {
+      await database.handle().execute(sql`UPDATE evidence_sources SET status = ${status}, detail = 'Sumber tidak terbaca', rows_json = '[]', row_count = 0 WHERE preparation_id = ${preparation.id} AND role = 'SOURCE'`);
+      const response = await get(`${BASE}/activities/act-missing/trace`, amilToken);
+      expect(response.status).toBe(200);
+      const { trace } = await response.json();
+      expect(trace.reportSources.status).toBe("OK");
+      expect(trace.reportSources.data).toHaveLength(1);
+      expect(trace.reportSources.data[0].status).toBe(status === "FAILED" ? "FAILED" : "UNAVAILABLE");
+      expect(trace.reportSources.data[0].reason).toBeString();
+    }
+  });
+
   it("kegiatan yang gagal dibaca tidak menggagalkan sumber realisasi; ketiadaannya dinyatakan", async () => {
     const { draft } = await prepareApprovedProposal({
       beneficiaries: [{ id: "ben-1", name: "Penerima", nik: "3201123456780071" }],
@@ -1552,6 +1664,12 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
         reason: "Kegiatan penyaluran dan alokasi kontribusi tidak dapat dibaca dari penyimpanan.",
       });
       expect(drill.provenances[0].realizations[0].activityId).toBeNull();
+      configureRuntime(disbursement);
+      expect((await post("/activities", { id: "act-gap", proposalId: draft.id, name: "Kegiatan setelah snapshot", operationId: crypto.randomUUID() }, amilToken)).status).toBe(201);
+      const response = await get(`${BASE}/activities/act-gap/trace`, amilToken);
+      expect(response.status).toBe(200);
+      const { trace } = await response.json();
+      expect(trace.reportSources).toEqual({ status: "OK", data: [{ status: "UNAVAILABLE", preparationId: preparation.id, label: "Paket kegiatan gagal", role: "SOURCE", reason: drill.provenances[0].activityTrace.reason }] });
     } finally {
       configureRuntime(disbursement);
     }

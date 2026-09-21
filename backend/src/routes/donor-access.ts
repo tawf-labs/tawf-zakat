@@ -7,6 +7,7 @@
  *   POST   /api/donor/session                             exchange a code for a bounded session token
  *   GET    /api/donor/contributions/:id                   contribution detail for its session
  *   GET    /api/donor/contributions/:id/allocations       activity allocations and pooled progress
+ *   GET    /api/donor/contributions/:id/trace             progress, funds, confirmation, certificate and proof tracks (#114)
  *   DELETE /api/donor/session                             revoke the session immediately
  *
  * Principles (ADR-0033 & Spec #100):
@@ -22,6 +23,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { workspaceRuntime } from "../workspace-runtime";
 import { bearerToken } from "../workspace-session";
+import { buildDonorTrace } from "../activity-trace";
 import {
   DonorAccessDeniedError,
   DonorContactMissingError,
@@ -167,6 +169,17 @@ donorAccessRoutes.get("/contributions/:id", async (c) => {
 donorAccessRoutes.get("/contributions/:id/allocations", async (c) => {
   const { store, session } = await authorizedSession(c);
   return c.json({ success: true, allocations: await store.getDonorAllocations(session) });
+});
+
+/**
+ * 4b. One projection of what the contribution funds: activity progress, funds and
+ * accountability, confirmation, certificate status and the contribution's own proof,
+ * each as its own track (Ticket #114). A track that cannot be read says so.
+ */
+donorAccessRoutes.get("/contributions/:id/trace", async (c) => {
+  const { session } = await authorizedSession(c);
+  const runtime = workspaceRuntime()!;
+  return c.json({ success: true, trace: await buildDonorTrace(runtime, session) });
 });
 
 /**

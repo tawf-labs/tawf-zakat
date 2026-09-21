@@ -1,5 +1,6 @@
 import type { DonorContributionCorrection } from "../../../../shared/contribution-lifecycle";
 import { getApiBaseUrl } from "../../lib/contracts";
+import type { DonorTrace } from "../traceability/traceClient";
 import type {
   ContributionStatus,
   CurrencyUnit,
@@ -209,6 +210,12 @@ export const fetchDonorAllocations = async (session: DonorSessionRecord) =>
     `/contributions/${encodeURIComponent(session.contributionId)}/allocations`,
     session.token
   )).allocations;
+
+export const fetchDonorTrace = async (session: DonorSessionRecord) =>
+  (await readPrivate<{ trace: DonorTrace }>(
+    `/contributions/${encodeURIComponent(session.contributionId)}/trace`,
+    session.token
+  )).trace;
 
 /** Revokes the session on the server; the caller forgets it locally regardless. */
 export async function endDonorSession(token: string): Promise<void> {

@@ -4,6 +4,7 @@ import { DonorSessionEndedError, type DonorSessionRecord } from "./donorClient";
 import { useDonorAllocations, useDonorContribution } from "./donorQueries";
 import { DonorContributionSummary } from "./DonorContributionSummary";
 import { DonorAllocationList } from "./DonorAllocationList";
+import { DonorTraceSection } from "./DonorTraceSection";
 import { Notice } from "./DonorNotice";
 
 type DonorContributionViewProps = {
@@ -60,6 +61,7 @@ export function DonorContributionView({ session, onLogout, onSessionEnded }: Don
             allocations={allocations.data}
             error={allocations.isError ? allocations.error.message : null}
           />
+          <DonorTraceSection session={session} onSessionEnded={onSessionEnded} />
         </>
       )}
     </div>

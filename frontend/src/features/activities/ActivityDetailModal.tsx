@@ -6,6 +6,7 @@ import { formatNominal } from "../contributions/contributionClient";
 import { errorMessage } from "../contributions/contributionUi";
 import { allocationPercent, getActivity, type ActivityDetail } from "./activityClient";
 import { ActivityAllocations } from "./ActivityAllocations";
+import { ActivityTracePanel } from "./ActivityTracePanel";
 import { TargetAmount } from "./ActivityTable";
 import { ReallocateModal } from "./ReallocateModal";
 
@@ -318,6 +319,8 @@ export function ActivityDetailModal({
                   <strong>Cakupan penelusuran:</strong> {detail.tracingCoverage}
                 </p>
               </div>
+
+              <ActivityTracePanel activityId={activityId} requests={requests} reloadKey={detail.version} />
 
               <ActivityAllocations detail={detail} />
             </>

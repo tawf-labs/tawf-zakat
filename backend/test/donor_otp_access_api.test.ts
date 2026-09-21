@@ -842,8 +842,11 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
 
         const code = await signIn();
         await page.getByText("Rp 1.250.000").waitFor();
-        await page.getByRole("heading", { name: "Kegiatan Penyerahan Beasiswa Pelajar" }).waitFor();
-        await page.getByText(/Rp 1\.000\.000 \/ Rp 4\.000\.000 \(25%\)/).waitFor();
+        const allocations = page.getByRole("region", { name: "Alokasi ke Kegiatan Penyaluran", exact: true });
+        await allocations.getByRole("heading", { name: "Kegiatan Penyerahan Beasiswa Pelajar" }).waitFor();
+        await allocations.getByText(/Rp 1\.000\.000 \/ Rp 4\.000\.000 \(25%\)/).waitFor();
+        await page.getByRole("region", { name: "Penelusuran Kegiatan", exact: true })
+          .getByRole("heading", { name: "Kegiatan Penyerahan Beasiswa Pelajar" }).waitFor();
         // Neither the code nor the token ever appears in a URL.
         expect(requestedUrls.some((url) => url.includes(code) || url.includes("dsess_"))).toBe(false);
 

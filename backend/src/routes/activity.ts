@@ -5,6 +5,7 @@
  *   POST   /api/workspace/activities                        create an activity from an approved proposal version
  *   GET    /api/workspace/activities/:id                    one activity with its allocations and allocation history
  *   GET    /api/workspace/activities/:id/accountability     what the activity has spent, owes and has left over
+ *   GET    /api/workspace/activities/:id/trace              tracks and report snapshots for the amil recap (#114)
  *   GET    /api/workspace/activities/:id/reallocations      decisions that moved funds into or out of it
  *   POST   /api/workspace/activities/:id/reallocate         move part of an allocation to another activity
  *   POST   /api/workspace/contributions/:id/allocate        allocate part of an endorsed contribution to an activity
@@ -17,6 +18,7 @@
  */
 
 import { Hono } from "hono";
+import { buildAmilTrace } from "../activity-trace";
 import type { Context } from "hono";
 import { ActivityRuleError } from "../activity";
 import {
@@ -168,6 +170,21 @@ activityRoutes.get("/activities/:id", async (c) => {
   );
   if (!activity) return refuse(c, 404, "not-found");
   return c.json({ success: true, activity });
+});
+
+/**
+ * Amil recap of one activity from the same sources the donor sees (Ticket #114): the live
+ * activity tracks plus the report snapshots that froze it, marked as historical.
+ * Donor identity is not part of it; that stays behind the contribution mandate.
+ */
+activityRoutes.get("/activities/:id/trace", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId"));
+  if (!auth.ok) return auth.response;
+
+  const trace = await buildAmilTrace(runtime, auth.session.institutionId, c.req.param("id"));
+  if (!trace) return refuse(c, 404, "not-found");
+  return c.json({ success: true, trace });
 });
 
 activityRoutes.get("/activities/:id/accountability", async (c) => {

@@ -104,6 +104,14 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("public verifier refreshes, clea
     await page.getByRole("heading", { name: "Sertifikat #3", exact: true }).waitFor();
     expect(await institution.inputValue()).toBe("institution-two");
     expect(await id.inputValue()).toBe("certificate-three");
+
+    // The trace links to the version it displayed, not silently to a newer official head.
+    await page.goto(`${server.url.origin}/sertifikat?institutionId=institution-two&certificateId=certificate-three&version=1`);
+    await page.getByRole("heading", { name: "Sertifikat #3", exact: true }).waitFor();
+    expect(new URL(requests.at(-1)!.url).pathname).toBe("/api/public/certificates/institution-two/certificate-three/versions/1");
+    await page.getByRole("button", { name: "Kembali ke versi resmi terkini" }).click();
+    await page.getByRole("heading", { name: "Sertifikat #3", exact: true }).waitFor();
+    expect(new URL(requests.at(-1)!.url).pathname).toBe("/api/public/certificates/institution-two/certificate-three");
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

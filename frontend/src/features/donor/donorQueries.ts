@@ -3,6 +3,7 @@ import {
   fetchDonorAllocations,
   fetchDonorChannel,
   fetchDonorContribution,
+  fetchDonorTrace,
   type DonorSessionRecord,
 } from "./donorClient";
 
@@ -24,3 +25,9 @@ export const useDonorAllocations = (session: DonorSessionRecord) =>
 
 export const useDonorChannel = () =>
   useQuery({ queryKey: ["donor", "channel"], queryFn: fetchDonorChannel, retry: false });
+
+export const useDonorTrace = (session: DonorSessionRecord) =>
+  useQuery({
+    queryKey: ["donor", "trace", session.contributionId],
+    queryFn: () => fetchDonorTrace(session),
+  });

@@ -24,6 +24,7 @@ import {
   maskContact,
   otpHashMatches,
   type DonorActivityAllocation,
+  type DonorReallocation,
   type DonorContributionDetail,
   type DonorRecoveryRequest,
   type DonorRecoveryRequestInput,
@@ -612,7 +613,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
       const rows = rowsOf(
         await database.execute(sql`
           SELECT ca.id, ca.activity_id, ca.amount_exact, ca.currency_unit, ca.fund_type,
-                 ca.purpose, ca.reason, ca.allocated_at,
+                 ca.purpose, ca.reason, ca.allocated_at, ca.contribution_version,
                  a.name AS activity_name, a.description AS activity_description,
                  a.target_amount, a.target_is_partial,
                  a.currency_unit AS activity_currency_unit, a.status AS activity_status,
@@ -645,6 +646,7 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         purpose: row.purpose ?? "",
         reason: row.reason,
         allocatedAt: Number(row.allocated_at),
+        contributionVersion: Number(row.contribution_version),
         activity: {
           id: row.activity_id,
           name: row.activity_name,
@@ -658,6 +660,34 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
             allocationCount: Number(row.allocation_count ?? 0),
           },
         },
+      }));
+    },
+
+    /**
+     * Allocations of this contribution that #107 moved to another activity. Only the amount, the
+     * target activity's name, decision reason and when; no decision maker or other donor's detail.
+     */
+    async getDonorReallocations(session: DonorSession): Promise<DonorReallocation[]> {
+      const rows = rowsOf(
+        await database.execute(sql`
+          SELECT d.amount_exact, d.occurred_at, d.reason, ca.currency_unit, a.name AS target_name
+          FROM reallocation_decisions d
+          JOIN contribution_allocations ca
+            ON ca.id = d.source_allocation_id AND ca.institution_id = d.institution_id
+          LEFT JOIN distribution_activities a
+            ON a.id = d.target_activity_id AND a.institution_id = d.institution_id
+          WHERE d.contribution_id = ${session.contributionId}
+            AND d.institution_id = ${session.institutionId}
+          ORDER BY d.occurred_at, d.id
+        `)
+      );
+      return rows.map((row) => ({
+        kind: "REALLOCATED" as const,
+        amountExact: row.amount_exact,
+        currencyUnit: row.currency_unit,
+        toActivityName: row.target_name ?? null,
+        at: Number(row.occurred_at),
+        reason: row.reason,
       }));
     },
 

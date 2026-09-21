@@ -47,27 +47,8 @@ export interface DonorSession {
   lastAccessedAt: number;
 }
 
-export type DonorZkProofStatus =
-  | "NOT_AVAILABLE"
-  | "UNCONFIRMED"
-  | "PENDING"
-  | "PROVING"
-  | "VERIFIED"
-  | "FAILED"
-  | "SUPERSEDED";
-
-export interface DonorZkProofDetail {
-  status: DonorZkProofStatus;
-  batchId?: string;
-  batchNumber?: number;
-  version?: number;
-  batchRoot?: string;
-  receiptCommitment?: string;
-  txHash?: string;
-  blockNumber?: number;
-  verifiedAt?: number;
-  failureReason?: string;
-}
+import type { DonorZkProofDetail } from "../../shared/activity-trace";
+export type { DonorZkProofDetail, DonorZkProofStatus } from "../../shared/activity-trace";
 
 export interface DonorContributionDetail {
   version: number;
@@ -90,6 +71,8 @@ export interface DonorContributionDetail {
   zkProof: DonorZkProofDetail;
 }
 
+export type { DonorReallocation } from "../../shared/activity-trace";
+
 export interface DonorActivityAllocation {
   allocationId: string;
   activityId: string;
@@ -99,6 +82,8 @@ export interface DonorActivityAllocation {
   purpose: string;
   reason: string;
   allocatedAt: number;
+  /** The contribution version this allocation was made against (#114 compares it with the current one). */
+  contributionVersion: number;
   activity: {
     id: string;
     name: string;

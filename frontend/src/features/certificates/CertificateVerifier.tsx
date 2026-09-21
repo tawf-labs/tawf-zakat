@@ -8,12 +8,14 @@ import { usePublicCertificate, type CertificateLookup } from "./usePublicCertifi
 interface Props {
   institutionId?: string;
   certificateId?: string;
+  /** A trace deep link must inspect the exact version that the reader saw. */
+  version?: string;
 }
 
-export function CertificateVerifier({ institutionId = "", certificateId = "" }: Props) {
+export function CertificateVerifier({ institutionId = "", certificateId = "", version }: Props) {
   const [submitted, setSubmitted] = useState<CertificateLookup | null>(() =>
     institutionId.trim() && certificateId.trim()
-      ? { institutionId: institutionId.trim(), certificateId: certificateId.trim() }
+      ? { institutionId: institutionId.trim(), certificateId: certificateId.trim(), ...(version?.trim() ? { version: version.trim() } : {}) }
       : null,
   );
   const query = usePublicCertificate(submitted);

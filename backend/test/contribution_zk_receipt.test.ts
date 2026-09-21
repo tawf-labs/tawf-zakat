@@ -463,27 +463,23 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     await runZkPublication(runtime, `root:${batch.id}`); // refresh root after verifier outage
 
     // Step 6: Generate Real Groth16 Proof and Verify on EVM (AC01, AC04, AC18)
-    const processProofPromise = app.fetch(
-      new Request(`${BASE_WORKSPACE}/contribution-batches/${batch.id}/proofs/${contributionId}/process`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${amilToken}`,
-        },
-        body: JSON.stringify({
-          institutionId: SINAR,
-        }),
-      })
-    );
-    const concurrent = await app.fetch(processRequest());
-    const processProofRes = await processProofPromise;
-    expect([200, 202, 409]).toContain(concurrent.status);
-    const processProofJson = await processProofRes.json();
-    if (processProofRes.status !== 201) {
-      console.error("POST /process proof failed:", processProofJson);
+    const publicationBefore = (await publications.list(SINAR, batch.id)).find(p => p.contributionId === contributionId)!;
+    const nonceBefore = await publicClient.getTransactionCount({ address: deployer.address });
+    const responses = await Promise.all([app.fetch(processRequest()), app.fetch(processRequest())]);
+    const results = await Promise.all(responses.map(async response => ({ status: response.status, body: await response.json() })));
+    // Either request can acquire the publication lease. A response observes the
+    // final state, so both may report 201 without creating a second publication.
+    expect(results.some(result => result.status === 201)).toBe(true);
+    for (const result of results) expect([200, 201, 202]).toContain(result.status);
+    const { proofRecord } = results.find(result => result.status === 201)!.body;
+    for (const result of results) {
+      if (result.status === 202) {
+        expect(result.body.operation.id).toBe(publicationBefore.id);
+        expect(["QUEUED", "PROVING", "SUBMITTING", "PENDING"]).toContain(result.body.proofRecord.status);
+      } else {
+        expect(result.body.proofRecord).toEqual(proofRecord);
+      }
     }
-    expect(processProofRes.status).toBe(201);
-    const { proofRecord } = processProofJson;
     expect(proofRecord.status).toBe("VERIFIED");
     expect(proofRecord.txHash).toBeDefined();
     expect(proofRecord.blockNumber).toBeGreaterThan(0);
@@ -507,6 +503,14 @@ describe("Satu receipt dengan proof ZK nyata hingga EVM (Issue #108)", () => {
     const repeatJson = await repeatProcessRes.json();
     expect(repeatJson.proofRecord.status).toBe("VERIFIED");
     expect(repeatJson.proofRecord.txHash).toBe(proofRecord.txHash);
+    const receiptPublications = (await publications.list(SINAR, batch.id)).filter(p => p.contributionId === contributionId);
+    expect(receiptPublications).toHaveLength(1);
+    expect(receiptPublications[0]!.id).toBe(publicationBefore.id);
+    expect(receiptPublications[0]!.status).toBe("CONFIRMED");
+    expect(receiptPublications[0]!.txHash).toBe(proofRecord.txHash);
+    expect(receiptPublications[0]!.attempts).toBe(publicationBefore.attempts + 1);
+    // The concurrent calls plus the idempotent repeat spend exactly one nonce.
+    expect(await publicClient.getTransactionCount({ address: deployer.address })).toBe(nonceBefore + 1);
 
     // Step 8: Donor Access View (Ticket #104 & Issue #108)
     // Donors view their contribution via OTP without seeing private witness or Merkle siblings
