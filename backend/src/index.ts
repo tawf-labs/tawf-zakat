@@ -28,6 +28,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia } from "viem/chains";
 import { CONTRACT_CONFIG } from "./config";
 import { chargeQRIS, verifyMidtransSignature, checkMidtransStatus, createSnapTransaction } from "./midtrans";
+import { workspaceRuntime } from "./workspace-runtime";
+import { recordSettledDonation, rememberGatewayIntent } from "./gateway-contribution";
 import { getSafeInfo, getSafePendingTransactions, getSafeTransactionDetails } from "./safe";
 import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
@@ -339,11 +341,31 @@ app.get("/health", (c) => {
   });
 });
 
+// Online payments reach the institution's ledger as RECEIVED contributions, recorded by the system.
+// Reconciliation and endorsement remain with people. Idempotent, and never allowed to fail a payment.
+const GATEWAY_EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+// The webhook falls back to a built-in demo key when none is configured, so a forged notification
+// would verify. Without a real server key nothing from the gateway may enter the ledger.
+const recordGatewayPayment = async (donation: DonationRecord) => {
+  if (!process.env.MIDTRANS_SERVER_KEY?.trim()) return;
+  try {
+    const runtime = workspaceRuntime();
+    if (!runtime?.contributions) return;
+    await recordSettledDonation(runtime.contributions, donation, runtime.now());
+  } catch {
+    console.error("Pencatatan kontribusi dari gateway pembayaran tertunda.");
+  }
+};
+
 // 1. Inflow: Create Fiat QRIS Invoice (Status: PENDING)
 const handleFiatDonation = async (c: any) => {
   try {
     const body = await c.req.json();
     const { donorName, isAnonymous, amountIDR, zakatType, paymentMethod } = body;
+    const donorContact = typeof body.donorContact === "string" && body.donorContact.trim() ? body.donorContact.trim() : null;
+    if (donorContact && (donorContact.length > 254 || !GATEWAY_EMAIL.test(donorContact))) {
+      return c.json({ error: "Email donor tidak valid", success: false }, 400);
+    }
 
     if (!amountIDR || amountIDR <= 0) {
       return c.json({ error: "Invalid donation amount", success: false }, 400);
@@ -377,6 +399,16 @@ const handleFiatDonation = async (c: any) => {
     };
 
     await dbService.recordDonation(record);
+
+    const gatewayInstitution = process.env.GATEWAY_INSTITUTION_ID?.trim();
+    const contributions = workspaceRuntime()?.contributions;
+    if (gatewayInstitution && contributions) {
+      try {
+        await rememberGatewayIntent(contributions, {
+          trxId, institutionId: gatewayInstitution, zakatType: String(zakatType || "Zakat"), donorContact,
+        }, Math.floor(Date.now() / 1000));
+      } catch { console.error("Niat donasi gateway tidak tersimpan."); }
+    }
 
     return c.json({
       success: true,
@@ -412,6 +444,7 @@ app.post("/api/donations/fiat", handleFiatDonation);
 
 // 1b. Inflow: public contribution lookup (the pending check also syncs Midtrans settlement)
 const syncPendingPayment = async (donation: DonationRecord) => {
+  if (donation.status === "PAID") return recordGatewayPayment(donation);
   if (donation.status !== "PENDING") return;
   const midtransCheck = await checkMidtransStatus(donation.trxId);
   if (midtransCheck && midtransCheck.isSettled) {
@@ -419,6 +452,7 @@ const syncPendingPayment = async (donation: DonationRecord) => {
     await dbService.markDonationAsPaid(donation.trxId, paidTime);
     donation.status = "PAID";
     donation.paidAt = paidTime;
+    await recordGatewayPayment(donation);
   }
 };
 
@@ -460,6 +494,7 @@ app.post("/api/webhooks/payment", async (c) => {
 
     // Idempotency: If already paid or batched, acknowledge immediately without duplicate work
     if (donation.status === "PAID" || donation.status === "BATCHED") {
+      await recordGatewayPayment(donation);
       return c.json({
         success: true,
         message: "Payment notification already processed",
@@ -492,6 +527,7 @@ app.post("/api/webhooks/payment", async (c) => {
     if (transaction_status === "settlement" || transaction_status === "capture" || !transaction_status) {
       const paidTimestamp = settlement_time || new Date().toISOString();
       const updated = await dbService.markDonationAsPaid(order_id, paidTimestamp);
+      await recordGatewayPayment({ ...donation, ...(updated ?? {}), paidAt: paidTimestamp });
 
       eventBus.broadcast("DONATION_PAID", {
         trxId: order_id,

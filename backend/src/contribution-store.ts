@@ -91,6 +91,13 @@ export type ContributionOperation = {
   requestHash: string;
 };
 
+export type GatewayIntent = {
+  trxId: string;
+  institutionId: string;
+  zakatType: string;
+  donorContact: string | null;
+};
+
 export type ActorIdentity = {
   account: string;
   officerId: string | null;
@@ -144,6 +151,14 @@ export class ContributionOperationConflictError extends Error {
 }
 
 export const CONTRIBUTION_SCHEMA_STATEMENTS = [
+  // An online payment's chosen institution, fund type and contact, kept from invoice to settlement.
+  `CREATE TABLE IF NOT EXISTS gateway_donation_intents (
+     trx_id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     zakat_type TEXT NOT NULL,
+     donor_contact TEXT,
+     created_at BIGINT NOT NULL
+   );`,
   `CREATE TABLE IF NOT EXISTS contributions (
      id TEXT PRIMARY KEY,
      institution_id TEXT NOT NULL REFERENCES institutions (id),
@@ -550,6 +565,10 @@ export type ContributionStore = {
 
   getContribution: (institutionId: string, id: string) => Promise<ContributionRecord | null>;
 
+  /** Remember what an online invoice was for. The first registration wins. */
+  saveGatewayIntent: (intent: GatewayIntent, now: number) => Promise<void>;
+  getGatewayIntent: (trxId: string) => Promise<GatewayIntent | null>;
+
   listContributions: (
     institutionId: string,
     filters?: { status?: ContributionStatus; currencyUnit?: CurrencyUnit; fundType?: JenisDana }
@@ -728,6 +747,23 @@ export function createContributionStore(database: ContributionDatabase): Contrib
         `)
       )[0];
       return row ? contributionFromRow(row) : null;
+    },
+
+    async saveGatewayIntent(intent, now) {
+      await database.execute(sql`
+        INSERT INTO gateway_donation_intents (trx_id, institution_id, zakat_type, donor_contact, created_at)
+        VALUES (${intent.trxId}, ${intent.institutionId}, ${intent.zakatType}, ${intent.donorContact}, ${now})
+        ON CONFLICT (trx_id) DO NOTHING
+      `);
+    },
+
+    async getGatewayIntent(trxId) {
+      const row = rowsOf(
+        await database.execute(sql`SELECT * FROM gateway_donation_intents WHERE trx_id = ${trxId}`)
+      )[0];
+      return row
+        ? { trxId: row.trx_id, institutionId: row.institution_id, zakatType: row.zakat_type, donorContact: row.donor_contact ?? null }
+        : null;
     },
 
     async listContributions(institutionId, filters) {
