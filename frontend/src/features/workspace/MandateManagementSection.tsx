@@ -37,7 +37,7 @@ export function MandateManagementSection({ requests }: { requests: PrivateReques
         }} /> : <>
         <div className="flex flex-wrap justify-between gap-3">
           <div>
-            <h4 className="font-semibold">{OPERATIONAL_FUNCTION_LABELS[mandate.function].label}</h4>
+            <h4 className="font-semibold">{OPERATIONAL_FUNCTION_LABELS[mandate.function]?.label ?? mandate.function}</h4>
             <p className="text-sm">{officers.data?.find(o => o.id === mandate.officerId)?.displayName ?? mandate.officerId}</p>
             <p className="text-xs">{mandate.isActive ? "Aktif" : "Dicabut"} · Versi {mandate.version}</p>
           </div>

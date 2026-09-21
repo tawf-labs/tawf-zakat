@@ -25,6 +25,22 @@ export const OPERATIONAL_FUNCTION_LABELS: Record<OperationalFunction, { label: s
     label: "Pemeriksaan Laporan",
     description: "Memeriksa laporan pertanggungjawaban penyaluran sebelum finalisasi.",
   },
+  RECORD_CONTRIBUTIONS: {
+    label: "Pencatatan Kontribusi",
+    description: "Mencatat kontribusi donor dan menyusun batch kontribusi lembaga.",
+  },
+  ENDORSE_CONTRIBUTIONS: {
+    label: "Pengesahan Kontribusi",
+    description: "Mengesahkan batch kontribusi sebelum akar bukti dipublikasikan.",
+  },
+  ISSUE_CERTIFICATES: {
+    label: "Penerbitan Sertifikat",
+    description: "Mengesahkan dan menerbitkan sertifikat distribusi (NFT) atas penyaluran.",
+  },
+  RECOVER_CERTIFICATE_CUSTODY: {
+    label: "Pemulihan Kustodian Sertifikat",
+    description: "Menerbitkan sertifikat pengganti bila kustodian sertifikat hilang.",
+  },
 };
 
 export const SCOPE_TYPE_LABELS: Record<MandateScopeType, string> = {
