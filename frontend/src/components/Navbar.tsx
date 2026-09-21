@@ -93,10 +93,10 @@ export function Navbar() {
           {/* Live WebSocket Indicator Badge */}
           <div
             className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-medium border border-[#dbe7dd] bg-[#f4f8f3] text-[#17332c]"
-            title={isConnected ? "WebSocket Real-Time Terhubung" : "Menghubungkan ke Server Real-Time..."}
+            title={isConnected ? "Terhubung langsung ke server" : "Menyambungkan ke server..."}
           >
             <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
-            <span>{isConnected ? "LIVE" : "CONNECTING"}</span>
+            <span>{isConnected ? "LANGSUNG" : "MENYAMBUNG"}</span>
           </div>
 
           {/* Quick Donate CTA */}
@@ -121,7 +121,7 @@ export function Navbar() {
                   >
                     {!isSepolia ? (
                       <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full font-bold">
-                        <AlertCircle className="w-3 h-3" /> Pindah Chain
+                        <AlertCircle className="w-3 h-3" /> Ganti Jaringan
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full font-semibold hidden sm:flex">
@@ -150,7 +150,7 @@ export function Navbar() {
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#1b765e] hover:bg-[#143f34] text-white text-xs font-semibold uppercase tracking-wider shadow-sm active:scale-98 transition-all cursor-pointer disabled:opacity-50"
                 >
                   <Wallet className="w-3.5 h-3.5 text-[#c4ed70]" />
-                  {isConnecting ? "Membuka..." : "Connect Wallet"}
+                  {isConnecting ? "Membuka..." : "Hubungkan Dompet Digital"}
                 </button>
               );
             }}
@@ -202,7 +202,7 @@ export function Navbar() {
             onClick={() => setMobileMenuOpen(false)}
             className="block text-sm font-semibold text-[#17332c] hover:text-[#1b765e] py-1.5"
           >
-            Verifikasi Kuitansi Merkle
+            Cek Kuitansi
           </a>
           <a
             href="#transparency"

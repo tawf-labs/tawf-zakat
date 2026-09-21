@@ -63,7 +63,7 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
           {/* Search Box */}
           <div className="w-full sm:w-64">
             <Input
-              placeholder="Cari ID, Hash, Asnaf..."
+              placeholder="Cari nomor, kode, atau golongan penerima..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               leftAddon={<Search className="w-4 h-4 text-[#5e7a70]" />}
@@ -99,11 +99,11 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
             <TableRow>
               <TableHead>ID Program</TableHead>
               <TableHead>Asnaf</TableHead>
-              <TableHead>Beneficiary Hash (UU PDP)</TableHead>
+              <TableHead>Kode Penerima (dilindungi UU PDP)</TableHead>
               <TableHead>Nominal</TableHead>
               <TableHead>Status Otorisasi</TableHead>
               <TableHead>Bukti BAST</TableHead>
-              <TableHead>Jejak L1</TableHead>
+              <TableHead>Jejak di Catatan Publik</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

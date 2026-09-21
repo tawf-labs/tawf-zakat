@@ -33,7 +33,7 @@ export function OwnerReceiptCheck({ contribution }: { contribution: PublicContri
         </summary>
         <p className="text-xs text-[#5e7a70] mt-2">
           Pemilik kuitansi dapat memasukkan kode rahasia dan nominal dari kuitansinya. Server memeriksa kecocokannya
-          dengan catatan batch; data ini tidak ditampilkan kepada publik.
+          dengan catatan lembaga; data ini tidak ditampilkan kepada publik.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-4">
@@ -74,10 +74,10 @@ function CheckOutcome({ check }: { check: ReturnType<typeof useReceiptCheck> }) 
   if (!check.data) return null;
   return check.data.isValid ? (
     <Outcome tone="bg-emerald-50 border-emerald-200 text-emerald-900" Icon={CheckCircle2}
-      text={`Kuitansi cocok dengan catatan batch #${check.data.batch?.batchId} yang tersimpan di server.`} />
+      text={`Kuitansi cocok dengan catatan penerimaan kelompok #${check.data.batch?.batchId} yang tersimpan di server.`} />
   ) : (
     <Outcome tone="bg-red-50 border-red-200 text-red-900" Icon={AlertCircle}
-      text="Kuitansi tidak cocok dengan catatan batch mana pun. Periksa kode rahasia dan nominal." />
+      text="Kuitansi tidak cocok dengan catatan penerimaan mana pun. Periksa kode rahasia dan nominal." />
   );
 }
 

@@ -24,7 +24,7 @@ export function DonorTraceSection({ session, onSessionEnded }: {
         <Route className="w-5 h-5 text-tawf-green-light" aria-hidden />
         <div>
           <h4 id="donor-trace-heading" className="font-serif text-lg font-bold text-tawf-green">Penelusuran Kegiatan</h4>
-          <p className="text-xs text-tawf-muted">Progres, dana, konfirmasi, dan NFT distribusi dipisahkan agar tidak saling menggantikan.</p>
+          <p className="text-xs text-tawf-muted">Kemajuan kegiatan, dana, konfirmasi penerima, dan sertifikat penyaluran ditampilkan terpisah agar tidak tercampur.</p>
         </div>
       </div>
       {trace.isPending ? (

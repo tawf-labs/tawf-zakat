@@ -41,7 +41,7 @@ export function TreasuryBalanceCards({
         {/* Card 2: Saldo Vault USDC */}
         <div className="rounded-3xl border border-[#dbe7dd] bg-white p-6 shadow-2xs space-y-3">
           <div className="flex items-center justify-between text-[#5e7a70]">
-            <span className="text-xs font-semibold uppercase tracking-wider">Vault On-Chain USDC</span>
+            <span className="text-xs font-semibold uppercase tracking-wider">Dana USDC di Brankas Digital</span>
             <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
               <Wallet className="w-4 h-4" />
             </div>

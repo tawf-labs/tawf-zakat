@@ -199,7 +199,7 @@ export function ContributionPanel({ requests, canManage, onAllocated }: {
         </TabButton>
         {canManage && (
           <>
-            <TabButton active={activeTab === "batches"} onClick={() => setActiveTab("batches")}>Batch bukti ZK</TabButton>
+            <TabButton active={activeTab === "batches"} onClick={() => setActiveTab("batches")}>Bukti Keaslian</TabButton>
             <TabButton active={activeTab === "create"} onClick={() => setActiveTab("create")}>
               <Plus className="h-4 w-4" />
               <span>Catat Manual</span>

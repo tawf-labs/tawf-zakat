@@ -17,7 +17,7 @@ export function ShariaPillars() {
       step: "02",
       role: "Dewan Pengawas Syariah (DPS)",
       icon: Scale,
-      title: "Otorisasi Fikih & Safe Multisig",
+      title: "Otorisasi Fikih & Persetujuan Bersama",
       description:
         "Komite ulama DPS menelaah dokumen penyaluran. Dana bantuan tidak dapat dicairkan tanpa persetujuan kuorum minimal 2 dari 3 ustadz pengawas.",
       badge: "Tahap 2: Hak Veto Fikih",
@@ -29,7 +29,7 @@ export function ShariaPillars() {
       title: "Audit BAST & Opini WTP",
       description:
         "Auditor independen memeriksa bukti mutasi bank dan Berita Acara Serah Terima (BAST), lalu menerbitkan atestasi kepatuhan akuntansi PSAK 109.",
-      badge: "Tahap 3: Ex-Post Audit",
+      badge: "Tahap 3: Audit Setelah Penyaluran",
     },
   ];
 

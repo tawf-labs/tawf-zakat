@@ -23,7 +23,7 @@ export function Footer() {
             </Link>
 
             <p className="text-sm text-[#5e7a70] max-w-sm leading-relaxed">
-              Protokol transparansi zakat pertama di blockchain yang mengunci hak operasional amil maksimal 12.5% secara <em>code-is-law</em> dan memvalidasi penyaluran dana secara publik.
+              Transparansi zakat yang bisa diperiksa siapa saja: hak operasional amil dibatasi maksimal 12,5% secara otomatis oleh sistem, dan penyaluran dana dapat dilihat publik.
             </p>
 
             <div className="flex gap-3 text-[#5e7a70] pt-2">
@@ -55,7 +55,7 @@ export function Footer() {
               </li>
               <li>
                 <a href="#verify" className="hover:text-[#1b765e] transition-colors">
-                  Verifikasi Kuitansi Merkle
+                  Cek Kuitansi
                 </a>
               </li>
               <li>
@@ -77,10 +77,10 @@ export function Footer() {
               Prinsip Syariah
             </h3>
             <ul className="space-y-2 text-xs text-[#5e7a70]">
-              <li>• Invariant 12.5% Hak Amil</li>
+              <li>• Batas 12,5% Hak Amil</li>
               <li>• 87.5% Hak Mutlak Mustahik</li>
-              <li>• Zero Gas Verification</li>
-              <li>• IPFS Attachment Proof</li>
+              <li>• Pemeriksaan Gratis</li>
+              <li>• Lampiran Bukti Tersimpan Permanen</li>
             </ul>
           </div>
 
@@ -91,7 +91,7 @@ export function Footer() {
             </h3>
             <ul className="space-y-2.5 text-xs text-[#5e7a70]">
               <li className="flex items-center gap-1.5 text-emerald-800 font-medium">
-                <ShieldCheck className="w-4 h-4 text-[#1b765e]" /> Ethereum Sepolia L1
+                <ShieldCheck className="w-4 h-4 text-[#1b765e]" /> Jaringan uji publik (Sepolia)
               </li>
               <li className="flex items-center gap-1.5 text-emerald-800 font-medium">
                 <HeartHandshake className="w-4 h-4 text-[#1b765e]" /> Dewan Pengawas Syariah

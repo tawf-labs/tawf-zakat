@@ -4,14 +4,14 @@ import { getPublicReceiptVerification, type DonorContribution, type DonorZkProof
 import { ReceiptProofReference } from "./ReceiptProofReference";
 
 const STATUS_LABELS: Record<DonorZkProofStatus, string> = {
-  VERIFIED: "Bukti keanggotaan terkonfirmasi",
-  UNCONFIRMED: "Bukti belum terkonfirmasi saat ini",
-  NOT_AVAILABLE: "Bukti belum tersedia",
-  PENDING: "Menunggu pembuktian",
-  PROVING: "Pembuktian sedang diproses",
-  FAILED: "Pembuktian gagal",
+  VERIFIED: "Keaslian catatan terkonfirmasi",
+  UNCONFIRMED: "Keaslian belum dapat dikonfirmasi saat ini",
+  NOT_AVAILABLE: "Bukti keaslian belum tersedia",
+  PENDING: "Menunggu pemeriksaan keaslian",
+  PROVING: "Pemeriksaan keaslian sedang diproses",
+  FAILED: "Pemeriksaan keaslian gagal",
   SUPERSEDED: "Bukti versi lama",
-  PENDING_REPROOF: "Menunggu pembuktian ulang pada batch baru",
+  PENDING_REPROOF: "Menunggu pemeriksaan ulang karena catatan dikoreksi",
 };
 
 export function DonorReceiptProof({ contribution }: { contribution: DonorContribution }) {
@@ -40,7 +40,7 @@ export function DonorReceiptProof({ contribution }: { contribution: DonorContrib
     }`}>
       {check.isFetching ? "Memeriksa bukti…" : STATUS_LABELS[status]}
     </p>
-    <p className="text-xs text-tawf-muted">Klaim: catatan kontribusi termasuk batch yang disahkan lembaga. Ini tidak membuktikan pembayaran bank atau penyerahan bantuan.</p>
+    <p className="text-xs text-tawf-muted">Yang dibuktikan: catatan kontribusi Anda masuk daftar yang sudah disahkan lembaga dan tidak diubah diam-diam. Ini bukan bukti uang sudah masuk bank atau bantuan sudah diserahkan.</p>
     {unavailable && <p role="alert" className="text-amber-800">Pemeriksaan belum tersedia. Coba lagi nanti.</p>}
     {status === "UNCONFIRMED" && !check.isFetching && <p className="text-xs text-tawf-muted">
       Hasil historis tetap tersimpan; keberlakuan bukti saat ini belum dapat dikonfirmasi.
@@ -50,7 +50,7 @@ export function DonorReceiptProof({ contribution }: { contribution: DonorContrib
       <RefreshCw aria-hidden className={`h-3 w-3 ${check.isFetching ? "animate-spin" : ""}`} />
       {check.isFetching ? "Memeriksa…" : "Periksa ulang bukti"}
     </button>
-    <p className="text-xs text-tawf-muted">Pemeriksaan dapat diulang tanpa biaya dan tanpa wallet.</p>
+    <p className="text-xs text-tawf-muted">Pemeriksaan boleh diulang kapan saja, gratis, dan tanpa dompet digital.</p>
     <details className="group rounded-2xl border border-tawf-green-10 bg-[#f4f8f3]/60">
       <summary className="flex cursor-pointer items-center justify-between p-4 text-xs font-semibold text-tawf-green">
         Rincian teknis pembuktian

@@ -13,10 +13,10 @@ export function BatchCorrectionForm({ draft, busy, submitting, onCorrect }: Prop
   const [source, setSource] = useState("");
   const id = useId();
   return <details className="border rounded-lg p-3 text-sm space-y-2 mt-4">
-    <summary className="font-medium cursor-pointer">{draft ? "Perbarui draf batch" : "Koreksi batch ini"}</summary>
+    <summary className="font-medium cursor-pointer">{draft ? "Perbarui draf daftar" : "Koreksi kelompok ini"}</summary>
     <p className="text-xs text-stone-600">{draft
-      ? "Jika sumber berubah, buat snapshot draf pengganti untuk diperiksa dan disahkan kembali. Draf lama tetap tersimpan. Transaksi yang sudah ditandatangani harus diselesaikan dahulu."
-      : "Buat versi penerus setelah kontribusi dikoreksi atau dana dikembalikan. Semua receipt anggota yang masih sah perlu dibuktikan ulang; receipt lama tetap menjadi riwayat."}</p>
+      ? "Jika sumber berubah, buat draf daftar pengganti untuk diperiksa dan disahkan kembali. Draf lama tetap tersimpan. Pencatatan yang sudah terkirim harus diselesaikan dahulu."
+      : "Buat versi penerus setelah kontribusi dikoreksi atau dana dikembalikan. Semua kuitansi anggota yang masih sah perlu dibuktikan ulang; kuitansi lama tetap tersimpan sebagai riwayat."}</p>
     <form className="space-y-2 pt-2" onSubmit={event => {
       event.preventDefault();
       if (!busy && reason.trim() && source.trim()) void onCorrect(reason.trim(), source.trim());
@@ -32,7 +32,7 @@ export function BatchCorrectionForm({ draft, busy, submitting, onCorrect }: Prop
           placeholder="REF-CORR-2026-09-001" className="w-full border rounded p-2 text-sm" />
       </div>
       <Button type="submit" disabled={busy || !reason.trim() || !source.trim()}>
-        {submitting ? "Menyiapkan koreksi…" : draft ? "Siapkan draf pengganti" : "Siapkan batch koreksi"}
+        {submitting ? "Menyiapkan koreksi…" : draft ? "Siapkan draf pengganti" : "Siapkan kelompok koreksi"}
       </Button>
     </form>
   </details>;

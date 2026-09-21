@@ -96,7 +96,7 @@ export function PaymentSuccessModal({
 
           {receiptData.txHash && (
             <div className="flex items-center justify-between pt-1 border-t border-[#dbe7dd]/60">
-              <span className="text-[#5e7a70]">Tx Hash On-Chain:</span>
+              <span className="text-[#5e7a70]">Nomor transaksi (catatan publik):</span>
               <a
                 href={`https://sepolia.arbiscan.io/tx/${receiptData.txHash}`}
                 target="_blank"

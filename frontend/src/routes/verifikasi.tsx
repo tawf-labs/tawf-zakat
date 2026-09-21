@@ -24,7 +24,7 @@ function VerifikasiPage() {
       <PageHeader
         badgeText="Verifikasi Digital Mandiri"
         title="Cek Bukti & Sertifikat Donasi"
-        description="Masukkan ID Transaksi atau Hash NIK Anda untuk memastikan donasi telah tercatat secara permanen dan sah dalam buku besar digital tanpa biaya gas."
+        description="Masukkan nomor transaksi Anda (contoh: TRX-…) untuk memastikan donasi tercatat dengan benar dan tidak dapat diubah diam-diam. Gratis dan tanpa dompet digital."
       />
 
       <Container>

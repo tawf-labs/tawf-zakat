@@ -89,6 +89,6 @@ export function PublicReport({ packageId }: { packageId: string }) {
     </section>
     <p className="text-sm">{summary.trust}</p>
     {summary.attestations.entries.length > 0 && <p className="text-sm">{summary.attestations.basis}</p>}
-    <p className="text-sm">Pembaca berwenang dapat membuka ruang kerja lembaga untuk mengunduh sumber dan paket pemeriksaan versi ini. Referensi laporan/versi berupa hash; judul bebas dan narasi tetap terbatas.</p>
+    <p className="text-sm">Pembaca berwenang dapat membuka ruang kerja lembaga untuk mengunduh sumber dan paket pemeriksaan versi ini. Referensi laporan/versi berupa sidik jari digital; judul bebas dan narasi tetap terbatas.</p>
   </article>;
 }
