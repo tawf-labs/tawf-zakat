@@ -41,10 +41,57 @@ export type CertificateIssuanceIntent = {
   accountKind: "EOA" | "ERC1271"; observation: CertificateMintObservation; transactionHash?: Hex;
 };
 
+/** Why a successor version exists. Validated server-side against what the source actually shows:
+ * a reason that the current source does not support is refused, not stored. */
+export const CORRECTION_REASONS = ["SOURCE_CORRECTION", "DISPUTE_DISCLOSURE"] as const;
+export type CorrectionReason = (typeof CORRECTION_REASONS)[number];
+export const isCorrectionReason = (v: unknown): v is CorrectionReason =>
+  typeof v === "string" && (CORRECTION_REASONS as readonly string[]).includes(v);
+
+/** Latest realization/dispute state of the frozen scope, compared field by field with what the
+ * certificate froze. Missing documents alone never appear here: evidence completeness is not a
+ * dispute, and a realization added later is a different stage, not a change to this one. */
+export type ScopeSourceStatus = "MATCHES" | "CHANGED" | "DISPUTED";
+
+/** Publication of the successor version, kept apart from whether the predecessor still stands. */
+export type ReplacementState =
+  | "NONE" | "PREPARED" | "ENDORSED_PENDING_MINT" | "INCLUDED_PENDING_CONFIRMATION"
+  | "NONCANONICAL_PENDING" | "CONFIRMED" | "FAILED" | "UNVERIFIED_CHAIN_SUCCESSOR";
+
+/** Business currentness of one version. CURRENT needs all of: own mint confirmed, no
+ * successor in any state, and the frozen scope unchanged and undisputed. */
+export type CertificateValidity =
+  | "CURRENT" | "PENDING_CONFIRMATION" | "DISPUTED" | "SOURCE_CHANGED"
+  | "REPLACEMENT_PENDING" | "REPLACEMENT_FAILED" | "SUPERSEDED";
+
+export type PublicCertificateVersion = {
+  version: string; predecessor: string; tokenId: string | null; validity: CertificateValidity;
+  replacement: ReplacementState; observationState: CertificateMintState;
+};
+
 /** Allowlisted public aggregate for the certificate verifier; never includes beneficiary detail. */
 export type PublicCertificateSummary = {
   tokenId: string; institutionId: string; activityId: string; certificateId: string; version: string;
   issuer: Hex; contentDigest: Hex; custodian: Hex;
   observation: CertificateMintObservation;
   totals: { confirmedCount: number; disputedCount: number; unconfirmedCount: number; totalRealizedIdr: string };
+  /** Present from #112 on; older servers omit them, so readers must not assume a "current" label. */
+  validity?: CertificateValidity;
+  scope?: { sourceStatus: ScopeSourceStatus; disputedCount: number; changedCount: number };
+  replacement?: { state: ReplacementState; version?: string; tokenId?: string };
+  predecessor?: { version: string; tokenId?: string };
+  /** Only the reason code is public; the officer's free-text note stays in the workspace view. */
+  correction?: { reason: CorrectionReason };
+  history?: PublicCertificateVersion[];
+};
+
+/** What a workspace operator sees for one version, including the scope drift that would justify a correction. */
+export type CertificateLineVersion = PublicCertificateVersion & {
+  intentId: string; endorsed: boolean; correction?: { reason: CorrectionReason; note: string };
+};
+export type CertificateLineStatus = {
+  certificateId: string; headVersion: string | null; headTokenId?: string;
+  versions: CertificateLineVersion[];
+  scope: { sourceStatus: ScopeSourceStatus; disputedCount: number; changedCount: number } | null;
+  correctionAllowed: boolean;
 };

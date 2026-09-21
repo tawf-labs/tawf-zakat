@@ -5,6 +5,7 @@ import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "./privateRequests";
 import { useCertificateIssuance } from "./useCertificateIssuance";
 import { listActivities, type DistributionActivity } from "../activities/activityClient";
+import { CertificateLineSection } from "./CertificateLineSection";
 
 const STATE_LABELS: Record<string, string> = {
   PREPARED: "Pengesahan disiapkan; belum dikirim",
@@ -65,18 +66,18 @@ export function CertificateIssuancePanel({ requests, institutionId, canManage }:
       {started && (
         <CertificateFlow key={`${started.activityId}:${started.certificateId}:${requests.contextId}`}
           requests={requests} institutionId={institutionId} activityId={started.activityId} certificateId={started.certificateId}
-          onReset={() => setStarted(null)} />
+          onReset={() => setStarted(null)} onOpen={(id) => setStarted({ activityId: started.activityId, certificateId: id })} />
       )}
     </section>
   );
 }
 
-function CertificateFlow({ requests, institutionId, activityId, certificateId, onReset }: {
-  requests: PrivateRequests; institutionId: string; activityId: string; certificateId: string; onReset: () => void;
+function CertificateFlow({ requests, institutionId, activityId, certificateId, onReset, onOpen }: {
+  requests: PrivateRequests; institutionId: string; activityId: string; certificateId: string; onReset: () => void; onOpen: (intentId: string) => void;
 }) {
   const { address, chainId } = useAccount();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
-  const { intent, contentTotals, reviewed, error, statusUnavailable, loading, busy, task } = useCertificateIssuance({ requests, institutionId, activityId, certificateId });
+  const { intent, contentTotals, line, reviewed, error, statusUnavailable, loading, busy, task } = useCertificateIssuance({ requests, institutionId, activityId, certificateId });
   const preparing = busy === "prepare", submitting = busy === "submit", retrying = busy === "retry", checking = busy === "check";
   const locked = loading || preparing || submitting || retrying || switching;
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
@@ -161,6 +162,11 @@ function CertificateFlow({ requests, institutionId, activityId, certificateId, o
             </>
           )}
         </>
+      )}
+
+      {intent && line && (
+        <CertificateLineSection requests={requests} institutionId={institutionId} activityId={activityId} certificateId={certificateId}
+          line={line} viewingVersion={intent.certification.version} disabled={locked} onOpen={onOpen} />
       )}
 
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}

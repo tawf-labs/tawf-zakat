@@ -18,7 +18,7 @@ export function CertificateVerifier({ institutionId = "", certificateId = "" }: 
   );
   const query = usePublicCertificate(submitted);
   function verify(lookup: CertificateLookup) {
-    if (submitted?.institutionId === lookup.institutionId && submitted.certificateId === lookup.certificateId) {
+    if (submitted?.institutionId === lookup.institutionId && submitted.certificateId === lookup.certificateId && !submitted.version) {
       void query.refetch();
     } else {
       setSubmitted(lookup);
@@ -48,7 +48,8 @@ export function CertificateVerifier({ institutionId = "", certificateId = "" }: 
               ? <p role="status" className="mt-8 text-sm text-stone-600">Memeriksa sertifikat…</p>
               : query.isError
                 ? <p role="alert" className="mt-8 text-sm text-red-700">{query.error.message}</p>
-                : <CertificateResult certificate={query.data} />
+                : <CertificateResult certificate={query.data} viewingVersion={submitted.version ?? null}
+                    onSelectVersion={(version) => setSubmitted({ institutionId: submitted.institutionId, certificateId: submitted.certificateId, ...(version ? { version } : {}) })} />
         )}
       </Container>
     </main>

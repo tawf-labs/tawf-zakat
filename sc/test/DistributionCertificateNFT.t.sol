@@ -237,12 +237,125 @@ contract DistributionCertificateNFTTest is Test {
         cert.issueCertificate(c, signature);
     }
 
-    function test_PredecessorVersioningIsOutOfScopeForThisContract() public {
-        Certificate.Certification memory c = certification();
-        c.predecessor = "stage-1";
-        bytes memory signature = sign(c);
+    function successor(string memory version, string memory predecessor, uint256 nonce)
+        internal
+        view
+        returns (Certificate.Certification memory c)
+    {
+        c = certification();
+        c.version = version;
+        c.predecessor = predecessor;
+        c.digest = keccak256(abi.encodePacked("frozen realization scope v", version));
+        c.nonce = bytes32(nonce);
+    }
+
+    function test_CorrectionMintsLinkedSuccessorAndKeepsPredecessorReadable() public {
+        Certificate.Certification memory first = certification();
+        uint256 oldToken = cert.issueCertificate(first, sign(first));
+        assertTrue(cert.isLatestVersion(oldToken));
+
+        Certificate.Certification memory next = successor("2", "1", 2);
+        uint256 newToken = cert.issueCertificate(next, sign(next));
+
+        assertEq(cert.successorOf(oldToken), newToken);
+        assertEq(cert.predecessorOf(newToken), oldToken);
+        assertFalse(cert.isLatestVersion(oldToken));
+        assertTrue(cert.isLatestVersion(newToken));
+        assertEq(cert.latestCertificateVersion("institution-a", "stage-1"), "2");
+        // The historical token is untouched: same content commitment, issuer, owner and lock.
+        assertEq(cert.contentDigestOf(oldToken), first.digest);
+        assertEq(cert.issuerOf(oldToken), signer);
+        assertEq(cert.ownerOf(oldToken), admin);
+        assertTrue(cert.locked(oldToken));
+        assertEq(cert.certificateVersionToken("institution-a", "stage-1", "1"), oldToken);
+        assertEq(cert.contentDigestOf(newToken), next.digest);
+    }
+
+    function test_CompetingCorrectionsCannotBothWinTheSameLine() public {
+        Certificate.Certification memory first = certification();
+        cert.issueCertificate(first, sign(first));
+        Certificate.Certification memory a = successor("2", "1", 2);
+        Certificate.Certification memory b = successor("2b", "1", 3);
+        bytes memory signatureA = sign(a);
+        bytes memory signatureB = sign(b);
+        // Both are individually valid until one of them mints.
+        cert.validateCertification(a, signatureA);
+        cert.validateCertification(b, signatureB);
+        cert.issueCertificate(a, signatureA);
+        vm.expectRevert(Certificate.WrongPredecessor.selector);
+        cert.issueCertificate(b, signatureB);
+        assertEq(cert.certificateVersionToken("institution-a", "stage-1", "2b"), 0);
+        assertEq(cert.latestCertificateVersion("institution-a", "stage-1"), "2");
+    }
+
+    function test_SupersededVersionCannotBeCorrectedAgainAndVersionsCannotRepeat() public {
+        Certificate.Certification memory first = certification();
+        cert.issueCertificate(first, sign(first));
+        Certificate.Certification memory second = successor("2", "1", 2);
+        cert.issueCertificate(second, sign(second));
+
+        Certificate.Certification memory stale = successor("3", "1", 3);
+        bytes memory staleSignature = sign(stale);
+        vm.expectRevert(Certificate.WrongPredecessor.selector);
+        cert.issueCertificate(stale, staleSignature);
+
+        Certificate.Certification memory repeat = successor("2", "2", 4);
+        bytes memory repeatSignature = sign(repeat);
+        vm.expectRevert(Certificate.AlreadyIssued.selector);
+        cert.issueCertificate(repeat, repeatSignature);
+
+        Certificate.Certification memory third = successor("3", "2", 5);
+        cert.issueCertificate(third, sign(third));
+        assertEq(cert.predecessorOf(3), 2);
+    }
+
+    function test_CorrectionNeedsAnExistingLineTheSameActivityAndACurrentMandate() public {
+        Certificate.Certification memory orphan = successor("2", "1", 2);
+        bytes memory orphanSignature = sign(orphan);
+        vm.expectRevert(Certificate.WrongPredecessor.selector);
+        cert.issueCertificate(orphan, orphanSignature);
+
+        Certificate.Certification memory first = certification();
+        cert.issueCertificate(first, sign(first));
+
+        Certificate.Certification memory moved = successor("2", "1", 3);
+        moved.activityId = "activity-other";
+        bytes memory movedSignature = sign(moved);
         vm.expectRevert(Certificate.OutOfScope.selector);
-        cert.issueCertificate(c, signature);
+        cert.issueCertificate(moved, movedSignature);
+
+        Certificate.Certification memory forged = successor("2", "1", 4);
+        forged.signer = address(0xFACE);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xFEED, cert.certificationDigest(forged));
+        bytes memory forgedSignature = abi.encodePacked(r, s, v);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.issueCertificate(forged, forgedSignature);
+
+        Certificate.Certification memory revoked = successor("2", "1", 5);
+        bytes memory revokedSignature = sign(revoked);
+        vm.prank(admin);
+        registry.setSignatory("institution-a", signer, false);
+        vm.expectRevert(Certificate.Unauthorized.selector);
+        cert.issueCertificate(revoked, revokedSignature);
+    }
+
+    function test_CorrectionSignatureBindsPredecessorAndIsNotAFreshIssuance() public {
+        Certificate.Certification memory first = certification();
+        cert.issueCertificate(first, sign(first));
+        Certificate.Certification memory next = successor("2", "1", 2);
+        bytes memory signature = sign(next);
+        next.digest = keccak256("swapped correction content");
+        vm.expectRevert(Certificate.InvalidAuthorization.selector);
+        cert.issueCertificate(next, signature);
+        next = successor("2", "1", 2);
+        next.predecessor = "";
+        vm.expectRevert(Certificate.AlreadyIssued.selector);
+        cert.issueCertificate(next, signature);
+        // A no-predecessor endorsement can never restart a line that already exists.
+        Certificate.Certification memory restart = successor("9", "", 6);
+        bytes memory restartSignature = sign(restart);
+        vm.expectRevert(Certificate.AlreadyIssued.selector);
+        cert.issueCertificate(restart, restartSignature);
     }
 
     function test_ReportRegistrySignatureCannotBeReplayedAsCertificateIssuance() public {

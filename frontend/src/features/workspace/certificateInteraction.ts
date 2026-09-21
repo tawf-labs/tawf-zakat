@@ -1,6 +1,6 @@
 import { hashTypedData, keccak256, toHex } from "viem";
 import { certificationTypedData, ISSUE_CERTIFICATE, type CertificateIssuanceIntent } from "../../../../shared/certificate-nft";
-import { prepareCertificate, submitCertificate, retryCertificate, getCertificate, type CertificateContentTotals, type CertificateStatus } from "./certificateClient";
+import { prepareCertificate, submitCertificate, retryCertificate, getCertificate, type CertificateContentTotals, type CertificateLineStatus, type CertificateStatus } from "./certificateClient";
 import { AccessContextChanged, type PrivateRequests } from "./privateRequests";
 
 export type CertificatePorts = {
@@ -10,34 +10,36 @@ export type CertificatePorts = {
   schedule: (task: () => void, milliseconds: number) => () => void;
 };
 type State = {
-  intent: CertificateIssuanceIntent | null; contentTotals: CertificateContentTotals; loading: boolean;
+  intent: CertificateIssuanceIntent | null; contentTotals: CertificateContentTotals; line: CertificateLineStatus | null; loading: boolean;
   busy: "prepare" | "submit" | "retry" | "check" | null;
   reviewed: boolean; signature: string; error: string | null; statusUnavailable: boolean;
 };
+/** A successor version is addressed as `<certificateId>@<version>`; the signed statement names the bare id. */
+const bareCertificateId = (id: string) => id.split("@")[0]!;
 const material = (intent: CertificateIssuanceIntent) => JSON.stringify([intent.id, intent.domain, intent.certification, intent.certificationDigest, intent.accountKind]);
 
 /** One certificate identity per instance, unlike `registryInteraction.ts`'s history-of-packages
  * shape: the officer names the certificate up front, so there is nothing to select afterward. */
 export function createCertificateTask(ports: CertificatePorts) {
-  let state: State = { intent: null, contentTotals: null, loading: true, busy: null, reviewed: false, signature: "", error: null, statusUnavailable: false };
+  let state: State = { intent: null, contentTotals: null, line: null, loading: true, busy: null, reviewed: false, signature: "", error: null, statusUnavailable: false };
   let generation = 0, disposed = false;
   let cancel: (() => void) | null = null;
   let refreshing: Promise<void> | null = null;
   const listeners = new Set<() => void>();
   const publish = (patch: Partial<State>) => { state = { ...state, ...patch }; listeners.forEach((fn) => fn()); };
   const current = (started = generation) => { ports.requests.assertCurrent(); if (disposed || generation !== started) throw new AccessContextChanged(); };
-  function install(next: CertificateIssuanceIntent, contentTotals?: CertificateContentTotals) {
+  function install(next: CertificateIssuanceIntent, contentTotals?: CertificateContentTotals, line?: CertificateLineStatus | null) {
     const changed = !state.intent || material(next) !== material(state.intent);
     const stale = next.signingAuthority === "STALE" || next.signingAuthority === "UNAVAILABLE";
-    publish({ intent: next, ...(contentTotals !== undefined ? { contentTotals } : {}), statusUnavailable: next.signingAuthority === "UNAVAILABLE",
+    publish({ intent: next, ...(contentTotals !== undefined ? { contentTotals } : {}), ...(line ? { line } : {}), statusUnavailable: next.signingAuthority === "UNAVAILABLE",
       ...(changed || stale ? { reviewed: false, signature: "" } : {}) });
   }
-  const installStatus = (status: CertificateStatus) => install(status.certificate, status.contentTotals);
+  const installStatus = (status: CertificateStatus) => install(status.certificate, status.contentTotals, status.line);
   function validate(intent: CertificateIssuanceIntent) {
     const c = intent.certification;
     const typedDigest = hashTypedData(certificationTypedData(intent.domain, c));
     if (!ports.account || c.signer.toLowerCase() !== ports.account.toLowerCase() || intent.domain.chainId !== ports.chainId
-      || c.institutionId !== ports.institutionId || c.activityId !== ports.activityId || c.certificateId !== ports.certificateId
+      || c.institutionId !== ports.institutionId || c.activityId !== ports.activityId || c.certificateId !== bareCertificateId(ports.certificateId)
       || c.action !== keccak256(toHex(ISSUE_CERTIFICATE)) || typedDigest !== intent.certificationDigest) {
       throw new Error("Sertifikat berbeda dari versi, jaringan, atau akun yang ditinjau.");
     }

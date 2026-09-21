@@ -30,9 +30,24 @@ export function createCertificateRelay(store: CertificateStore, chain: Certifica
     return current.observation.state === "SUBMITTED" || current.observation.state === "NONCANONICAL" ? null : current;
   }
 
+  /** A competing successor whose mint reverted on a canonical block has lost for good; anything
+   * still pending, reorged or unknown keeps the slot, because it may yet win the line. */
+  async function reclaimable(intent: CertificateIssuanceIntent): Promise<string[]> {
+    const c = intent.certification;
+    const holder = await store.successorClaim(institution, c.certificateId, c.predecessor);
+    if (!holder || holder === intent.id) return [];
+    const held = await store.get(institution, holder);
+    if (!held) return [holder];
+    return ["REVERTED", "INVALID_EVENT"].includes((await status(held)).observation.state) ? [holder] : [];
+  }
+
   async function send(intent: CertificateIssuanceIntent, signature: Hex): Promise<CertificateIssuanceIntent> {
     let attempt = await store.attempt(institution, intent.id);
-    if (!attempt) attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), chain.budget, (nonce) => chain.build(intent, signature, nonce));
+    if (!attempt) {
+      const c = intent.certification;
+      const successor = c.predecessor ? { certificateId: c.certificateId, predecessor: c.predecessor, reclaimable: await reclaimable(intent) } : undefined;
+      attempt = await store.reserve(institution, intent.id, chain.deployment, await chain.pendingNonce(), chain.budget, (nonce) => chain.build(intent, signature, nonce), successor);
+    }
     if (attempt.signature !== signature) throw fail("Retry berbeda dari percobaan tersimpan.", 409);
     // Broadcast ambiguity is recoverable: exact signed bytes and hash are already durable.
     await chain.broadcast(attempt);

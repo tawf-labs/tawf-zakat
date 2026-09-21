@@ -14,8 +14,9 @@ interface IMandateSource {
 
 /// @notice One official, non-transferable certificate per distribution-stage version, minted to an
 /// institution's resolved custodian only after an institutional signatory endorses a frozen scope.
-/// Correction/succession across versions is issue #112's contract change, not this one's: a
-/// version with a non-empty predecessor is rejected here, not processed.
+/// A correction (#112) is a new version whose signed `predecessor` must be the line's current
+/// official version: two competing successors of the same predecessor cannot both mint. The
+/// predecessor token keeps its content and stays readable; it is only marked superseded.
 contract DistributionCertificateNFT is EIP712, ERC5192 {
     bytes32 public constant ISSUE_CERTIFICATE = keccak256("ISSUE_CERTIFICATE");
     bytes32 public constant CERTIFICATION_TYPEHASH = keccak256(
@@ -47,6 +48,8 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
     mapping(uint256 tokenId => string activityId) private tokenActivities;
     mapping(uint256 tokenId => string certificateId) private tokenCertificateIds;
     mapping(uint256 tokenId => string version) private tokenVersions;
+    mapping(uint256 tokenId => uint256 successorTokenId) public successorOf;
+    mapping(uint256 tokenId => uint256 predecessorTokenId) public predecessorOf;
     mapping(bytes32 institutionKey => address custodian) public custodianOf;
 
     error Unauthorized();
@@ -56,6 +59,7 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
     error AlreadyIssued();
     error OutOfScope();
     error NoCustodian();
+    error WrongPredecessor();
 
     event CertificateIssued(
         bytes32 indexed institutionKey,
@@ -65,6 +69,12 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         bytes32 digest,
         address signer,
         address custodian
+    );
+    event CertificateSuperseded(
+        bytes32 indexed institutionKey,
+        bytes32 indexed certificateKey,
+        uint256 indexed predecessorTokenId,
+        uint256 successorTokenId
     );
     event CustodianUpdated(bytes32 indexed institutionKey, address previous, address next);
 
@@ -115,15 +125,21 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
                 || bytes(c.activityId).length == 0 || bytes(c.certificateId).length == 0
                 || bytes(c.version).length == 0
         ) revert InvalidAuthorization();
-        // Correction/succession across an existing certificate line is #112's contract change.
-        if (bytes(c.predecessor).length != 0) revert OutOfScope();
         bytes32 institutionKey = keccak256(bytes(c.institutionId));
         (bool active, uint256 epoch) = registry.signatories(institutionKey, c.signer);
         if (!active || epoch != c.authorityEpoch) revert Unauthorized();
         if (block.timestamp > c.deadline) revert Expired();
         if (usedNonces[institutionKey][c.signer][c.nonce]) revert Replayed();
         bytes32 certificateKey = keccak256(bytes(c.certificateId));
-        if (bytes(latestVersions[institutionKey][certificateKey]).length != 0) revert AlreadyIssued();
+        bytes32 latestKey = keccak256(bytes(latestVersions[institutionKey][certificateKey]));
+        if (bytes(c.predecessor).length == 0) {
+            if (bytes(latestVersions[institutionKey][certificateKey]).length != 0) revert AlreadyIssued();
+        } else {
+            // Only the official head can be corrected, and a line never moves to another activity.
+            if (keccak256(bytes(c.predecessor)) != latestKey) revert WrongPredecessor();
+            uint256 previous = certificateVersions[institutionKey][certificateKey][latestKey];
+            if (keccak256(bytes(tokenActivities[previous])) != keccak256(bytes(c.activityId))) revert OutOfScope();
+        }
         if (certificateVersions[institutionKey][certificateKey][keccak256(bytes(c.version))] != 0) revert AlreadyIssued();
         if (!SignatureChecker.isValidSignatureNow(c.signer, certificationDigest(c), signature)) revert InvalidAuthorization();
     }
@@ -139,6 +155,9 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
 
         usedNonces[institutionKey][c.signer][c.nonce] = true;
         bytes32 certificateKey = keccak256(bytes(c.certificateId));
+        uint256 previousToken = bytes(c.predecessor).length == 0
+            ? 0
+            : certificateVersions[institutionKey][certificateKey][keccak256(bytes(c.predecessor))];
 
         tokenId = ++tokenIdCounter;
         tokenDigests[tokenId] = c.digest;
@@ -148,6 +167,11 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
         tokenVersions[tokenId] = c.version;
         certificateVersions[institutionKey][certificateKey][keccak256(bytes(c.version))] = tokenId;
         latestVersions[institutionKey][certificateKey] = c.version;
+        if (previousToken != 0) {
+            successorOf[previousToken] = tokenId;
+            predecessorOf[tokenId] = previousToken;
+            emit CertificateSuperseded(institutionKey, certificateKey, previousToken, tokenId);
+        }
 
         // Reserve the certificate and initialize its content before the receiver callback.
         _safeMint(custodian, tokenId);
@@ -172,6 +196,13 @@ contract DistributionCertificateNFT is EIP712, ERC5192 {
     {
         if (_ownerOf(tokenId) == address(0)) revert ErrNotFound();
         return (tokenActivities[tokenId], tokenCertificateIds[tokenId], tokenVersions[tokenId]);
+    }
+
+    /// @notice Chain-only status of a token: true while no successor has been minted for it.
+    /// This says nothing about whether the offchain source has since been disputed or changed.
+    function isLatestVersion(uint256 tokenId) external view returns (bool) {
+        if (_ownerOf(tokenId) == address(0)) revert ErrNotFound();
+        return successorOf[tokenId] == 0;
     }
 
     function certificateVersionToken(string calldata institutionId, string calldata certificateId, string calldata version)

@@ -334,6 +334,25 @@ export const certificateNftAbi = [
   },
   {
     "type": "function",
+    "name": "isLatestVersion",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "issueCertificate",
     "inputs": [
       {
@@ -509,6 +528,25 @@ export const certificateNftAbi = [
   },
   {
     "type": "function",
+    "name": "predecessorOf",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "predecessorTokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "registry",
     "inputs": [],
     "outputs": [
@@ -606,6 +644,25 @@ export const certificateNftAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "successorOf",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "successorTokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -886,6 +943,37 @@ export const certificateNftAbi = [
   },
   {
     "type": "event",
+    "name": "CertificateSuperseded",
+    "inputs": [
+      {
+        "name": "institutionKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "certificateKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "predecessorTokenId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "successorTokenId",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "CustodianUpdated",
     "inputs": [
       {
@@ -1128,6 +1216,11 @@ export const certificateNftAbi = [
   {
     "type": "error",
     "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "WrongPredecessor",
     "inputs": []
   }
 ] as const;

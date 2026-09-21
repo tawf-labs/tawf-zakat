@@ -6,7 +6,10 @@
  *   GET  /api/activities/:activityId/certificates/:certificateId         status of one certificate
  *   POST /api/activities/:activityId/certificates/:certificateId/submit  officer's signature; relay broadcasts
  *   POST /api/activities/:activityId/certificates/:certificateId/retry   resend the same signed bytes
- *   GET  /api/public/certificates/:institutionId/:certificateId          public verifier: allowlisted aggregate only
+ *   POST /api/activities/:activityId/certificates/:certificateId/correct prepare the next version (#112); signed via submit
+ *   GET  /api/activities/:activityId/certificates/:certificateId/history read-only version history (any workspace reader)
+ *   GET  /api/public/certificates/:institutionId/:certificateId          public verifier: official head, allowlisted aggregate only
+ *   GET  /api/public/certificates/:institutionId/:certificateId/versions/:version   one historical version
  */
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -67,7 +70,39 @@ certificateRoutes.get("/activities/:activityId/certificates/:certificateId", asy
   if ("response" in gate) return gate.response;
   const certificateId = c.req.param("certificateId")!;
   const certificate = await gate.issuance.status(certificateId);
-  return c.json({ success: true, certificate, contentTotals: await gate.issuance.contentTotals(certificateId) });
+  return c.json({
+    success: true, certificate, contentTotals: await gate.issuance.contentTotals(certificateId),
+    line: await gate.issuance.line(certificate.certification.certificateId),
+  });
+});
+
+/** Read-only: a reader (for example an auditor's workspace session) may follow the history of a
+ * certificate line but holds no capability to prepare, sign or correct on the institution's behalf. */
+certificateRoutes.get("/activities/:activityId/certificates/:certificateId/history", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId")?.trim());
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "viewWorkspace")) return refuse(c, 403, "forbidden");
+  const issuance = createCertificateIssuance(
+    runtime, { store: runtime.certificateStore!, chain: runtime.certificateChain! },
+    runtime.activities!, runtime.disbursement!, auth.session.institutionId,
+  );
+  const line = await issuance.line(c.req.param("certificateId")!);
+  return c.json({ success: true, line });
+});
+
+certificateRoutes.post("/activities/:activityId/certificates/:certificateId/correct", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const institutionId = typeof body.institutionId === "string" ? body.institutionId : undefined;
+  const gate = await certificateActor(c, institutionId);
+  if ("response" in gate) return gate.response;
+  const activityId = c.req.param("activityId")!.trim();
+  const certificateId = c.req.param("certificateId")!.trim();
+  const certificate = await gate.issuance.prepareCorrection(gate.account, activityId, certificateId, body.reason, body.note);
+  return c.json({
+    success: true, certificate, contentTotals: await gate.issuance.contentTotals(certificate.id),
+    line: await gate.issuance.line(certificateId),
+  }, 201);
 });
 
 certificateRoutes.post("/activities/:activityId/certificates/:certificateId/prepare", async (c) => {
@@ -118,5 +153,16 @@ publicCertificateRoutes.get("/certificates/:institutionId/:certificateId", async
   );
   const summary = await issuance.publicSummary(c.req.param("certificateId")!);
   if (!summary) return c.json({ success: false, error: "Sertifikat tidak ditemukan atau belum diterbitkan." }, 404);
+  return c.json({ success: true, certificate: summary });
+});
+publicCertificateRoutes.get("/certificates/:institutionId/:certificateId/versions/:version", async (c) => {
+  const runtime = workspaceRuntime();
+  if (!runtime?.certificateChain || !runtime.certificateStore) return c.json({ success: false, error: "Layanan sertifikat belum dikonfigurasi." }, 503);
+  const issuance = createCertificateIssuance(
+    runtime, { store: runtime.certificateStore, chain: runtime.certificateChain },
+    runtime.activities!, runtime.disbursement!, c.req.param("institutionId")!,
+  );
+  const summary = await issuance.publicSummary(c.req.param("certificateId")!, c.req.param("version")!);
+  if (!summary) return c.json({ success: false, error: "Versi sertifikat tidak ditemukan atau belum diterbitkan." }, 404);
   return c.json({ success: true, certificate: summary });
 });

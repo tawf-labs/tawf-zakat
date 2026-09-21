@@ -122,12 +122,24 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     },
     async publicView(tokenId: bigint) {
       await assertDeployment();
-      const [issuer, contentDigest, custodian] = await Promise.all([
+      const [issuer, contentDigest, custodian, successorTokenId, predecessorTokenId] = await Promise.all([
         rpc.readContract({ address: config.address, abi, functionName: "issuerOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "contentDigestOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "ownerOf", args: [tokenId] }),
+        rpc.readContract({ address: config.address, abi, functionName: "successorOf", args: [tokenId] }),
+        rpc.readContract({ address: config.address, abi, functionName: "predecessorOf", args: [tokenId] }),
       ]);
-      return { issuer, contentDigest, custodian };
+      return { issuer, contentDigest, custodian, successorTokenId, predecessorTokenId };
+    },
+    /** The line's official head as the chain sees it now. Empty until the first version mints. */
+    async latestVersion(institutionId: string, certificateId: string) {
+      await assertDeployment();
+      return rpc.readContract({ address: config.address, abi, functionName: "latestCertificateVersion", args: [institutionId, certificateId] });
+    },
+    async certificateOf(tokenId: bigint) {
+      await assertDeployment();
+      const [activityId, certificateId, version] = await rpc.readContract({ address: config.address, abi, functionName: "certificateOf", args: [tokenId] });
+      return { activityId, certificateId, version };
     },
     observe,
   };

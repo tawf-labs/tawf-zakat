@@ -12,6 +12,11 @@ type Executor = { execute: (query: any) => Promise<unknown> };
 export type CertificateDatabase = Executor & { transaction: <T>(run: (tx: Executor) => Promise<T>) => Promise<T> };
 
 const rows = (result: any): any[] => result.rows ?? result;
+/** The predecessor's single signed-successor slot is already held by another correction. */
+export class SuccessorClaimedError extends Error {
+  constructor(readonly holder: string) { super("Koreksi lain sudah mengunci versi resmi yang sama."); }
+}
+export type SuccessorClaim = { certificateId: string; predecessor: string; reclaimable: readonly string[] };
 export type CertificateAttempt = { raw: Hex; hash: Hex; signature: Hex; nonce: number };
 
 export function createCertificateStore(db: CertificateDatabase) {
@@ -32,18 +37,39 @@ export function createCertificateStore(db: CertificateDatabase) {
         `CREATE TABLE IF NOT EXISTS certificate_service_budgets (scope TEXT PRIMARY KEY, reserved_wei TEXT NOT NULL)`,
         `ALTER TABLE certificate_attempts ADD COLUMN IF NOT EXISTS budget_scope TEXT`,
         `ALTER TABLE certificate_attempts ADD COLUMN IF NOT EXISTS reserved_wei TEXT`,
+        // #112: one certificate line holds several versions. `id` stays the per-version intent id
+        // (the bare certificate id for version 1, `<id>@<version>` after), so existing rows and
+        // routes keep working; the line and version are their own indexed columns.
+        `ALTER TABLE certificate_intents ADD COLUMN IF NOT EXISTS certificate_id TEXT`,
+        `ALTER TABLE certificate_intents ADD COLUMN IF NOT EXISTS version TEXT`,
+        `UPDATE certificate_intents SET certificate_id=id, version='1' WHERE certificate_id IS NULL`,
+        `CREATE INDEX IF NOT EXISTS certificate_intents_line ON certificate_intents (institution_id, certificate_id)`,
+        // One signed successor per predecessor: claimed when the endorsement is committed, so two
+        // competing corrections cannot both hold signed bytes for the same official line.
+        `CREATE TABLE IF NOT EXISTS certificate_successor_claims (institution_id TEXT NOT NULL, certificate_id TEXT NOT NULL,
+         predecessor TEXT NOT NULL, intent_id TEXT NOT NULL, PRIMARY KEY(institution_id,certificate_id,predecessor))`,
       ]) await db.execute(sql.raw(statement));
     },
     /** Content stays server-side: the salt in particular must never reach an HTTP response. */
     async create(intent: CertificateIssuanceIntent, activityId: string, contentCanonical: string, contentSalt: string, now: number): Promise<CertificateIssuanceIntent> {
-      await db.execute(sql`INSERT INTO certificate_intents (institution_id,id,activity_id,intent,content_canonical,content_salt,created_at)
-        VALUES (${intent.certification.institutionId},${intent.id},${activityId},${JSON.stringify(intent)},${contentCanonical},${contentSalt},${now}) ON CONFLICT DO NOTHING`);
+      await db.execute(sql`INSERT INTO certificate_intents (institution_id,id,activity_id,intent,content_canonical,content_salt,created_at,certificate_id,version)
+        VALUES (${intent.certification.institutionId},${intent.id},${activityId},${JSON.stringify(intent)},${contentCanonical},${contentSalt},${now},${intent.certification.certificateId},${intent.certification.version}) ON CONFLICT DO NOTHING`);
       return (await get(intent.certification.institutionId, intent.id))!;
     },
     async list(institution: string, activityId?: string): Promise<CertificateIssuanceIntent[]> {
       return rows(await db.execute(sql`SELECT intent FROM certificate_intents
         WHERE institution_id=${institution} AND (${activityId ?? null}::text IS NULL OR activity_id=${activityId ?? null}) ORDER BY id`))
         .map((r) => JSON.parse(r.intent));
+    },
+    /** Every version of one certificate line, oldest first. Numeric versions sort numerically. */
+    async line(institution: string, certificateId: string): Promise<CertificateIssuanceIntent[]> {
+      const found: CertificateIssuanceIntent[] = rows(await db.execute(sql`SELECT intent FROM certificate_intents
+        WHERE institution_id=${institution} AND certificate_id=${certificateId}`)).map((r) => JSON.parse(r.intent));
+      return found.sort((a, b) => Number(a.certification.version) - Number(b.certification.version) || a.id.localeCompare(b.id));
+    },
+    async successorClaim(institution: string, certificateId: string, predecessor: string): Promise<string | null> {
+      return rows(await db.execute(sql`SELECT intent_id FROM certificate_successor_claims
+        WHERE institution_id=${institution} AND certificate_id=${certificateId} AND predecessor=${predecessor}`))[0]?.intent_id ?? null;
     },
     async content(institution: string, id: string): Promise<{ canonical: string; salt: string } | null> {
       const row = rows(await db.execute(sql`SELECT content_canonical, content_salt FROM certificate_intents WHERE institution_id=${institution} AND id=${id}`))[0];
@@ -58,7 +84,7 @@ export function createCertificateStore(db: CertificateDatabase) {
      * NEVER refunded, even after confirmation/revert: reorgs and mempool retries remain safe.
      * This is conservative lifetime liability, not measured gas expenditure or donor money.
      */
-    async reserve(institution: string, id: string, deployment: string, pendingNonce: number, policy: CertificateBudgetPolicy, build: (nonce: number) => Promise<CertificateAttempt>) {
+    async reserve(institution: string, id: string, deployment: string, pendingNonce: number, policy: CertificateBudgetPolicy, build: (nonce: number) => Promise<CertificateAttempt>, successor?: SuccessorClaim) {
       const maxWei = positiveBudgetWei(policy.maxWei);
       const reservationWei = positiveBudgetWei(policy.reservationWei);
       return db.transaction(async (tx) => {
@@ -67,6 +93,23 @@ export function createCertificateStore(db: CertificateDatabase) {
         const existing = rows(await tx.execute(sql`SELECT raw,hash,signature,nonce FROM certificate_attempts WHERE institution_id=${institution} AND intent_id=${id}`))[0];
         // Exact-byte retries must remain possible even after the configured budget is exhausted.
         if (existing) return existing as CertificateAttempt;
+        // Claim the predecessor's only signed-successor slot in this same transaction as the signed
+        // bytes, so two racing corrections cannot both end up holding a broadcastable transaction.
+        // A holder that never stored signed bytes, or whose mint reverted for good, does not block.
+        if (successor) {
+          const inserted = rows(await tx.execute(sql`INSERT INTO certificate_successor_claims(institution_id,certificate_id,predecessor,intent_id)
+            VALUES (${institution},${successor.certificateId},${successor.predecessor},${id}) ON CONFLICT DO NOTHING RETURNING intent_id`));
+          if (!inserted.length) {
+            const holder = rows(await tx.execute(sql`SELECT intent_id FROM certificate_successor_claims
+              WHERE institution_id=${institution} AND certificate_id=${successor.certificateId} AND predecessor=${successor.predecessor} FOR UPDATE`))[0].intent_id as string;
+            if (holder !== id) {
+              const signed = rows(await tx.execute(sql`SELECT 1 AS x FROM certificate_attempts WHERE institution_id=${institution} AND intent_id=${holder}`)).length > 0;
+              if (signed && !successor.reclaimable.includes(holder)) throw new SuccessorClaimedError(holder);
+              await tx.execute(sql`UPDATE certificate_successor_claims SET intent_id=${id}
+                WHERE institution_id=${institution} AND certificate_id=${successor.certificateId} AND predecessor=${successor.predecessor}`);
+            }
+          }
+        }
         let reserved = BigInt(budget.reserved_wei);
         if (reserved < 0n) throw new CertificateBudgetError("Catatan anggaran sertifikat tidak sah.");
         // Additive migration: old signed bytes may still be spendable. Recover their actual

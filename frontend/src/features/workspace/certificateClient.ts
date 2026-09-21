@@ -7,14 +7,14 @@
  * reachable through this module by accident.
  */
 import type { PrivateRequests } from "./privateRequests";
-import type { CertificateIssuanceIntent } from "../../../../shared/certificate-nft";
+import type { CertificateIssuanceIntent, CertificateLineStatus, CorrectionReason } from "../../../../shared/certificate-nft";
 
-export type { CertificateIssuanceIntent, PublicCertificateSummary } from "../../../../shared/certificate-nft";
+export type { CertificateIssuanceIntent, CertificateLineStatus, PublicCertificateSummary } from "../../../../shared/certificate-nft";
 
 /** Confirmed vs. disputed/unconfirmed counts for the frozen scope; null until a certificate has
  * been prepared (nothing frozen yet). Never a realization or beneficiary reference. */
 export type CertificateContentTotals = { confirmedCount: number; disputedCount: number; unconfirmedCount: number; totalRealizedIdr: string } | null;
-export type CertificateStatus = { certificate: CertificateIssuanceIntent; contentTotals: CertificateContentTotals };
+export type CertificateStatus = { certificate: CertificateIssuanceIntent; contentTotals: CertificateContentTotals; line?: CertificateLineStatus };
 
 const path = (activityId: string, certificateId?: string) =>
   `/api/workspace/activities/${encodeURIComponent(activityId)}/certificates${certificateId ? `/${encodeURIComponent(certificateId)}` : ""}`;
@@ -31,6 +31,13 @@ export async function getCertificate(requests: PrivateRequests, activityId: stri
 export async function prepareCertificate(requests: PrivateRequests, institutionId: string, activityId: string, certificateId: string): Promise<CertificateStatus> {
   return requests.json<CertificateStatus>(`${path(activityId, certificateId)}/prepare`, {
     method: "POST", body: JSON.stringify({ institutionId }),
+  });
+}
+
+/** Prepare the next version of an issued certificate; the officer then signs it like a first issuance. */
+export async function prepareCorrection(requests: PrivateRequests, institutionId: string, activityId: string, certificateId: string, reason: CorrectionReason, note: string): Promise<CertificateStatus> {
+  return requests.json<CertificateStatus>(`${path(activityId, certificateId)}/correct`, {
+    method: "POST", body: JSON.stringify({ institutionId, reason, note }),
   });
 }
 

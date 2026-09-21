@@ -14,6 +14,7 @@ import { canonicalJson } from "../../shared/canonical-json";
 import { commitmentFor, newCommitmentSalt, sha256Hex } from "./evidence-snapshot";
 import type { DistributionActivityRecord } from "./activity";
 import type { RealizationRecord } from "./disbursement";
+import type { CorrectionReason } from "../../shared/certificate-nft";
 
 export const CERTIFICATE_CONTENT_FORMAT = "tawf.distribution.certificate" as const;
 export const CERTIFICATE_CONTENT_VERSION = 1 as const;
@@ -38,6 +39,15 @@ export type CertificateTotals = {
   goods: Array<{ unit: string; totalQuantity: string; count: number }>;
 };
 
+/** A correction is bound into the frozen content, so the endorsement signature (which commits to
+ * the content digest) covers its reason and the exact predecessor it replaces. */
+export type CertificateCorrection = {
+  reason: CorrectionReason;
+  note: string;
+  predecessorVersion: string;
+  predecessorDigest: string;
+};
+
 export type CertificateContent = {
   format: typeof CERTIFICATE_CONTENT_FORMAT;
   version: typeof CERTIFICATE_CONTENT_VERSION;
@@ -54,6 +64,7 @@ export type CertificateContent = {
   frozenAt: number;
   realizations: CertificateRealizationLine[];
   totals: CertificateTotals;
+  correction?: CertificateCorrection;
 };
 
 const addIdr = (a: string, b: string): string => (BigInt(a) + BigInt(b)).toString();
@@ -95,9 +106,12 @@ export function freezeCertificateContent(input: {
   certificateVersion: string;
   realizations: RealizationRecord[];
   frozenAt: number;
+  /** A successor re-reads exactly the predecessor's realizations: it never widens the stage. */
+  correction?: CertificateCorrection & { scopeRealizationIds: string[] };
 }): { content: CertificateContent; canonical: string; bytes: Uint8Array } {
+  const scope = input.correction ? new Set(input.correction.scopeRealizationIds) : null;
   const realizations: CertificateRealizationLine[] = input.realizations
-    .filter(isCertifiableRealization)
+    .filter((r) => (scope ? scope.has(r.id) : isCertifiableRealization(r)))
     .map((r) => ({
       realizationId: r.id,
       method: r.method,
@@ -127,6 +141,10 @@ export function freezeCertificateContent(input: {
     frozenAt: input.frozenAt,
     realizations,
     totals: totalsOf(realizations),
+    ...(input.correction ? { correction: {
+      reason: input.correction.reason, note: input.correction.note,
+      predecessorVersion: input.correction.predecessorVersion, predecessorDigest: input.correction.predecessorDigest,
+    } } : {}),
   };
 
   const canonical = canonicalJson(content);
