@@ -466,3 +466,5 @@ frontend/.output/
 
 # Restart journal for explicit testnet demo seeding (signed transactions, no keys).
 .seed-demo/
+
+.scratch/
