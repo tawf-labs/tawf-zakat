@@ -11,6 +11,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
+import { startAnvil } from "./helpers/anvil-fixture";
 import { createWorkspaceStore } from "../src/tenancy-store";
 import { createEvidenceStore } from "../src/evidence-store";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
@@ -30,7 +31,7 @@ const rpcUrl = "http://127.0.0.1:18572";
 // Anvil mines immediately; the default 4s polling nearly exhausts Bun's 5s test deadline.
 const rpc = createPublicClient({ chain: foundry, pollingInterval: 25, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
 const wallet = createWalletClient({ account, chain: foundry, transport: http(rpcUrl) });
-let node: ReturnType<typeof Bun.spawn>;
+let anvil: Awaited<ReturnType<typeof startAnvil>>;
 let fileDirectory: string;
 let files: PrivateFileStore;
 let validatorAvailable = true;
@@ -78,15 +79,7 @@ async function configure(clockOffset = 0) {
   return store;
 }
 beforeAll(async () => {
-  let occupied = false;
-  try { await rpc.getChainId(); occupied = true; } catch { /* The isolated fixture must own this port. */ }
-  if (occupied) throw new Error("Port 18572 sudah digunakan; hentikan fixture Anvil lama sebelum menjalankan suite.");
-  node = Bun.spawn(["anvil", "--host", "127.0.0.1", "--port", "18572", "--silent"], { stdout: "ignore", stderr: "pipe" });
-  let ready = false;
-  for (let i = 0; i < 50; i++) {
-    try { await rpc.getChainId(); ready = true; break; } catch { await Bun.sleep(100); }
-  }
-  if (!ready) throw new Error("Local Anvil did not start");
+  anvil = await startAnvil(18572);
   const artifact = await Bun.file(new URL("../../sc/out/ReportEvidenceRegistry.sol/ReportEvidenceRegistry.json", import.meta.url)).json();
   const deployment = await wallet.deployContract({ abi: reportRegistryAbi, bytecode: artifact.bytecode.object, args: [account.address] });
   registry = (await rpc.waitForTransactionReceipt({ hash: deployment })).contractAddress!;
@@ -122,7 +115,7 @@ afterAll(async () => {
   try {
     if (database) await database.close();
   } finally {
-    if (node && node.exitCode === null) { node.kill(); await node.exited; }
+    if (anvil) await anvil.stop();
     if (fileDirectory) await rm(fileDirectory, { recursive: true, force: true });
   }
 });

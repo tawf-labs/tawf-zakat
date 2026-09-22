@@ -23,6 +23,7 @@ import { foundry } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
+import { startAnvil } from "./helpers/anvil-fixture";
 import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store";
 import { createDisbursementStore, type DisbursementStore } from "../src/disbursement-store";
 import { createEvidenceStore, type EvidenceStore } from "../src/evidence-store";
@@ -2054,7 +2055,7 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
   const rpcUrl = "http://127.0.0.1:18582";
   const rpc = createPublicClient({ chain: foundry, transport: http(rpcUrl, { retryCount: 0, timeout: 500 }) });
   const wallet = createWalletClient({ account: deployer, chain: foundry, transport: http(rpcUrl) });
-  let node: ReturnType<typeof Bun.spawn> | null = null;
+  let anvil: Awaited<ReturnType<typeof startAnvil>>;
   let registry: Hex;
   let chain: ReturnType<typeof createRegistryChain>;
 
@@ -2065,23 +2066,7 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
     });
 
   beforeAll(async () => {
-    let occupied = false;
-    try {
-      await rpc.getChainId();
-      occupied = true;
-    } catch {
-      /* The isolated fixture must own this port. */
-    }
-    if (occupied) throw new Error("Port 18582 sudah digunakan; hentikan fixture Anvil lama sebelum menjalankan suite.");
-    node = Bun.spawn(["anvil", "--host", "127.0.0.1", "--port", "18582", "--silent"], { stdout: "ignore", stderr: "pipe" });
-    for (let i = 0; i < 50; i++) {
-      try {
-        await rpc.getChainId();
-        break;
-      } catch {
-        await Bun.sleep(100);
-      }
-    }
+    anvil = await startAnvil(18582);
     const artifact = await Bun.file(new URL("../../sc/out/ReportEvidenceRegistry.sol/ReportEvidenceRegistry.json", import.meta.url)).json();
     const deployment = await wallet.deployContract({ abi: reportRegistryAbi, bytecode: artifact.bytecode.object, args: [deployer.address] });
     registry = (await rpc.waitForTransactionReceipt({ hash: deployment })).contractAddress!;
@@ -2106,10 +2091,7 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
 
   afterAll(async () => {
     configureRuntime(disbursement);
-    if (node && node.exitCode === null) {
-      node.kill();
-      await node.exited;
-    }
+    if (anvil) await anvil.stop();
   });
 
   const recordAt = async (draft: any, token: string, aidLineId: string, beneficiaryId: string, amountIdr: string, reportedAt: number) => {
