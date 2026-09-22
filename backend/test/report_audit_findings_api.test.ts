@@ -17,6 +17,7 @@ import { foundry } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
+import { startAnvil } from "./helpers/anvil-fixture";
 import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store";
 import { createEvidenceStore, type EvidenceStore } from "../src/evidence-store";
 import { createDisbursementStore } from "../src/disbursement-store";
@@ -63,7 +64,7 @@ let store: WorkspaceStore;
 let evidence: EvidenceStore;
 let fileDirectory: string;
 let clock = NOW;
-let node: ReturnType<typeof Bun.spawn> | null = null;
+let anvil: Awaited<ReturnType<typeof startAnvil>>;
 let registryAddress: Hex;
 let chain: ReturnType<typeof createRegistryChain>;
 let withRegistry = true;
@@ -152,13 +153,7 @@ async function created(overrides: Record<string, unknown> = {}) {
 }
 
 beforeAll(async () => {
-  let occupied = false;
-  try { await rpc.getChainId(); occupied = true; } catch { /* The isolated fixture must own this port. */ }
-  if (occupied) throw new Error("Port 18592 sudah digunakan; hentikan fixture Anvil lama sebelum menjalankan suite.");
-  node = Bun.spawn(["anvil", "--host", "127.0.0.1", "--port", "18592", "--silent"], { stdout: "ignore", stderr: "pipe" });
-  for (let i = 0; i < 50; i++) {
-    try { await rpc.getChainId(); break; } catch { await Bun.sleep(100); }
-  }
+  anvil = await startAnvil(18592);
   const artifact = await Bun.file(new URL("../../sc/out/ReportEvidenceRegistry.sol/ReportEvidenceRegistry.json", import.meta.url)).json();
   const deployment = await wallet.deployContract({ abi: reportRegistryAbi, bytecode: artifact.bytecode.object, args: [deployer.address] });
   registryAddress = (await rpc.waitForTransactionReceipt({ hash: deployment })).contractAddress!;
@@ -182,10 +177,7 @@ afterAll(async () => {
   resetWorkspace();
   await database.close();
   await rm(fileDirectory, { recursive: true, force: true });
-  if (node && node.exitCode === null) {
-    node.kill();
-    await node.exited;
-  }
+  if (anvil) await anvil.stop();
 });
 
 beforeEach(async () => {
