@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, RefreshCw, Send, ShieldCheck } from "lucide-react";
+import { Loader2, Send, ShieldCheck } from "lucide-react";
 import { requestDonorOtp, verifyDonorOtp, type DonorOtpChallenge, type DonorSessionRecord } from "./donorClient";
 import { useCountdown } from "./useCountdown";
 import { Notice } from "./DonorNotice";
@@ -51,49 +51,46 @@ export function DonorOtpForm({ reference, onAuthenticated }: DonorOtpFormProps) 
     onAuthenticated({ token: result.sessionToken, contributionId: result.contributionId, expiresAt: result.expiresAt });
   };
 
-  const resendLabel = cooldown > 0 ? `Kirim ulang dalam ${cooldown} detik` : "Kirim Ulang Kode";
+  const resendLabel = cooldown > 0 ? `Kirim ulang dalam ${cooldown} detik` : challenge ? "Kirim Ulang Kode" : "Kirim Kode OTP";
 
   return (
     <div className="space-y-4">
-      {!challenge ? (
-        <button type="button" onClick={handleRequest} disabled={busy !== null || cooldown > 0} className={`w-full sm:w-auto ${PILL_PRIMARY}`}>
-          {busy === "request" ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Send className="w-4 h-4" aria-hidden />}
-          <span>{cooldown > 0 ? resendLabel : "Kirim Kode OTP"}</span>
-        </button>
-      ) : (
-        <form onSubmit={handleVerify} className="rounded-2xl bg-[#f4f8f3] border border-tawf-green-10 p-4 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <label htmlFor="donor-otp-code" className="text-xs font-medium text-tawf-green">
-              Masukkan 6 digit kode yang dikirim ke kontak terdaftar
-            </label>
-            <button
-              type="button"
-              onClick={handleRequest}
-              disabled={busy !== null || cooldown > 0}
-              className="text-[11px] font-bold text-tawf-green-light hover:underline disabled:no-underline disabled:opacity-60 cursor-pointer flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" aria-hidden />
-              <span>{resendLabel}</span>
-            </button>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              id="donor-otp-code"
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
-              className="w-full text-center tracking-[0.4em] font-mono text-xl font-bold bg-white border border-tawf-green-10 rounded-full px-4 py-2.5 text-tawf-green focus:outline-hidden focus:ring-2 focus:ring-[#1b765e]"
-            />
-            <button type="submit" disabled={otpCode.length !== 6 || busy !== null} className={`shrink-0 ${PILL_PRIMARY}`}>
-              {busy === "verify" ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <ShieldCheck className="w-4 h-4" aria-hidden />}
-              <span>Verifikasi</span>
-            </button>
-          </div>
-        </form>
-      )}
+      {/* Kirim dan verifikasi tampil sekaligus: kode baru aktif setelah "Kirim", tapi
+          kolomnya tidak disembunyikan menunggu klik itu lebih dulu. */}
+      <form onSubmit={handleVerify} className="rounded-2xl bg-[#f4f8f3] border border-tawf-green-10 p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <label htmlFor="donor-otp-code" className="text-xs font-medium text-tawf-green">
+            {challenge ? "Masukkan 6 digit kode yang dikirim ke kontak terdaftar" : "Klik “Kirim Kode OTP” untuk menerima kode di kontak terdaftar"}
+          </label>
+          <button
+            type="button"
+            onClick={handleRequest}
+            disabled={busy !== null || cooldown > 0}
+            className="text-[11px] font-bold text-tawf-green-light hover:underline disabled:no-underline disabled:opacity-60 cursor-pointer flex items-center gap-1"
+          >
+            {busy === "request" ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden /> : <Send className="w-3 h-3" aria-hidden />}
+            <span>{resendLabel}</span>
+          </button>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            id="donor-otp-code"
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            disabled={!challenge}
+            placeholder={challenge ? undefined : "------"}
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+            className="w-full text-center tracking-[0.4em] font-mono text-xl font-bold bg-white border border-tawf-green-10 rounded-full px-4 py-2.5 text-tawf-green focus:outline-hidden focus:ring-2 focus:ring-[#1b765e] disabled:bg-[#eef2ef] disabled:text-tawf-muted"
+          />
+          <button type="submit" disabled={!challenge || otpCode.length !== 6 || busy !== null} className={`shrink-0 ${PILL_PRIMARY}`}>
+            {busy === "verify" ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <ShieldCheck className="w-4 h-4" aria-hidden />}
+            <span>Verifikasi</span>
+          </button>
+        </div>
+      </form>
 
       {error && <Notice tone="error">{error}</Notice>}
 

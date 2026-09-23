@@ -351,9 +351,17 @@ const recordGatewayPayment = async (donation: DonationRecord) => {
   try {
     const runtime = workspaceRuntime();
     if (!runtime?.contributions) return;
-    await recordSettledDonation(runtime.contributions, donation, runtime.now());
-  } catch {
-    console.error("Pencatatan kontribusi dari gateway pembayaran tertunda.");
+    const outcome = await recordSettledDonation(runtime.contributions, donation, runtime.now());
+    if (outcome === "NO_INTENT") {
+      // No gateway intent was ever saved for this trxId, so no contribution was recorded
+      // (see rememberGatewayIntent in handleFiatDonation). The donor stays paid, but their
+      // OTP donor-access page will never show an allocation until someone notices this log.
+      console.error(`[gateway-contribution] no intent for ${donation.trxId}; contribution not recorded`);
+    }
+  } catch (error) {
+    // Never let a ledger-recording failure fail the payment itself; log with enough
+    // detail (trxId + real error) that a missing contribution can actually be traced.
+    console.error(`[gateway-contribution] failed to record contribution for ${donation.trxId}:`, error);
   }
 };
 
@@ -574,6 +582,8 @@ app.post("/api/webhooks/simulator", async (c) => {
 
     const paidTimestamp = new Date().toISOString();
     const updated = await dbService.markDonationAsPaid(trxId, paidTimestamp);
+    // Same ledger entry a real webhook would produce (#104 depends on it existing).
+    await recordGatewayPayment({ ...donation, ...(updated ?? {}), paidAt: paidTimestamp });
 
     eventBus.broadcast("DONATION_PAID", {
       trxId,

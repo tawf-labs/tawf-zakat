@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Circle } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { getInstitutionPolicy, type Beneficiary, type DisbursementPolicy, type ProposalDocument } from "./disbursementClient";
+import { LIST_PAGE_SIZE, Pager, pageOf, usePage } from "./Pagination";
 
 export type RequiredDocument = { key: string; label: string; done: boolean };
 
@@ -37,23 +38,37 @@ export function ProposalRequiredDocuments({ requests, beneficiaries, documents }
     getInstitutionPolicy(requests).then((value) => { if (!disposed) setPolicy(value); }).catch(() => undefined);
     return () => { disposed = true; };
   }, [requests]);
-  if (!policy) return null;
-  const items = requiredDocuments(policy, beneficiaries, documents);
-  if (!items.length) return null;
-  const missing = items.filter((item) => !item.done).length;
+  // A large roster means a large checklist (one line per mustahik's KTP/KK). Once most are
+  // attached there is nothing to act on for the "done" ones, so only the gaps need listing.
+  const items = policy ? requiredDocuments(policy, beneficiaries, documents) : [];
+  const missingItems = items.filter((item) => !item.done);
+  const missing = missingItems.length;
+  // Hooks must run every render regardless of the early returns below.
+  const pager = usePage(missingItems.length);
+  const paged = pageOf(missingItems, pager.page);
+  if (!policy || !items.length) return null;
   return (
     <div aria-label="Dokumen yang wajib dilampirkan" className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs">
-      <p className="font-semibold text-stone-800">
-        Dokumen wajib sebelum diajukan {missing ? `(${missing} belum dilampirkan)` : "(lengkap)"}
+      <p className="flex items-center gap-1.5 font-semibold text-stone-800">
+        {missing ? <Circle aria-hidden className="h-3.5 w-3.5 shrink-0 text-amber-600" /> : <CheckCircle2 aria-hidden className="h-3.5 w-3.5 shrink-0 text-emerald-600" />}
+        Dokumen wajib sebelum diajukan: {items.length - missing} dari {items.length} sudah dilampirkan
+        {missing ? `, ${missing} belum` : " (lengkap)"}
       </p>
-      <ul className="mt-2 space-y-1">
-        {items.map((item) => (
-          <li key={item.key} className={`flex items-start gap-1.5 ${item.done ? "text-emerald-800" : "text-amber-800"}`}>
-            {item.done ? <CheckCircle2 aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <Circle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-            <span>{item.label}{item.done ? " — sudah dilampirkan" : " — belum dilampirkan"}</span>
-          </li>
-        ))}
-      </ul>
+      {missing > 0 && (
+        <>
+          <ul className="mt-2 space-y-1">
+            {paged.map(({ item }) => (
+              <li key={item.key} className="flex items-start gap-1.5 text-amber-800">
+                <Circle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{item.label} — belum dilampirkan</span>
+              </li>
+            ))}
+          </ul>
+          {missing > LIST_PAGE_SIZE && (
+            <Pager label="Belum dilampirkan" page={pager.page} pageCount={pager.pageCount} onChange={pager.setPage} />
+          )}
+        </>
+      )}
     </div>
   );
 }

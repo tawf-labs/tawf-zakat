@@ -1,10 +1,11 @@
-import { formatIdrAmount } from "../workspace/mandateLabels";
 import { Download, FileSpreadsheet, Plus } from "lucide-react";
+import { formatIdrAmount } from "../workspace/mandateLabels";
 import { Button } from "../../components/ui/Button";
 import { newAidLine, newBeneficiary, type ProposalDraft, type ProposalTotals, type TabularFormat } from "./disbursementClient";
 import { issuesFor, IssueList } from "./ProposalIssues";
 import { BeneficiaryCard } from "./BeneficiaryCard";
 import { AidLineRow } from "./AidLineRow";
+import { LIST_PAGE_SIZE, Pager, pageOf, usePage } from "./Pagination";
 
 type DraftSectionProps = { draft: ProposalDraft; setDraft: (draft: ProposalDraft) => void };
 type RosterSectionProps = DraftSectionProps & {
@@ -65,6 +66,12 @@ export function ProposalDetails({ draft, setDraft }: DraftSectionProps) {
 }
 
 export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: RosterSectionProps) {
+  const beneficiaryPager = usePage(draft.beneficiaries.length, LIST_PAGE_SIZE);
+  const aidLinePager = usePage(draft.aidLines.length, LIST_PAGE_SIZE);
+
+  const pagedBeneficiaries = pageOf(draft.beneficiaries, beneficiaryPager.page);
+  const pagedAidLines = pageOf(draft.aidLines, aidLinePager.page);
+
   return <>
       <section>
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -107,9 +114,14 @@ export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: Rost
             </Button>
           </div>
         </div>
+        {draft.beneficiaries.length > LIST_PAGE_SIZE && (
+          <p className="mt-1 text-xs text-stone-500">
+            Daftar besar (mis. hasil impor CSV) ditampilkan {LIST_PAGE_SIZE} per halaman agar layar tetap responsif.
+          </p>
+        )}
 
         <div className="mt-3 space-y-3">
-          {draft.beneficiaries.map((b, i) => (
+          {pagedBeneficiaries.map(({ item: b, index: i }) => (
             <BeneficiaryCard
               key={b.id}
               beneficiary={b}
@@ -122,6 +134,7 @@ export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: Rost
             />
           ))}
         </div>
+        <Pager label="Penerima" page={beneficiaryPager.page} pageCount={beneficiaryPager.pageCount} onChange={beneficiaryPager.setPage} />
       </section>
 
       <section>
@@ -137,7 +150,7 @@ export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: Rost
           </Button>
         </div>
         <div className="mt-3 space-y-2">
-          {draft.aidLines.map((line, i) => (
+          {pagedAidLines.map(({ item: line, index: i }) => (
             <AidLineRow
               key={line.id}
               line={line}
@@ -149,6 +162,7 @@ export function ProposalRoster({ draft, setDraft, onOpenImport, onExport }: Rost
             />
           ))}
         </div>
+        <Pager label="Rincian bantuan" page={aidLinePager.page} pageCount={aidLinePager.pageCount} onChange={aidLinePager.setPage} />
       </section>
 
   </>;

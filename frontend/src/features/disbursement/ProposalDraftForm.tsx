@@ -283,6 +283,7 @@ export function ProposalDraftForm({
         requests={requests}
         proposalId={draft.id}
         beneficiaries={draft.beneficiaries}
+        aidLines={draft.aidLines}
         readOnly={isReadOnly}
         proposalVersion={draft.version}
       />}

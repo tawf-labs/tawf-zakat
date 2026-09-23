@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { deleteProposalDocument, downloadProposalFile, listProposalDocuments,
-  type Beneficiary, type ProposalDocument } from "./disbursementClient";
+  type AidLine, type Beneficiary, type ProposalDocument } from "./disbursementClient";
 import { ProposalDocumentList } from "./ProposalDocumentList";
 import { ProposalDocumentUpload } from "./ProposalDocumentUpload";
 import { ProposalRequiredDocuments } from "./ProposalRequiredDocuments";
+import { BeneficiaryIdentityBulkUpload } from "./BeneficiaryIdentityBulkUpload";
 
-export function ProposalDocumentManager({ requests, proposalId, beneficiaries, readOnly = false,
+export function ProposalDocumentManager({ requests, proposalId, beneficiaries, aidLines = [], readOnly = false,
   proposalVersion, onDocumentsChanged }: {
-  requests: PrivateRequests; proposalId: string; beneficiaries: Beneficiary[]; readOnly?: boolean;
+  requests: PrivateRequests; proposalId: string; beneficiaries: Beneficiary[]; aidLines?: AidLine[]; readOnly?: boolean;
   proposalVersion?: number; onDocumentsChanged?: () => void;
 }) {
   const [documents, setDocuments] = useState<ProposalDocument[]>([]);
@@ -62,6 +63,15 @@ export function ProposalDocumentManager({ requests, proposalId, beneficiaries, r
       </details>
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
       {!readOnly && !loading && !error && <ProposalRequiredDocuments requests={requests} beneficiaries={beneficiaries} documents={documents} />}
+      {!readOnly && beneficiaries.length > 1 && (
+        <BeneficiaryIdentityBulkUpload
+          requests={requests}
+          proposalId={proposalId}
+          beneficiaries={beneficiaries}
+          aidLines={aidLines}
+          onUploaded={changed}
+        />
+      )}
       {!readOnly && <ProposalDocumentUpload requests={requests} proposalId={proposalId} beneficiaries={beneficiaries} onUploaded={changed} />}
       {loading ? <p className="text-xs">Memuat dokumen…</p> : !error &&
         <ProposalDocumentList documents={documents} beneficiaries={beneficiaries} readOnly={readOnly} onDownload={download} onDelete={remove} />}
