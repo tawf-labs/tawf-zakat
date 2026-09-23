@@ -46,7 +46,7 @@ export async function recordSettledDonation(store: ContributionStore, donation: 
       currencyUnit: "IDR",
       amountExact: String(Math.trunc(donation.amountIDR)),
       fundType: fundTypeOf(intent.zakatType),
-      purpose: "Donasi online melalui Midtrans",
+      purpose: "Donasi Online",
       receivedAt: Number.isFinite(paidAt) ? Math.floor(paidAt / 1000) : now,
       donorName: donation.donorName,
       donorContact: intent.donorContact,
