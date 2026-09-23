@@ -591,6 +591,121 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
     expect(jsonString).not.toContain("alloc-2");
   });
 
+  it("shows which mustahik the donor's rupiah reached, as pseudonyms only (ADR-0037)", async () => {
+    const { propId, actId } = await createApprovedProposalAndActivity("2400000");
+    const contrib = await createFixtureContribution({ donorName: "Donatur Satu", amountExact: "1000000" });
+    const db = database.handle();
+    await db.execute(sql`
+      UPDATE contributions SET status = 'ENDORSED', reconciled_at = ${NOW}, endorsed_at = ${NOW} WHERE id = ${contrib.id}
+    `);
+    await db.execute(sql`
+      INSERT INTO contribution_allocations (
+        id, institution_id, contribution_id, activity_id, currency_unit, amount_exact,
+        fund_type, purpose, reason, status, allocated_at, allocated_by, contribution_version, version, created_at, updated_at
+      ) VALUES (
+        'alloc-share', ${SINAR}, ${contrib.id}, ${actId}, 'IDR', '1000000', 'ZAKAT', 'Bantuan Pelajar',
+        'Alokasi tahap I', 'ACTIVE', ${NOW}, 'off-amil', 1, 1, ${NOW}, ${NOW}
+      )
+    `);
+    // Three mustahik are reached by the activity, so the detail clears the k-anonymity
+    // threshold; this donor's money filled the first and part of the second.
+    const other = await createFixtureContribution({ donorName: "Donatur Dua", amountExact: "800000" });
+    await db.execute(sql`
+      UPDATE contributions SET status = 'ENDORSED', reconciled_at = ${NOW}, endorsed_at = ${NOW} WHERE id = ${other.id}
+    `);
+    await db.execute(sql`
+      INSERT INTO contribution_allocations (
+        id, institution_id, contribution_id, activity_id, currency_unit, amount_exact,
+        fund_type, purpose, reason, status, allocated_at, allocated_by, contribution_version, version, created_at, updated_at
+      ) VALUES (
+        'alloc-other', ${SINAR}, ${other.id}, ${actId}, 'IDR', '800000', 'ZAKAT', 'Bantuan Pelajar',
+        'Alokasi tahap II', 'ACTIVE', ${NOW}, 'off-amil', 1, 1, ${NOW}, ${NOW}
+      )
+    `);
+    const share = (id: string, pseudonym: string, asnaf: string, beneficiary: string, amount: string, allocation: string) => sql`(
+      ${id}, ${SINAR}, ${allocation}, ${allocation === "alloc-share" ? contrib.id : other.id}, ${actId}, ${propId}, 1,
+      ${`aid-${beneficiary}`}, ${beneficiary}, ${pseudonym}, ${asnaf}, ${amount}, '800000', 1, 'ACTIVE', ${NOW}, ${NOW}
+    )`;
+    await db.execute(sql`
+      INSERT INTO allocation_beneficiary_shares (
+        id, institution_id, allocation_id, contribution_id, activity_id, proposal_id, proposal_version,
+        aid_line_id, beneficiary_id, beneficiary_pseudonym, asnaf, share_exact, aid_line_approved_exact,
+        fill_sequence, status, created_at, updated_at
+      ) VALUES ${sql.join([
+        share("sh-1", "Mustahik #07", "FAKIR", "ben-1", "800000", "alloc-share"),
+        share("sh-2", "Mustahik #23", "MISKIN", "ben-2", "100000", "alloc-share"),
+        share("sh-3", "Mustahik #31", "MISKIN", "ben-3", "800000", "alloc-other"),
+      ], sql`, `)}
+    `);
+
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib.id });
+    const { challengeId } = await chalRes.json();
+    const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
+
+    const { allocations } = await (await getDonor(`/contributions/${contrib.id}/allocations`, sessionToken)).json();
+    const beneficiaries = allocations[0].beneficiaries;
+
+    expect(beneficiaries.withheldReason).toBeNull();
+    expect(beneficiaries.regionLabel).toBe("REGIONAL");
+    expect(beneficiaries.shares).toEqual([
+      { beneficiaryPseudonym: "Mustahik #07", asnaf: "FAKIR", shareExact: "800000", aidLineApprovedExact: "800000", isFull: true, fillSequence: 1 },
+      { beneficiaryPseudonym: "Mustahik #23", asnaf: "MISKIN", shareExact: "100000", aidLineApprovedExact: "800000", isFull: false, fillSequence: 1 },
+    ]);
+    // 1.000.000 given, 900.000 attributed: the rest stays visible rather than rounded away.
+    expect(beneficiaries.unassignedExact).toBe("100000");
+    expect(beneficiaries.disclaimer).toContain("atribusi pencatatan");
+
+    // Another donor's share never crosses over, and no identity column is carried.
+    const payload = JSON.stringify(allocations);
+    expect(payload).not.toContain("Mustahik #31");
+    expect(payload).not.toContain("ben-1");
+    expect(payload).not.toContain("alloc-other");
+  });
+
+  it("withholds per-mustahik detail when an activity reaches too few recipients (ADR-0037)", async () => {
+    const { propId, actId } = await createApprovedProposalAndActivity("1600000");
+    const contrib = await createFixtureContribution({ donorName: "Donatur Tunggal", amountExact: "800000" });
+    const db = database.handle();
+    await db.execute(sql`
+      UPDATE contributions SET status = 'ENDORSED', reconciled_at = ${NOW}, endorsed_at = ${NOW} WHERE id = ${contrib.id}
+    `);
+    await db.execute(sql`
+      INSERT INTO contribution_allocations (
+        id, institution_id, contribution_id, activity_id, currency_unit, amount_exact,
+        fund_type, purpose, reason, status, allocated_at, allocated_by, contribution_version, version, created_at, updated_at
+      ) VALUES (
+        'alloc-kecil', ${SINAR}, ${contrib.id}, ${actId}, 'IDR', '800000', 'ZAKAT', 'Bantuan Pelajar',
+        'Alokasi tunggal', 'ACTIVE', ${NOW}, 'off-amil', 1, 1, ${NOW}, ${NOW}
+      )
+    `);
+    await db.execute(sql`
+      INSERT INTO allocation_beneficiary_shares (
+        id, institution_id, allocation_id, contribution_id, activity_id, proposal_id, proposal_version,
+        aid_line_id, beneficiary_id, beneficiary_pseudonym, asnaf, share_exact, aid_line_approved_exact,
+        fill_sequence, status, created_at, updated_at
+      ) VALUES (
+        'sh-kecil', ${SINAR}, 'alloc-kecil', ${contrib.id}, ${actId}, ${propId}, 1,
+        'aid-1', 'ben-1', 'Mustahik #01', 'FAKIR', '800000', '800000', 1, 'ACTIVE', ${NOW}, ${NOW}
+      )
+    `);
+
+    const chalRes = await postDonor("/otp-challenge", { reference: contrib.id });
+    const { challengeId } = await chalRes.json();
+    const code = outbox.at(-1)?.body.match(/\b(\d{6})\b/)?.[1]!;
+    const { sessionToken } = await (await postDonor("/session", { challengeId, otpCode: code })).json();
+
+    const { allocations } = await (await getDonor(`/contributions/${contrib.id}/allocations`, sessionToken)).json();
+    const beneficiaries = allocations[0].beneficiaries;
+
+    expect(beneficiaries.shares).toEqual([]);
+    // Withheld with a stated reason, not silently emptied.
+    expect(beneficiaries.withheldReason).toContain("privasi penerima");
+    expect(JSON.stringify(allocations)).not.toContain("Mustahik #01");
+    // Pooled funding stays readable as before.
+    expect(allocations[0].activity.pooled.totalAllocatedAmount).toBe("800000");
+  });
+
   it("revokes session on logout and clears access (AC29)", async () => {
     const contrib = await createFixtureContribution();
     const chalRes = await postDonor("/otp-challenge", { reference: contrib.id });
@@ -784,7 +899,7 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)(
     "browser: fixture code opens one contribution without signup, survives navigation, and closes on expiry and logout (AC30)",
     async () => {
-      const { actId } = await createApprovedProposalAndActivity("4000000");
+      const { propId, actId } = await createApprovedProposalAndActivity("4000000");
       const contrib = await createFixtureContribution({ sourceReference: "BCA-SMOKE-104", amountExact: "1250000" });
       await database.handle().execute(sql`
         UPDATE contributions SET status = 'ENDORSED', reconciled_at = ${NOW}, endorsed_at = ${NOW} WHERE id = ${contrib.id}
@@ -795,6 +910,20 @@ describe("Accountless Donor Access via OTP (Ticket #104)", () => {
           fund_type, purpose, reason, status, allocated_at, allocated_by, contribution_version, version, created_at, updated_at
         ) VALUES ('alloc-smoke', ${SINAR}, ${contrib.id}, ${actId}, 'IDR', '1000000', 'ZAKAT', 'Bantuan Pelajar',
                   'Alokasi semester genap', 'ACTIVE', ${NOW}, 'off-amil', 1, 1, ${NOW}, ${NOW})
+      `);
+      // Three mustahik reached, so the k-anonymity guard lets the detail through (ADR-0037).
+      await database.handle().execute(sql`
+        INSERT INTO allocation_beneficiary_shares (
+          id, institution_id, allocation_id, contribution_id, activity_id, proposal_id, proposal_version,
+          aid_line_id, beneficiary_id, beneficiary_pseudonym, asnaf, share_exact, aid_line_approved_exact,
+          fill_sequence, status, created_at, updated_at
+        ) VALUES
+          ('sh-smoke-1', ${SINAR}, 'alloc-smoke', ${contrib.id}, ${actId}, ${propId}, 1,
+           'aid-1', 'ben-1', 'Mustahik #01', 'FAKIR', '400000', '400000', 1, 'ACTIVE', ${NOW}, ${NOW}),
+          ('sh-smoke-2', ${SINAR}, 'alloc-smoke', ${contrib.id}, ${actId}, ${propId}, 1,
+           'aid-2', 'ben-2', 'Mustahik #02', 'MISKIN', '400000', '400000', 2, 'ACTIVE', ${NOW}, ${NOW}),
+          ('sh-smoke-3', ${SINAR}, 'alloc-smoke', ${contrib.id}, ${actId}, ${propId}, 1,
+           'aid-3', 'ben-3', 'Mustahik #03', 'MISKIN', '200000', '400000', 3, 'ACTIVE', ${NOW}, ${NOW})
       `);
 
       const built = await Bun.build({

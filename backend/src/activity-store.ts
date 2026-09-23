@@ -27,7 +27,14 @@ import {
   type DistributionActivityRecord,
   type ReallocationDecisionRecord,
 } from "./activity";
-import { type AidLine, type FundType } from "./disbursement";
+import {
+  beneficiaryPseudonyms,
+  fillAllocation,
+  fillTargetsFrom,
+  type FillResult,
+} from "./allocation-fill";
+import { normalizeFundType, type JenisDana } from "./contribution";
+import { type AidLine, type Beneficiary, type FundType } from "./disbursement";
 import type { ActivityTraceData } from "./realization-source";
 
 type Executor = { execute: (query: SQL) => Promise<unknown> };
@@ -204,6 +211,36 @@ export const ACTIVITY_SCHEMA_STATEMENTS = [
   `ALTER TABLE contribution_allocations ADD CONSTRAINT contribution_allocations_status_known
     CHECK (status IN ('ACTIVE', 'REALLOCATED'));`,
 
+  // ADR-0037: the per-beneficiary attribution of one allocation, stored rather than
+  // recomputed, so a correction or reallocation unwinds deterministically. A share is
+  // never deleted; it is marked REVERSED, and no recipient identity is kept here.
+  `CREATE TABLE IF NOT EXISTS allocation_beneficiary_shares (
+    id TEXT PRIMARY KEY,
+    institution_id TEXT NOT NULL REFERENCES institutions(id),
+    allocation_id TEXT NOT NULL REFERENCES contribution_allocations(id),
+    contribution_id TEXT NOT NULL REFERENCES contributions(id),
+    activity_id TEXT NOT NULL REFERENCES distribution_activities(id),
+    proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id),
+    proposal_version INTEGER NOT NULL,
+    aid_line_id TEXT NOT NULL,
+    beneficiary_id TEXT NOT NULL,
+    beneficiary_pseudonym TEXT NOT NULL,
+    asnaf TEXT NOT NULL,
+    share_exact TEXT NOT NULL,
+    aid_line_approved_exact TEXT NOT NULL,
+    fill_sequence INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    CONSTRAINT allocation_beneficiary_shares_status_known CHECK (status IN ('ACTIVE', 'REVERSED'))
+  );`,
+  `CREATE INDEX IF NOT EXISTS allocation_beneficiary_shares_by_contribution
+    ON allocation_beneficiary_shares (institution_id, contribution_id);`,
+  `CREATE INDEX IF NOT EXISTS allocation_beneficiary_shares_by_aid_line
+    ON allocation_beneficiary_shares (institution_id, activity_id, aid_line_id);`,
+  `CREATE INDEX IF NOT EXISTS allocation_beneficiary_shares_by_allocation
+    ON allocation_beneficiary_shares (institution_id, allocation_id);`,
+
   `CREATE TABLE IF NOT EXISTS activity_operations (
     institution_id TEXT NOT NULL REFERENCES institutions(id),
     account TEXT NOT NULL,
@@ -355,6 +392,99 @@ async function reallocationsTouching(
     `)
   );
   return rows.map(reallocationFrom);
+}
+
+/**
+ * Attributes one allocation to the activity's individual mustahik (ADR-0037).
+ *
+ * The caller must already hold the activity's row lock: the fill reads how much of
+ * each aid line is taken and writes the next shares, so two officers allocating to
+ * one activity in parallel would otherwise fill the same mustahik twice.
+ *
+ * Only the pseudonym, the asnaf and the amounts are written. Nothing that names the
+ * recipient is copied here, and the fill never touches an `AMIL` line: the amil's
+ * right runs through its own path (`amil-policy.ts`), not through a donor's trace.
+ */
+export async function recordBeneficiaryShares(
+  executor: Executor,
+  institutionId: string,
+  input: {
+    allocationId: string;
+    contributionId: string;
+    activityId: string;
+    proposalId: string;
+    amountExact: string;
+    fundType: JenisDana;
+  },
+  now: number
+): Promise<FillResult> {
+  const proposal = rowsOf(
+    await executor.execute(sql`
+      SELECT id, version, aid_lines_json, beneficiaries_json
+      FROM proposal_drafts
+      WHERE id = ${input.proposalId} AND institution_id = ${institutionId}
+    `)
+  )[0];
+  if (!proposal) throw new ActivityNotFoundError("Pengajuan", input.proposalId);
+
+  const aidLines: AidLine[] = JSON.parse(proposal.aid_lines_json ?? "[]");
+  const beneficiaries: Beneficiary[] = JSON.parse(proposal.beneficiaries_json ?? "[]");
+  if (aidLines.length === 0) return { shares: [], unassignedExact: input.amountExact, exclusions: [] };
+
+  const asnafById = new Map(beneficiaries.map((row) => [row.id, row.asnaf]));
+  // The pseudonym follows the roster's own order, not the fill order, so its number
+  // never discloses where a recipient stands in the priority queue.
+  const pseudonyms = beneficiaryPseudonyms(beneficiaries.map((row) => row.id));
+
+  const takenRows = rowsOf(
+    await executor.execute(sql`
+      SELECT aid_line_id, COALESCE(SUM(share_exact::numeric), 0)::text AS taken
+      FROM allocation_beneficiary_shares
+      WHERE institution_id = ${institutionId} AND activity_id = ${input.activityId} AND status = 'ACTIVE'
+      GROUP BY aid_line_id
+    `)
+  );
+  const allocatedByAidLine = new Map<string, string>(takenRows.map((row) => [row.aid_line_id, row.taken]));
+
+  const result = fillAllocation(
+    input.amountExact,
+    fillTargetsFrom(aidLines, { asnafOf: (id) => asnafById.get(id) ?? "", allocatedByAidLine }),
+    { fundType: input.fundType }
+  );
+
+  for (const share of result.shares) {
+    await executor.execute(sql`
+      INSERT INTO allocation_beneficiary_shares (
+        id, institution_id, allocation_id, contribution_id, activity_id, proposal_id, proposal_version,
+        aid_line_id, beneficiary_id, beneficiary_pseudonym, asnaf, share_exact, aid_line_approved_exact,
+        fill_sequence, status, created_at, updated_at
+      ) VALUES (
+        ${`share-${crypto.randomUUID()}`}, ${institutionId}, ${input.allocationId}, ${input.contributionId},
+        ${input.activityId}, ${proposal.id}, ${Number(proposal.version)},
+        ${share.aidLineId}, ${share.beneficiaryId}, ${pseudonyms.get(share.beneficiaryId) ?? "Mustahik"},
+        ${share.asnaf}, ${share.shareExact}, ${share.approvedExact},
+        ${share.fillSequence}, 'ACTIVE', ${now}, ${now}
+      )
+    `);
+  }
+  return result;
+}
+
+/**
+ * Unwinds an allocation's attribution (#107). Shares are marked, never deleted: what
+ * a donor was once shown stays auditable after the money moves.
+ */
+async function reverseBeneficiaryShares(
+  executor: Executor,
+  institutionId: string,
+  allocationId: string,
+  now: number
+): Promise<void> {
+  await executor.execute(sql`
+    UPDATE allocation_beneficiary_shares
+    SET status = 'REVERSED', updated_at = ${now}
+    WHERE institution_id = ${institutionId} AND allocation_id = ${allocationId} AND status = 'ACTIVE'
+  `);
 }
 
 async function loadActivityAccountability(
@@ -743,10 +873,14 @@ export function createActivityStore(db: ActivityDatabase) {
           );
         }
 
+        // Locked, not merely read: the per-beneficiary fill below reads how much of each
+        // aid line is already taken, so two officers allocating to one activity in
+        // parallel must queue rather than fill the same mustahik twice (ADR-0037).
         const activity = rowsOf(
           await tx.execute(sql`
             SELECT * FROM distribution_activities
             WHERE id = ${params.activityId} AND institution_id = ${institutionId}
+            FOR UPDATE
           `)
         )[0];
         if (!activity) throw new ActivityNotFoundError("Kegiatan penyaluran", params.activityId);
@@ -799,6 +933,20 @@ export function createActivityStore(db: ActivityDatabase) {
             'ALLOCATE', ${actor.account}, ${actor.officerId}, NULL, 'ACTIVE', ${requested.toString()}, ${params.reason}, ${now}
           )
         `);
+
+        await recordBeneficiaryShares(
+          tx,
+          institutionId,
+          {
+            allocationId,
+            contributionId: contribution.id,
+            activityId: activity.id,
+            proposalId: activity.proposal_id,
+            amountExact: requested.toString(),
+            fundType: terms.fundType,
+          },
+          now
+        );
 
         // The contribution's own version is left alone: an allocation is not an edit of
         // the contribution, and bumping it would stale pending reconcile/endorse requests.
@@ -1159,6 +1307,26 @@ export function createActivityStore(db: ActivityDatabase) {
           )
         `);
 
+        // The moved money can no longer be attributed to the source activity's mustahik.
+        // The whole attribution is reversed and what stays behind is filled again, so the
+        // result is the same as if the smaller allocation had been made in the first place.
+        await reverseBeneficiaryShares(tx, institutionId, sourceAllocationRow.id, now);
+        if (sourceNewAmount > 0n) {
+          await recordBeneficiaryShares(
+            tx,
+            institutionId,
+            {
+              allocationId: sourceAllocationRow.id,
+              contributionId: contribution.id,
+              activityId: sourceActivityRow.id,
+              proposalId: sourceActivityRow.proposal_id,
+              amountExact: sourceNewAmount.toString(),
+              fundType: normalizeFundType(sourceAllocationRow.fund_type) ?? terms.fundType,
+            },
+            now
+          );
+        }
+
         const targetAllocationId = `alloc-${crypto.randomUUID()}`;
         const insertedTarget = rowsOf(
           await tx.execute(sql`
@@ -1186,6 +1354,20 @@ export function createActivityStore(db: ActivityDatabase) {
             NULL, 'ACTIVE', ${requested.toString()}, ${params.reason}, ${now}
           )
         `);
+
+        await recordBeneficiaryShares(
+          tx,
+          institutionId,
+          {
+            allocationId: targetAllocationId,
+            contributionId: contribution.id,
+            activityId: targetActivityRow.id,
+            proposalId: targetActivityRow.proposal_id,
+            amountExact: requested.toString(),
+            fundType: terms.fundType,
+          },
+          now
+        );
 
         const reallocId = `realloc-${crypto.randomUUID()}`;
         const sourceActivityNewVersion = Number(sourceActivityRow.version) + 1;

@@ -73,6 +73,41 @@ export interface DonorContributionDetail {
 
 export type { DonorReallocation } from "../../shared/activity-trace";
 
+/**
+ * One mustahik's part of this donor's rupiah (ADR-0037). A pseudonym, an asnaf and two
+ * amounts - never a name, NIK, address, contact, photo, document, representative or
+ * payment recipient. The region label is the activity's, never the recipient's own
+ * address, which would be precise enough to guess the person in a small village.
+ */
+export interface DonorBeneficiaryShare {
+  /** `Mustahik #07`: the recipient's position on the proposal roster, never their identity. */
+  beneficiaryPseudonym: string;
+  asnaf: string;
+  /** Rupiah from this contribution to this mustahik. */
+  shareExact: string;
+  /** The mustahik's approved need, the denominator behind "800.000 dari 800.000". */
+  aidLineApprovedExact: string;
+  /** Whether this donor's share covers that need on its own. */
+  isFull: boolean;
+  fillSequence: number;
+}
+
+export interface DonorAllocationBeneficiaries {
+  shares: DonorBeneficiaryShare[];
+  /** Set when the k-anonymity guard withheld the detail; the honest reason, not an empty list. */
+  withheldReason: string | null;
+  /**
+   * This allocation's rupiah not attributed to any mustahik: it exceeds the activity's
+   * remaining need, or belongs to aid whose value is not yet known. Visible, not hidden
+   * as a zero (ADR-0033).
+   */
+  unassignedExact: string;
+  /** One label for the whole activity, taken from its program's scope. */
+  regionLabel: string | null;
+  /** The attribution is accounting, not a physical earmark; the UI must say so. */
+  disclaimer: string;
+}
+
 export interface DonorActivityAllocation {
   allocationId: string;
   activityId: string;
@@ -84,6 +119,8 @@ export interface DonorActivityAllocation {
   allocatedAt: number;
   /** The contribution version this allocation was made against (#114 compares it with the current one). */
   contributionVersion: number;
+  /** Who this donor's rupiah reached, as pseudonyms (ADR-0037). */
+  beneficiaries: DonorAllocationBeneficiaries;
   activity: {
     id: string;
     name: string;

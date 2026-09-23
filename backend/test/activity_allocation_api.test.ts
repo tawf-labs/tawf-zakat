@@ -23,6 +23,7 @@ import { createWorkspaceStore } from "../src/tenancy-store";
 import { createDisbursementStore } from "../src/disbursement-store";
 import { createContributionStore } from "../src/contribution-store";
 import { createActivityStore } from "../src/activity-store";
+import { backfillBeneficiaryShares } from "../src/allocation-share-backfill";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { type EthCall } from "../src/account-signature";
 import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
@@ -119,9 +120,31 @@ type AidValue =
   | { kind: "MONEY"; amountRequestedIdr: string }
   | { kind: "GOODS"; unit: string; quantityRequested: string; valuedAmountIdr: string | null };
 
-/** Submit, examine and approve over authenticated HTTP with a separate signer. */
-async function approvedProposal(programId: string, proposalId: string, values: AidValue[], tokens: Tokens, approvedAmounts?: string[]) {
-  const beneficiaryId = `ben-${proposalId}`;
+/**
+ * Submit, examine and approve over authenticated HTTP with a separate signer.
+ *
+ * `asnafPerLine` gives each aid line its own recipient with that asnaf, which is what
+ * a per-mustahik allocation needs; without it every line belongs to one fakir.
+ */
+async function approvedProposal(
+  programId: string,
+  proposalId: string,
+  values: AidValue[],
+  tokens: Tokens,
+  approvedAmounts?: string[],
+  asnafPerLine?: string[]
+) {
+  const beneficiaryIdOf = (index: number) =>
+    asnafPerLine ? `ben-${proposalId}-${index}` : `ben-${proposalId}`;
+  const beneficiaries = (asnafPerLine ?? ["Fakir"]).map((asnaf, index) => ({
+    id: beneficiaryIdOf(index),
+    name: `Penerima Manfaat ${index + 1}`,
+    asnaf,
+    identityBasis: { kind: "NIK", value: `320112345678901${index % 10}` },
+    addressOrScope: "Wilayah Sintetis",
+    guardian: null,
+    paymentRecipient: null,
+  }));
   const created = await mutate(
     "/proposals",
     {
@@ -132,20 +155,10 @@ async function approvedProposal(programId: string, proposalId: string, values: A
       purpose: `Penyaluran ${proposalId}`,
       personInCharge: "Ahmad Amil",
       aidPeriod: { start: "2026-03-01", end: "2026-03-31" },
-      beneficiaries: [
-        {
-          id: beneficiaryId,
-          name: "Penerima Manfaat",
-          asnaf: "Fakir",
-          identityBasis: { kind: "NIK", value: "3201123456789012" },
-          addressOrScope: "Wilayah Sintetis",
-          guardian: null,
-          paymentRecipient: null,
-        },
-      ],
+      beneficiaries,
       aidLines: values.map((value, index) => ({
         id: `aid-${proposalId}-${index}`,
-        beneficiaryId,
+        beneficiaryId: beneficiaryIdOf(index),
         aidType: value.kind === "MONEY" ? "Bantuan tunai" : "Sembako",
         period: "2026-03",
         value:
@@ -158,14 +171,26 @@ async function approvedProposal(programId: string, proposalId: string, values: A
   );
   expect(created.status).toBe(201);
 
-  for (const category of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+  const letter = await post(
+    `/proposals/${proposalId}/documents`,
+    {
+      category: "PROPOSAL_LETTER",
+      fileName: "proposal_letter.txt",
+      mimeType: "text/plain",
+      beneficiaryId: null,
+      contentBase64: Buffer.from("Dokumen bukti sah").toString("base64"),
+    },
+    tokens.preparer
+  );
+  expect(letter.status).toBe(201);
+  for (const beneficiary of beneficiaries) {
     const doc = await post(
       `/proposals/${proposalId}/documents`,
       {
-        category,
-        fileName: `${category.toLowerCase()}.txt`,
+        category: "BENEFICIARY_IDENTITY",
+        fileName: `identity_${beneficiary.id}.txt`,
         mimeType: "text/plain",
-        beneficiaryId: category === "BENEFICIARY_IDENTITY" ? beneficiaryId : null,
+        beneficiaryId: beneficiary.id,
         contentBase64: Buffer.from("Dokumen bukti sah").toString("base64"),
       },
       tokens.preparer
@@ -249,6 +274,16 @@ async function endorsedContribution(
   const endorsed = await mutate(`/contributions/${id}/endorse`, { expectedVersion: 2, notes: "Disahkan" }, tokens.approver);
   expect(endorsed.status).toBe(200);
   return (await endorsed.json()).contribution.version;
+}
+
+/** The stored per-mustahik attribution of an activity, active rows in fill order. */
+async function beneficiaryShares(activityId: string): Promise<any[]> {
+  const result: any = await database.handle().execute(sql`
+    SELECT * FROM allocation_beneficiary_shares
+    WHERE activity_id = ${activityId} AND status = 'ACTIVE'
+    ORDER BY created_at, fill_sequence
+  `);
+  return result.rows ?? result;
 }
 
 const allocate = (contributionId: string, body: Record<string, unknown>, token: string) =>
@@ -556,6 +591,147 @@ describe("Distribution Activities & Contribution Allocations (Ticket #103)", () 
 
     const worsen = await allocate("c-koreksi", { activityId: "act-koreksi", amountExact: "1", expectedVersion: version + 1 }, tokens.amil);
     expect(worsen.status).toBe(400);
+  });
+
+  it("attributes one allocation to individual mustahik, in asnaf order, without recording identity (ADR-0037)", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(
+      programId,
+      "prop-mustahik",
+      [money("800000"), money("800000"), money("800000")],
+      tokens,
+      undefined,
+      ["Gharim", "Fakir", "Miskin"]
+    );
+    await createActivity("act-mustahik", "prop-mustahik", tokens);
+    const version = await endorsedContribution("c-mustahik", "1000000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-mustahik", { activityId: "act-mustahik", amountExact: "1000000", expectedVersion: version }, tokens.amil)).status).toBe(200);
+
+    const shares = await beneficiaryShares("act-mustahik");
+    // Fakir before miskin before gharim (Q9:60), whatever order the roster listed them in.
+    expect(shares.map((row) => [row.asnaf, row.share_exact, row.aid_line_approved_exact])).toEqual([
+      ["Fakir", "800000", "800000"],
+      ["Miskin", "200000", "800000"],
+    ]);
+    // The pseudonym follows the roster's order, not the fill's: the gharim listed first is #01.
+    expect(shares.map((row) => row.beneficiary_pseudonym)).toEqual(["Mustahik #02", "Mustahik #03"]);
+    expect(shares.every((row) => row.status === "ACTIVE" && Number(row.proposal_version) === 1)).toBe(true);
+    expect(JSON.stringify(shares)).not.toContain("Penerima Manfaat");
+    expect(JSON.stringify(shares)).not.toContain("3201123456789");
+
+    // A second allocation continues from the cursor rather than filling anyone twice.
+    const second = await endorsedContribution("c-mustahik-2", "700000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-mustahik-2", { activityId: "act-mustahik", amountExact: "700000", expectedVersion: second }, tokens.amil)).status).toBe(200);
+    const after = await beneficiaryShares("act-mustahik");
+    const perLine = new Map<string, bigint>();
+    for (const row of after) perLine.set(row.aid_line_id, (perLine.get(row.aid_line_id) ?? 0n) + BigInt(row.share_exact));
+    expect([...perLine.values()].every((total) => total <= 800000n)).toBe(true);
+    expect([...perLine.values()].reduce((total, value) => total + value, 0n)).toBe(1700000n);
+  });
+
+  it("never fills an amil line from a donor's zakat, leaving that part unattributed", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(
+      programId,
+      "prop-amil",
+      [money("400000"), money("400000")],
+      tokens,
+      undefined,
+      ["Amil", "Fakir"]
+    );
+    await createActivity("act-amil", "prop-amil", tokens);
+    const version = await endorsedContribution("c-amil", "1000000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-amil", { activityId: "act-amil", amountExact: "1000000", expectedVersion: version }, tokens.amil)).status).toBe(200);
+
+    const shares = await beneficiaryShares("act-amil");
+    expect(shares).toHaveLength(1);
+    expect(shares[0]).toMatchObject({ asnaf: "Fakir", share_exact: "400000" });
+  });
+
+  it("leaves aid whose value is unknown out of the attribution instead of calling it zero (ADR-0033)", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(
+      programId,
+      "prop-barang",
+      [{ kind: "GOODS", unit: "paket", quantityRequested: "10", valuedAmountIdr: null }, money("300000")],
+      tokens,
+      undefined,
+      ["Fakir", "Miskin"]
+    );
+    await createActivity("act-barang", "prop-barang", tokens);
+    const version = await endorsedContribution("c-barang", "500000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-barang", { activityId: "act-barang", amountExact: "500000", expectedVersion: version }, tokens.amil)).status).toBe(200);
+
+    const shares = await beneficiaryShares("act-barang");
+    expect(shares.map((row) => [row.asnaf, row.share_exact])).toEqual([["Miskin", "300000"]]);
+  });
+
+  it("backfills allocations recorded before per-mustahik attribution existed, verify writing nothing (ADR-0037)", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(
+      programId,
+      "prop-backfill",
+      [money("800000"), money("800000")],
+      tokens,
+      undefined,
+      ["Fakir", "Miskin"]
+    );
+    await createActivity("act-backfill", "prop-backfill", tokens);
+    const first = await endorsedContribution("c-backfill-1", "1000000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-backfill-1", { activityId: "act-backfill", amountExact: "1000000", expectedVersion: first }, tokens.amil)).status).toBe(200);
+    const second = await endorsedContribution("c-backfill-2", "400000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-backfill-2", { activityId: "act-backfill", amountExact: "400000", expectedVersion: second }, tokens.amil)).status).toBe(200);
+
+    const expected = (await beneficiaryShares("act-backfill")).map((row) => [
+      row.allocation_id, row.aid_line_id, row.beneficiary_pseudonym, row.share_exact, row.fill_sequence,
+    ]);
+    expect(expected).toHaveLength(3);
+
+    // The state a deployment that allocated before ADR-0037 is in.
+    const db = database.handle();
+    await db.execute(sql`DELETE FROM allocation_beneficiary_shares WHERE activity_id = 'act-backfill'`);
+
+    const dryRun = await backfillBeneficiaryShares(db as any, { apply: false, now: clock });
+    expect(dryRun.candidates).toBe(2);
+    expect(dryRun.outcomes.every((outcome) => outcome.state === "ATTRIBUTED")).toBe(true);
+    expect(dryRun.outcomes.reduce((total, o) => total + BigInt(o.attributedExact), 0n)).toBe(1400000n);
+    // Verify reports without writing.
+    expect(await beneficiaryShares("act-backfill")).toHaveLength(0);
+
+    const applied = await backfillBeneficiaryShares(db as any, { apply: true, now: clock });
+    expect(applied.candidates).toBe(2);
+    const restored = (await beneficiaryShares("act-backfill")).map((row) => [
+      row.allocation_id, row.aid_line_id, row.beneficiary_pseudonym, row.share_exact, row.fill_sequence,
+    ]);
+    // Oldest allocation first, so the replay lands exactly where the live path had it.
+    expect(restored).toEqual(expected);
+
+    // Running it again finds nothing left to do and writes nothing twice.
+    const again = await backfillBeneficiaryShares(db as any, { apply: true, now: clock });
+    expect(again.candidates).toBe(0);
+    expect(await beneficiaryShares("act-backfill")).toHaveLength(3);
+  });
+
+  it("leaves a reversed attribution reversed and skips an emptied allocation when backfilling", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens);
+    await approvedProposal(programId, "prop-kosong", [money("500000")], tokens);
+    await createActivity("act-kosong", "prop-kosong", tokens);
+    const version = await endorsedContribution("c-kosong", "500000", "ZAKAT", "Zakat", tokens);
+    expect((await allocate("c-kosong", { activityId: "act-kosong", amountExact: "500000", expectedVersion: version }, tokens.amil)).status).toBe(200);
+
+    // The shape a fully reallocated allocation leaves behind: no money, shares reversed.
+    const db = database.handle();
+    await db.execute(sql`UPDATE allocation_beneficiary_shares SET status = 'REVERSED' WHERE activity_id = 'act-kosong'`);
+    await db.execute(sql`UPDATE contribution_allocations SET amount_exact = '0' WHERE activity_id = 'act-kosong'`);
+
+    const report = await backfillBeneficiaryShares(db as any, { apply: true, now: clock });
+    expect(report.outcomes.map((outcome) => outcome.state)).toEqual(["EMPTY"]);
+    expect(await beneficiaryShares("act-kosong")).toHaveLength(0);
   });
 
   it("replays an identical retry and refuses a reused operationId with a different payload", async () => {

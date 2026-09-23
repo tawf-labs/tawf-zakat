@@ -235,6 +235,17 @@ export function contributionBalance(totalExact: string, allocatedExact: string):
 }
 
 /**
+ * One aid line in rupiah, or `null` when its value is not known - a goods line
+ * without a valuation. The one reading of a line's value: the activity target and
+ * the per-beneficiary fill (`allocation-fill.ts`) must never disagree on it.
+ */
+export function aidLineValueIdr(line: AidLine): string | null {
+  return line.value.kind === "MONEY"
+    ? (line.value.amountApprovedIdr ?? line.value.amountRequestedIdr)
+    : goodsValuationOf(line.value);
+}
+
+/**
  * The activity's target from its proposal's aid lines. Aid lines were validated when
  * the proposal was submitted, so an unreadable amount here is corrupt data and throws.
  */
@@ -242,9 +253,7 @@ export function activityTarget(aidLines: AidLine[]): { targetAmount: string; tar
   let total = 0n;
   let partial = false;
   for (const line of aidLines) {
-    const idr = line.value.kind === "MONEY"
-      ? (line.value.amountApprovedIdr ?? line.value.amountRequestedIdr)
-      : goodsValuationOf(line.value);
+    const idr = aidLineValueIdr(line);
     if (idr === null) {
       partial = true;
       continue;

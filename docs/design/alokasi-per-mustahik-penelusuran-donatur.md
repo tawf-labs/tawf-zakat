@@ -1,6 +1,6 @@
 # Alokasi per mustahik pada penelusuran donatur
 
-- Status: riset selesai, dua keputusan produk dikunci pengguna, implementasi **belum dimulai**. Dokumen ini adalah serah terima untuk sesi kerja berikutnya.
+- Status: **terimplementasi 2026-09-23**, dikunci sebagai [ADR-0037](../adr/0037-per-beneficiary-allocation-shares-in-donor-tracing.md). Dokumen ini disimpan sebagai catatan riset dan alasan di balik rancangannya; ADR yang mengikat, kode yang berlaku.
 - Tujuan: muzakki yang membuka kontribusinya lewat OTP melihat dananya terbagi ke mustahik tertentu (mis. Rp1jt → satu mustahik penuh 800k/800k, satu lagi paruh 200k/800k), tanpa membuka identitas mustahik.
 - Dasar: ADR-0006 (privasi identitas penerima), ADR-0032/0033 (pooled funding, alokasi eksplisit), #103 (alokasi kontribusi), #104 (akses donatur via OTP), #107/#114 (realokasi & koreksi).
 
@@ -143,8 +143,19 @@ Label wilayah tidak disimpan di sini; diambil dari kegiatan saat dibaca (§2).
 - **Revisi pengajuan.** Bila roster berubah setelah fill, `proposal_version` pada baris share membuat selisihnya terlihat; jangan diam-diam memetakan ulang ke aid line versi baru.
 - **Kebocoran lewat sisi lain.** Setelah fitur ini ada, periksa ulang bahwa jalur publik (`/verifikasi`, laporan periode, paket bukti) tidak ikut menampilkan share — ini khusus untuk sesi donatur yang sudah lolos OTP.
 
-## 7. Terbuka, belum diputuskan
+## 7. Yang sempat terbuka, kini diputuskan (2026-09-23)
 
-1. Perlakuan baris ber-asnaf `AMIL` pada fill yang terlihat donatur (§3.1).
-2. Apakah `MIN_ANONYMITY_SET = 3` angka yang tepat, atau perlu disetel per lembaga lewat kebijakan penyaluran (`institution_disbursement_policies` sudah ada sebagai tempatnya).
-3. Apakah perubahan ini perlu ADR sendiri (kemungkinan besar ya — ia memperluas ADR-0032/0033 dari pooled-per-kegiatan menjadi pooled-per-mustahik, dan menetapkan level disclosure baru di bawah ADR-0006). Nomor berikutnya: ADR-0037.
+1. Baris ber-asnaf `AMIL` **dikeluarkan** dari fill yang terlihat donatur (§3.1); hak amil tetap lewat jalurnya sendiri, dan bagian yang tak terserap muncul sebagai sisa belum dirinci.
+2. `MIN_ANONYMITY_SET = 3` **tetap konstanta** di modul murni. Menjadikannya kebijakan per lembaga tetap terbuka dan tidak mengubah pembaca.
+3. ADR ditulis: [ADR-0037](../adr/0037-per-beneficiary-allocation-shares-in-donor-tracing.md).
+
+## 8. Di mana kodenya
+
+| Bagian | Berkas |
+| --- | --- |
+| Modul murni + guard k-anonimitas | `backend/src/allocation-fill.ts`, uji `backend/test/allocation_fill.test.ts` |
+| Nilai satu baris, dipakai bersama target kegiatan | `aidLineValueIdr` di `backend/src/activity.ts` |
+| Tabel + DDL | `allocation_beneficiary_shares` di `backend/src/db/schema.ts` dan `ACTIVITY_SCHEMA_STATEMENTS` |
+| Tulis & unwind | `recordBeneficiaryShares`/`reverseBeneficiaryShares` di `backend/src/activity-store.ts` |
+| Baca donatur | `getDonorAllocations` di `backend/src/donor-access-store.ts`, tipe di `backend/src/donor-access.ts` |
+| Tampilan | `frontend/src/features/donor/DonorAllocationList.tsx` |

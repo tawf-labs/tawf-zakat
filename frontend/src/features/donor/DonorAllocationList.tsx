@@ -1,4 +1,4 @@
-import { HeartHandshake, Layers, Lock } from "lucide-react";
+import { HeartHandshake, Layers, Lock, Users } from "lucide-react";
 import { formatNominal } from "../contributions/contributionClient";
 import { allocationPercent } from "../activities/activityClient";
 import type { DonorActivityAllocation } from "./donorClient";
@@ -91,6 +91,8 @@ function AllocationCard({ item }: { item: DonorActivityAllocation }) {
         <p className="text-[11px] text-tawf-muted">Didanai bersama oleh {activity.pooled.allocationCount} alokasi kontribusi.</p>
       </div>
 
+      <BeneficiaryShares item={item} />
+
       {item.reason && (
         <p className="text-xs text-tawf-muted border-t border-tawf-green-10 pt-3">
           <span className="font-semibold text-tawf-green">Dasar alokasi: </span>
@@ -99,4 +101,81 @@ function AllocationCard({ item }: { item: DonorActivityAllocation }) {
       )}
     </li>
   );
+}
+
+/**
+ * Where this donor's rupiah landed, per mustahik (ADR-0037).
+ *
+ * Pseudonyms and asnaf only, with the activity's own region label. What the server
+ * withholds to protect recipients is said plainly, not left as an empty list, and the
+ * screen never pretends the split is a physical earmark.
+ */
+function BeneficiaryShares({ item }: { item: DonorActivityAllocation }) {
+  const beneficiaries = item.beneficiaries;
+  if (!beneficiaries) return null;
+
+  const hasUnassigned = beneficiaries.unassignedExact !== "0";
+  const region = beneficiaries.regionLabel?.trim();
+
+  return (
+    <div className="space-y-3 border-t border-tawf-green-10 pt-4">
+      <div className="flex items-center gap-2">
+        <Users className="w-4 h-4 text-tawf-green-light" aria-hidden />
+        <h6 className="text-xs font-semibold text-tawf-green">Sampai ke mustahik</h6>
+      </div>
+
+      {beneficiaries.withheldReason ? (
+        <p className="text-[11px] text-tawf-muted leading-relaxed">{beneficiaries.withheldReason}</p>
+      ) : beneficiaries.shares.length === 0 ? (
+        <p className="text-[11px] text-tawf-muted leading-relaxed">
+          Bagian kontribusi ini belum dirinci ke penerima tertentu.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {beneficiaries.shares.map((share, index) => (
+            <li
+              key={`${share.beneficiaryPseudonym}-${share.fillSequence}-${index}`}
+              className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 text-xs"
+            >
+              <span className="text-tawf-green">
+                <span className="font-semibold">{share.beneficiaryPseudonym}</span>
+                <span className="text-tawf-muted">
+                  {" · "}
+                  {asnafLabel(share.asnaf)}
+                  {region ? ` · ${region}` : ""}
+                </span>
+              </span>
+              <span className="font-mono text-tawf-green-light">
+                {formatNominal(share.shareExact, item.currencyUnit)}
+                <span className="text-tawf-muted">
+                  {" dari "}
+                  {formatNominal(share.aidLineApprovedExact, item.currencyUnit)}
+                  {share.isFull ? " (penuh)" : " (sebagian)"}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {hasUnassigned && (
+        <p className="text-[11px] text-tawf-muted leading-relaxed">
+          {formatNominal(beneficiaries.unassignedExact, item.currencyUnit)} belum dirinci ke penerima tertentu: melebihi
+          kebutuhan yang tersisa pada kegiatan ini, atau berupa bantuan yang nilainya belum ditetapkan.
+        </p>
+      )}
+
+      <p className="text-[11px] text-tawf-muted leading-relaxed">{beneficiaries.disclaimer}</p>
+    </div>
+  );
+}
+
+/** `FAKIR` as the word a donor reads, without inventing a category the server did not send. */
+function asnafLabel(asnaf: string): string {
+  const trimmed = asnaf.trim();
+  if (!trimmed) return "Asnaf tidak tercatat";
+  return trimmed
+    .split(/[\s_]+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }

@@ -75,6 +75,30 @@ export interface DonorZkProofDetail {
   failureReason?: string;
 }
 
+/**
+ * One mustahik's part of this donor's rupiah (ADR-0037). A pseudonym and an asnaf:
+ * the server never sends a name, address or contact, and the screen never asks for one.
+ */
+export type DonorBeneficiaryShare = {
+  beneficiaryPseudonym: string;
+  asnaf: string;
+  shareExact: string;
+  aidLineApprovedExact: string;
+  isFull: boolean;
+  fillSequence: number;
+};
+
+export type DonorAllocationBeneficiaries = {
+  shares: DonorBeneficiaryShare[];
+  /** Set when the server withheld the detail to protect recipients; shown as stated. */
+  withheldReason: string | null;
+  /** Rupiah not attributed to any mustahik: beyond the need, or aid not yet valued. */
+  unassignedExact: string;
+  /** The activity's own region label, never a recipient's address. */
+  regionLabel: string | null;
+  disclaimer: string;
+};
+
 export type DonorActivityAllocation = {
   allocationId: string;
   activityId: string;
@@ -84,6 +108,7 @@ export type DonorActivityAllocation = {
   purpose: string;
   reason: string;
   allocatedAt: number;
+  beneficiaries: DonorAllocationBeneficiaries;
   activity: {
     id: string;
     name: string;

@@ -336,6 +336,16 @@ async function endorsedContribution(
 const allocate = (contributionId: string, body: Record<string, unknown>, token: string) =>
   mutate(`/contributions/${contributionId}/allocate`, { reason: "Alokasi awal", ...body }, token);
 
+/** The stored per-mustahik attribution of an activity, in one state (ADR-0037). */
+async function beneficiaryShares(activityId: string, status: "ACTIVE" | "REVERSED"): Promise<any[]> {
+  const result: any = await database.handle().execute(sql`
+    SELECT * FROM allocation_beneficiary_shares
+    WHERE activity_id = ${activityId} AND status = ${status}
+    ORDER BY created_at, fill_sequence
+  `);
+  return result.rows ?? result;
+}
+
 async function recordAdvance(proposalId: string, amountIdr: string, purpose: string, reference: string, token: string) {
   const res = await post(`/proposals/${proposalId}/advances`, { amountIdr, purpose, reference }, token);
   expect(res.status).toBe(201);
@@ -1174,6 +1184,49 @@ describe("Allocation Reallocation & Activity Accountability (Issue #107, Spec #1
     const { sourceAllocation } = await reallocRes.json();
     expect(sourceAllocation.amountExact).toBe("0");
     expect(sourceAllocation.status).toBe("REALLOCATED");
+
+    // Nothing of this contribution is attributed to the source activity's mustahik any
+    // more, and what was shown before stays readable as REVERSED (ADR-0037).
+    expect(await beneficiaryShares(activityA.id, "ACTIVE")).toHaveLength(0);
+    expect(await beneficiaryShares(activityA.id, "REVERSED")).toHaveLength(1);
+    expect((await beneficiaryShares(activityB.id, "ACTIVE")).map((row) => row.share_exact)).toEqual(["1000000"]);
+  });
+
+  it("re-attributes what stays behind after a partial reallocation (ADR-0037)", async () => {
+    const tokens = await signInSinar();
+    const programId = await createProgram("ZAKAT", tokens, "Pemberdayaan Bertahap");
+    const proposalA = await approvedProposal(programId, "prop-share-a", [money("2000000")], tokens);
+    const proposalB = await approvedProposal(programId, "prop-share-b", [money("3000000")], tokens);
+
+    const activityA = await createActivity("act-share-a", proposalA.id, tokens);
+    const activityB = await createActivity("act-share-b", proposalB.id, tokens);
+
+    await endorsedContribution("c-share", "2000000", "ZAKAT", "Bantuan", tokens);
+    const allocRes = await allocate("c-share", { activityId: activityA.id, amountExact: "2000000", expectedVersion: 3 }, tokens.amil);
+    expect(allocRes.status).toBe(200);
+    const sourceAlloc = (await allocRes.json()).allocation;
+    expect((await beneficiaryShares(activityA.id, "ACTIVE")).map((row) => row.share_exact)).toEqual(["2000000"]);
+
+    await cancelProposal(proposalA.id, proposalA.version, "Sebagian dialihkan", tokens);
+    const reallocRes = await post(
+      `/activities/${activityA.id}/reallocate`,
+      {
+        sourceAllocationId: sourceAlloc.id,
+        targetActivityId: activityB.id,
+        amountExact: "800000",
+        reason: "Pengalihan sebagian untuk Kegiatan B",
+        expectedVersion: 1,
+        expectedTargetActivityVersion: 1,
+      },
+      tokens.amil
+    );
+    expect(reallocRes.status).toBe(200);
+
+    // The result is what a 1.200.000 allocation would have produced, with the old
+    // attribution kept as REVERSED rather than deleted.
+    expect((await beneficiaryShares(activityA.id, "ACTIVE")).map((row) => row.share_exact)).toEqual(["1200000"]);
+    expect((await beneficiaryShares(activityA.id, "REVERSED")).map((row) => row.share_exact)).toEqual(["2000000"]);
+    expect((await beneficiaryShares(activityB.id, "ACTIVE")).map((row) => row.share_exact)).toEqual(["800000"]);
   });
 
   it("rejects reallocation when target activity program fund type is incompatible (US-37, AC09)", async () => {

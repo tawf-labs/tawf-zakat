@@ -734,6 +734,30 @@ export const allocationHistory = pgTable("allocation_history", {
   occurredAt: bigint("occurred_at", { mode: "number" }).notNull(),
 });
 
+// Per-beneficiary attribution of one allocation (ADR-0037). The fill result is stored
+// rather than recomputed on read, so a correction or reallocation unwinds deterministically
+// and the history stays auditable. Recipient identity never lives here: the pseudonym and
+// asnaf are what a donor may see, and the region label comes from the activity.
+export const allocationBeneficiaryShares = pgTable("allocation_beneficiary_shares", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  allocationId: text("allocation_id").notNull().references(() => contributionAllocations.id),
+  contributionId: text("contribution_id").notNull().references(() => contributions.id),
+  activityId: text("activity_id").notNull().references(() => distributionActivities.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  proposalVersion: integer("proposal_version").notNull(),
+  aidLineId: text("aid_line_id").notNull(),
+  beneficiaryId: text("beneficiary_id").notNull(),
+  beneficiaryPseudonym: text("beneficiary_pseudonym").notNull(),
+  asnaf: text("asnaf").notNull(),
+  shareExact: text("share_exact").notNull(),
+  aidLineApprovedExact: text("aid_line_approved_exact").notNull(),
+  fillSequence: integer("fill_sequence").notNull(),
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE' | 'REVERSED'
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
 export const activityOperations = pgTable("activity_operations", {
   institutionId: text("institution_id").notNull().references(() => institutions.id),
   account: text("account").notNull(),
@@ -750,6 +774,9 @@ export type NewContributionAllocationRow = typeof contributionAllocations.$infer
 
 export type AllocationHistoryRow = typeof allocationHistory.$inferSelect;
 export type NewAllocationHistoryRow = typeof allocationHistory.$inferInsert;
+
+export type AllocationBeneficiaryShareRow = typeof allocationBeneficiaryShares.$inferSelect;
+export type NewAllocationBeneficiaryShareRow = typeof allocationBeneficiaryShares.$inferInsert;
 
 // 15. Disbursement Realization and Payment Evidence (Spec #86, Ticket #94)
 // Append-only facts: nothing cascades on delete, and status changes bump `version`

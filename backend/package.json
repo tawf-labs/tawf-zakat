@@ -16,6 +16,8 @@
     "proposal:migrate": "bun src/scripts/proposal-amount-precision.ts apply",
     "proposal:decisions:verify": "bun src/scripts/proposal-decided-lines.ts verify",
     "proposal:decisions:apply": "bun src/scripts/proposal-decided-lines.ts apply",
+    "shares:verify": "bun src/scripts/allocation-beneficiary-shares.ts verify",
+    "shares:apply": "bun src/scripts/allocation-beneficiary-shares.ts apply",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

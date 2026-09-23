@@ -24,6 +24,8 @@ import {
   maskContact,
   otpHashMatches,
   type DonorActivityAllocation,
+  type DonorAllocationBeneficiaries,
+  type DonorBeneficiaryShare,
   type DonorReallocation,
   type DonorContributionDetail,
   type DonorRecoveryRequest,
@@ -38,8 +40,33 @@ import type { RecipientMessageTransport } from "./workspace-runtime";
 import type { CurrencyUnit } from "./reconciliation";
 import type { ContributionStatus, JenisDana, SourceChannel } from "./contribution";
 import type { ActivityStatus } from "./activity";
+import { SHARE_ATTRIBUTION_DISCLAIMER, applyAnonymityGuard } from "./allocation-fill";
 import { rowsOf } from "./sql-rows";
 import { ContributionConflictError } from "./contribution-store";
+
+/**
+ * The per-mustahik reading of one allocation, k-anonymity guard included (ADR-0037).
+ *
+ * The guard lives here, in the one read path, rather than in the UI: a screen that
+ * decides for itself what to hide is a screen that can be made to stop hiding it.
+ */
+function beneficiariesOf(
+  allocationAmountExact: string,
+  shares: DonorBeneficiaryShare[],
+  activityReach: number,
+  regionLabel: string | null
+): DonorAllocationBeneficiaries {
+  const attributed = shares.reduce((total, share) => total + BigInt(share.shareExact), 0n);
+  const amount = BigInt(allocationAmountExact);
+  const guarded = applyAnonymityGuard(shares, activityReach);
+  return {
+    shares: guarded.shares,
+    withheldReason: guarded.withheldReason,
+    unassignedExact: (amount > attributed ? amount - attributed : 0n).toString(),
+    regionLabel,
+    disclaimer: SHARE_ATTRIBUTION_DISCLAIMER,
+  };
+}
 
 export const DONOR_ACCESS_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS donor_otp_challenges (
@@ -617,10 +644,13 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
                  a.name AS activity_name, a.description AS activity_description,
                  a.target_amount, a.target_is_partial,
                  a.currency_unit AS activity_currency_unit, a.status AS activity_status,
+                 pr.scope AS region_label,
                  pooled.total_pooled, pooled.allocation_count
           FROM contribution_allocations ca
           JOIN distribution_activities a
             ON a.id = ca.activity_id AND a.institution_id = ca.institution_id
+          LEFT JOIN programs pr
+            ON pr.id = a.program_id AND pr.institution_id = a.institution_id
           JOIN (
             SELECT activity_id, institution_id,
                    SUM(CAST(amount_exact AS NUMERIC)) AS total_pooled,
@@ -637,6 +667,51 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         `)
       );
 
+      // Who each allocation reached, as pseudonyms (ADR-0037). The select names no
+      // identity column - not even `beneficiary_id`, which the donor has no use for
+      // and which would let two contributions be cross-referenced onto one person.
+      const shareRows = rows.length === 0 ? [] : rowsOf(
+        await database.execute(sql`
+          SELECT allocation_id, activity_id, beneficiary_pseudonym, asnaf,
+                 share_exact, aid_line_approved_exact, fill_sequence
+          FROM allocation_beneficiary_shares
+          WHERE contribution_id = ${session.contributionId}
+            AND institution_id = ${session.institutionId}
+            AND status = 'ACTIVE'
+          ORDER BY allocation_id, fill_sequence
+        `)
+      );
+
+      // The anonymity set is the whole activity's reach, not this donor's slice of it:
+      // a pseudonym is only as private as the crowd it stands in.
+      const reachRows = rows.length === 0 ? [] : rowsOf(
+        await database.execute(sql`
+          SELECT activity_id, COUNT(DISTINCT beneficiary_id)::int AS reach
+          FROM allocation_beneficiary_shares
+          WHERE institution_id = ${session.institutionId}
+            AND status = 'ACTIVE'
+            AND activity_id IN (${sql.join(rows.map((row) => sql`${row.activity_id}`), sql`, `)})
+          GROUP BY activity_id
+        `)
+      );
+      const reachByActivity = new Map<string, number>(
+        reachRows.map((row) => [row.activity_id as string, Number(row.reach ?? 0)])
+      );
+
+      const sharesByAllocation = new Map<string, DonorBeneficiaryShare[]>();
+      for (const row of shareRows) {
+        const list = sharesByAllocation.get(row.allocation_id) ?? [];
+        list.push({
+          beneficiaryPseudonym: row.beneficiary_pseudonym,
+          asnaf: row.asnaf,
+          shareExact: row.share_exact,
+          aidLineApprovedExact: row.aid_line_approved_exact,
+          isFull: BigInt(row.share_exact) >= BigInt(row.aid_line_approved_exact),
+          fillSequence: Number(row.fill_sequence),
+        });
+        sharesByAllocation.set(row.allocation_id, list);
+      }
+
       return rows.map((row) => ({
         allocationId: row.id,
         activityId: row.activity_id,
@@ -647,6 +722,12 @@ export function createDonorAccessStore(database: DonorDatabase, otpKey: Buffer) 
         reason: row.reason,
         allocatedAt: Number(row.allocated_at),
         contributionVersion: Number(row.contribution_version),
+        beneficiaries: beneficiariesOf(
+          row.amount_exact,
+          sharesByAllocation.get(row.id) ?? [],
+          reachByActivity.get(row.activity_id) ?? 0,
+          row.region_label ?? null
+        ),
         activity: {
           id: row.activity_id,
           name: row.activity_name,
