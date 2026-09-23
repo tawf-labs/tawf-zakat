@@ -34,12 +34,27 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
   const confirmationPolicy = `block-depth-v1:${config.chainId}:${config.requiredConfirmations}`;
   const base = { confirmationPolicy, requiredConfirmations: config.requiredConfirmations, confirmations: 0 };
 
+  // The deployment's chain id and EIP-712 domain never change while this process runs, but every
+  // chain method used to re-verify them on its own: reading one certificate line (a handful of
+  // methods, each preceded by this check) cost dozens of redundant RPC round trips against a
+  // public endpoint - the whole reason a donor's /trace request could take tens of seconds. One
+  // verification is memoized here and shared; a failed attempt is not cached, so a transient RPC
+  // error does not wrongly and permanently mark the deployment as mismatched.
+  let deploymentAsserted: Promise<void> | null = null;
   async function assertDeployment() {
-    if (await rpc.getChainId() !== config.chainId) throw new Error("Chain kontrak sertifikat tidak cocok.");
-    const [, name, version, chainId, address] = await rpc.readContract({ address: config.address, abi, functionName: "eip712Domain" });
-    if (name !== domain.name || version !== domain.version || chainId !== BigInt(domain.chainId) || address.toLowerCase() !== domain.verifyingContract.toLowerCase()) {
-      throw new Error("Domain kontrak sertifikat tidak cocok.");
+    if (!deploymentAsserted) {
+      deploymentAsserted = (async () => {
+        if (await rpc.getChainId() !== config.chainId) throw new Error("Chain kontrak sertifikat tidak cocok.");
+        const [, name, version, chainId, address] = await rpc.readContract({ address: config.address, abi, functionName: "eip712Domain" });
+        if (name !== domain.name || version !== domain.version || chainId !== BigInt(domain.chainId) || address.toLowerCase() !== domain.verifyingContract.toLowerCase()) {
+          throw new Error("Domain kontrak sertifikat tidak cocok.");
+        }
+      })().catch((error) => {
+        deploymentAsserted = null;
+        throw error;
+      });
     }
+    return deploymentAsserted;
   }
 
   /** Issuance and recovery share one fee/gas policy and the same durable attempt format. */
@@ -148,14 +163,14 @@ export function createCertificateChain(config: CertificateChainConfig, mandateCh
     },
     async publicView(tokenId: bigint) {
       await assertDeployment();
-      const [issuer, contentDigest, custodian, successorTokenId, predecessorTokenId] = await Promise.all([
+      const [issuer, contentDigest, custodian, successorTokenId, predecessorTokenId, originalTokenId] = await Promise.all([
         rpc.readContract({ address: config.address, abi, functionName: "issuerOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "contentDigestOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "ownerOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "successorOf", args: [tokenId] }),
         rpc.readContract({ address: config.address, abi, functionName: "predecessorOf", args: [tokenId] }),
+        rpc.readContract({ address: config.address, abi, functionName: "originalTokenOf", args: [tokenId] }),
       ]);
-      const originalTokenId = await rpc.readContract({ address: config.address, abi, functionName: "originalTokenOf", args: [tokenId] });
       return { issuer, contentDigest, custodian, successorTokenId, predecessorTokenId, originalTokenId };
     },
     /** The line's official head as the chain sees it now. Empty until the first version mints. */

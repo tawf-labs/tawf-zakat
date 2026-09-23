@@ -134,9 +134,11 @@ async function readCertificateTrack(runtime: Services, institutionId: string, ac
     );
     const intents = await runtime.certificateStore.list(institutionId, activityId);
     const ids = [...new Set(intents.map((i) => i.certification.certificateId))];
-    const lines: CertificateLineView[] = [];
-    for (const certificateId of ids) {
-      const lifecycle = await issuance.line(certificateId);
+    // Every certificate line, and `line()`/`publicSummary()` within one line, reads the chain
+    // independently: sequential awaits here serialized a donor's /trace request behind every
+    // certificate line an activity has. Promise.all keeps `ids`' order in `lines`.
+    const lines: CertificateLineView[] = await Promise.all(ids.map(async (certificateId) => {
+      const [lifecycle, summary] = await Promise.all([issuance.line(certificateId), issuance.publicSummary(certificateId)]);
       const latest = lifecycle.versions.at(-1);
       if (!latest) throw new Error("Certificate line has no issuance version");
       const reason = {
@@ -148,8 +150,7 @@ async function readCertificateTrack(runtime: Services, institutionId: string, ac
         INVALID_EVENT: "Bukti penerbitan tidak sesuai; status sertifikat belum dapat disahkan.",
         NONCANONICAL: "Bukti penerbitan tidak lagi berada pada chain kanonik; verifikasi ulang diperlukan.",
       }[latest.observationState];
-      const summary = await issuance.publicSummary(certificateId);
-      lines.push({
+      return {
         certificateId,
         issuance: { state: latest.observationState, reason },
         published: summary && {
@@ -167,8 +168,8 @@ async function readCertificateTrack(runtime: Services, institutionId: string, ac
             unconfirmedCount: summary.totals.unconfirmedCount,
           },
         },
-      });
-    }
+      };
+    }));
     const pendingCount = lines.filter((l) => l.published?.validity !== "CURRENT").length;
     return ok({ lines, pendingCount });
   } catch (error) {

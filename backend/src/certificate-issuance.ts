@@ -116,8 +116,12 @@ export function createCertificateIssuance(
   /** Read every version of one line together with what the chain and the source say about each. */
   async function inspectLine(certificateId: string): Promise<{ entries: Entry[]; realizations: RealizationRecord[] }> {
     const intents = await store.line(institution, certificateId);
-    const entries: Entry[] = [];
-    for (const listed of intents) {
+    // Each version is independent of the others; reading them one at a time serialized every
+    // certificate line's RPC round trips behind each other (the direct cause of a donor's /trace
+    // request taking tens of seconds). Promise.all keeps `store.line`'s order in the result -
+    // it resolves positionally, not by completion time - so nothing downstream that reads
+    // `entries` in order is affected.
+    const entries: Entry[] = await Promise.all(intents.map(async (listed) => {
       const intent = await readIntent(listed.id);
       const observed = await relay.status(intent);
       const endorsed = !!(await store.attempt(institution, intent.id));
@@ -134,8 +138,8 @@ export function createCertificateIssuance(
           throw new CertificateError("Token sertifikat tidak cocok dengan receipt penerbitan.", 503);
         }
       }
-      entries.push({ intent, observed, endorsed, tokenId, content, chain: view });
-    }
+      return { intent, observed, endorsed, tokenId, content, chain: view };
+    }));
     const proposals = [...new Set(entries.map((e) => e.content.proposalId))];
     const realizations = (await Promise.all(proposals.map((p) => disbursement.getProposalRealizations(institution, p)))).flat();
     return { entries, realizations };
@@ -161,9 +165,8 @@ export function createCertificateIssuance(
   /** Who holds the token now, which tokens have represented this version, and whether the holder is
    * still the institution's resolved custodian. Stale holders are visible, never hidden. */
   async function custodyOf(activeTokenId: bigint): Promise<NonNullable<PublicCertificateSummary["custody"]>> {
-    const tokens = await chain.custodyTokens(activeTokenId);
+    const [tokens, resolved] = await Promise.all([chain.custodyTokens(activeTokenId), chain.resolvedCustodian(institution)]);
     const active = tokens.find((t) => t.status === "ACTIVE")!;
-    const resolved = await chain.resolvedCustodian(institution);
     return {
       current: active.holder.toLowerCase() === resolved.toLowerCase(),
       tokens: tokens.map((t) => ({ tokenId: t.tokenId.toString(), holder: t.holder, status: t.status })),
