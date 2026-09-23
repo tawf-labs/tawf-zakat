@@ -1,9 +1,9 @@
 import { compareDecimalStrings } from "../../../../shared/exact-decimal";
-import { Plus, Trash2 } from "lucide-react";
+import { ListPlus, Plus, Trash2 } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { Button } from "../../components/ui/Button";
 import { formatIdrAmount } from "../workspace/mandateLabels";
-import type { ProposalRealizationSummary } from "./disbursementClient";
+import type { ProposalRealizationSummary, RealizationLineSummary } from "./disbursementClient";
 
 export type RealizationRow = {
   key: string;
@@ -12,6 +12,13 @@ export type RealizationRow = {
   quantity?: string;
   unit?: string;
 };
+
+/** A fresh row defaulted to a line's full remaining right - still editable per row afterward. */
+function rowFrom(line: RealizationLineSummary): RealizationRow {
+  return line.kind === "GOODS"
+    ? { key: crypto.randomUUID(), aidLineId: line.aidLineId, amountIdr: "", quantity: line.quantityRemaining ?? "", unit: line.unit ?? "" }
+    : { key: crypto.randomUUID(), aidLineId: line.aidLineId, amountIdr: line.amountRemainingIdr ?? "" };
+}
 
 export function RealizationRecipientRows({ id, rows, setRows, summary }: {
   id: string; rows: RealizationRow[]; setRows: Dispatch<SetStateAction<RealizationRow[]>>; summary: ProposalRealizationSummary;
@@ -80,17 +87,21 @@ export function RealizationRecipientRows({ id, rows, setRows, summary }: {
         </div>
       );
     })}
-    {rows.length < open.length && <Button type="button" variant="outline" size="sm" className="flex items-center gap-1"
-      onClick={() => {
-        const next = open.find((line) => !rows.some((row) => row.aidLineId === line.aidLineId));
-        if (next) {
-          if (next.kind === "GOODS") {
-            setRows((current) => [...current, { key: crypto.randomUUID(), aidLineId: next.aidLineId, amountIdr: "", quantity: next.quantityRemaining ?? "", unit: next.unit ?? "" }]);
-          } else {
-            setRows((current) => [...current, { key: crypto.randomUUID(), aidLineId: next.aidLineId, amountIdr: next.amountRemainingIdr ?? "" }]);
-          }
-        }
-      }}><Plus className="h-4 w-4" /> Tambah penerima (penyerahan kelompok)</Button>}
+    {rows.length < open.length && <div className="flex flex-wrap gap-2">
+      <Button type="button" variant="outline" size="sm" className="flex items-center gap-1"
+        onClick={() => {
+          const next = open.find((line) => !rows.some((row) => row.aidLineId === line.aidLineId));
+          if (next) setRows((current) => [...current, rowFrom(next)]);
+        }}><Plus className="h-4 w-4" /> Tambah penerima (penyerahan kelompok)</Button>
+      <Button type="button" variant="outline" size="sm" className="flex items-center gap-1"
+        onClick={() => {
+          const remaining = open.filter((line) => !rows.some((row) => row.aidLineId === line.aidLineId));
+          setRows((current) => [...current, ...remaining.map(rowFrom)]);
+        }}><ListPlus className="h-4 w-4" /> Tambah semua sisa ({open.length - rows.length})</Button>
+    </div>}
+    {rows.length > 6 && <p className="text-xs text-stone-600">
+      Tiap baris terisi penuh dari sisa hak masing-masing; ubah kuantitas per baris kalau yang benar-benar diserahkan berbeda dari rencana.
+    </p>}
     {rows.length > 1 && <p className="text-xs text-stone-600">Baris-baris ini dicatat sebagai satu kelompok penyerahan. Satu BAST kelompok kemudian dialokasikan ke setiap penerima.</p>}
   </div>;
 }

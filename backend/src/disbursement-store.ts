@@ -239,9 +239,17 @@ export class RealizationInputError extends Error {
   }
 }
 
-/** The event's current state refuses the step: held by a dispute, already confirmed, or not a cash handover. */
+/**
+ * The event's current state refuses the step: held by a dispute, already confirmed, evidence
+ * still short, not a cash/goods handover, or overtaken by a concurrent change. `code` classifies
+ * why - the batch BAST confirmation reads it to report each member's outcome honestly rather
+ * than treating every refusal alike.
+ */
 export class RealizationStateError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: "DISPUTED" | "ALREADY_CONFIRMED" | "NOT_EVIDENCED" | "WRONG_METHOD" | "STALE_VERSION"
+  ) {
     super(message);
     this.name = "RealizationStateError";
   }
@@ -267,6 +275,42 @@ export class RealizationSelfExaminationError extends Error {
     super(message);
     this.name = "RealizationSelfExaminationError";
   }
+}
+
+/** One member's result inside a batch BAST confirmation - never silently folded into the others. */
+export type BastBatchOutcomeState =
+  | "CONFIRMED"
+  | "ALREADY_CONFIRMED"
+  | "DISPUTED"
+  | "NOT_EVIDENCED"
+  | "SELF_EXAMINATION"
+  | "NOT_CONFIRMABLE_METHOD"
+  | "FAILED";
+
+export type BastBatchOutcome = {
+  realizationId: string;
+  beneficiaryId: string;
+  state: BastBatchOutcomeState;
+  message?: string;
+};
+
+export type BastBatchConfirmationReport = {
+  outcomes: BastBatchOutcome[];
+  confirmedCount: number;
+};
+
+function bastBatchOutcomeStateOf(error: unknown): BastBatchOutcomeState {
+  if (error instanceof RealizationSelfExaminationError) return "SELF_EXAMINATION";
+  if (error instanceof RealizationStateError) {
+    switch (error.code) {
+      case "ALREADY_CONFIRMED": return "ALREADY_CONFIRMED";
+      case "DISPUTED": return "DISPUTED";
+      case "NOT_EVIDENCED": return "NOT_EVIDENCED";
+      case "WRONG_METHOD": return "NOT_CONFIRMABLE_METHOD";
+      default: return "FAILED";
+    }
+  }
+  return "FAILED";
 }
 
 export type DraftOperation = { id: string; account: string; requestHash: string };
@@ -771,7 +815,7 @@ async function updateRealizationStatus(
     WHERE id = ${current.id} AND institution_id = ${current.institutionId} AND version = ${current.version}
     RETURNING *
   `))[0];
-  if (!row) throw new RealizationStateError("Realisasi sudah berubah. Muat ulang sebelum melanjutkan.");
+  if (!row) throw new RealizationStateError("Realisasi sudah berubah. Muat ulang sebelum melanjutkan.", "STALE_VERSION");
   return realizationRecordFrom(row);
 }
 
@@ -779,14 +823,15 @@ async function updateRealizationStatus(
 function assertRecipientConfirmable(realization: RealizationRecord) {
   if (realization.method !== "CASH" && realization.method !== "GOODS_HANDOVER") {
     throw new RealizationStateError(
-      "Transfer atau pembayaran penyedia dibuktikan dengan bukti pembayaran, bukan konfirmasi penerima."
+      "Transfer atau pembayaran penyedia dibuktikan dengan bukti pembayaran, bukan konfirmasi penerima.",
+      "WRONG_METHOD"
     );
   }
   if (realization.confirmationStatus === "DISPUTED") {
-    throw new RealizationStateError("Konfirmasi ditahan karena realisasi ini sedang diperselisihkan.");
+    throw new RealizationStateError("Konfirmasi ditahan karena realisasi ini sedang diperselisihkan.", "DISPUTED");
   }
   if (realization.confirmationStatus === "CONFIRMED") {
-    throw new RealizationStateError("Penerimaan realisasi ini sudah dikonfirmasi.");
+    throw new RealizationStateError("Penerimaan realisasi ini sudah dikonfirmasi.", "ALREADY_CONFIRMED");
   }
 }
 
@@ -805,6 +850,66 @@ async function evidenceAllocationsOf(tx: Executor, institutionId: string, realiz
     if (row.unit != null) item.unit = row.unit as string;
     return item;
   });
+}
+
+/**
+ * The BAST-examination step itself, shared by the single-realization route and the batch
+ * confirmation below - one rule, so a batch of a thousand rows can never confirm something the
+ * single-item route would have refused.
+ */
+async function performBastExamination(
+  tx: Executor,
+  institutionId: string,
+  proposalId: string,
+  realizationId: string,
+  notes: string,
+  actor: { account: string; officerId: string },
+  now: number
+): Promise<{ examination: BastExaminationRecord; realization: RealizationRecord }> {
+  const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
+  if (realization.operatorOfficerId === actor.officerId) {
+    throw new RealizationSelfExaminationError("Petugas pencatat tidak dapat memverifikasi BAST miliknya sendiri.");
+  }
+  assertRecipientConfirmable(realization);
+  const receipts = (await evidenceAllocationsOf(tx, institutionId, realizationId))
+    .filter((allocation) => allocation.documentType === "RECEIPT_OR_BAST");
+  if (realization.quantity != null) {
+    const totalQty = receipts
+      .filter((receipt) => receipt.quantity != null)
+      .reduce((total, receipt) => addDecimalStrings(total, receipt.quantity!), "0");
+    if (compareDecimalStrings(totalQty, realization.quantity) !== 0) {
+      throw new RealizationStateError(
+        "Lengkapi alokasi tanda terima atau BAST untuk seluruh kuantitas sebelum konfirmasi penuh.",
+        "NOT_EVIDENCED"
+      );
+    }
+  } else {
+    if (receipts.reduce((total, receipt) => total + BigInt(receipt.amountIdr ?? 0), 0n) !== BigInt(realization.amountIdr!)) {
+      throw new RealizationStateError(
+        "Lengkapi alokasi tanda terima atau BAST untuk seluruh nominal sebelum konfirmasi penuh.",
+        "NOT_EVIDENCED"
+      );
+    }
+  }
+
+  const examinationRow = rowsOf(await tx.execute(sql`
+    INSERT INTO disbursement_realization_bast_examinations (
+      id, realization_id, institution_id, verifier_officer_id, verifier_account, notes, verified_at
+    ) VALUES (
+      ${`bast-exam-${crypto.randomUUID()}`}, ${realizationId}, ${institutionId}, ${actor.officerId},
+      ${actor.account.toLowerCase()}, ${notes}, ${now}
+    )
+    RETURNING *
+  `))[0];
+
+  return {
+    examination: bastExaminationFrom(examinationRow),
+    realization: await updateRealizationStatus(tx, realization, {
+      ...realization,
+      confirmationStatus: "CONFIRMED",
+      confirmationMethod: "BAST_EXAMINED",
+    }, now),
+  };
 }
 
 async function allocationsByDocument(tx: Executor, institutionId: string, documentIds: string[]) {
@@ -3110,46 +3215,46 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       actor: { account: string; officerId: string },
       now: number
     ): Promise<{ examination: BastExaminationRecord; realization: RealizationRecord }> {
-      return db.transaction(async (tx) => {
-        const realization = await lockRealization(tx, institutionId, proposalId, realizationId);
-        if (realization.operatorOfficerId === actor.officerId) {
-          throw new RealizationSelfExaminationError("Petugas pencatat tidak dapat memverifikasi BAST miliknya sendiri.");
-        }
-        assertRecipientConfirmable(realization);
-        const receipts = (await evidenceAllocationsOf(tx, institutionId, realizationId))
-          .filter((allocation) => allocation.documentType === "RECEIPT_OR_BAST");
-        if (realization.quantity != null) {
-          const totalQty = receipts
-            .filter((receipt) => receipt.quantity != null)
-            .reduce((total, receipt) => addDecimalStrings(total, receipt.quantity!), "0");
-          if (compareDecimalStrings(totalQty, realization.quantity) !== 0) {
-            throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh kuantitas sebelum konfirmasi penuh.");
-          }
-        } else {
-          if (receipts.reduce((total, receipt) => total + BigInt(receipt.amountIdr ?? 0), 0n) !== BigInt(realization.amountIdr!)) {
-            throw new RealizationStateError("Lengkapi alokasi tanda terima atau BAST untuk seluruh nominal sebelum konfirmasi penuh.");
-          }
-        }
+      return db.transaction((tx) => performBastExamination(tx, institutionId, proposalId, realizationId, notes, actor, now));
+    },
 
-        const examinationRow = rowsOf(await tx.execute(sql`
-          INSERT INTO disbursement_realization_bast_examinations (
-            id, realization_id, institution_id, verifier_officer_id, verifier_account, notes, verified_at
-          ) VALUES (
-            ${`bast-exam-${crypto.randomUUID()}`}, ${realizationId}, ${institutionId}, ${actor.officerId},
-            ${actor.account.toLowerCase()}, ${notes}, ${now}
-          )
-          RETURNING *
-        `))[0];
+    /**
+     * Confirms every member of one group handover in a single call - the UX a large roster
+     * (a hundred sembako recipients handed over at once) needs, without pretending a batch is
+     * one undifferentiated success. Each member gets its own transaction and its own outcome:
+     * one row that is already disputed, already confirmed, still short of evidence, or recorded
+     * by this same officer does not block or silently pass the rest of the batch.
+     */
+    async verifyBastBatchBySecondOfficer(
+      institutionId: string,
+      proposalId: string,
+      batchGroupId: string,
+      notes: string,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<BastBatchConfirmationReport> {
+      const members = rowsOf(await db.execute(sql`
+        SELECT id, beneficiary_id FROM disbursement_realizations
+        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND batch_group_id = ${batchGroupId}
+        ORDER BY id
+      `));
+      if (members.length === 0) throw new RealizationNotFoundError("Kelompok realisasi ini tidak ditemukan.");
 
-        return {
-          examination: bastExaminationFrom(examinationRow),
-          realization: await updateRealizationStatus(tx, realization, {
-            ...realization,
-            confirmationStatus: "CONFIRMED",
-            confirmationMethod: "BAST_EXAMINED",
-          }, now),
-        };
-      });
+      const outcomes: BastBatchOutcome[] = [];
+      for (const member of members) {
+        try {
+          await db.transaction((tx) => performBastExamination(tx, institutionId, proposalId, member.id, notes, actor, now));
+          outcomes.push({ realizationId: member.id, beneficiaryId: member.beneficiary_id, state: "CONFIRMED" });
+        } catch (error) {
+          outcomes.push({
+            realizationId: member.id,
+            beneficiaryId: member.beneficiary_id,
+            state: bastBatchOutcomeStateOf(error),
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return { outcomes, confirmedCount: outcomes.filter((outcome) => outcome.state === "CONFIRMED").length };
     },
 
     /** Marks the contested part and holds final confirmation. The realized amount is never deleted or recounted. */

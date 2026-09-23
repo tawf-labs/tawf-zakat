@@ -2,7 +2,7 @@ import { RealizationSummaryMetrics } from "./RealizationSummaryMetrics";
 import { compareDecimalStrings } from "../../../../shared/exact-decimal";
 import { useRealizationOverview, useInvalidateRealizations } from "./useRealizationQueries";
 import { useState } from "react";
-import { AlertTriangle, Banknote, Coins, Edit3, FileCheck, FileSpreadsheet, PlusCircle, XCircle } from "lucide-react";
+import { AlertTriangle, Banknote, CheckCheck, Coins, Edit3, FileCheck, FileSpreadsheet, PlusCircle, XCircle } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import { formatIdrAmount } from "../workspace/mandateLabels";
@@ -18,6 +18,7 @@ import {
 import { RecordRealizationModal } from "./RecordRealizationModal";
 import { RealizationEvidenceModal, evidencedIdr } from "./RealizationEvidenceModal";
 import { RecipientConfirmationModal } from "./RecipientConfirmationModal";
+import { BatchConfirmationModal } from "./BatchConfirmationModal";
 import { RealizationDisputeModal } from "./RealizationDisputeModal";
 import { AdvancesAndExpensesModal } from "./AdvancesAndExpensesModal";
 import { ProposalRevisionModal } from "./ProposalRevisionModal";
@@ -34,6 +35,7 @@ type Open =
   | { kind: "cancel" }
   | { kind: "closeRemainder" }
   | { kind: "evidence" | "confirm" | "dispute"; realization: DisbursementRealization }
+  | { kind: "batchConfirm"; batchGroupId: string; members: DisbursementRealization[] }
   | null;
 
 const CONFIRMATION_TEXT: Record<ConfirmationStatus, string> = {
@@ -84,6 +86,19 @@ export function ProposalRealizationBanner({
   const canRecord = summary && (summary.totalRemainingIdr !== "0" || hasRemainingGoods);
   const canCancel = loaded && loaded.realizations.length === 0;
   const canCloseRemainder = loaded && loaded.realizations.length > 0 && canRecord;
+
+  // Group handovers with more than one member still open to confirm: one button per group,
+  // not per row, so a hundred-recipient batch is one click instead of a hundred.
+  const confirmableBatches = new Map<string, DisbursementRealization[]>();
+  for (const realization of loaded?.realizations ?? []) {
+    if (!realization.batchGroupId) continue;
+    if (!(realization.method === "CASH" || realization.method === "GOODS_HANDOVER")) continue;
+    if (realization.confirmationStatus !== "UNCONFIRMED") continue;
+    const list = confirmableBatches.get(realization.batchGroupId) ?? [];
+    list.push(realization);
+    confirmableBatches.set(realization.batchGroupId, list);
+  }
+  const batchButtonShownFor = new Set<string>();
 
   return <section aria-labelledby={`realization-${draft.id}`} className="space-y-4 rounded-2xl border border-emerald-200 bg-white p-4 text-sm text-stone-800 shadow-sm sm:p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -151,7 +166,15 @@ export function ProposalRealizationBanner({
             ? `${realization.quantity} ${realization.unit}`
             : formatIdrAmount(realization.amountIdr ?? "0");
           const confirmable = (realization.method === "CASH" || realization.method === "GOODS_HANDOVER") && realization.confirmationStatus === "UNCONFIRMED";
-          return <li key={realization.id} className="space-y-2 rounded-xl border border-stone-200 p-3">
+          const batch = realization.batchGroupId ? confirmableBatches.get(realization.batchGroupId) : undefined;
+          const showBatchButton = batch && batch.length > 1 && !batchButtonShownFor.has(realization.batchGroupId!);
+          if (showBatchButton) batchButtonShownFor.add(realization.batchGroupId!);
+          return <li key={realization.id} className="space-y-2">
+            {showBatchButton && <Button type="button" size="sm" className="flex w-full items-center justify-center gap-1.5"
+              onClick={() => setOpen({ kind: "batchConfirm", batchGroupId: realization.batchGroupId!, members: batch! })}>
+              <CheckCheck className="h-4 w-4" /> Konfirmasi kelompok ini sekaligus ({batch!.length} penerima)
+            </Button>}
+            <div className="space-y-2 rounded-xl border border-stone-200 p-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <p className="font-semibold text-stone-900">{beneficiaryName(realization)} · {amountOrQtyText}</p>
               <p className="text-xs text-stone-600">{DISBURSEMENT_METHOD_LABELS[realization.method]}{realization.batchGroupId ? " · penyerahan kelompok" : ""}</p>
@@ -194,6 +217,7 @@ export function ProposalRealizationBanner({
                 onClick={() => setOpen({ kind: "confirm", realization })}>Konfirmasi penerimaan</Button>}
               <Button type="button" variant="outline" size="sm" onClick={() => setOpen({ kind: "dispute", realization })}>Keberatan</Button>
             </div>
+            </div>
           </li>;
         })}
       </ul>)}
@@ -211,6 +235,8 @@ export function ProposalRealizationBanner({
       beneficiaryName={beneficiaryName(open.realization)} beneficiary={draft.beneficiaries.find((b) => b.id === open.realization.beneficiaryId)} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {open?.kind === "dispute" && <RealizationDisputeModal requests={requests} proposalId={draft.id} realization={open.realization}
       beneficiaryName={beneficiaryName(open.realization)} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
+    {open?.kind === "batchConfirm" && <BatchConfirmationModal requests={requests} proposalId={draft.id} batchGroupId={open.batchGroupId}
+      members={open.members} beneficiaryName={beneficiaryName} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {open?.kind === "advances" && <AdvancesAndExpensesModal requests={requests} proposalId={draft.id}
       isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {loaded && open?.kind === "revision" && (

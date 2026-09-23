@@ -1017,6 +1017,45 @@ export const verifyBastBySecondOfficer = (
     .json<{ realization: DisbursementRealization }>(`${realizationPath(proposalId, realizationId)}/bast-verify`, postJson(input))
     .then((r) => r.realization);
 
+/** One member's result inside a batch BAST confirmation - never folded into the others. */
+export type BastBatchOutcomeState =
+  | "CONFIRMED"
+  | "ALREADY_CONFIRMED"
+  | "DISPUTED"
+  | "NOT_EVIDENCED"
+  | "SELF_EXAMINATION"
+  | "NOT_CONFIRMABLE_METHOD"
+  | "FAILED";
+
+export type BastBatchOutcome = {
+  realizationId: string;
+  beneficiaryId: string;
+  state: BastBatchOutcomeState;
+  message?: string;
+};
+
+export const BAST_BATCH_OUTCOME_LABELS: Record<BastBatchOutcomeState, string> = {
+  CONFIRMED: "Terkonfirmasi",
+  ALREADY_CONFIRMED: "Sudah terkonfirmasi sebelumnya",
+  DISPUTED: "Sedang diperselisihkan, dilewati",
+  NOT_EVIDENCED: "Bukti belum lengkap, dilewati",
+  SELF_EXAMINATION: "Direkam petugas ini sendiri, tidak dapat diperiksa sendiri",
+  NOT_CONFIRMABLE_METHOD: "Bukan penyerahan tunai/barang, dilewati",
+  FAILED: "Gagal diperiksa",
+};
+
+/** Confirms every member of one group handover in a single call; see BastBatchOutcome per member. */
+export const verifyBastBatchBySecondOfficer = (
+  requests: PrivateRequests,
+  proposalId: string,
+  batchGroupId: string,
+  input: { notes: string }
+) =>
+  requests.json<{ outcomes: BastBatchOutcome[]; confirmedCount: number }>(
+    `/api/workspace/proposals/${proposalId}/realization-batches/${encodeURIComponent(batchGroupId)}/bast-verify`,
+    postJson(input)
+  );
+
 export const recordRealizationDispute = (
   requests: PrivateRequests,
   proposalId: string,

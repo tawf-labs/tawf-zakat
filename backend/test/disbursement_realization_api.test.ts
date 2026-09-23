@@ -818,6 +818,80 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
     expect((await summaryOf(draft, amilToken)).confirmedCount).toBe(1);
   });
 
+  it("confirms a whole group handover in one call, reporting each member's own outcome (batch BAST)", async () => {
+    const { draft, amilToken, examinerToken } = await prepareApprovedProposal({ beneficiariesCount: 4, perBeneficiaryAmount: "250000" });
+    const grouped = await realize(draft, amilToken, [0, 1, 2].map((i) => item(draft, i, { amountIdr: "250000" })), { batchGroupId: "serah-terima-balai-desa" });
+    expect(grouped.status).toBe(201);
+    const [r1, r2, r3] = (await grouped.json()).records;
+    const outsider = (await (await realize(draft, amilToken, [item(draft, 3, { amountIdr: "250000" })])).json()).records[0];
+
+    const batchPath = `/proposals/${draft.id}/realization-batches/serah-terima-balai-desa/bast-verify`;
+
+    // A missing batch group answers not-found, not an empty success.
+    expect((await post(`/proposals/${draft.id}/realization-batches/tidak-ada/bast-verify`, { notes: "x" }, examinerToken)).status).toBe(404);
+
+    // Only r1 and r2 have their group BAST allocated; r3 is still short of evidence.
+    await upload(draft, r1.id, amilToken, {
+      documentType: "RECEIPT_OR_BAST", fileName: "bast-kelompok.pdf",
+      allocations: [r1, r2].map((r: any) => ({ realizationId: r.id, amountIdr: "250000" })),
+    });
+
+    const first = await post(batchPath, { notes: "Diperiksa langsung di balai desa" }, examinerToken);
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.confirmedCount).toBe(2);
+    expect(firstBody.outcomes).toEqual(expect.arrayContaining([
+      { realizationId: r1.id, beneficiaryId: r1.beneficiaryId, state: "CONFIRMED" },
+      { realizationId: r2.id, beneficiaryId: r2.beneficiaryId, state: "CONFIRMED" },
+      expect.objectContaining({ realizationId: r3.id, beneficiaryId: r3.beneficiaryId, state: "NOT_EVIDENCED" }),
+    ]));
+    expect(firstBody.outcomes).toHaveLength(3);
+    // Only the batch's own members are touched.
+    expect(firstBody.outcomes.some((o: any) => o.realizationId === outsider.id)).toBe(false);
+
+    const summary = await summaryOf(draft, amilToken);
+    expect(summary.confirmedCount).toBe(2);
+
+    // Complete r3's evidence and dispute r2 before running the batch again.
+    await upload(draft, r3.id, amilToken, { documentType: "RECEIPT_OR_BAST", allocations: [{ realizationId: r3.id, amountIdr: "250000" }] });
+    const disputed = await post(`/proposals/${draft.id}/realizations/${r2.id}/disputes`, {
+      complainantType: "OFFICER", subject: "AMOUNT", reason: "Selisih ditemukan saat rekap", disputedAmountIdr: "250000",
+    }, amilToken);
+    expect(disputed.status).toBe(201);
+
+    // A retry is idempotent and honest: r1 was already confirmed, r2 is now held by a dispute,
+    // and only r3 is newly confirmed - never a blanket re-success or a silent skip.
+    const second = await post(batchPath, { notes: "Susulan" }, examinerToken);
+    expect(second.status).toBe(200);
+    const secondBody = await second.json();
+    expect(secondBody.confirmedCount).toBe(1);
+    expect(secondBody.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ realizationId: r1.id, beneficiaryId: r1.beneficiaryId, state: "ALREADY_CONFIRMED" }),
+      expect.objectContaining({ realizationId: r2.id, beneficiaryId: r2.beneficiaryId, state: "DISPUTED" }),
+      { realizationId: r3.id, beneficiaryId: r3.beneficiaryId, state: "CONFIRMED" },
+    ]));
+  });
+
+  it("never lets the batch confirm what the recording officer recorded themselves", async () => {
+    const { draft, amilToken, examinerToken } = await prepareApprovedProposal({ beneficiariesCount: 2, perBeneficiaryAmount: "250000" });
+    const grouped = await realize(draft, amilToken, [0, 1].map((i) => item(draft, i, { amountIdr: "250000" })), { batchGroupId: "serah-terima-mandiri" });
+    const [r1, r2] = (await grouped.json()).records;
+    await upload(draft, r1.id, amilToken, {
+      documentType: "RECEIPT_OR_BAST", fileName: "bast.pdf",
+      allocations: [r1, r2].map((r: any) => ({ realizationId: r.id, amountIdr: "250000" })),
+    });
+
+    // The recorder tries to confirm their own batch: every member is refused, none silently passes.
+    const selfAttempt = await post(`/proposals/${draft.id}/realization-batches/serah-terima-mandiri/bast-verify`, { notes: "x" }, amilToken);
+    expect(selfAttempt.status).toBe(200);
+    expect((await selfAttempt.json()).outcomes.every((o: any) => o.state === "SELF_EXAMINATION")).toBe(true);
+    expect((await summaryOf(draft, amilToken)).confirmedCount).toBe(0);
+
+    // A different officer confirms the same batch normally.
+    const other = await post(`/proposals/${draft.id}/realization-batches/serah-terima-mandiri/bast-verify`, { notes: "Diperiksa" }, examinerToken);
+    expect((await other.json()).confirmedCount).toBe(2);
+  });
+
   it("keeps officer advances and expenses apart from aid, accounting expenses only against an advance of the same proposal", async () => {
     const { draft, amilToken, approverToken } = await prepareApprovedProposal({ perBeneficiaryAmount: "5000000" });
     const other = await prepareApprovedProposal();

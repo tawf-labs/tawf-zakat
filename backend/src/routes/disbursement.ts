@@ -2648,6 +2648,33 @@ disbursementRoutes.post("/proposals/:id/realizations/:realizationId/bast-verify"
   return c.json({ success: true, ...result });
 });
 
+/**
+ * Konfirmasi kelompok: memeriksa BAST sekali dan menandai seluruh anggota penyerahan kelompok
+ * ini terkonfirmasi, satu klik untuk roster besar. Setiap anggota tetap diperiksa dan dilaporkan
+ * sendiri - satu baris yang sudah diperselisihkan, sudah dikonfirmasi, kurang bukti, atau dicatat
+ * oleh petugas yang sama tidak menahan atau ikut lolos bersama yang lain.
+ */
+disbursementRoutes.post("/proposals/:id/realization-batches/:batchGroupId/bast-verify", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const notes = text(body.notes);
+  if (!notes) return badRequest(c, "Catatan pemeriksaan BAST wajib diisi.");
+
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION", ...EXAMINING_FUNCTIONS]);
+  if (!access.ok) return access.response;
+
+  const result = await runtime.disbursement.verifyBastBatchBySecondOfficer(
+    access.session.institutionId,
+    access.draft.id,
+    c.req.param("batchGroupId"),
+    notes,
+    { account: access.session.account, officerId: access.officer.id },
+    runtime.now()
+  );
+  return c.json({ success: true, ...result });
+});
+
 /** Catat keberatan atas penerimaan atau jumlah. Dokumen kurang bukan sengketa otomatis. */
 disbursementRoutes.post("/proposals/:id/realizations/:realizationId/disputes", async (c) => {
   const runtime = runtimeOf();
