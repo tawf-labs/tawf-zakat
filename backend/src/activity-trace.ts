@@ -231,7 +231,8 @@ export async function readActivityTrack(
       : realizationsFailure,
     funds: ok({
       currencyUnit: a.currencyUnit, totalAllocatedAmount: a.totalAllocatedAmount,
-      totalRealizedMoneyIdr: a.totalRealizedMoneyIdr, totalExpensesIdr: a.totalExpensesIdr,
+      totalRealizedMoneyIdr: a.totalRealizedMoneyIdr, totalRealizedGoodsIdr: a.totalRealizedGoodsIdr,
+      totalExpensesIdr: a.totalExpensesIdr,
       totalAdvancesIdr: a.totalAdvancesIdr, unaccountedAdvancesIdr: a.unaccountedAdvancesIdr,
       totalCommittedAidIdr: a.totalCommittedAidIdr, totalContributionShortfall: a.totalContributionShortfall,
       totalOverCommitmentIdr: a.totalOverCommitmentIdr, availabilityStatus: a.availabilityStatus,

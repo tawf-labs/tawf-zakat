@@ -17,7 +17,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("trace distinguishes refund and 
   const track: ActivityTrackView = {
     identity: { activityId: "activity-one", proposalId: "proposal-one", proposalVersion: 1, activityVersion: 1, name: "Bantuan pangan", currencyUnit: "IDR", observedAt: now },
     distribution: { status: "OK", data: { proposalStatus: "PARTIALLY_REALIZED", isRemainderClosed: false, recordedRealizations: 1, unitSummaries: [{ aidType: "Beras", unit: "kg", approved: "10", realized: "4", remaining: "6" }], committedAidIdr: "0", hasUnvaluedGoods: true } },
-    funds: { status: "OK", data: { currencyUnit: "IDR", totalAllocatedAmount: "500000", totalRealizedMoneyIdr: "100000", totalExpensesIdr: "0", totalAdvancesIdr: "0", unaccountedAdvancesIdr: "0", totalCommittedAidIdr: "0", totalContributionShortfall: "0", totalOverCommitmentIdr: "0", availabilityStatus: "AVAILABLE", availabilityReason: "Dana tercatat dari alokasi kontribusi." } },
+    funds: { status: "OK", data: { currencyUnit: "IDR", totalAllocatedAmount: "500000", totalRealizedMoneyIdr: "100000", totalRealizedGoodsIdr: "0", totalExpensesIdr: "0", totalAdvancesIdr: "0", unaccountedAdvancesIdr: "0", totalCommittedAidIdr: "0", totalContributionShortfall: "0", totalOverCommitmentIdr: "0", availabilityStatus: "AVAILABLE", availabilityReason: "Dana tercatat dari alokasi kontribusi." } },
     confirmation: { status: "OK", data: { total: 1, confirmed: 0, disputed: 0, unconfirmed: 1 } },
     certificates: { status: "OK", data: { lines: [], pendingCount: 0 } },
     summary: { status: "OK", data: { headline: "IN_PROGRESS", openItems: ["CONFIRMATION_PENDING"] } },

@@ -92,6 +92,8 @@ export type ActivityAccountabilitySummary = {
   isRemainderClosed: boolean;
   totalAllocatedAmount: string;
   totalRealizedMoneyIdr: string;
+  /** Valuation of approved goods already handed over: spent, counted alongside expenses. */
+  totalRealizedGoodsIdr: string;
   totalExpensesIdr: string;
   totalDirectExpensesIdr: string;
   totalAccountedExpensesIdr: string;

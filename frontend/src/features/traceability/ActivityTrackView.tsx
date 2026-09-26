@@ -75,6 +75,7 @@ export function ActivityTrackView({ track }: { track: ActivityTrack }) {
             <dl className="space-y-1.5">
               <Row label="Dana teralokasi (gabungan)" value={formatNominal(f.totalAllocatedAmount, unit)} />
               <Row label="Realisasi uang" value={formatNominal(f.totalRealizedMoneyIdr, "IDR")} />
+              <Row label="Realisasi barang (rupiah)" value={formatNominal(f.totalRealizedGoodsIdr, "IDR")} />
               <Row label="Biaya tercatat" value={formatNominal(f.totalExpensesIdr, "IDR")} />
               <Row label="Uang muka belum dipertanggungjawabkan" value={formatNominal(f.unaccountedAdvancesIdr, "IDR")} />
               <p className="text-[11px] text-stone-500">{f.availabilityReason}</p>

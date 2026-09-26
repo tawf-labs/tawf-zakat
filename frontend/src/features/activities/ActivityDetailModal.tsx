@@ -146,6 +146,10 @@ export function ActivityDetailModal({
                       <strong className="text-stone-900 font-semibold">{formatNominal(acc.totalRealizedMoneyIdr, detail.currencyUnit)}</strong>
                     </div>
                     <div className="rounded-lg border border-stone-200 bg-white p-2.5">
+                      <span className="text-xs text-stone-500 block">Realisasi Barang (Rupiah)</span>
+                      <strong className="text-stone-900 font-semibold">{formatNominal(acc.totalRealizedGoodsIdr, detail.currencyUnit)}</strong>
+                    </div>
+                    <div className="rounded-lg border border-stone-200 bg-white p-2.5">
                       <span className="text-xs text-stone-500 block">Biaya Aktual</span>
                       <strong className="text-stone-900 font-semibold">{formatNominal(acc.totalExpensesIdr, detail.currencyUnit)}</strong>
                     </div>

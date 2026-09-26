@@ -33,7 +33,8 @@ export type ActivityTrackView = {
     committedAidIdr: string; hasUnvaluedGoods: boolean;
   }>;
   funds: Track<{
-    currencyUnit: string; totalAllocatedAmount: string; totalRealizedMoneyIdr: string; totalExpensesIdr: string;
+    currencyUnit: string; totalAllocatedAmount: string; totalRealizedMoneyIdr: string; totalRealizedGoodsIdr: string;
+    totalExpensesIdr: string;
     totalAdvancesIdr: string; unaccountedAdvancesIdr: string; totalCommittedAidIdr: string;
     totalContributionShortfall: string; totalOverCommitmentIdr: string; availabilityStatus: string; availabilityReason: string;
   }>;

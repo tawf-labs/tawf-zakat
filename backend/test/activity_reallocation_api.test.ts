@@ -764,12 +764,15 @@ describe("Allocation Reallocation & Activity Accountability (Issue #107, Spec #1
 
     const after = (await (await get(`/activities/${activityA.id}/accountability`, tokens.amil)).json()).accountability;
     expect(after.totalCommittedGoodsIdr).toBe("500000");
+    expect(after.totalRealizedGoodsIdr).toBe("1500000");
     expect(after.unitSummaries).toEqual([
       { aidType: "Bantuan pangan", unit: "paket", approved: "20", realized: "15", remaining: "5" },
     ]);
-    // 2.000.000 allocated less 500.000 still owed as goods = 1.500.000 genuinely spare.
-    expect(after.availabilityStatus).toBe("AVAILABLE");
-    expect(after.availableForReallocation).toBe("1500000");
+    // 2.000.000 allocated = 1.500.000 already spent on the 15 paket handed over
+    // + 500.000 still owed as goods. Nothing is spare: the delivered paket's value is
+    // spent, not available, even though no separate expense was logged for it.
+    expect(after.availabilityStatus).toBe("NONE");
+    expect(after.availableForReallocation).toBe("0");
 
     const overReach = await post(
       `/activities/${activityA.id}/reallocate`,

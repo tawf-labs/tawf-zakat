@@ -74,6 +74,8 @@ export type ActivityAccountabilitySummary = {
   isRemainderClosed: boolean;
   totalAllocatedAmount: string;
   totalRealizedMoneyIdr: string;
+  /** Valuation of approved goods already handed over: spent, counted alongside expenses. */
+  totalRealizedGoodsIdr: string;
   totalExpensesIdr: string;
   totalDirectExpensesIdr: string;
   totalAccountedExpensesIdr: string;
@@ -338,6 +340,8 @@ export type AidLineSummary = {
   totalRealizedMoneyIdr: string;
   /** Valuation of approved goods not yet handed over. Unvalued goods add nothing here. */
   totalCommittedGoodsIdr: string;
+  /** Valuation of approved goods already handed over: spent, not spare (fixes the goods-vanish bug). */
+  totalRealizedGoodsIdr: string;
   /** True when a goods line carries no rupiah valuation, so the commitment is understated. */
   hasUnvaluedGoods: boolean;
   unitSummaries: AidUnitSummary[];
@@ -395,6 +399,7 @@ export function summarizeAidLines(aidLines: AidLine[], realizations: AidRealizat
   }
 
   let committedGoods = 0n;
+  let realizedGoods = 0n;
   const byUnit = new Map<string, AidUnitSummary>();
   for (const line of aidLines) {
     if (line.value.kind !== "GOODS") continue;
@@ -403,10 +408,17 @@ export function summarizeAidLines(aidLines: AidLine[], realizations: AidRealizat
     // Over-delivery leaves nothing outstanding; it never becomes a negative commitment.
     const remainingQty =
       compareDecimalStrings(approvedQty, realizedQty) > 0 ? subtractDecimalStrings(approvedQty, realizedQty) : "0";
+    // Over-delivery is capped at the approved quantity: it is valued at what was approved,
+    // never inflated past the line's own valuation.
+    const deliveredQty =
+      compareDecimalStrings(approvedQty, realizedQty) > 0 ? realizedQty : approvedQty;
 
     const valuation = goodsValuationOf(line.value);
     if (valuation !== null) {
       committedGoods += prorate(BigInt(valuation), remainingQty, approvedQty);
+      // Goods already handed over are spent, not spare: without this they vanish from
+      // both the commitment and the expense side once delivered (the "excess funds" bug).
+      realizedGoods += prorate(BigInt(valuation), deliveredQty, approvedQty);
     }
 
     const unit = line.value.unit;
@@ -425,6 +437,7 @@ export function summarizeAidLines(aidLines: AidLine[], realizations: AidRealizat
     totalApprovedMoneyIdr: approvedMoney.toString(),
     totalRealizedMoneyIdr: realizedMoney.toString(),
     totalCommittedGoodsIdr: committedGoods.toString(),
+    totalRealizedGoodsIdr: realizedGoods.toString(),
     hasUnvaluedGoods,
     unitSummaries: [...byUnit.values()],
   };
@@ -451,9 +464,19 @@ export function calculateActivityAccountability(input: {
 }): ActivityAccountabilitySummary {
   const totalAllocated = BigInt(input.totalAllocatedAmount);
   const realizedMoney = BigInt(input.aidLines.totalRealizedMoneyIdr);
+  // Goods already handed to mustahik are spent at their recorded valuation, whether or
+  // not the institution separately logged a procurement expense: they must not vanish
+  // from the books just because delivery is complete (the "excess funds" bug).
+  const realizedGoods = BigInt(input.aidLines.totalRealizedGoodsIdr);
   const directExpenses = BigInt(input.totalDirectExpensesIdr);
   const accountedExpenses = BigInt(input.totalAccountedExpensesIdr);
   const totalExpenses = directExpenses + accountedExpenses;
+  // The purchase and the handover are one flow of aid, counted once: an actual expense
+  // recorded for the procurement replaces the planned valuation rather than stacking on
+  // top of it, but delivered goods with no expense logged at all still fall back to
+  // their planned valuation so the spend is never silently dropped (the "excess funds"
+  // bug: goods delivered with nothing recorded against them must not read as spare).
+  const goodsSpend = totalExpenses > realizedGoods ? totalExpenses : realizedGoods;
   const totalAdvances = BigInt(input.totalAdvancesIdr);
   const unaccountedAdvances = totalAdvances > accountedExpenses ? totalAdvances - accountedExpenses : 0n;
   const hasOutstandingAccountability = unaccountedAdvances > 0n;
@@ -468,7 +491,7 @@ export function calculateActivityAccountability(input: {
   // the rupiah behind them is spoken for even though no money has left yet (AC02, AC07).
   const committedGoods = entitlementStillOwed ? BigInt(input.aidLines.totalCommittedGoodsIdr) : 0n;
   const committedAid = committedMoney + committedGoods;
-  const totalObligated = realizedMoney + totalExpenses + committedAid;
+  const totalObligated = realizedMoney + goodsSpend + committedAid;
   // What this activity owes above what it holds. Non-zero means the books do not
   // balance and the gap must stay on the screen (AC05).
   const overCommitment = totalObligated > totalAllocated ? totalObligated - totalAllocated : 0n;
@@ -524,6 +547,7 @@ export function calculateActivityAccountability(input: {
     isRemainderClosed: input.isRemainderClosed,
     totalAllocatedAmount: totalAllocated.toString(),
     totalRealizedMoneyIdr: realizedMoney.toString(),
+    totalRealizedGoodsIdr: realizedGoods.toString(),
     totalExpensesIdr: totalExpenses.toString(),
     totalDirectExpensesIdr: directExpenses.toString(),
     totalAccountedExpensesIdr: accountedExpenses.toString(),
