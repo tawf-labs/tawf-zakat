@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Building2, CheckCircle2, DoorOpen, KeyRound, LockKeyhole, ShieldAlert, Users } from "lucide-react";
+import { Building2, CheckCircle2, DoorOpen, KeyRound, LockKeyhole, ShieldAlert, Sparkles, Users } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
+import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
 import { useWorkspaceAccess } from "./useWorkspaceAccess";
 import { fetchOnboardingFixtures, type Institution, type Workspace } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
@@ -16,6 +17,43 @@ import { ActivityPanel } from "../activities";
 import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
 import { CertificateIssuancePanel } from "./CertificateIssuancePanel";
 
+const demoWorkspace: Workspace = {
+  account: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11",
+  institution: {
+    id: "inst-tawf-01",
+    legalName: "Lembaga Amil Zakat Tawf Sejahtera",
+    scopeUnit: "DKI Jakarta",
+    scopeLevel: "Provinsi",
+    mandateNote: "Pengelolaan Zakat, Infaq, Sedekah terdaftar resmi BAZNAS",
+    isSynthetic: false,
+  },
+  role: "ADMIN",
+  officer: {
+    id: "off-01",
+    displayName: "Ahmad Fauzi, S.E.",
+    isActive: true,
+  },
+  capabilities: {
+    viewWorkspace: true,
+    prepareEvidence: true,
+    manageMembers: true,
+    manageDisbursement: true,
+  },
+  members: [
+    { account: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11", displayName: "Ahmad Fauzi, S.E.", role: "ADMIN" },
+    { account: "0x38B132C7d89B25A11F0825B9e04812aF8C811C4", displayName: "Siti Rahmawati", role: "OFFICER" },
+  ],
+  mandates: [],
+  evidencePackages: [],
+};
+
+const demoRequests: PrivateRequests = {
+  contextId: "demo-preview-context",
+  assertCurrent: () => {},
+  json: async <T,>() => ({ records: [], items: [], total: 0, mandates: [], findings: [], proposals: [] } as unknown as T),
+  blob: async () => new Blob(),
+};
+
 /** The session determines the tenant. Navigation never grants access; the API enforces every capability. */
 export function WorkspacePanel() {
   return <WorkspaceContents />;
@@ -27,6 +65,7 @@ function WorkspaceContents() {
   const busy = access.state === "OPENING";
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
+  const [previewMode, setPreviewMode] = useState(false);
 
   useEffect(() => {
     fetchOnboardingFixtures()
@@ -37,12 +76,65 @@ function WorkspaceContents() {
       .catch(() => setInstitutions([]));
   }, []);
 
+  if (previewMode && !address) {
+    const previewBanner = (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#c5a869]/40 bg-gradient-to-r from-amber-50/80 via-white to-emerald-50/80 p-3.5 px-4 text-xs shadow-2xs">
+        <div className="flex items-center gap-2 text-stone-700">
+          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="font-semibold text-[#17332c]">Mode Pratinjau Desain Sidebar & Ruang Kerja</span>
+          <span className="hidden sm:inline text-stone-400">|</span>
+          <span className="hidden sm:inline text-stone-600">Menampilkan desain UI/UX baru dengan data simulasi amil zakat.</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPreviewMode(false)}
+          className="cursor-pointer font-semibold text-[#1b765e] hover:underline"
+        >
+          Tutup Pratinjau &times;
+        </button>
+      </div>
+    );
+
+    return (
+      <ReadyWorkspace
+        workspace={demoWorkspace}
+        requests={demoRequests}
+        onSignOut={() => setPreviewMode(false)}
+        banner={previewBanner}
+      />
+    );
+  }
+
   if (!address) {
-    return <section className="rounded-2xl border border-stone-200 bg-white p-8 text-center">
-      <KeyRound className="mx-auto h-10 w-10 text-stone-400" />
-      <h2 className="mt-4 text-xl font-semibold text-stone-900">Hubungkan dompet digital lembaga</h2>
-      <p className="mx-auto mt-2 max-w-lg text-sm text-stone-600">Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.</p>
-    </section>;
+    return (
+      <section className="rounded-3xl border border-[#dbe7dd] bg-white p-8 sm:p-10 text-center shadow-xs">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#eaf3e8] to-[#d8ebd5] text-[#1b765e] shadow-2xs">
+          <KeyRound className="h-7 w-7" />
+        </div>
+        <h2 className="mt-5 font-serif text-2xl font-bold text-[#17332c]">Hubungkan dompet digital lembaga</h2>
+        <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-stone-600">
+          Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.
+        </p>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <SafeConnectKitButton>
+            {({ show, isConnecting }) => (
+              <Button onClick={show} className="cursor-pointer">
+                <KeyRound className="mr-2 h-4 w-4" />
+                {isConnecting ? "Menghubungkan..." : "Hubungkan Dompet"}
+              </Button>
+            )}
+          </SafeConnectKitButton>
+          <button
+            type="button"
+            onClick={() => setPreviewMode(true)}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#1b765e]/30 bg-[#f4f8f3] px-4 py-2.5 text-xs font-semibold text-[#17332c] shadow-2xs transition-all hover:bg-[#1b765e] hover:text-white"
+          >
+            <Sparkles className="h-4 w-4 text-[#c5a869]" />
+            Pratinjau Antarmuka Ruang Kerja
+          </button>
+        </div>
+      </section>
+    );
   }
 
   if (access.state !== "READY") {
@@ -69,13 +161,23 @@ function WorkspaceContents() {
   </>;
 }
 
-function ReadyWorkspace({ workspace, requests, onSignOut }: { workspace: Workspace; requests: PrivateRequests; onSignOut: () => void }) {
+function ReadyWorkspace({
+  workspace,
+  requests,
+  onSignOut,
+  banner,
+}: {
+  workspace: Workspace;
+  requests: PrivateRequests;
+  onSignOut: () => void;
+  banner?: React.ReactNode;
+}) {
   const [allocationRevision, setAllocationRevision] = useState(0);
   const { institution, role, capabilities, members } = workspace;
   const sections = workspaceSections(capabilities);
 
   return <WorkspaceShell sections={sections} institutionName={institution.legalName} scope={`${institution.scopeUnit} · cakupan ${institution.scopeLevel}`}
-    role={role} officerName={workspace.officer?.displayName} onSignOut={onSignOut} renderSection={(id, navigate) => {
+    role={role} officerName={workspace.officer?.displayName} onSignOut={onSignOut} banner={banner} renderSection={(id, navigate) => {
       switch (id) {
         case "overview": return <>
           <section className="rounded-2xl border border-[#dbe7dd] bg-[#17332c] p-5 text-white sm:p-6">

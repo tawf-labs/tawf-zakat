@@ -1,4 +1,4 @@
-import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Scripts, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { Navbar } from "../components/layout/Navbar";
 import { Footer } from "../components/layout/Footer";
 import { WagmiProvider } from "wagmi";
@@ -63,6 +63,21 @@ export const Route = createRootRoute({
   shellComponent: RootDocument,
 });
 
+function AppLayout({ children }: { children: React.ReactNode }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isWorkspace = pathname.startsWith("/ruang-kerja");
+
+  return (
+    <>
+      <Navbar />
+      <ErrorBoundary>
+        <div className="flex-1">{children}</div>
+      </ErrorBoundary>
+      {!isWorkspace && <Footer />}
+    </>
+  );
+}
+
 function RootDocument({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
@@ -121,11 +136,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 <WebSocketProvider>
                   <RootWorkspaceAccessProvider>
                     <Toaster richColors position="top-right" closeButton theme="light" />
-                    <Navbar />
-                    <ErrorBoundary>
-                      <div className="flex-1">{children}</div>
-                    </ErrorBoundary>
-                    <Footer />
+                    <AppLayout>{children}</AppLayout>
                   </RootWorkspaceAccessProvider>
                 </WebSocketProvider>
               </WalletProvider>
