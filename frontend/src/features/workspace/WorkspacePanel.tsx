@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { Building2, DoorOpen, KeyRound, LogOut, ShieldAlert, Users, UserCheck } from "lucide-react";
+import { Building2, CheckCircle2, DoorOpen, KeyRound, LockKeyhole, ShieldAlert, Users } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { useWorkspaceAccess } from "./useWorkspaceAccess";
-import { fetchOnboardingFixtures, type Institution } from "./workspaceClient";
+import { fetchOnboardingFixtures, type Institution, type Workspace } from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
+import type { PrivateRequests } from "./privateRequests";
+import { WorkspaceShell, WorkspaceShortcut } from "./WorkspaceShell";
+import { workspaceSections } from "./workspaceNavigation";
 import { EvidencePackagePanel } from "./EvidencePackagePanel";
 import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
@@ -13,18 +16,7 @@ import { ActivityPanel } from "../activities";
 import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
 import { CertificateIssuancePanel } from "./CertificateIssuancePanel";
 
-/**
- * The door to an institution's workspace (Spec #68, ticket #69).
- *
- * Three states and nothing in between: wallet not connected, connected but not
- * signed in, signed in. What is shown after signing in is the institution the
- * *session* is for - never one picked from a dropdown afterwards, because the
- * tenant is not the interface's to choose.
- *
- * Capabilities hide controls the server would refuse anyway. They are a courtesy,
- * not a control: every one of these actions is gated again at the API, and the
- * tests that prove it call the API directly rather than through this page.
- */
+/** The session determines the tenant. Navigation never grants access; the API enforces every capability. */
 export function WorkspacePanel() {
   return <WorkspaceContents />;
 }
@@ -35,7 +27,6 @@ function WorkspaceContents() {
   const busy = access.state === "OPENING";
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [chosen, setChosen] = useState<string>("");
-  const [allocationRevision, setAllocationRevision] = useState(0);
 
   useEffect(() => {
     fetchOnboardingFixtures()
@@ -47,167 +38,85 @@ function WorkspaceContents() {
   }, []);
 
   if (!address) {
-    return (
-      <section className="rounded-2xl border border-stone-200 bg-white p-8 text-center">
-        <KeyRound className="mx-auto h-10 w-10 text-stone-400" />
-        <h2 className="mt-4 text-xl font-semibold text-stone-900">Hubungkan dompet digital lembaga</h2>
-        <p className="mx-auto mt-2 max-w-lg text-sm text-stone-600">
-          Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak
-          cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.
-        </p>
-      </section>
-    );
+    return <section className="rounded-2xl border border-stone-200 bg-white p-8 text-center">
+      <KeyRound className="mx-auto h-10 w-10 text-stone-400" />
+      <h2 className="mt-4 text-xl font-semibold text-stone-900">Hubungkan dompet digital lembaga</h2>
+      <p className="mx-auto mt-2 max-w-lg text-sm text-stone-600">Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.</p>
+    </section>;
   }
 
   if (access.state !== "READY") {
-    return (
-      <section className="rounded-2xl border border-stone-200 bg-white p-8">
-        <h2 className="text-xl font-semibold text-stone-900">Masuk ruang kerja</h2>
-        <p className="mt-2 text-sm text-stone-600">
-          Wallet <span className="font-mono text-stone-800">{address}</span> akan diminta
-          menandatangani tantangan yang berlaku singkat dan hanya sekali pakai.
-        </p>
-
-        <label className="mt-6 block text-sm font-medium text-stone-700" htmlFor="institution">
-          Pengelola Zakat
-        </label>
-        <select
-          id="institution"
-          value={chosen}
-          onChange={(event) => setChosen(event.target.value)}
-          className="mt-2 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-        >
-          {institutions.map((institution) => (
-            <option key={institution.id} value={institution.id}>
-              {institution.legalName}
-            </option>
-          ))}
-        </select>
-
-        <Button className="mt-5" disabled={busy || chosen === ""} onClick={() => signIn(chosen)}>
-          <DoorOpen className="mr-2 h-4 w-4" />
-          {busy ? "Menunggu tanda tangan…" : "Tandatangani dan masuk"}
-        </Button>
-
-        {error && (
-          <p role="alert" className="mt-4 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            {error}
-          </p>
-        )}
-      </section>
-    );
+    return <section className="rounded-2xl border border-stone-200 bg-white p-8">
+      <h2 className="text-xl font-semibold text-stone-900">Masuk ruang kerja</h2>
+      <p className="mt-2 text-sm text-stone-600">Wallet <span className="break-all font-mono text-stone-800">{address}</span> akan diminta menandatangani tantangan yang berlaku singkat dan hanya sekali pakai.</p>
+      <label className="mt-6 block text-sm font-medium text-stone-700" htmlFor="institution">Pengelola Zakat</label>
+      <select id="institution" value={chosen} onChange={(event) => setChosen(event.target.value)} className="mt-2 min-h-11 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-base text-stone-900">
+        {institutions.map(institution => <option key={institution.id} value={institution.id}>{institution.legalName}</option>)}
+      </select>
+      <Button className="mt-5" disabled={busy || chosen === ""} onClick={() => signIn(chosen)}>
+        <DoorOpen className="mr-2 h-4 w-4" />{busy ? "Menunggu tanda tangan…" : "Tandatangani dan masuk"}
+      </Button>
+      {error && <p role="alert" className="mt-4 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</p>}
+    </section>;
   }
 
   const { workspace, requests } = access;
+  // Reset both navigation and retained drafts on session or access changes, never on menu selection.
+  const sessionKey = `${requests.contextId}:${workspace.role}:${JSON.stringify(workspace.capabilities)}`;
+  return <>
+    <ReadyWorkspace key={sessionKey} workspace={workspace} requests={requests} onSignOut={signOut} />
+    {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+  </>;
+}
+
+function ReadyWorkspace({ workspace, requests, onSignOut }: { workspace: Workspace; requests: PrivateRequests; onSignOut: () => void }) {
+  const [allocationRevision, setAllocationRevision] = useState(0);
   const { institution, role, capabilities, members } = workspace;
+  const sections = workspaceSections(capabilities);
 
-  return (
-    <section className="space-y-6">
-      <header className="rounded-2xl border border-stone-200 bg-white p-6 md:p-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Building2 className="h-5 w-5 text-emerald-700" />
-              <h2 className="truncate text-xl font-semibold text-stone-900">{institution.legalName}</h2>
-            </div>
-            <p className="mt-1 text-sm text-stone-600">
-              {institution.scopeUnit} · cakupan {institution.scopeLevel} · <code>{institution.id}</code>
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-stone-700">
-              <span>
-                Masuk sebagai <span className="font-mono">{workspace.account}</span>
-              </span>
-              <Badge>{role}</Badge>
-              {workspace.officer ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-850 border border-emerald-300">
-                  <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>{workspace.officer.displayName}</span>
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-900 border border-amber-300" title="Akun ini belum terhubung dengan profil petugas lembaga">
-                  Profil belum tersedia
-                </span>
-              )}
-            </div>
-          </div>
-
-          <Button variant="outline" disabled={busy} onClick={() => signOut()}>
-            <LogOut className="mr-2 h-4 w-4" />
-            Keluar
-          </Button>
-        </div>
-
-        {institution.isSynthetic && (
-          <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            Lembaga sintetis untuk pengujian. Identitas, mandat, dan akun penanda tangan lembaga
-            sungguhan adalah data onboarding yang belum diisi.
-          </p>
-        )}
-      </header>
-
-      <div className="rounded-2xl border border-stone-200 bg-white p-6">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-stone-500">
-          Yang boleh Anda lakukan di ruang kerja ini
-        </h3>
-        <ul className="mt-3 space-y-2 text-sm text-stone-700">
-          <li>{capabilities.viewWorkspace ? "✓" : "✕"} Membuka ruang kerja dan membaca data lembaga</li>
-          <li>{capabilities.prepareEvidence ? "✓" : "✕"} Menyiapkan dan mengubah bukti lembaga</li>
-          <li>{capabilities.manageMembers ? "✓" : "✕"} Mengelola anggota lembaga</li>
-          <li>{capabilities.manageDisbursement ? "✓" : "✕"} Membuat program dan draf pengajuan penyaluran</li>
-        </ul>
-        <p className="mt-4 border-t border-stone-100 pt-4 text-xs text-stone-500">
-          Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan
-          diperiksa di catatan publik, dan keanggotaan di sini tidak menggantikannya.
-        </p>
-      </div>
-
-      <WorkspaceAuthority key={`operational-authority:${requests.contextId}`} requests={requests} workspace={workspace} />
-
-      {capabilities.manageMembers && members && (
-        <div className="rounded-2xl border border-stone-200 bg-white p-6">
-          <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
-            <Users className="h-4 w-4" /> Anggota lembaga ({members.length})
-          </h3>
-          <ul className="mt-3 space-y-2 text-sm">
-            {members.map((member) => (
-              <li key={member.account} className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="truncate font-mono text-stone-700">{member.account}</span>
-                  {member.displayName && (
-                    <span className="ml-2 text-xs text-stone-500 font-sans">
-                      ({member.displayName})
-                    </span>
-                  )}
-                </div>
-                <Badge>{member.role}</Badge>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <AuthorityPanel key={`authority:${requests.contextId}`} requests={requests} workspace={workspace} />
-
-      <ContributionPanel key={`contribution:${requests.contextId}`} requests={requests} canManage={capabilities.prepareEvidence}
-        canRecord={workspace.mandates?.some(m => m.isActive && m.function === "RECORD_CONTRIBUTIONS") ?? false}
-        onAllocated={() => setAllocationRevision(value => value + 1)} />
-
-      <DisbursementPanel key={`disbursement:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement} />
-
-      <ActivityPanel key={`activity:${requests.contextId}`} requests={requests} canManage={capabilities.manageDisbursement}
-        allocationRevision={allocationRevision} />
-
-      <CertificateIssuancePanel key={`certificate:${requests.contextId}`} requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />
-
-      <EvidencePackagePanel key={requests.contextId} requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />
-      <AuditFindingQueuePanel key={`audit-findings:${requests.contextId}`} requests={requests} />
-
-      {error && (
-        <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          {error}
-        </p>
-      )}
-    </section>
-  );
+  return <WorkspaceShell sections={sections} institutionName={institution.legalName} scope={`${institution.scopeUnit} · cakupan ${institution.scopeLevel}`}
+    role={role} officerName={workspace.officer?.displayName} onSignOut={onSignOut} renderSection={(id, navigate) => {
+      switch (id) {
+        case "overview": return <>
+          <section className="rounded-2xl border border-[#dbe7dd] bg-[#17332c] p-5 text-white sm:p-6">
+            <div className="flex items-start gap-3"><Building2 className="mt-1 h-5 w-5 shrink-0 text-[#c4ed70]" aria-hidden="true" /><div className="min-w-0">
+              <p className="text-xs text-[#dbe7dd]">Selamat bekerja{workspace.officer ? `, ${workspace.officer.displayName}` : ""}</p>
+              <h3 className="mt-1 break-words font-serif text-xl font-semibold">{institution.legalName}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-[#dbe7dd]">Pilih pekerjaan dari menu. Hanya bagian yang sedang Anda buka yang ditampilkan.</p>
+            </div></div>
+          </section>
+          {institution.isSynthetic && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Lembaga sintetis untuk pengujian. Identitas, mandat, dan akun penanda tangan lembaga sungguhan adalah data onboarding yang belum diisi.</p>}
+          {!workspace.officer && <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />Profil petugas belum tersedia. Tindakan yang memerlukan identitas amil lengkap tetap ditahan.</p>}
+          <section className="rounded-2xl border border-[#dbe7dd] bg-white p-5">
+            <h3 className="text-sm font-semibold text-[#17332c]">Akses ruang kerja Anda</h3>
+            <ul className="mt-4 grid gap-3 text-sm text-stone-700 sm:grid-cols-2">
+              {([
+                [capabilities.viewWorkspace, "Membaca data lembaga"],
+                [capabilities.prepareEvidence, "Menyiapkan bukti"],
+                [capabilities.manageMembers, "Mengelola anggota"],
+                [capabilities.manageDisbursement, "Mengelola penyaluran"],
+              ] as const).map(([enabled, label]) => <li key={label} className="flex items-center gap-2">{enabled ? <CheckCircle2 className="h-4 w-4 shrink-0 text-[#1b765e]" aria-hidden="true" /> : <LockKeyhole className="h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />}<span>{label}<span className="sr-only">{enabled ? ": tersedia" : ": tidak tersedia"}</span></span></li>)}
+            </ul>
+            <details className="mt-4 border-t border-[#dbe7dd] pt-3">
+              <summary className="min-h-11 cursor-pointer py-3 text-xs font-medium text-stone-600 focus-visible:outline-2 focus-visible:outline-[#1b765e]">Detail akun dan batas kewenangan</summary>
+              <dl className="space-y-2 text-xs text-stone-600"><div><dt>Akun kerja</dt><dd className="mt-1 break-all font-mono text-stone-800">{workspace.account}</dd></div><div><dt>ID lembaga</dt><dd className="mt-1 break-all font-mono">{institution.id}</dd></div></dl>
+              <p className="mt-3 text-xs leading-relaxed text-stone-600">Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan diperiksa di catatan publik; keanggotaan di sini tidak menggantikannya.</p>
+            </details>
+          </section>
+          <section><h3 className="mb-3 text-sm font-semibold text-[#17332c]">Mulai pekerjaan</h3><div className="grid gap-3 sm:grid-cols-2">{sections.filter(section => ["contributions", "disbursement", "activities", "evidence"].includes(section.id)).map(section => <WorkspaceShortcut key={section.id} section={section} onClick={() => navigate(section.id)} />)}</div></section>
+        </>;
+        case "contributions": return <ContributionPanel requests={requests} canManage={capabilities.prepareEvidence} canRecord={workspace.mandates?.some(m => m.isActive && m.function === "RECORD_CONTRIBUTIONS") ?? false} onAllocated={() => setAllocationRevision(value => value + 1)} />;
+        case "disbursement": return <DisbursementPanel requests={requests} canManage={capabilities.manageDisbursement} />;
+        case "activities": return <ActivityPanel requests={requests} canManage={capabilities.manageDisbursement} allocationRevision={allocationRevision} />;
+        case "certificates": return <CertificateIssuancePanel requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />;
+        case "evidence": return <EvidencePackagePanel requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />;
+        case "audit": return <AuditFindingQueuePanel requests={requests} />;
+        case "identity": return <WorkspaceAuthority requests={requests} workspace={workspace} view="identity" />;
+        case "authority": return <AuthorityPanel requests={requests} workspace={workspace} />;
+        case "members": return capabilities.manageMembers ? <>
+          <WorkspaceAuthority requests={requests} workspace={workspace} view="management" />
+          {members && <section className="rounded-2xl border border-[#dbe7dd] bg-white p-5"><h3 className="flex items-center gap-2 text-sm font-semibold text-[#17332c]"><Users className="h-4 w-4" />Anggota lembaga ({members.length})</h3><ul className="mt-3 divide-y divide-stone-100">{members.map(member => <li key={member.account} className="flex items-start justify-between gap-3 py-3"><div className="min-w-0"><p className="break-all font-mono text-xs text-stone-700">{member.account}</p>{member.displayName && <p className="mt-1 text-xs text-stone-600">{member.displayName}</p>}</div><Badge>{member.role}</Badge></li>)}</ul></section>}
+        </> : null;
+      }
+    }} />;
 }
