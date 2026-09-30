@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type MutableRefObject, type ReactNode } from "react";
-import { AlertTriangle, Plus, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, History, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/Button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/Dialog";
@@ -31,8 +31,10 @@ type Cell = { r: number; c: number };
 type Selection = { anchor: Cell; extent: Cell };
 type Editing = { r: number; c: number; initial: string };
 type Write = { r: number; c: number; text: string };
+/** An advisory marker on a row (not an error), e.g. a recipient already aided elsewhere. */
+export type RowFlag = { badge: string; detail: string };
 
-const ROW_HEADER_WIDTH = 52;
+const ROW_HEADER_WIDTH = 76;
 const PAGE_STEP = 20;
 
 const isEnabled = <R,>(column: GridColumn<R>, row: R) => Boolean(column.apply) && (column.enabled?.(row) ?? true);
@@ -56,6 +58,8 @@ export function SpreadsheetGrid<R>({
   onlyIssues,
   onOnlyIssuesChange,
   actions,
+  flags,
+  flagFilter,
   fill = false,
 }: {
   label: string;
@@ -79,6 +83,10 @@ export function SpreadsheetGrid<R>({
   onlyIssues: boolean;
   onOnlyIssuesChange: (only: boolean) => void;
   actions?: ReactNode;
+  /** Advisory row markers keyed by row id, shown beside the row number. */
+  flags?: Map<string, RowFlag>;
+  /** A toolbar toggle that narrows the grid to flagged rows. */
+  flagFilter?: { label: string; active: boolean; onChange: (active: boolean) => void };
   /** Grow to the parent's height (fullscreen) instead of capping at 70vh. */
   fill?: boolean;
 }) {
@@ -112,17 +120,18 @@ export function SpreadsheetGrid<R>({
   // Which rows a filter shows is decided when the filter changes or rows are added/removed, not on
   // every keystroke: fixing a cell under "only problems" must not yank the row away mid-edit.
   const needle = query.trim().toLowerCase();
-  const filtered = needle !== "" || onlyIssues;
+  const onlyFlagged = Boolean(flagFilter?.active && flags);
+  const filtered = needle !== "" || onlyIssues || onlyFlagged;
   const idsKey = rows.map(rowId).join("|");
   const shownIds = useMemo(() => {
     if (!filtered) return null;
     return new Set(
       rows
-        .filter((row) => (!onlyIssues || hasIssue(row)) && (!needle || columns.some((col) => col.value(row).toLowerCase().includes(needle))))
+        .filter((row) => (!onlyIssues || hasIssue(row)) && (!onlyFlagged || flags!.has(rowId(row))) && (!needle || columns.some((col) => col.value(row).toLowerCase().includes(needle))))
         .map(rowId),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately frozen between filter changes
-  }, [filtered, needle, onlyIssues, idsKey, columns, serverIssues]);
+  }, [filtered, needle, onlyIssues, onlyFlagged, flags, idsKey, columns, serverIssues]);
   const visible = useMemo(
     () => rows.flatMap((row, index) => (!shownIds || shownIds.has(rowId(row)) ? [index] : [])),
     [rows, shownIds, rowId],
@@ -466,6 +475,19 @@ export function SpreadsheetGrid<R>({
           <AlertTriangle className="h-3.5 w-3.5" />
           Hanya baris bermasalah ({issueRowCount})
         </button>
+        {flagFilter && flags && flags.size > 0 && (
+          <button
+            type="button"
+            aria-pressed={flagFilter.active}
+            onClick={() => { flagFilter.onChange(!flagFilter.active); setSelection(null); }}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+              flagFilter.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-stone-300 bg-white text-stone-700 hover:bg-stone-50"
+            }`}
+          >
+            <History className="h-3.5 w-3.5" />
+            {flagFilter.label} ({flags.size})
+          </button>
+        )}
         <span className="text-xs text-stone-500" aria-live="polite">
           {filtered ? `${visible.length} dari ${rows.length} baris` : `${rows.length} baris`}
         </span>
@@ -544,6 +566,7 @@ export function SpreadsheetGrid<R>({
                   columns={columns}
                   errors={errorsOf(row)}
                   extra={serverIssues.get(rowId(row))}
+                  flag={flags?.get(rowId(row))}
                   selC0={inRows ? rect!.c0 : -1}
                   selC1={inRows ? rect!.c1 : -1}
                   activeC={sel && sel.anchor.r === r ? sel.anchor.c : -1}
@@ -615,6 +638,7 @@ type GridRowProps<R> = {
   columns: GridColumn<R>[];
   errors: (string | null)[];
   extra: string[] | undefined;
+  flag: RowFlag | undefined;
   selC0: number;
   selC1: number;
   activeC: number;
@@ -627,7 +651,7 @@ type GridRowProps<R> = {
 // Rows re-render only when their data or their slice of the selection changes; with hundreds of
 // rows this keeps arrow-key navigation and typing from repainting the whole sheet.
 const GridRow = memo(function GridRow<R>({
-  gridId, row, r, rowNumber, columns, errors, extra, selC0, selC1, activeC, editing, editValue, onEditorKeyDown, onEditorBlur,
+  gridId, row, r, rowNumber, columns, errors, extra, flag, selC0, selC1, activeC, editing, editValue, onEditorKeyDown, onEditorBlur,
 }: GridRowProps<R>) {
   const messages = [...errors.filter((e): e is string => e !== null), ...(extra ?? [])];
   const rowSelected = selC0 === 0 && selC1 === columns.length - 1;
@@ -637,12 +661,17 @@ const GridRow = memo(function GridRow<R>({
         scope="row"
         data-r={r}
         data-row-header="1"
-        title={messages.length > 0 ? messages.join("\n") : `Pilih baris ${rowNumber}`}
+        title={[...messages, ...(flag ? [flag.detail] : [])].join("\n") || `Pilih baris ${rowNumber}`}
         className={`sticky left-0 z-10 cursor-pointer border-b border-r border-stone-200 px-2 py-1.5 text-right font-mono font-normal tabular-nums ${
           rowSelected ? "bg-emerald-100 text-emerald-900" : selC0 >= 0 ? "bg-emerald-50 text-stone-700" : "bg-stone-50 text-stone-500"
         }`}
       >
         <span className="inline-flex items-center gap-1">
+          {flag && (
+            <span className="rounded bg-amber-100 px-1 font-sans text-[10px] font-semibold text-amber-900" aria-label={flag.detail}>
+              {flag.badge}
+            </span>
+          )}
           {messages.length > 0 && <AlertTriangle className="h-3 w-3 text-red-600" aria-label={`${messages.length} masalah`} />}
           {rowNumber}
         </span>

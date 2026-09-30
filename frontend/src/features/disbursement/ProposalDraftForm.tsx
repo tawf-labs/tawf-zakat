@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowUpRight, CheckCircle2, FileSignature, RotateCcw, Save, Undo2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, CheckCircle2, FileSignature, RotateCcw, Save, Undo2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "../workspace/privateRequests";
@@ -23,6 +23,7 @@ import { useBeneficiaryImport } from "./useBeneficiaryImport";
 import { ProposalDecisionModal } from "./ProposalDecisionModal";
 import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
 import { ProposalRealizationBanner } from "./ProposalRealizationBanner";
+import { RecurringAidWarnings, recurringFlags } from "./RecurringAidWarnings";
 
 const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
   DRAFT: { variant: "neutral", label: "Draf Pengajuan" },
@@ -84,6 +85,11 @@ export function ProposalDraftForm({
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [submissionIssues, setSubmissionIssues] = useState<{ field: string; message: string }[]>([]);
   const [recurringWarnings, setRecurringWarnings] = useState<RecurringAidWarning[]>([]);
+  const [onlyRecurring, setOnlyRecurring] = useState(false);
+  const recurringRowFlags = useMemo(
+    () => recurringFlags(recurringWarnings, (status) => STATUS_BADGES[status]?.label ?? status),
+    [recurringWarnings],
+  );
 
   // Withdrawal state
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
@@ -284,20 +290,14 @@ export function ProposalDraftForm({
       <ProposalDecisionBanner requests={requests} draft={draft} recorded={recordedDecision} />
       <ProposalRealizationBanner requests={requests} draft={draft} onDraftUpdated={setDraft} />
 
-      {/* Recurring aid warnings banner */}
-      {recurringWarnings.length > 0 && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900 space-y-2">
-          <p className="font-bold flex items-center gap-1.5">
-            <AlertCircle className="h-4 w-4 text-amber-700" />
-            Peringatan Bantuan Berulang Terdeteksi ({recurringWarnings.length})
-          </p>
-          <ul className="list-disc pl-4 space-y-1">
-            {recurringWarnings.map((w, i) => (
-              <li key={i}>{w.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <RecurringAidWarnings
+        warnings={recurringWarnings}
+        statusLabel={(status) => STATUS_BADGES[status]?.label ?? status}
+        onShowInTable={() => {
+          setOnlyRecurring(true);
+          document.getElementById("proposal-roster")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}
+      />
 
       {/* Form fields */}
       <fieldset disabled={saving || unknown || isReadOnly} className="min-w-0 space-y-4">
@@ -313,6 +313,7 @@ export function ProposalDraftForm({
         onOpenImport={isReadOnly ? undefined : rosterImport.open}
         onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
         saveControl={isReadOnly ? undefined : <>{statusBadge}{saveButton}</>}
+        recurring={recurringRowFlags.size > 0 ? { flags: recurringRowFlags, only: onlyRecurring, onOnlyChange: setOnlyRecurring } : undefined}
       />
       {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowBeneficiaryList(true)}>
         Perbarui daftar penerima dari berkas

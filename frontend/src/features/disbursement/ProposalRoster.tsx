@@ -7,7 +7,7 @@ import { newAidLine, newBeneficiary, type AidLine, type Beneficiary, type Propos
 import { BeneficiaryCard } from "./BeneficiaryCard";
 import { AidLineRow } from "./AidLineRow";
 import { LIST_PAGE_SIZE, Pager, pageOf, usePage } from "./Pagination";
-import { SpreadsheetGrid, type GridColumn } from "./SpreadsheetGrid";
+import { SpreadsheetGrid, type GridColumn, type RowFlag } from "./SpreadsheetGrid";
 import { aidLineColumns, beneficiaryColumns, CLIENT_VALIDATED_FIELDS } from "./rosterColumns";
 
 type Tab = "recipients" | "aidLines";
@@ -78,6 +78,7 @@ export function ProposalRoster({
   onOpenImport,
   onExport,
   saveControl,
+  recurring,
 }: {
   draft: ProposalDraft;
   setDraft: (draft: ProposalDraft) => void;
@@ -90,6 +91,8 @@ export function ProposalRoster({
   onExport?: (format: TabularFormat) => void;
   /** The save button and status, repeated in fullscreen where the form footer is covered. */
   saveControl?: ReactNode;
+  /** Recipients already aided by other proposals, marked on their rows with a filter toggle. */
+  recurring?: { flags: Map<string, RowFlag>; only: boolean; onOnlyChange: (only: boolean) => void };
 }) {
   const [tab, setTab] = useState<Tab>("recipients");
   const [expanded, setExpanded] = useState(false);
@@ -102,6 +105,12 @@ export function ProposalRoster({
   const aidColumns = useMemo(() => aidLineColumns(draft.beneficiaries), [draft.beneficiaries]);
   const recipientIssues = useServerIssues(draft.issues, "recipient", draft.beneficiaries);
   const aidLineIssues = useServerIssues(draft.issues, "aidLine", draft.aidLines);
+
+  // "Lihat di tabel" from the recurring-aid banner turns the filter on; show it on the tab it applies to.
+  const onlyRecurring = recurring?.only ?? false;
+  useEffect(() => {
+    if (onlyRecurring) setTab("recipients");
+  }, [onlyRecurring]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -201,6 +210,8 @@ export function ProposalRoster({
               onDeleteRows={deleteRecipients}
               deleteImpact={recipientDeleteImpact}
               serverIssues={recipientIssues}
+              flags={recurring?.flags}
+              flagFilter={recurring && { label: "Hanya penerima berulang", active: recurring.only, onChange: recurring.onOnlyChange }}
               {...gridProps("recipients")}
             />
           </div>
@@ -239,7 +250,7 @@ export function ProposalRoster({
   );
 
   return (
-    <section aria-label="Penerima dan rincian bantuan">
+    <section id="proposal-roster" aria-label="Penerima dan rincian bantuan" className="scroll-mt-4">
       <h3 className="mb-2 text-sm font-semibold text-stone-900">Penerima dan rincian bantuan</h3>
       {expanded ? createPortal(content, document.body) : content}
     </section>
