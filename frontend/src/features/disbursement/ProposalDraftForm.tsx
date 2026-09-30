@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowUpRight, CheckCircle2, FileSignature, RotateCcw, Save, Undo2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -12,7 +12,8 @@ import {
   type ProposalTotals,
   type RecurringAidWarning,
 } from "./disbursementClient";
-import { ProposalDetails, ProposalRoster, ProposalSummary } from "./ProposalSections";
+import { ProposalDetails, ProposalSummary } from "./ProposalSections";
+import { ProposalRoster } from "./ProposalRoster";
 import { ProposalDocumentManager } from "./ProposalDocumentManager";
 import { useProposalDraft, type EditorNavigation } from "./useProposalDraft";
 import { BeneficiaryImportModal } from "./BeneficiaryImportModal";
@@ -37,6 +38,21 @@ const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "
 };
 
 /** Says exactly where a locked proposal stands, instead of one message that fits several states. */
+/** Roster rows added, removed or edited since the last save (recipients and aid lines together). */
+function countChangedRows(saved: ProposalDraft, draft: ProposalDraft): number {
+  const diff = (before: { id: string }[], after: { id: string }[]) => {
+    const previous = new Map(before.map((row) => [row.id, row]));
+    let count = 0;
+    for (const row of after) {
+      const old = previous.get(row.id);
+      if (old !== row && JSON.stringify(old) !== JSON.stringify(row)) count++;
+      previous.delete(row.id);
+    }
+    return count + previous.size;
+  };
+  return diff(saved.beneficiaries, draft.beneficiaries) + diff(saved.aidLines, draft.aidLines);
+}
+
 function readOnlyMessage(status: ProposalDraft["status"]): string {
   switch (status) {
     case "SUBMITTED": return "Pengajuan sudah diajukan dan menunggu pemeriksa memulai pemeriksaan.";
@@ -62,7 +78,7 @@ export function ProposalDraftForm({
   onNavigationChange: (state: EditorNavigation) => void;
 }) {
   const editor = useProposalDraft(requests, initial, initialSummary, onSaved, onNavigationChange);
-  const { draft, setDraft, acceptSaved, dirty, saving, unknown, summary, error: saveError, save } = editor;
+  const { draft, saved, setDraft, acceptSaved, dirty, saving, unknown, summary, error: saveError, save } = editor;
 
   const [submitting, setSubmitting] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
@@ -154,13 +170,49 @@ export function ProposalDraftForm({
     }
   };
 
+  const changedRows = dirty ? countChangedRows(saved, draft) : 0;
   const statusText = unknown
     ? "Hasil penyimpanan belum diketahui"
     : saving
     ? "Menyimpan…"
     : dirty
-    ? `Belum tersimpan${draft.version ? ` · berdasarkan versi ${draft.version}` : ""}`
+    ? `Belum tersimpan${changedRows ? ` · ${changedRows} baris berubah` : ""}${draft.version ? ` · berdasarkan versi ${draft.version}` : ""}`
     : `Draf tersimpan · versi ${draft.version}`;
+
+  // Ctrl+S saves the draft. The deferred call lets an open grid cell commit (on blur) and
+  // re-render first, so the save carries the value that was being typed.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (isReadOnly) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      event.preventDefault();
+      (document.activeElement as HTMLElement | null)?.blur();
+      setTimeout(() => saveRef.current(), 0);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isReadOnly]);
+
+  const statusBadge = (
+    <span
+      role="status"
+      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+        dirty || unknown
+          ? "bg-amber-100 text-amber-900"
+          : "bg-emerald-100 text-emerald-900"
+      }`}
+    >
+      {statusText}
+    </span>
+  );
+  const saveButton = (
+    <Button type="button" disabled={saving} onClick={save} className="mr-2" title="Simpan draf (Ctrl+S)">
+      <Save className="mr-2 h-4 w-4" />{" "}
+      {saving ? "Menyimpan…" : unknown ? "Periksa penyimpanan" : "Simpan draf"}
+    </Button>
+  );
 
   return (
     <div className="space-y-4 rounded-2xl border border-stone-200 bg-stone-50 p-4">
@@ -168,16 +220,7 @@ export function ProposalDraftForm({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Badge variant={STATUS_BADGES[draft.status].variant}>{STATUS_BADGES[draft.status].label}</Badge>
-          <span
-            role="status"
-            className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-              dirty || unknown
-                ? "bg-amber-100 text-amber-900"
-                : "bg-emerald-100 text-emerald-900"
-            }`}
-          >
-            {statusText}
-          </span>
+          {statusBadge}
         </div>
 
         {/* Withdrawal action if in queue */}
@@ -260,13 +303,17 @@ export function ProposalDraftForm({
       <fieldset disabled={saving || unknown || isReadOnly} className="min-w-0 space-y-4">
         <legend className="sr-only">Pengajuan penyaluran</legend>
         <ProposalDetails draft={draft} setDraft={setDraft} />
-        <ProposalRoster
-          draft={draft}
-          setDraft={setDraft}
-          onOpenImport={isReadOnly ? undefined : rosterImport.open}
-          onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
-        />
       </fieldset>
+      {/* Outside the fieldset: a read-only roster must still be searchable, scrollable and copyable. */}
+      <ProposalRoster
+        draft={draft}
+        setDraft={setDraft}
+        readOnly={isReadOnly}
+        locked={saving || unknown}
+        onOpenImport={isReadOnly ? undefined : rosterImport.open}
+        onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
+        saveControl={isReadOnly ? undefined : <>{statusBadge}{saveButton}</>}
+      />
       {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowBeneficiaryList(true)}>
         Perbarui daftar penerima dari berkas
       </Button>}
@@ -308,12 +355,7 @@ export function ProposalDraftForm({
       {/* Actions footer */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 pt-3">
         <div>
-          {!isReadOnly && (
-            <Button type="button" disabled={saving} onClick={save} className="mr-2">
-              <Save className="mr-2 h-4 w-4" />{" "}
-              {saving ? "Menyimpan…" : unknown ? "Periksa penyimpanan" : "Simpan draf"}
-            </Button>
-          )}
+          {!isReadOnly && saveButton}
         </div>
 
         <div>

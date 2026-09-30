@@ -59,5 +59,5 @@ export function useProposalDraft(requests: PrivateRequests, initial: ProposalDra
     }
   }
 
-  return { draft, setDraft, acceptSaved: (value: ProposalDraft) => { setDraft(value); setSaved(value); }, summary, dirty, saving, unknown, error, save };
+  return { draft, saved, setDraft, acceptSaved: (value: ProposalDraft) => { setDraft(value); setSaved(value); }, summary, dirty, saving, unknown, error, save };
 }
