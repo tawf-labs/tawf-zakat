@@ -910,7 +910,7 @@ describe("Operational Mandates and Endorsement Accounts (Ticket #90)", () => {
         expect((await store.getMandate(SINAR, browserMandate!.id))?.isActive).toBe(false);
         await mandatePanel.getByRole("button", { name: "Batal", exact: true }).click();
         await mandatePanel.getByRole("button", { name: "Muat ulang", exact: true }).click();
-        await mandatePanel.getByText("Dicabut · Versi 2", { exact: true }).waitFor();
+        await mandatePanel.getByText("Dicabut", { exact: true }).waitFor();
         page.once("dialog", (dialog: { accept(): Promise<void> }) => dialog.accept());
         await mandatePanel.getByRole("button", { name: "Aktifkan kembali", exact: true }).click();
         await mandatePanel.getByText("Mandat diaktifkan kembali.", { exact: true }).waitFor();

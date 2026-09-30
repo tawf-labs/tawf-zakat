@@ -4,7 +4,14 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
 import { useWorkspaceAccess } from "./useWorkspaceAccess";
-import { fetchOnboardingFixtures, type Institution, type Workspace } from "./workspaceClient";
+import {
+  fetchOnboardingFixtures,
+  type InstitutionalEndorsementAccount,
+  type Institution,
+  type OfficerWithAccounts,
+  type OperationalMandate,
+  type Workspace,
+} from "./workspaceClient";
 import { AuthorityPanel } from "./AuthorityPanel";
 import type { PrivateRequests } from "./privateRequests";
 import { WorkspaceShell, WorkspaceShortcut } from "./WorkspaceShell";
@@ -16,6 +23,79 @@ import { ContributionPanel } from "../contributions";
 import { ActivityPanel } from "../activities";
 import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
 import { CertificateIssuancePanel } from "./CertificateIssuancePanel";
+
+const demoOfficers: OfficerWithAccounts[] = [
+  {
+    id: "off-01",
+    displayName: "Ahmad Fauzi, S.E.",
+    isActive: true,
+    accounts: [
+      { account: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11", role: "ADMIN", isActive: true },
+    ],
+  },
+  {
+    id: "off-02",
+    displayName: "Siti Rahmawati, M.E.",
+    isActive: true,
+    accounts: [
+      { account: "0x38B132C7d89B25A11F0825B9e04812aF8C811C4", role: "OFFICER", isActive: true },
+    ],
+  },
+];
+
+const demoMandates: OperationalMandate[] = [
+  {
+    id: "man-01",
+    institutionId: "inst-tawf-01",
+    officerId: "off-01",
+    accountAddress: null,
+    function: "PREPARE_PROPOSALS",
+    scopeType: "ALL_PROGRAMS",
+    programId: null,
+    assignmentRef: "SK/2026/BAZNAS/012",
+    nominalLimit: "150000000",
+    validFrom: 1767225600,
+    validUntil: 1798761600,
+    isActive: true,
+    version: 1,
+    createdAt: 1767225600,
+    updatedAt: 1767225600,
+    createdBy: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11",
+  },
+  {
+    id: "man-02",
+    institutionId: "inst-tawf-01",
+    officerId: "off-02",
+    accountAddress: null,
+    function: "RECORD_CONTRIBUTIONS",
+    scopeType: "ALL_PROGRAMS",
+    programId: null,
+    assignmentRef: "SK/2026/BAZNAS/018",
+    nominalLimit: "50000000",
+    validFrom: 1767225600,
+    validUntil: 1798761600,
+    isActive: true,
+    version: 1,
+    createdAt: 1767225600,
+    updatedAt: 1767225600,
+    createdBy: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11",
+  },
+];
+
+const demoEndorsements: InstitutionalEndorsementAccount[] = [
+  {
+    id: "end-01",
+    institutionId: "inst-tawf-01",
+    accountAddress: "0x1b765e347d4F7aB5B915E8D8a6C89b25B9e04812",
+    label: "Rekening Pengesahan Resmi BAZNAS Utama",
+    authorizedOfficerIds: ["off-01", "off-02"],
+    isActive: true,
+    version: 1,
+    createdAt: 1767225600,
+    updatedAt: 1767225600,
+    createdBy: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11",
+  },
+];
 
 const demoWorkspace: Workspace = {
   account: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11",
@@ -41,16 +121,33 @@ const demoWorkspace: Workspace = {
   },
   members: [
     { account: "0x71C8564E68D8a6C89b25B9e04812aF8C89A23E11", displayName: "Ahmad Fauzi, S.E.", role: "ADMIN" },
-    { account: "0x38B132C7d89B25A11F0825B9e04812aF8C811C4", displayName: "Siti Rahmawati", role: "OFFICER" },
+    { account: "0x38B132C7d89B25A11F0825B9e04812aF8C811C4", displayName: "Siti Rahmawati, M.E.", role: "OFFICER" },
   ],
-  mandates: [],
+  mandates: demoMandates,
+  endorsementAccounts: demoEndorsements,
   evidencePackages: [],
 };
 
 const demoRequests: PrivateRequests = {
   contextId: "demo-preview-context",
   assertCurrent: () => {},
-  json: async <T,>() => ({ records: [], items: [], total: 0, mandates: [], findings: [], proposals: [] } as unknown as T),
+  json: async <T,>(url?: string) => {
+    if (typeof url === "string") {
+      if (url.includes("/officers")) return { officers: demoOfficers } as unknown as T;
+      if (url.includes("/mandates")) return { mandates: demoMandates } as unknown as T;
+      if (url.includes("/endorsement-accounts")) return { endorsementAccounts: demoEndorsements } as unknown as T;
+    }
+    return {
+      records: [],
+      items: [],
+      total: 0,
+      mandates: demoMandates,
+      officers: demoOfficers,
+      endorsementAccounts: demoEndorsements,
+      findings: [],
+      proposals: [],
+    } as unknown as T;
+  },
   blob: async () => new Blob(),
 };
 
@@ -217,7 +314,33 @@ function ReadyWorkspace({
         case "authority": return <AuthorityPanel requests={requests} workspace={workspace} />;
         case "members": return capabilities.manageMembers ? <>
           <WorkspaceAuthority requests={requests} workspace={workspace} view="management" />
-          {members && <section className="rounded-2xl border border-[#dbe7dd] bg-white p-5"><h3 className="flex items-center gap-2 text-sm font-semibold text-[#17332c]"><Users className="h-4 w-4" />Anggota lembaga ({members.length})</h3><ul className="mt-3 divide-y divide-stone-100">{members.map(member => <li key={member.account} className="flex items-start justify-between gap-3 py-3"><div className="min-w-0"><p className="break-all font-mono text-xs text-stone-700">{member.account}</p>{member.displayName && <p className="mt-1 text-xs text-stone-600">{member.displayName}</p>}</div><Badge>{member.role}</Badge></li>)}</ul></section>}
+          {members && <section className="rounded-2xl border border-[#dbe7dd] bg-white p-6 shadow-xs">
+            <div className="flex items-center gap-3 border-b border-stone-100 pb-4">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-2 text-[#1b765e]">
+                <Users className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-serif text-lg font-semibold text-[#17332c]">Daftar Akun Anggota Lembaga ({members.length})</h3>
+                <p className="mt-0.5 text-xs text-stone-600">Alamat dompet terdaftar dengan hak akses di ruang kerja lembaga.</p>
+              </div>
+            </div>
+            <ul className="mt-4 space-y-3">
+              {members.map(member => (
+                <li key={member.account} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-stone-200/80 bg-stone-50/50 p-3.5 shadow-2xs">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-100/70 text-[#17332c] font-serif font-bold text-xs border border-emerald-200/60">
+                      {member.displayName ? member.displayName.split(" ").filter(Boolean).map(n => n[0]).slice(0, 2).join("").toUpperCase() : "AG"}
+                    </div>
+                    <div className="min-w-0">
+                      {member.displayName && <p className="text-sm font-semibold text-[#17332c]">{member.displayName}</p>}
+                      <p className="break-all font-mono text-xs text-stone-600">{member.account}</p>
+                    </div>
+                  </div>
+                  <Badge>{member.role}</Badge>
+                </li>
+              ))}
+            </ul>
+          </section>}
         </> : null;
       }
     }} />;
