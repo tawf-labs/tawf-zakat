@@ -29,40 +29,41 @@ export function ContributionSummary({
 }) {
   const countOf = (status: ContributionStatus) => contributions.filter((c) => c.status === status).length;
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
-      <div className="rounded-xl border border-stone-200 bg-stone-50/50 p-4">
-        <span className="text-xs font-medium uppercase tracking-wider text-stone-500">Total Diterima (IDR)</span>
-        <div className="mt-1 text-lg font-bold text-stone-900">{formatNominal(sumOf(contributions, "IDR"), "IDR")}</div>
-        <span className="text-xs text-stone-500">Nominal pasti satuan rupiah</span>
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-6">
+      <div className="rounded-2xl border border-stone-200/90 bg-stone-50/50 p-4.5 min-w-0 shadow-2xs">
+        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Total Diterima (IDR)</span>
+        <div className="mt-1 text-lg font-bold text-[#17332c] truncate">{formatNominal(sumOf(contributions, "IDR"), "IDR")}</div>
+        <span className="mt-1 block text-xs text-stone-500">Nominal pasti satuan rupiah</span>
       </div>
 
-      <div className="rounded-xl border border-stone-200 bg-stone-50/50 p-4">
-        <span className="text-xs font-medium uppercase tracking-wider text-stone-500">Total Diterima (USDC)</span>
-        <div className="mt-1 text-lg font-bold text-stone-900">
+      <div className="rounded-2xl border border-stone-200/90 bg-stone-50/50 p-4.5 min-w-0 shadow-2xs">
+        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Total Diterima (USDC)</span>
+        <div className="mt-1 text-lg font-bold text-[#17332c] truncate">
           {formatNominal(sumOf(contributions, "USDC_6DP"), "USDC_6DP")}
         </div>
-        <span className="text-xs text-stone-500">Mata uang terpisah, tanpa konversi</span>
+        <span className="mt-1 block text-xs text-stone-500">Mata uang terpisah, tanpa konversi</span>
       </div>
 
-      <div className="rounded-xl border border-stone-200 bg-stone-50/50 p-4">
-        <span className="text-xs font-medium uppercase tracking-wider text-stone-500">Status Siklus</span>
-        <div className="mt-2 flex items-center gap-2">
-          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">
-            {countOf("RECEIVED")} Baru
+      <div className="rounded-2xl border border-stone-200/90 bg-stone-50/50 p-4.5 min-w-0 shadow-2xs">
+        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Status Siklus</span>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 min-w-0">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold bg-amber-100/90 text-amber-900 border border-amber-200/80 whitespace-nowrap">
+            <span className="font-bold">{countOf("RECEIVED")}</span> Baru
           </span>
-          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800">
-            {countOf("RECONCILED")} Rekonsiliasi
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold bg-blue-100/90 text-blue-900 border border-blue-200/80 whitespace-nowrap">
+            <span className="font-bold">{countOf("RECONCILED")}</span> Rekonsiliasi
           </span>
-          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-            {countOf("ENDORSED")} Disahkan
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold bg-emerald-100/90 text-emerald-900 border border-emerald-200/80 whitespace-nowrap">
+            <span className="font-bold">{countOf("ENDORSED")}</span> Disahkan
           </span>
         </div>
+        <span className="mt-1.5 block text-xs text-stone-500">Distribusi alur verifikasi</span>
       </div>
 
-      <div className="rounded-xl border border-stone-200 bg-stone-50/50 p-4">
-        <span className="text-xs font-medium uppercase tracking-wider text-stone-500">Draf Impor Tabular</span>
-        <div className="mt-1 text-lg font-bold text-stone-900">{drafts.length} Draf</div>
-        <span className="text-xs text-stone-500">Tidak mempengaruhi total penerimaan</span>
+      <div className="rounded-2xl border border-stone-200/90 bg-stone-50/50 p-4.5 min-w-0 shadow-2xs">
+        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Draf Impor Tabular</span>
+        <div className="mt-1 text-lg font-bold text-[#17332c] truncate">{drafts.length} Draf</div>
+        <span className="mt-1 block text-xs text-stone-500">Tidak mempengaruhi total penerimaan</span>
       </div>
     </div>
   );
