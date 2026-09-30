@@ -9,7 +9,8 @@ import path from "node:path";
 const here = path.dirname(new URL(import.meta.url).pathname);
 const handlerPath = path.join(here, "..", ".vercel/output/functions/__server.func/index.mjs");
 
-const routes = ["/", "/donasi", "/verifikasi", "/tata-kelola", "/about"];
+const routes = ["/", "/donasi", "/verifikasi", "/ruang-kerja", "/about"];
+const retiredRoutes = ["/tata-kelola"];
 
 const { default: handler } = await import(pathToFileURL(handlerPath).href);
 
@@ -17,7 +18,7 @@ let failed = false;
 for (const route of routes) {
   try {
     const res = await handler.fetch(new Request(`http://localhost${route}`), {});
-    if (res.status >= 500) {
+    if (res.status >= 500 || (route === "/ruang-kerja" && res.status !== 200)) {
       failed = true;
       console.error(`FAIL ${route}: HTTP ${res.status}`);
     } else {
@@ -26,6 +27,21 @@ for (const route of routes) {
   } catch (err) {
     failed = true;
     console.error(`FAIL ${route}: threw`, err);
+  }
+}
+
+for (const route of retiredRoutes) {
+  try {
+    const res = await handler.fetch(new Request(`http://localhost${route}`), {});
+    if (res.status !== 404) {
+      failed = true;
+      console.error(`FAIL retired ${route}: expected HTTP 404, got ${res.status}`);
+    } else {
+      console.log(`ok   retired ${route}: HTTP 404`);
+    }
+  } catch (err) {
+    failed = true;
+    console.error(`FAIL retired ${route}: threw`, err);
   }
 }
 

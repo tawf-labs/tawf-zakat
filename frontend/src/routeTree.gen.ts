@@ -16,7 +16,6 @@ import { Route as LaporanPeriodeRouteImport } from './routes/laporan-periode'
 import { Route as RekonsiliasiRouteImport } from './routes/rekonsiliasi'
 import { Route as RuangKerjaRouteImport } from './routes/ruang-kerja'
 import { Route as SertifikatRouteImport } from './routes/sertifikat'
-import { Route as TataKelolaRouteImport } from './routes/tata-kelola'
 import { Route as TransparansiRouteImport } from './routes/transparansi'
 import { Route as VerifikasiRouteImport } from './routes/verifikasi'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
@@ -58,11 +57,6 @@ const SertifikatRoute = SertifikatRouteImport.update({
   path: '/sertifikat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TataKelolaRoute = TataKelolaRouteImport.update({
-  id: '/tata-kelola',
-  path: '/tata-kelola',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const TransparansiRoute = TransparansiRouteImport.update({
   id: '/transparansi',
   path: '/transparansi',
@@ -97,7 +91,6 @@ export interface FileRoutesByFullPath {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -112,7 +105,6 @@ export interface FileRoutesByTo {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -128,7 +120,6 @@ export interface FileRoutesById {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/tata-kelola': typeof TataKelolaRoute
   '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -145,7 +136,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
@@ -160,7 +150,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
@@ -175,7 +164,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/tata-kelola'
     | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
@@ -191,7 +179,6 @@ export interface RootRouteChildren {
   RekonsiliasiRoute: typeof RekonsiliasiRoute
   RuangKerjaRoute: typeof RuangKerjaRoute
   SertifikatRoute: typeof SertifikatRoute
-  TataKelolaRoute: typeof TataKelolaRoute
   TransparansiRoute: typeof TransparansiRouteWithChildren
   VerifikasiRoute: typeof VerifikasiRoute
   AdminRolesRoute: typeof AdminRolesRoute
@@ -246,13 +233,6 @@ declare module '@tanstack/react-router' {
       path: '/sertifikat'
       fullPath: '/sertifikat'
       preLoaderRoute: typeof SertifikatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/tata-kelola': {
-      id: '/tata-kelola'
-      path: '/tata-kelola'
-      fullPath: '/tata-kelola'
-      preLoaderRoute: typeof TataKelolaRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/transparansi': {
@@ -315,7 +295,6 @@ const rootRouteChildren: RootRouteChildren = {
   RekonsiliasiRoute: RekonsiliasiRoute,
   RuangKerjaRoute: RuangKerjaRoute,
   SertifikatRoute: SertifikatRoute,
-  TataKelolaRoute: TataKelolaRoute,
   TransparansiRoute: TransparansiRouteWithChildren,
   VerifikasiRoute: VerifikasiRoute,
   AdminRolesRoute: AdminRolesRoute,

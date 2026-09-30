@@ -12,22 +12,13 @@ describe("Safe.global DPS Multi-Sig Queue Integration (Ticket #32)", () => {
     expect(safeInfo.owners.length).toBeGreaterThanOrEqual(1);
   }, 10000);
 
-  it("should provide API endpoint GET /api/safe/info", async () => {
+  it("retires the portal GET /api/safe/info endpoint", async () => {
     const res = await app.fetch(new Request("http://localhost:3001/api/safe/info"));
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.success).toBe(true);
-    expect(data.safe.address).toBeDefined();
-    expect(data.safe.threshold).toBeDefined();
-    expect(Array.isArray(data.safe.owners)).toBe(true);
+    expect(res.status).toBe(404);
   }, 10000);
 
-  it("should provide API endpoint GET /api/safe/pending to track multisig queue signatures", async () => {
+  it("retires the portal GET /api/safe/pending endpoint", async () => {
     const res = await app.fetch(new Request("http://localhost:3001/api/safe/pending"));
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.success).toBe(true);
-    expect(Array.isArray(data.pendingTransactions)).toBe(true);
-    expect(data.safeThreshold).toBeDefined();
+    expect(res.status).toBe(404);
   }, 10000);
 });

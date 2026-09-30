@@ -82,11 +82,6 @@ export function Footer() {
                   Berkas BAST & Penyaluran
                 </Link>
               </li>
-              <li>
-                <Link to="/tata-kelola" className="hover:text-[#1b765e] transition-colors">
-                  Portal Pengawas & DPS
-                </Link>
-              </li>
             </ul>
           </div>
 

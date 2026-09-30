@@ -8,7 +8,6 @@ import {
   Eye,
   CheckCircle2,
   Home,
-  Landmark,
   Scale,
   FileCheck,
   Building2,
@@ -47,7 +46,6 @@ export function Navbar() {
     { to: "/rekonsiliasi", label: "Rekonsiliasi", icon: Scale },
     { to: "/laporan-periode", label: "Laporan Periode", icon: FileCheck },
     { to: "/ruang-kerja", label: "Ruang Kerja", icon: Building2 },
-    { to: "/tata-kelola", label: "Portal Pengawas", icon: Landmark },
   ];
 
   return (
@@ -331,7 +329,7 @@ export function Navbar() {
       <div className="hidden xl:block border-t border-[#dbe7dd]/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Desktop Nav Links */}
-          <nav aria-label="Navigasi utama" className="hidden xl:grid grid-cols-8 gap-1 py-2 text-xs font-semibold text-[#5e7a70]">
+          <nav aria-label="Navigasi utama" className="hidden xl:grid grid-cols-7 gap-1 py-2 text-xs font-semibold text-[#5e7a70]">
             {navLinks.map((link) => {
               const Icon = link.icon;
               return (

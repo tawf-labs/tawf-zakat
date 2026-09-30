@@ -53,7 +53,7 @@ describe("Backend API Endpoints", () => {
     expect(Array.isArray(body.proposals)).toBe(true);
   });
 
-  it("POST /api/disbursement/upload-proof should return beneficiary hash and IPFS CID", async () => {
+  it("POST /api/disbursement/upload-proof is retired with the supervisor portal", async () => {
     const payload = {
       beneficiaryName: "Ahmad Mustahik",
       beneficiaryNIK: "3201019999990001",
@@ -71,10 +71,6 @@ describe("Backend API Endpoints", () => {
       })
     );
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.beneficiaryHash.startsWith("0x")).toBe(true);
-    expect(body.ipfsProofCID.startsWith("Qm")).toBe(true);
+    expect(res.status).toBe(404);
   });
 });

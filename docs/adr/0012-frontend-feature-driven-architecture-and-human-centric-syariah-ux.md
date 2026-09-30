@@ -1,7 +1,24 @@
 # ADR-0012: Frontend Feature-Driven Architecture, Route Separation, and Indonesian Human-Centric Syariah UX
 
 ## Status
-Accepted
+Accepted; partially superseded by the portal retirement below.
+
+### Amendment — 2026-09-30: Supervisor portal retirement
+
+The `/tata-kelola` supervisor portal is retired at the user's direction. Its route,
+Navbar/Footer links, exclusive `features/governance` components and global
+`RoleProvider` are removed. The operational frontend is `/ruang-kerja`; its
+workspace, evidence and related backend services must remain available.
+Backend paths exclusive to the retired portal are removed, while shared services
+and public ledger reads remain. The independent `/admin/roles` page is retained;
+the `/tata-kelola/roles` route named below was an earlier design, not its current URL.
+
+The `/tata-kelola` route, `features/governance` directory and portal-specific loading
+claims below describe the historical decision and no longer mandate implementation.
+Do not rebuild or reintroduce this portal, its navigation, global provider or exclusive
+backend endpoints based on this historical ADR; doing so requires a new explicit
+product decision. Preserve services shared with `/ruang-kerja` and other active pages.
+The general feature-driven architecture and other route decisions remain accepted.
 
 ## Context
 Previously, the frontend bundled all application capabilities into a single monolithic page (`routes/index.tsx`):

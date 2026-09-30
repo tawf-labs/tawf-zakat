@@ -10,7 +10,6 @@ import { WalletProvider } from "../lib/WalletContext";
 import { WebSocketProvider } from "../lib/WebSocketContext";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
-import { RoleProvider } from "../features/governance";
 import React, { useState } from "react";
 import { DeploymentGate } from "../components/DeploymentGate";
 import { RootWorkspaceAccessProvider } from "../features/workspace/useWorkspaceAccess";
@@ -119,18 +118,16 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             >
               <DeploymentGate>
               <WalletProvider>
-                <RoleProvider>
-                  <WebSocketProvider>
-                    <RootWorkspaceAccessProvider>
-                      <Toaster richColors position="top-right" closeButton theme="light" />
-                      <Navbar />
-                      <ErrorBoundary>
-                        <div className="flex-1">{children}</div>
-                      </ErrorBoundary>
-                      <Footer />
-                    </RootWorkspaceAccessProvider>
-                  </WebSocketProvider>
-                </RoleProvider>
+                <WebSocketProvider>
+                  <RootWorkspaceAccessProvider>
+                    <Toaster richColors position="top-right" closeButton theme="light" />
+                    <Navbar />
+                    <ErrorBoundary>
+                      <div className="flex-1">{children}</div>
+                    </ErrorBoundary>
+                    <Footer />
+                  </RootWorkspaceAccessProvider>
+                </WebSocketProvider>
               </WalletProvider>
               </DeploymentGate>
             </SafeConnectKitProvider>

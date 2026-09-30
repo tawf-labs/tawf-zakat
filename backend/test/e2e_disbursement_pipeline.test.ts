@@ -5,9 +5,10 @@ import app from "../src/index";
 import { CONTRACT_CONFIG } from "../src/config";
 import { GOVERNANCE_ABI, governancePublicClient } from "../src/governance-chain";
 import { dataStore } from "../src/store";
+import { dbService } from "../src/db/index";
 import { isolateProtocolStore } from "./helpers/protocol-fixture";
 
-// Exercise HTTP -> receipt decoding -> persistence -> public reads. Only RPC is a fixture.
+// Exercise retained receipt decoding -> persistence -> public HTTP reads. Only RPC is a fixture.
 describe("Receipt-confirmed disbursement lifecycle", () => {
   isolateProtocolStore();
   const mocks: Array<{ mockRestore(): void }> = [];
@@ -37,27 +38,18 @@ describe("Receipt-confirmed disbursement lifecycle", () => {
       const metadataSignature = metadata ? await sender.signMessage({
         message: `Tawf metadata\n${CONTRACT_CONFIG.CHAIN_ID}\n${address.toLowerCase()}\n${hash}\n${JSON.stringify(metadata)}`,
       }) : undefined;
-      const response = await app.fetch(new Request("http://localhost/api/governance/confirm", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, proposalId, txHash: hash, amount: 1, status: "Cancelled", metadata, metadataSignature }),
-      }));
-      expect(response.status).toBe(200);
+      const proposal = await dbService.confirmGovernance(action as "propose" | "approve" | "execute", hash, proposalId, metadata, metadataSignature);
       const expectedStatus = ["Pending", "Approved", "Executed"][index];
-      expect((await response.json()).proposal).toMatchObject({ status: expectedStatus, amountExact: "2500000", chainVerified: true });
+      expect(proposal).toMatchObject({ status: expectedStatus, amountExact: "2500000", chainVerified: true });
       const list = await app.fetch(new Request("http://localhost/api/proposals"));
       expect((await list.json()).proposals).toEqual([expect.objectContaining({ proposalId, status: expectedStatus, beneficiaryHash: beneficiary })]);
     }
     expect(dataStore.proposals.get(proposalId)?.disbursementReceiptCID).toBe("ipfs://signed-bast");
     const before = structuredClone([...dataStore.proposals]);
     receipt.mockResolvedValue({ status: "reverted" } as any);
-    const rejected = await app.fetch(new Request("http://localhost/api/governance/confirm", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "cancel", proposalId, txHash: hash }),
-    }));
-    expect(rejected.status).toBe(409);
+    await expect(dbService.confirmGovernance("cancel", hash, proposalId)).rejects.toThrow();
     expect([...dataStore.proposals]).toEqual(before);
-    const overview = await app.fetch(new Request("http://localhost/api/audit/overview"));
-    expect((await overview.json()).totalDisbursedIDR).toBe(2500000);
+    expect((await dbService.getAuditOverview()).totalDisbursedIDR).toBe(2500000);
   });
 
   it("persists cancellation and its reason only from a matching contract receipt", async () => {
@@ -72,11 +64,7 @@ describe("Receipt-confirmed disbursement lifecycle", () => {
         args: { proposalId: BigInt(proposalId), canceller: sender.address } }),
         data: encodeAbiParameters(parseAbiParameters("string"), ["Confirmed reason"]) }],
     } as any));
-    const response = await app.fetch(new Request("http://localhost/api/governance/confirm", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "cancel", proposalId, txHash: hash, cancelReason: "Forged reason" }),
-    }));
-    expect(response.status).toBe(200);
+    await dbService.confirmGovernance("cancel", hash, proposalId);
     expect(dataStore.proposals.get(proposalId)).toMatchObject({
       status: "Cancelled", chainVerified: true, cancelReason: "Confirmed reason",
     });
