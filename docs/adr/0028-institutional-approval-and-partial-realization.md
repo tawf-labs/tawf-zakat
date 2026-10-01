@@ -1,7 +1,7 @@
 # ADR-0028: Persetujuan menurut SOP Lembaga dan Realisasi Bertahap
 
 - Status: Accepted — Q7–Q9 sesi `grill-with-docs`, 2026-09-15.
-- Related: ADR-0026, ADR-0027, ADR-0021/0022.
+- Related: ADR-0026, ADR-0027, ADR-0021/0022. Diperinci [ADR-0038](0038-dps-memberi-pendapat-bukan-gerbang-program-atau-penyaluran.md): keterlibatan pengawas syariah tidak menjadi tahap persetujuan tersendiri.
 - Partially supersedes: ADR-0006 untuk persetujuan DPS sebagai gerbang universal desain baru; pemisahan auditor setelah kegiatan tetap berlaku.
 
 Desain awal mendukung bantuan uang dan barang kepada penerima terdaftar. Fasilitas kolektif seperti pembangunan sumur menjadi kemungkinan perluasan berikutnya. Pengajuan melalui amil penyusun, pemeriksa administrasi/kelayakan, lalu pemberi persetujuan lembaga; penyusun tidak boleh menyetujui pengajuannya sendiri. Jabatan pemberi persetujuan serta keterlibatan pengawas syariah mengikuti SOP lembaga. Auditor tetap memeriksa setelah kegiatan.

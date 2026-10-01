@@ -28,8 +28,8 @@ Petugas atau unit yang menjalankan kegiatan bantuan di bawah penugasan satu [[Pe
 _Avoid_: Vendor teknologi; penyelenggara independen di luar penugasan lembaga, untuk cakupan pilot ini.
 
 **Dewan Pengawas Syariah (DPS)**:
-Pihak pengawas syariah lembaga yang menelaah kelayakan syariah sesuai penugasan dan SOP lembaganya.
-_Avoid_: Pemberi persetujuan wajib untuk setiap pengajuan di semua lembaga.
+Pihak pengawas syariah lembaga yang memberikan [[Pendapat syariah]] sesuai penugasan dan SOP lembaganya.
+_Avoid_: Pemberi persetujuan wajib untuk setiap program atau pengajuan; pengelola keuangan lembaga.
 
 **Pemeriksa pengajuan**:
 Pihak yang memeriksa kelengkapan administrasi dan kelayakan pengajuan sebelum keputusan penyaluran.
@@ -102,8 +102,8 @@ Bagian dana untuk pengelolaan zakat oleh amil menurut kebijakan yang berlaku bag
 _Avoid_: Pendapatan ZKT, biaya langganan vendor.
 
 **Program bantuan**:
-Wadah kegiatan bantuan lembaga dengan tujuan tertentu yang dapat menaungi banyak [[Pengajuan penyaluran]].
-_Avoid_: Pengajuan penyaluran, untuk keseluruhan program yang berjalan melalui beberapa pengajuan.
+Wadah kegiatan bantuan lembaga dengan tujuan tertentu yang dapat menaungi banyak [[Pengajuan penyaluran]]. Dibuka atas keputusan lembaga sendiri, misalnya rapat kepengurusan atau arahan lembaga di atasnya.
+_Avoid_: Pengajuan penyaluran, untuk keseluruhan program yang berjalan melalui beberapa pengajuan; usulan yang menunggu persetujuan DPS sebelum berjalan.
 
 **Kegiatan penyaluran**:
 Cakupan pelaksanaan bantuan yang progresnya ditelusuri donatur; pada pilot pertama mengikuti satu [[Pengajuan penyaluran]] dalam satu [[Program bantuan]].
@@ -147,8 +147,12 @@ Keputusan lembaga beserta alasan untuk mengakhiri bagian bantuan yang disetujui 
 _Avoid_: Bukti penyaluran; pemindahan bantuan ke penerima lain tanpa persetujuan; refund atau pengalihan alokasi, yang mengikuti siklus kontribusi.
 
 **Persetujuan DPS**:
-Persetujuan syariah atas pengajuan penyaluran oleh DPS yang berwenang.
-_Avoid_: Kuorum umum, persetujuan auditor, atau pengganti seluruh keputusan penyaluran lembaga.
+Persetujuan syariah oleh DPS sebagai tahap tersendiri sebelum penyaluran. Istilah ini hanya dipakai untuk jalur vault lama; alur pengajuan tidak memiliki tahap ini.
+_Avoid_: [[Pendapat syariah]]; [[Persetujuan penyaluran]] oleh anggota DPS yang ditunjuk SOP sebagai pemberi persetujuan; kuorum umum; persetujuan auditor.
+
+**Pendapat syariah**:
+Pandangan DPS atas suatu perkara sebagai masukan bagi lembaga, tanpa dengan sendirinya menahan atau mengesahkan program maupun pengajuan.
+_Avoid_: [[Persetujuan DPS]]; [[Persetujuan penyaluran]].
 
 **Persetujuan penyaluran**:
 Keputusan [[Pemberi persetujuan penyaluran]] atas pengajuan yang telah diperiksa menurut SOP lembaganya.

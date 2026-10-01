@@ -29,7 +29,7 @@ const UNTIL = Date.parse("2026-09-24T00:00:00Z") / 1000;
 const LIMIT = "10000000";
 const ACCOUNTS = [
   { account: "0x5e9B652C4E8a013f6fAb69F0b55377c408B59968".toLowerCase(), role: "ADMIN", officer: `${INSTITUTION}-operator`, name: "Operator sintetis", functions: ["MANAGE_PROGRAMS", "PREPARE_PROPOSALS", "EXAMINE_PROPOSALS", "RECORD_REALIZATION", "RECORD_CONTRIBUTIONS", "HANDLE_REPORT_EXAMINATION"] },
-  { account: "0x6214e4E81a075c7CA6F4B5725eCd943D1C6b642C".toLowerCase(), role: "OFFICER", officer: `${INSTITUTION}-approver`, name: "DPS approver sintetis", functions: ["APPROVE_DECISIONS", "ENDORSE_CONTRIBUTIONS", "ISSUE_CERTIFICATES"] },
+  { account: "0x6214e4E81a075c7CA6F4B5725eCd943D1C6b642C".toLowerCase(), role: "OFFICER", officer: `${INSTITUTION}-approver`, name: "Pemberi persetujuan sintetis", functions: ["APPROVE_DECISIONS", "ENDORSE_CONTRIBUTIONS", "ISSUE_CERTIFICATES"] },
   { account: "0xe8A4Ee352B95A4FC08667Df5d85c167006FE2A2f".toLowerCase(), role: "READER", officer: null, name: "Auditor pembaca sintetis", functions: [] },
 ] as const;
 const WARNING = "SYNTHETIC / TESTNET ONLY: administrator address historically compromised; never real assets or personal data. Database authority is not chain authority.";

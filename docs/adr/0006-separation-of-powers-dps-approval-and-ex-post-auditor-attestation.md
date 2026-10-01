@@ -1,6 +1,6 @@
 # ADR-0006: Separation of Powers — Pre-Disbursement DPS Sharia Approval via Safe.global & Ex-Post Independent Auditor Attestation
 
-- **Status:** Partially superseded by [ADR-0028](0028-institutional-approval-and-partial-realization.md) on 2026-09-15: the new workflow maps approval and sharia oversight to institutional SOPs instead of a universal DPS gate. Ex-post auditor separation remains accepted. This does not change the deployed vault automatically.
+- **Status:** Partially superseded by [ADR-0028](0028-institutional-approval-and-partial-realization.md) on 2026-09-15: the new workflow maps approval and sharia oversight to institutional SOPs instead of a universal DPS gate. Ex-post auditor separation remains accepted. This does not change the deployed vault automatically. Further superseded by [ADR-0038](0038-dps-memberi-pendapat-bukan-gerbang-program-atau-penyaluran.md) on 2026-10-01: the new workflow has no DPS approval stage at all; DPS gives sharia opinion only.
 - **Date:** 2026-08-29
 - **Deciders:** Tawf Labs Core Architecture Team
 - **Consulted:** Sharia Governance Standards (BAZNAS, DSN-MUI, PSAK 109 / SAS 109)
