@@ -964,6 +964,37 @@ export const operationalCostReimbursements = pgTable("operational_cost_reimburse
   seq: bigserial("seq", { mode: "number" }),
 });
 
+// Nota/kuitansi and their encrypted files (#126).
+export const operationalCostReceipts = pgTable("operational_cost_receipts", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  kind: text("kind").notNull(), // 'NOTA' | 'SURAT_PERNYATAAN'
+  reference: text("reference").notNull(),
+  issuedOn: text("issued_on").notNull(),
+  issuer: text("issuer"),
+  evidencedAt: bigint("evidenced_at", { mode: "number" }),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedByAccount: text("recorded_by_account").notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
+export const operationalCostReceiptFiles = pgTable("operational_cost_receipt_files", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  receiptId: text("receipt_id").notNull().references(() => operationalCostReceipts.id),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  storageRef: text("storage_ref").notNull(),
+  uploadedByOfficerId: text("uploaded_by_officer_id").notNull().references(() => officerProfiles.id),
+  uploadedByAccount: text("uploaded_by_account").notNull(),
+  uploadedAt: bigint("uploaded_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
 export const operationalCostItems = pgTable("operational_cost_items", {
   id: text("id").primaryKey(),
   institutionId: text("institution_id").notNull().references(() => institutions.id),
@@ -981,6 +1012,7 @@ export const operationalCostItems = pgTable("operational_cost_items", {
   holderOfficerId: text("holder_officer_id").references(() => officerProfiles.id),
   panjarId: text("panjar_id").references(() => operationalCostPanjar.id),
   reimbursementId: text("reimbursement_id").references(() => operationalCostReimbursements.id),
+  receiptId: text("receipt_id").references(() => operationalCostReceipts.id),
   recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
   recordedByAccount: text("recorded_by_account").notNull(),
   recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),

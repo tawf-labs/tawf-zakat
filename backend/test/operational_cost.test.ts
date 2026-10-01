@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   exactLineTotal,
   operationalCostTotals,
+  receiptFileTypeOf,
   summarizeHolders,
   validateCostItemInput,
   validatePanjarInput,
+  validateReceiptInput,
   type CostItemRecord,
   type PanjarRecord,
 } from "../src/operational-cost";
@@ -36,6 +38,7 @@ describe("validateCostItemInput", () => {
       value: {
         spentOn: "2026-09-28", purpose: "Bensin", quantity: "10", unit: "liter", unitPriceIdr: "10000",
         amountIdr: "100000", payee: "SPBU 34.153", fundingSource: { kind: "TALANGAN", holderOfficerId: "off-ahmad" },
+        receiptId: null,
       },
     });
   });
@@ -93,9 +96,30 @@ describe("validatePanjarInput", () => {
   });
 });
 
+describe("validateReceiptInput", () => {
+  test("a nota needs a number, a date and a kind; the issuer may be unknown", () => {
+    expect(validateReceiptInput({ kind: "NOTA", reference: " KW-012 ", issuedOn: "2026-09-28", issuer: "" })).toEqual({
+      ok: true, value: { kind: "NOTA", reference: "KW-012", issuedOn: "2026-09-28", issuer: null },
+    });
+    expect(validateReceiptInput({ kind: "SURAT_PERNYATAAN", reference: "Struk bensin hilang", issuedOn: "2026-09-29" }).ok).toBe(true);
+    const bad = validateReceiptInput({ kind: "FAKTUR", reference: "", issuedOn: "28/09/2026" });
+    expect(bad.ok ? [] : bad.issues.map((i) => i.field).sort()).toEqual(["issuedOn", "kind", "reference"]);
+  });
+});
+
+describe("receiptFileTypeOf", () => {
+  test("tells JPG, PNG and PDF by their leading bytes, and nothing else", () => {
+    expect(receiptFileTypeOf(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0]))).toBe("image/jpeg");
+    expect(receiptFileTypeOf(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]))).toBe("image/png");
+    expect(receiptFileTypeOf(new TextEncoder().encode("%PDF-1.7\n"))).toBe("application/pdf");
+    expect(receiptFileTypeOf(new TextEncoder().encode("<html><script>"))).toBeNull();
+    expect(receiptFileTypeOf(new Uint8Array([0xff, 0xd8]))).toBeNull();
+  });
+});
+
 const item = (id: string, amountIdr: string, fundingSource: CostItemRecord["fundingSource"], extra: Partial<CostItemRecord> = {}): CostItemRecord => ({
   id, proposalId: "prop-1", version: 1, status: "ACTIVE", spentOn: "2026-09-28", purpose: id, quantity: null, unit: null,
-  unitPriceIdr: null, amountIdr, payee: "Toko", fundingSource, reimbursementId: null, recordedByOfficerId: "off-admin",
+  unitPriceIdr: null, amountIdr, payee: "Toko", fundingSource, receiptId: null, reimbursementId: null, recordedByOfficerId: "off-admin",
   recordedAt: 1, updatedAt: 1, ...extra,
 });
 const panjar = (id: string, holderOfficerId: string, amountIdr: string): PanjarRecord => ({

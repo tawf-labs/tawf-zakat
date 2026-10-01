@@ -115,13 +115,20 @@ import {
   assertCanApproveProposal,
   type OperationalFunction,
 } from "../operational-mandate";
-import { MAX_EVIDENCE_FILE_BYTES, sha256Of } from "../evidence-files";
+import { EvidenceReadError, MAX_EVIDENCE_FILE_BYTES, sha256Of } from "../evidence-files";
 import { createRestrictedDocuments, DocumentError } from "../restricted-documents";
 // Shared with `evidence-preparation.ts` rather than redefined: identical shape,
 // no domain-specific wording, so a second copy here would just be a second
 // place for it to drift.
 import { operationalActor, OperationalAccessDenied, requestedIdr } from "../operational-access";
-import { isCalendarDate, MIN_CORRECTION_REASON, validateCostItemInput, validatePanjarInput } from "../operational-cost";
+import {
+  isCalendarDate,
+  MIN_CORRECTION_REASON,
+  receiptFileTypeOf,
+  validateCostItemInput,
+  validatePanjarInput,
+  validateReceiptInput,
+} from "../operational-cost";
 import { readJson, text } from "./evidence-preparation";
 
 const randomHex = (bytes: number): Hex =>
@@ -3024,6 +3031,103 @@ disbursementRoutes.post(`${COSTS}/panjar/:panjarId/returns`, async (c) => {
     { amountIdr, returnedOn, reference }, writer.actor, writer.runtime.now(), writer.operation
   );
   return c.json({ success: true, panjar }, 201);
+});
+
+/** Nota/kuitansi, atau surat pernyataan pengganti nota yang hilang (#126). */
+disbursementRoutes.post(`${COSTS}/receipts`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const validated = validateReceiptInput(body);
+  if (!validated.ok) return c.json({ success: false, error: "Isian nota belum sah.", issues: validated.issues }, 400);
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const receipt = await writer.runtime.disbursement.recordReceipt(
+    writer.institutionId, writer.proposalId, validated.value, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, receipt }, 201);
+});
+
+/** Foto (JPG/PNG) atau PDF nota, disimpan terenkripsi beserta sidik SHA-256-nya. */
+disbursementRoutes.post(`${COSTS}/receipts/:receiptId/files`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const fileName = text(body.fileName);
+  if (!fileName || fileName.length > 255) return badRequest(c, "Nama berkas tidak sah.");
+  if (typeof body.contentBase64 !== "string" || !body.contentBase64.trim()) {
+    return badRequest(c, "Isi berkas (base64) wajib diisi.");
+  }
+  const bytes = new Uint8Array(Buffer.from(body.contentBase64.trim(), "base64"));
+  if (bytes.byteLength === 0) return badRequest(c, "Berkas kosong tidak dapat disimpan.");
+  if (bytes.byteLength > MAX_EVIDENCE_FILE_BYTES) {
+    return badRequest(c, `Berkas melebihi batas ukuran ${MAX_EVIDENCE_FILE_BYTES} byte.`);
+  }
+  const mimeType = receiptFileTypeOf(bytes);
+  if (!mimeType) return badRequest(c, "Berkas nota harus foto JPG/PNG atau PDF.");
+
+  // The operation is keyed on the file's hash, not its base64, so a retry matches cheaply.
+  const writer = await costWriter(c, { ...body, contentBase64: sha256Of(bytes) });
+  if (!writer.ok) return writer.response;
+  const { runtime, institutionId, proposalId } = writer;
+  const files = runtime.files;
+  if (!files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  const file = await runtime.disbursement.addReceiptFile(
+    institutionId, proposalId, c.req.param("receiptId"), { fileName, mimeType },
+    async (fileId) => {
+      try {
+        return await files.put({ institutionId, preparationId: proposalId, fileId, bytes });
+      } catch {
+        throw new DocumentError("Berkas gagal disimpan. Coba lagi setelah penyimpanan tersedia.", "UNAVAILABLE");
+      }
+    },
+    writer.actor, runtime.now(), writer.operation
+  );
+  return c.json({ success: true, file }, 201);
+});
+
+/**
+ * Unduh berkas nota. Dokumen terbatas: hanya anggota ruang kerja lembaga, dan berkas
+ * yang isinya tidak cocok dengan sidik SHA-256 tercatat ditolak, tidak disajikan.
+ */
+disbursementRoutes.get(`${COSTS}/receipts/:receiptId/files/:fileId`, async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const file = await runtime.disbursement.getReceiptFile(
+    access.session.institutionId, access.draft.id, c.req.param("receiptId"), c.req.param("fileId")
+  );
+  if (!file) return refuse(c, 404, "not-found");
+
+  if (!runtime.files) throw new DocumentError("Penyimpanan dokumen terlindungi belum tersedia.", "UNAVAILABLE");
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await runtime.files.get(file.storageRef);
+  } catch (error) {
+    throw new DocumentError("Berkas nota tidak dapat dibaca atau diverifikasi.", error instanceof EvidenceReadError ? error.availability : "UNAVAILABLE");
+  }
+  if (!bytes) throw new DocumentError("Berkas nota tidak ditemukan di penyimpanan.", "MISSING");
+  if (bytes.byteLength !== file.sizeBytes || sha256Of(bytes) !== file.contentSha256) {
+    throw new DocumentError("Berkas nota tidak cocok dengan sidik SHA-256 yang tercatat.", "CORRUPT");
+  }
+
+  c.header("Content-Type", file.mimeType);
+  c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(file.fileName)}"`);
+  c.header("Content-Length", String(bytes.byteLength));
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("Cache-Control", "private, no-store");
+  return c.body(new Uint8Array(bytes).buffer);
+});
+
+/** Hapus berkas yang salah unggah, selama notanya belum menjadi bukti baris biaya tercatat. */
+disbursementRoutes.delete(`${COSTS}/receipts/:receiptId/files/:fileId`, async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationActor(c, runtime, c.req.query("institutionId") ?? undefined, ["RECORD_REALIZATION"]);
+  if (!access.ok) return access.response;
+  const { storageRef } = await runtime.disbursement.deleteReceiptFile(
+    access.session.institutionId, access.draft.id, c.req.param("receiptId"), c.req.param("fileId")
+  );
+  // The row is gone; ciphertext left behind by a failed unlink is unreachable, never served.
+  await runtime.files?.remove?.(storageRef).catch(() => {});
+  return c.body(null, 204);
 });
 
 /** Penggantian talangan satu petugas; baris yang sudah diganti tertutup untuk koreksi. */

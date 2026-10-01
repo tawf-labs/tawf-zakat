@@ -12,7 +12,11 @@ import {
   itemSnapshot,
   itemVersionFrom,
   loadOperationalCosts,
+  loadReceipts,
+  receiptFileFrom,
+  receiptFileView,
   reimbursementFrom,
+  type StoredReceiptFile,
 } from "./operational-cost-sql";
 import {
   operationalCostTotals,
@@ -27,6 +31,10 @@ import {
   type OperationalCostTotals,
   type PanjarInput,
   type PanjarRecord,
+  type ReceiptFileRecord,
+  type ReceiptFileType,
+  type ReceiptInput,
+  type ReceiptRecord,
   type ReimbursementRecord,
 } from "./operational-cost";
 import {
@@ -526,6 +534,7 @@ export type OperationalCostOverview = {
   items: CostItemRecord[];
   panjar: PanjarRecord[];
   reimbursements: ReimbursementRecord[];
+  receipts: ReceiptRecord[];
   holders: HolderSummary[];
   totals: OperationalCostTotals;
 };
@@ -581,6 +590,23 @@ function fundingIssue(
     }
   }
   return null;
+}
+
+/** A row may cite only a nota recorded on its own proposal. */
+function receiptIssue(input: CostItemInput, receipts: ReceiptRecord[]): CostIssue | null {
+  if (input.receiptId && !receipts.some((receipt) => receipt.id === input.receiptId)) {
+    return { field: "receiptId", message: "Nota yang dirujuk tidak ada pada pengajuan ini." };
+  }
+  return null;
+}
+
+/** Once a recorded row cites a receipt, its files are evidence and can no longer be deleted. */
+async function markReceiptEvidenced(tx: Executor, institutionId: string, receiptId: string | null, now: number) {
+  if (!receiptId) return;
+  await tx.execute(sql`
+    UPDATE operational_cost_receipts SET evidenced_at = COALESCE(evidenced_at, ${now})
+    WHERE id = ${receiptId} AND institution_id = ${institutionId}
+  `);
 }
 
 async function insertItemVersion(
@@ -3678,6 +3704,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       `)).map((row) => [row.id as string, row.display_name as string]));
       return {
         ...state,
+        receipts: await loadReceipts(db, institutionId, proposalId),
         holders: summarizeHolders(state.items, state.panjar, names),
         totals: operationalCostTotals(state.items, state.panjar),
       };
@@ -3696,6 +3723,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         await lockProposalForCosts(tx, institutionId, proposalId);
         const officers = await activeOfficerIds(tx, institutionId);
         const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        const receipts = await loadReceipts(tx, institutionId, proposalId);
         const spent = new Map<string, bigint>();
         const results: CostRecordingResult[] = [];
 
@@ -3706,9 +3734,10 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             continue;
           }
           const input = validated.value;
-          const issue = fundingIssue(input, officers, state.panjar, state.items, spent);
-          if (issue) {
-            results.push({ index, issues: [issue] });
+          const issues = [fundingIssue(input, officers, state.panjar, state.items, spent), receiptIssue(input, receipts)]
+            .filter((issue): issue is CostIssue => issue !== null);
+          if (issues.length > 0) {
+            results.push({ index, issues });
             continue;
           }
           if (input.fundingSource.kind === "PANJAR") {
@@ -3720,17 +3749,18 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           const row = rowsOf(await tx.execute(sql`
             INSERT INTO operational_cost_items (
               id, institution_id, proposal_id, version, status, spent_on, purpose, quantity, unit, unit_price_idr,
-              amount_idr, payee, funding_kind, holder_officer_id, panjar_id, reimbursement_id,
+              amount_idr, payee, funding_kind, holder_officer_id, panjar_id, reimbursement_id, receipt_id,
               recorded_by_officer_id, recorded_by_account, recorded_at, updated_at
             ) VALUES (
               ${`opc-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, 1, 'ACTIVE', ${input.spentOn}, ${input.purpose},
               ${input.quantity}, ${input.unit}, ${input.unitPriceIdr}, ${input.amountIdr}, ${input.payee},
-              ${funding.kind}, ${funding.holderOfficerId}, ${funding.panjarId}, NULL,
+              ${funding.kind}, ${funding.holderOfficerId}, ${funding.panjarId}, NULL, ${input.receiptId},
               ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}, ${now}
             )
             RETURNING *
           `))[0];
           const item = costItemFrom(row);
+          await markReceiptEvidenced(tx, institutionId, item.receiptId, now);
           await insertItemVersion(tx, institutionId, item, "RECORD", null, actor, now);
           results.push({ index, item });
         }
@@ -3863,7 +3893,8 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         const state = await loadOperationalCosts(tx, institutionId, proposalId);
         // The row's own current spend is given back to its panjar before the new amount is checked.
         const others = state.items.filter((item) => item.id !== itemId);
-        const issue = fundingIssue(input.item, await activeOfficerIds(tx, institutionId), state.panjar, others, new Map());
+        const issue = fundingIssue(input.item, await activeOfficerIds(tx, institutionId), state.panjar, others, new Map())
+          ?? receiptIssue(input.item, await loadReceipts(tx, institutionId, proposalId));
         if (issue) throw new RealizationInputError(issue.message);
 
         const next = input.item;
@@ -3873,11 +3904,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             version = ${current.version + 1}, spent_on = ${next.spentOn}, purpose = ${next.purpose},
             quantity = ${next.quantity}, unit = ${next.unit}, unit_price_idr = ${next.unitPriceIdr},
             amount_idr = ${next.amountIdr}, payee = ${next.payee}, funding_kind = ${funding.kind},
-            holder_officer_id = ${funding.holderOfficerId}, panjar_id = ${funding.panjarId}, updated_at = ${now}
+            holder_officer_id = ${funding.holderOfficerId}, panjar_id = ${funding.panjarId},
+            receipt_id = ${next.receiptId}, updated_at = ${now}
           WHERE id = ${itemId} AND institution_id = ${institutionId} AND version = ${current.version}
           RETURNING *
         `))[0];
         const item = costItemFrom(row);
+        await markReceiptEvidenced(tx, institutionId, item.receiptId, now);
         await insertItemVersion(tx, institutionId, item, "CORRECT", input.reason, actor, now);
         return item;
       }, "disbursement_realization_operations");
@@ -3905,6 +3938,111 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         await insertItemVersion(tx, institutionId, item, "VOID", input.reason, actor, now);
         return item;
       }, "disbursement_realization_operations");
+    },
+
+    /** Nota/kuitansi, or a surat pernyataan standing in for a lost one (#126). */
+    async recordReceipt(
+      institutionId: string,
+      proposalId: string,
+      input: ReceiptInput,
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<ReceiptRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const id = `nta-${crypto.randomUUID()}`;
+        await tx.execute(sql`
+          INSERT INTO operational_cost_receipts (
+            id, institution_id, proposal_id, kind, reference, issued_on, issuer,
+            recorded_by_officer_id, recorded_by_account, recorded_at
+          ) VALUES (
+            ${id}, ${institutionId}, ${proposalId}, ${input.kind}, ${input.reference}, ${input.issuedOn}, ${input.issuer},
+            ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+        `);
+        return (await loadReceipts(tx, institutionId, proposalId)).find((receipt) => receipt.id === id)!;
+      }, "disbursement_realization_operations");
+    },
+
+    /**
+     * Attaches one photo or PDF to a receipt. `persist` writes the ciphertext and runs only
+     * on the operation's first attempt, so a retried upload neither stores nor lists it twice.
+     */
+    async addReceiptFile(
+      institutionId: string,
+      proposalId: string,
+      receiptId: string,
+      file: { fileName: string; mimeType: ReceiptFileType },
+      persist: (fileId: string) => Promise<{ storageRef: string; sizeBytes: number; contentSha256: string }>,
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<ReceiptFileRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const receipt = rowsOf(await tx.execute(sql`
+          SELECT id FROM operational_cost_receipts
+          WHERE id = ${receiptId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+        `))[0];
+        if (!receipt) throw new RealizationNotFoundError("Nota tidak ditemukan pada pengajuan ini.");
+        const id = `ntf-${crypto.randomUUID()}`;
+        const stored = await persist(id);
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO operational_cost_receipt_files (
+            id, institution_id, receipt_id, file_name, mime_type, size_bytes, content_sha256, storage_ref,
+            uploaded_by_officer_id, uploaded_by_account, uploaded_at
+          ) VALUES (
+            ${id}, ${institutionId}, ${receiptId}, ${file.fileName}, ${file.mimeType}, ${stored.sizeBytes},
+            ${stored.contentSha256}, ${stored.storageRef}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+          RETURNING *
+        `))[0];
+        return receiptFileView(receiptFileFrom(row));
+      }, "disbursement_realization_operations");
+    },
+
+    async getReceiptFile(institutionId: string, proposalId: string, receiptId: string, fileId: string): Promise<StoredReceiptFile | null> {
+      const row = rowsOf(await db.execute(sql`
+        SELECT f.* FROM operational_cost_receipt_files f
+        JOIN operational_cost_receipts r ON r.id = f.receipt_id AND r.institution_id = f.institution_id
+        WHERE f.id = ${fileId} AND f.receipt_id = ${receiptId}
+          AND f.institution_id = ${institutionId} AND r.proposal_id = ${proposalId}
+      `))[0];
+      return row ? receiptFileFrom(row) : null;
+    },
+
+    /**
+     * Removes a file uploaded by mistake, only while no recorded row has cited its receipt.
+     * Returns the locator so the caller can drop the ciphertext once the row is gone.
+     */
+    async deleteReceiptFile(
+      institutionId: string,
+      proposalId: string,
+      receiptId: string,
+      fileId: string
+    ): Promise<{ storageRef: string }> {
+      return db.transaction(async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const receipt = rowsOf(await tx.execute(sql`
+          SELECT evidenced_at FROM operational_cost_receipts
+          WHERE id = ${receiptId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+          FOR UPDATE
+        `))[0];
+        if (!receipt) throw new RealizationNotFoundError("Nota tidak ditemukan pada pengajuan ini.");
+        if (receipt.evidenced_at !== null && receipt.evidenced_at !== undefined) {
+          throw new RealizationStateError(
+            "Nota ini sudah menjadi bukti baris biaya tercatat; berkasnya tidak dapat dihapus. Tambahkan berkas atau koreksi barisnya."
+          );
+        }
+        const row = rowsOf(await tx.execute(sql`
+          DELETE FROM operational_cost_receipt_files
+          WHERE id = ${fileId} AND receipt_id = ${receiptId} AND institution_id = ${institutionId}
+          RETURNING storage_ref
+        `))[0];
+        if (!row) throw new RealizationNotFoundError("Berkas nota tidak ditemukan.");
+        return { storageRef: row.storage_ref as string };
+      });
     },
 
     async costItemHistory(institutionId: string, proposalId: string, itemId: string): Promise<CostItemVersionRecord[]> {

@@ -17,6 +17,10 @@ import type {
   FundingSource,
   PanjarRecord,
   PanjarReturnRecord,
+  ReceiptFileRecord,
+  ReceiptKind,
+  ReceiptRecord,
+  ReceiptFileType,
   ReimbursementRecord,
 } from "./operational-cost";
 
@@ -107,6 +111,39 @@ export const OPERATIONAL_COST_SCHEMA_STATEMENTS = [
      at BIGINT NOT NULL,
      PRIMARY KEY (item_id, version)
    );`,
+  // Nota/kuitansi and their files (#126). A receipt belongs to one proposal; its files are
+  // ciphertext in the private file store, and only their SHA-256 and locator are kept here.
+  `CREATE TABLE IF NOT EXISTS operational_cost_receipts (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     proposal_id TEXT NOT NULL REFERENCES proposal_drafts (id),
+     kind TEXT NOT NULL,
+     reference TEXT NOT NULL,
+     issued_on TEXT NOT NULL,
+     issuer TEXT,
+     evidenced_at BIGINT,
+     recorded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     recorded_by_account TEXT NOT NULL,
+     recorded_at BIGINT NOT NULL,
+     seq BIGSERIAL,
+     CONSTRAINT operational_cost_receipts_kind CHECK (kind IN ('NOTA', 'SURAT_PERNYATAAN'))
+   );`,
+  `CREATE INDEX IF NOT EXISTS operational_cost_receipts_by_proposal ON operational_cost_receipts (institution_id, proposal_id);`,
+  `CREATE TABLE IF NOT EXISTS operational_cost_receipt_files (
+     id TEXT PRIMARY KEY,
+     institution_id TEXT NOT NULL REFERENCES institutions (id),
+     receipt_id TEXT NOT NULL REFERENCES operational_cost_receipts (id),
+     file_name TEXT NOT NULL,
+     mime_type TEXT NOT NULL,
+     size_bytes BIGINT NOT NULL,
+     content_sha256 TEXT NOT NULL,
+     storage_ref TEXT NOT NULL,
+     uploaded_by_officer_id TEXT NOT NULL REFERENCES officer_profiles (id),
+     uploaded_by_account TEXT NOT NULL,
+     uploaded_at BIGINT NOT NULL,
+     seq BIGSERIAL
+   );`,
+  `ALTER TABLE operational_cost_items ADD COLUMN IF NOT EXISTS receipt_id TEXT REFERENCES operational_cost_receipts (id);`,
 ] as const;
 
 const rowsOf = (result: any): any[] => (Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : []);
@@ -140,6 +177,7 @@ export const costItemFrom = (row: any): CostItemRecord => ({
   amountIdr: row.amount_idr,
   payee: row.payee,
   fundingSource: fundingSourceFrom(row),
+  receiptId: row.receipt_id ?? null,
   reimbursementId: row.reimbursement_id ?? null,
   recordedByOfficerId: row.recorded_by_officer_id,
   recordedAt: seconds(row.recorded_at),
@@ -150,14 +188,15 @@ export const costItemFrom = (row: any): CostItemRecord => ({
 export const itemSnapshot = (item: CostItemInput, status: CostItemStatus) => ({
   spentOn: item.spentOn, purpose: item.purpose, quantity: item.quantity, unit: item.unit,
   unitPriceIdr: item.unitPriceIdr, amountIdr: item.amountIdr, payee: item.payee,
-  fundingSource: item.fundingSource, status,
+  fundingSource: item.fundingSource, receiptId: item.receiptId, status,
 });
 
 export const itemVersionFrom = (row: any): CostItemVersionRecord => ({
   itemId: row.item_id,
   version: Number(row.version),
   change: row.change as CostItemChange,
-  item: JSON.parse(row.item_json),
+  // Versions frozen before receipts existed (#125) carry no receiptId.
+  item: { receiptId: null, ...JSON.parse(row.item_json) },
   reason: row.reason ?? null,
   actorOfficerId: row.actor_officer_id,
   actorAccount: row.actor_account,
@@ -247,4 +286,53 @@ export async function loadOperationalCosts(
       reimbursementFrom(row, items.filter((item) => item.reimbursementId === row.id).map((item) => item.id))
     ),
   };
+}
+
+/** The private locator stays on the server; readers get everything else. */
+export type StoredReceiptFile = ReceiptFileRecord & { storageRef: string };
+
+export const receiptFileFrom = (row: any): StoredReceiptFile => ({
+  id: row.id,
+  receiptId: row.receipt_id,
+  fileName: row.file_name,
+  mimeType: row.mime_type as ReceiptFileType,
+  sizeBytes: Number(row.size_bytes),
+  contentSha256: row.content_sha256,
+  uploadedByOfficerId: row.uploaded_by_officer_id,
+  uploadedAt: seconds(row.uploaded_at),
+  storageRef: row.storage_ref,
+});
+
+export const receiptFileView = ({ storageRef: _storageRef, ...file }: StoredReceiptFile): ReceiptFileRecord => file;
+
+const receiptFrom = (row: any, files: ReceiptFileRecord[]): ReceiptRecord => ({
+  id: row.id,
+  proposalId: row.proposal_id,
+  kind: row.kind as ReceiptKind,
+  reference: row.reference,
+  issuedOn: row.issued_on,
+  issuer: row.issuer ?? null,
+  recordedByOfficerId: row.recorded_by_officer_id,
+  recordedAt: seconds(row.recorded_at),
+  evidencedAt: row.evidenced_at === null || row.evidenced_at === undefined ? null : seconds(row.evidenced_at),
+  files,
+});
+
+/** Every receipt of one proposal with its files, in the order they were recorded. */
+export async function loadReceipts(executor: Executor, institutionId: string, proposalId: string): Promise<ReceiptRecord[]> {
+  const receiptRows = rowsOf(await executor.execute(sql`
+    SELECT * FROM operational_cost_receipts
+    WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
+    ORDER BY seq ASC
+  `));
+  if (receiptRows.length === 0) return [];
+  const fileRows = rowsOf(await executor.execute(sql`
+    SELECT * FROM operational_cost_receipt_files
+    WHERE institution_id = ${institutionId}
+      AND receipt_id IN (${sql.join(receiptRows.map((row) => sql`${row.id}`), sql`, `)})
+    ORDER BY seq ASC
+  `));
+  return receiptRows.map((row) =>
+    receiptFrom(row, fileRows.filter((file) => file.receipt_id === row.id).map((file) => receiptFileView(receiptFileFrom(file))))
+  );
 }

@@ -30,6 +30,8 @@ export type CostItemInput = {
   /** Dibayarkan kepada: who was paid, e.g. a shop or a rental. */
   payee: string;
   fundingSource: FundingSource;
+  /** The nota (or surat pernyataan) this row is evidenced by, on the same proposal. */
+  receiptId: string | null;
 };
 
 export type CostItemStatus = "ACTIVE" | "VOIDED";
@@ -98,6 +100,45 @@ export type ReimbursementRecord = {
 };
 
 export type CostIssue = { field: string; message: string };
+
+/**
+ * Nota/kuitansi as its own record, evidence for any number of cost rows. A surat
+ * pernyataan stands in for a nota that was lost.
+ */
+export type ReceiptKind = "NOTA" | "SURAT_PERNYATAAN";
+
+export type ReceiptInput = {
+  kind: ReceiptKind;
+  /** No. nota/kuitansi, or what a surat pernyataan declares. */
+  reference: string;
+  issuedOn: string;
+  /** Penerbit: the shop or rental that issued it; unknown on a faded struk. */
+  issuer: string | null;
+};
+
+export type ReceiptFileRecord = {
+  id: string;
+  receiptId: string;
+  fileName: string;
+  mimeType: ReceiptFileType;
+  sizeBytes: number;
+  /** SHA-256 of the plaintext; every download is checked against it. */
+  contentSha256: string;
+  uploadedByOfficerId: string;
+  uploadedAt: number;
+};
+
+export type ReceiptRecord = ReceiptInput & {
+  id: string;
+  proposalId: string;
+  recordedByOfficerId: string;
+  recordedAt: number;
+  /** When a cost row first cited it; from then on none of its files may be deleted. */
+  evidencedAt: number | null;
+  files: ReceiptFileRecord[];
+};
+
+export type ReceiptFileType = "image/jpeg" | "image/png" | "application/pdf";
 
 export type HolderPanjarSummary = {
   panjarId: string;
@@ -229,9 +270,43 @@ export function validateCostItemInput(
     ok: true,
     value: {
       spentOn, purpose, quantity, unit: quantity ? unit : null, unitPriceIdr,
-      amountIdr: BigInt(amountIdr).toString(), payee, fundingSource,
+      amountIdr: BigInt(amountIdr).toString(), payee, fundingSource, receiptId: optional(raw.receiptId),
     },
   };
+}
+
+export function validateReceiptInput(
+  input: unknown
+): { ok: true; value: ReceiptInput } | { ok: false; issues: CostIssue[] } {
+  const raw = (input ?? {}) as Record<string, unknown>;
+  const issues: CostIssue[] = [];
+  const kind = raw.kind === "NOTA" || raw.kind === "SURAT_PERNYATAAN" ? raw.kind : null;
+  if (!kind) issues.push({ field: "kind", message: "Jenis bukti wajib 'NOTA' atau 'SURAT_PERNYATAAN' (pengganti nota yang hilang)." });
+  const reference = text(raw.reference);
+  if (!reference || reference.length > MAX_TEXT) {
+    issues.push({ field: "reference", message: `Nomor atau keterangan nota wajib diisi (maksimal ${MAX_TEXT} karakter).` });
+  }
+  const issuedOn = text(raw.issuedOn);
+  if (!isCalendarDate(issuedOn)) issues.push({ field: "issuedOn", message: "Tanggal nota wajib berupa tanggal yang sah (YYYY-MM-DD)." });
+  const issuer = optional(raw.issuer);
+  if (issuer && issuer.length > MAX_TEXT) issues.push({ field: "issuer", message: `Penerbit nota maksimal ${MAX_TEXT} karakter.` });
+  if (issues.length > 0 || !kind) return { ok: false, issues };
+  return { ok: true, value: { kind, reference, issuedOn, issuer } };
+}
+
+const SIGNATURES: Array<[ReceiptFileType, number[]]> = [
+  ["image/jpeg", [0xff, 0xd8, 0xff]],
+  ["image/png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ["application/pdf", [0x25, 0x50, 0x44, 0x46, 0x2d]],
+];
+
+/**
+ * A receipt file is a photo (JPG/PNG) or a PDF, told by its leading bytes rather than
+ * by the name or type the browser claims, so it is always served as what it is.
+ */
+export function receiptFileTypeOf(bytes: Uint8Array): ReceiptFileType | null {
+  const match = SIGNATURES.find(([, signature]) => signature.every((byte, index) => bytes[index] === byte));
+  return match ? match[0] : null;
 }
 
 export function validatePanjarInput(
