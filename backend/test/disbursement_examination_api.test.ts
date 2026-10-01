@@ -1211,6 +1211,9 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
 
   it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser: private upload, two-role queues, recurring warnings, revision, download and keyboard", async () => {
     const prior = await syntheticProposal();
+    // This journey is the in-app examination path, which an institution opts into (ADR-0041).
+    const policy = (await (await get("/policy", prior.adminToken)).json()).policy;
+    expect((await post("/policy", { ...policy, expectedVersion: policy.version, decisionOutsideApp: false }, prior.adminToken)).status).toBe(200);
     await completeAndSubmit(prior.draft, prior.amilToken);
     const fixture = await syntheticProposal(prior.programId);
     const changed = await post("/proposals", { ...fixture.draft, purpose: "Pengajuan Browser Sintetis",

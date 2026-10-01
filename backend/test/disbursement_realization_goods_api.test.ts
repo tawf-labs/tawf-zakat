@@ -1051,7 +1051,7 @@ describe("Realisasi Bantuan Barang, Kuantitas Desimal, Alokasi BAST, dan Biaya O
         await dialog.getByLabel(/Mustahik 1 · belum berbukti/).fill("0.1");
         await dialog.getByRole("button", { name: "Unggah bukti", exact: true }).click();
         await page.getByRole("dialog").waitFor({ state: "hidden" });
-        await page.getByRole("button", { name: "Bukti Belum Lengkap", exact: true }).click();
+        await page.getByRole("button", { name: "Bukti Penyaluran Belum Lengkap", exact: true }).click();
         const queue = page.getByRole("region", { name: "Antrean bukti realisasi", exact: true });
         await queue.getByText("Beras: 0.3 kg", { exact: true }).waitFor();
         expect(await queue.innerText()).not.toContain("Rp");

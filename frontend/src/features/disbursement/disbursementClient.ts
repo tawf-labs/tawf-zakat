@@ -107,6 +107,8 @@ export type DisbursementPolicy = {
   institutionId: string;
   requireProposalLetter: boolean;
   requireRecipientVerification: boolean;
+  /** The institution decides internally; the amil publishes straight to approved (ADR-0041). */
+  decisionOutsideApp: boolean;
   requireIdentityDoc: boolean;
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;
@@ -302,6 +304,17 @@ export const submitProposalDraft = (
       method: "POST",
       body: JSON.stringify({ expectedVersion, operationId }),
     }
+  );
+
+/** Publishes a complete proposal straight to approved, citing the institution's internal decision. */
+export const publishProposalDraft = (
+  requests: PrivateRequests,
+  proposalId: string,
+  input: { expectedVersion: number; operationId: string; decisionReference: string; decisionDate: string },
+) =>
+  requests.json<{ draft: ProposalDraft; decision: ProposalDecision; warnings: RecurringAidWarning[] }>(
+    `/api/workspace/proposals/${proposalId}/publish`,
+    { method: "POST", body: JSON.stringify(input) },
   );
 
 export const withdrawProposal = (
@@ -587,16 +600,18 @@ export type ProposalDecision = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string;
-  decisionDocumentId: string;
-  decisionDocumentSha256: string;
+  /** `RECORDED_OUTSIDE_APP`: published on an internal decision, with no signer or SK file here. */
+  basis: "SIGNED_IN_APP" | "RECORDED_OUTSIDE_APP";
+  decisionDocumentId: string | null;
+  decisionDocumentSha256: string | null;
   notes: string | null;
   rejectionReason: string | null;
   rightsDigest: string;
   operatorOfficerId: string;
   operatorAccount: string;
-  signerAccount: string;
+  signerAccount: string | null;
   mandateId: string;
-  signature: string;
+  signature: string | null;
   createdAt: number;
 };
 

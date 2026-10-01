@@ -432,6 +432,12 @@ export type DisbursementPolicy = {
   requireProposalLetter: boolean;
   /** One document verifying the whole roster, e.g. a berita acara or RT/RW letter (ADR-0040). */
   requireRecipientVerification: boolean;
+  /**
+   * The institution decides through its own internal process (e.g. a board meeting), so
+   * the amil publishes a complete proposal straight to APPROVED citing that decision
+   * (ADR-0041). False keeps the in-app examination and signed decision as the only path.
+   */
+  decisionOutsideApp: boolean;
   requireIdentityDoc: boolean;
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;
@@ -451,6 +457,7 @@ export const DEFAULT_DISBURSEMENT_POLICY = (institutionId: string): Disbursement
   institutionId,
   requireProposalLetter: false,
   requireRecipientVerification: true,
+  decisionOutsideApp: true,
   requireIdentityDoc: false,
   requireAlternativeIdProof: false,
   requireGuardianProof: false,
@@ -701,7 +708,8 @@ export type ProposalHistoryAction =
   | "PROPOSE_REVISION"
   | "WITHDRAW_REVISION"
   | "APPROVE_REVISION"
-  | "REJECT_REVISION";
+  | "REJECT_REVISION"
+  | "PUBLISH";
 
 export type ProposalHistoryRecord = {
   id: number;
@@ -836,18 +844,46 @@ export type ProposalDecisionRecord = {
   action: ProposalDecisionAction;
   decisionReference: string;
   decisionDate: string;
-  decisionDocumentId: string;
-  decisionDocumentSha256: string;
+  /**
+   * `SIGNED_IN_APP`: an authorised signer decided here, on an uploaded SK / berita acara.
+   * `RECORDED_OUTSIDE_APP`: the institution decided internally and the publishing amil
+   * cites it; there is no signer, signature or decision document (ADR-0041).
+   */
+  basis: ProposalDecisionBasis;
+  decisionDocumentId: string | null;
+  decisionDocumentSha256: string | null;
   notes: string | null;
   rejectionReason: string | null;
   rightsDigest: string;
   operatorOfficerId: string;
   operatorAccount: string;
-  signerAccount: string;
+  signerAccount: string | null;
   mandateId: string;
-  signature: string;
+  signature: string | null;
   createdAt: number;
 };
+
+export type ProposalDecisionBasis = "SIGNED_IN_APP" | "RECORDED_OUTSIDE_APP";
+
+export type ProposalPublicationInput = { decisionReference: string; decisionDate: string; notes: string | null };
+
+/** The internal decision a publication cites: a reference and the date it was taken. */
+export function validatePublicationInput(
+  input: unknown
+): { ok: true; value: ProposalPublicationInput } | { ok: false; error: string } {
+  const raw = (input ?? {}) as Record<string, unknown>;
+  const decisionReference = trimmed(raw.decisionReference);
+  if (!decisionReference) {
+    return { ok: false, error: "Rujukan keputusan internal (mis. rapat pengurus atau nomor surat) wajib diisi." };
+  }
+  if (decisionReference.length > 200) return { ok: false, error: "Rujukan keputusan maksimal 200 karakter." };
+  const decisionDate = trimmed(raw.decisionDate);
+  if (!isIsoDate(decisionDate) || Number.isNaN(Date.parse(`${decisionDate}T00:00:00Z`))) {
+    return { ok: false, error: "Tanggal keputusan wajib berformat YYYY-MM-DD." };
+  }
+  const notes = trimmed(raw.notes);
+  return { ok: true, value: { decisionReference, decisionDate, notes: notes || null } };
+}
 
 /**
  * The aid lines as the decision fixes them. A rejection leaves them untouched;

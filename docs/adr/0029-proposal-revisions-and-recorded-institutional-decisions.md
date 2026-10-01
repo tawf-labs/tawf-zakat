@@ -1,7 +1,7 @@
 # ADR-0029: Revisi Pengajuan dan Pencatatan Keputusan Lembaga
 
 - Status: Accepted — Q15 dan Q17 sesi `grill-with-docs`, 2026-09-15.
-- Related: ADR-0028, ADR-0022.
+- Related: ADR-0028, ADR-0022. Pengesahan pencatatan keputusan di aplikasi menjadi opsi kebijakan lembaga sejak [ADR-0041](0041-penerbitan-pengajuan-atas-keputusan-internal-lembaga.md); bawaannya kini penerbitan atas keputusan internal.
 
 Perubahan penerima atau hak bantuan setelah persetujuan menghasilkan revisi dengan alasan dan persetujuan kembali. Riwayat pengajuan serta realisasi yang telah terjadi dipertahankan; bagian yang berubah menunggu persetujuan baru. Sisa bantuan yang tidak jadi disalurkan ditutup melalui keputusan lembaga beserta alasan. Pilihan menimpa pengajuan lama tidak dipakai karena akan menghilangkan dasar keputusan dan pembanding pemeriksaan.
 

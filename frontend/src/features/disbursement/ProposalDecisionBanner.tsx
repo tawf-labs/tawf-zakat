@@ -72,6 +72,7 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
   }, [requests, draft.id, decided, recorded, draft.status]);
 
   async function download(decision: ProposalDecision) {
+    if (!decision.decisionDocumentId) return;
     try {
       const url = URL.createObjectURL(await downloadDecisionDocument(requests, draft.id, decision.decisionDocumentId));
       requests.assertCurrent();
@@ -87,7 +88,12 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
 
   if (!isDecidedStatus(draft.status)) return null;
   const decision = recorded ?? loaded;
-  const { tone, Icon, title, reasonLabel } = DECIDED_PRESENTATION[draft.status];
+  const { tone, Icon, reasonLabel } = DECIDED_PRESENTATION[draft.status];
+  // Published on the institution's own internal decision (ADR-0041): nothing was signed here.
+  const outside = decision?.basis === "RECORDED_OUTSIDE_APP";
+  const title = outside && draft.status === "APPROVED"
+    ? "Pengajuan terbit atas keputusan internal lembaga · siap disalurkan"
+    : DECIDED_PRESENTATION[draft.status].title;
 
   return <div className={`space-y-2 rounded-xl border p-4 text-xs ${tone}`}>
     <p className="flex items-center gap-1.5 text-sm font-bold">
@@ -95,8 +101,8 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
     </p>
     {decision && <>
       <dl className="grid grid-cols-1 gap-2 md:grid-cols-2">
-        <div><dt className="font-semibold">Rujukan SK / pleno</dt><dd>{decision.decisionReference}</dd></div>
-        <div><dt className="font-semibold">Tanggal penetapan</dt><dd>{decision.decisionDate}</dd></div>
+        <div><dt className="font-semibold">{outside ? "Rujukan keputusan internal" : "Rujukan SK / pleno"}</dt><dd>{decision.decisionReference}</dd></div>
+        <div><dt className="font-semibold">{outside ? "Tanggal keputusan" : "Tanggal penetapan"}</dt><dd>{decision.decisionDate}</dd></div>
         {decision.rejectionReason && <div className="md:col-span-2"><dt className="font-semibold">{reasonLabel}</dt>
           <dd>{decision.rejectionReason}</dd></div>}
         {decision.notes && <div className="md:col-span-2"><dt className="font-semibold">Catatan keputusan</dt>
@@ -155,15 +161,26 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
       )}
       <details>
         <summary className="cursor-pointer font-semibold">Detail pencatatan</summary>
-        <dl className="mt-1 space-y-1 font-mono text-[11px]">
-          <div><dt className="inline">Akun operator: </dt><dd className="inline">{decision.operatorAccount}</dd></div>
-          <div><dt className="inline">Akun pengesah: </dt><dd className="inline">{decision.signerAccount}</dd></div>
-          <div><dt className="inline">Sidik isi hak bantuan: </dt><dd className="inline break-all">{decision.rightsDigest}</dd></div>
-          <div><dt className="inline">Sidik berkas keputusan: </dt><dd className="inline break-all">{decision.decisionDocumentSha256}</dd></div>
-        </dl>
-        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void download(decision)}>
-          Unduh berkas keputusan
-        </Button>
+        {outside ? <>
+          <p className="mt-1">
+            Keputusan diambil lewat proses internal lembaga di luar aplikasi. Aplikasi mencatat rujukannya dan akun yang
+            menerbitkan; tidak ada tanda tangan pengesah atau berkas SK di sini.
+          </p>
+          <dl className="mt-1 space-y-1 font-mono text-[11px]">
+            <div><dt className="inline">Diterbitkan oleh akun: </dt><dd className="inline">{decision.operatorAccount}</dd></div>
+            <div><dt className="inline">Sidik isi hak bantuan: </dt><dd className="inline break-all">{decision.rightsDigest}</dd></div>
+          </dl>
+        </> : <>
+          <dl className="mt-1 space-y-1 font-mono text-[11px]">
+            <div><dt className="inline">Akun operator: </dt><dd className="inline">{decision.operatorAccount}</dd></div>
+            <div><dt className="inline">Akun pengesah: </dt><dd className="inline">{decision.signerAccount}</dd></div>
+            <div><dt className="inline">Sidik isi hak bantuan: </dt><dd className="inline break-all">{decision.rightsDigest}</dd></div>
+            <div><dt className="inline">Sidik berkas keputusan: </dt><dd className="inline break-all">{decision.decisionDocumentSha256}</dd></div>
+          </dl>
+          <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void download(decision)}>
+            Unduh berkas keputusan
+          </Button>
+        </>}
         {downloadError && <p role="alert" className="mt-1">{downloadError}</p>}
       </details>
     </>}

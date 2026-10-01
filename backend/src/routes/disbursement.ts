@@ -47,6 +47,7 @@ import {
   validateProgramInput,
   validateProposalDecisionInput,
   validateProposalDraft,
+  validatePublicationInput,
   withStableIds,
   type AidLine,
   type Beneficiary,
@@ -572,6 +573,7 @@ disbursementRoutes.post("/policy", async (c) => {
       institutionId: auth.session.institutionId,
       requireProposalLetter: flag("requireProposalLetter"),
       requireRecipientVerification: flag("requireRecipientVerification"),
+      decisionOutsideApp: flag("decisionOutsideApp"),
       requireIdentityDoc: flag("requireIdentityDoc"),
       requireAlternativeIdProof: flag("requireAlternativeIdProof"),
       requireGuardianProof: flag("requireGuardianProof"),
@@ -1580,6 +1582,60 @@ disbursementRoutes.post("/proposals/:id/submit", async (c) => {
   );
 
   return c.json({ success: true, draft: result.draft, warnings: result.warnings });
+});
+
+/**
+ * Publishes a complete proposal straight to APPROVED on a decision the institution took
+ * outside the app (ADR-0041). Only for an institution whose policy says so; the in-app
+ * examination path stays open to everyone, since it is never the weaker control.
+ */
+disbursementRoutes.post("/proposals/:id/publish", async (c) => {
+  const runtime = runtimeOf();
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+
+  const auth = await authenticateWorkspace(c, runtime, institutionOf(body));
+  if (!auth.ok) return auth.response;
+  if (!authorize(auth.session.role, "manageDisbursement")) return refuse(c, 403, "forbidden");
+
+  const expectedVersion = mutationVersion(body, 1);
+  if (expectedVersion === null) return badRequest(c, "Versi yang diharapkan dan ID operasi wajib diisi.");
+  const publication = validatePublicationInput(body);
+  if (!publication.ok) return badRequest(c, publication.error);
+
+  const proposalId = c.req.param("id");
+  const draft = await runtime.disbursement.getProposalDraft(auth.session.institutionId, proposalId);
+  if (!draft) return refuse(c, 404, "not-found");
+
+  const policy = await runtime.disbursement.getInstitutionPolicy(auth.session.institutionId);
+  if (!policy.decisionOutsideApp) {
+    return c.json({
+      success: false,
+      error: "Kebijakan lembaga ini memutus pengajuan di aplikasi. Ajukan untuk pemeriksaan, bukan terbitkan langsung.",
+    }, 409);
+  }
+
+  const actor = await operationalActor(runtime, auth.session);
+  const mandate = actor.require("PREPARE_PROPOSALS", {
+    programId: draft.programId,
+    nominalAmount: requestedIdr(draft.aidLines),
+  });
+
+  const result = await runtime.disbursement.publishProposalDraft(
+    auth.session.institutionId,
+    proposalId,
+    expectedVersion,
+    { ...publication.value, mandateId: mandate.id },
+    {
+      id: text(body.operationId),
+      account: auth.session.account,
+      requestHash: requestHash(["publish", proposalId, expectedVersion, publication.value]),
+    },
+    { account: auth.session.account, officerId: actor.officer.id },
+    runtime.now()
+  );
+
+  return c.json({ success: true, draft: result.draft, decision: result.decision, warnings: result.warnings });
 });
 
 disbursementRoutes.post("/proposals/:id/withdraw", async (c) => {

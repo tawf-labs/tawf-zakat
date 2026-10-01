@@ -158,6 +158,14 @@ _Avoid_: [[Persetujuan DPS]]; [[Persetujuan penyaluran]].
 Keputusan [[Pemberi persetujuan penyaluran]] atas pengajuan yang telah diperiksa menurut SOP lembaganya.
 _Avoid_: Bukti bantuan telah diserahkan; opini auditor.
 
+**Keputusan internal lembaga**:
+Keputusan penyaluran yang diambil lembaga melalui proses internalnya di luar aplikasi, misalnya rapat pengurus atau persetujuan bendahara, dan dirujuk dengan rujukan serta tanggalnya.
+_Avoid_: [[Persetujuan penyaluran]] yang ditandatangani di aplikasi; bukti bahwa isi pengajuan telah dibahas dalam rapat tersebut.
+
+**Penerbitan pengajuan**:
+Penetapan [[Pengajuan penyaluran]] yang lengkap sebagai disetujui oleh amil atas dasar [[Keputusan internal lembaga]], sehingga siap menerima donasi dan disalurkan.
+_Avoid_: [[Penerbitan laporan]]; pemeriksaan atau pengesahan oleh pihak kedua di aplikasi.
+
 **Penyaluran**:
 Pemberian dana atau bantuan kepada penerima yang dituju.
 

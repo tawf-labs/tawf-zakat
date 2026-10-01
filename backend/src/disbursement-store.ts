@@ -12,7 +12,9 @@ import {
   approvedUnitOf,
   calculateProposalRealizationSummary,
   compareDecimalStrings,
+  computeRightsDigest,
   contactHintOf,
+  decidedAidLines,
   DEFAULT_DISBURSEMENT_POLICY,
   evaluateRecurringAidWarnings,
   evidenceStatusOf,
@@ -41,6 +43,7 @@ import {
   type ProgramStatus,
   type ProposalCompletenessIssue,
   type ProposalDecisionAction,
+  type ProposalDecisionBasis,
   type ProposalDecisionChallenge,
   type ProposalDecisionDocument,
   type ProposalDecisionInput,
@@ -50,6 +53,7 @@ import {
   type ProposalHistoryAction,
   type ProposalHistoryRecord,
   type ProposalIssue,
+  type ProposalPublicationInput,
   type ProposalRealizationSummary,
   type ProposalStatus,
   type RealizationChallenge,
@@ -352,6 +356,138 @@ export class DraftOperationConflictError extends Error {
 type OperationLedger = "proposal_draft_operations" | "disbursement_realization_operations";
 
 /** The unique insert waits for an in-flight retry before reading its committed result. */
+/** The shape every submitted or published proposal version is frozen in. */
+type FrozenSubmission = {
+  current: StoredProposalDraft;
+  policy: DisbursementPolicy;
+  version: number;
+  warnings: RecurringAidWarning[];
+};
+
+/**
+ * Locks a DRAFT / REVISION_REQUIRED proposal, enforces the institution's completeness
+ * policy and freezes the version with its documents and recurring-aid warnings. Shared by
+ * submission for examination and by publication on an outside-app decision (ADR-0041),
+ * so both freeze exactly the same evidence. Leaves the draft row and history to the caller.
+ */
+async function freezeSubmission(
+  tx: { execute: (query: any) => Promise<any> },
+  institutionId: string,
+  proposalId: string,
+  expectedVersion: number,
+  actor: { account: string },
+  now: number
+): Promise<FrozenSubmission> {
+  const currentRaw = rowsOf(
+    await tx.execute(sql`
+      SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId} FOR UPDATE
+    `)
+  )[0];
+  if (!currentRaw) throw new ProposalDraftConflictError(proposalId);
+  const current = draftFrom(currentRaw);
+  if (current.version !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
+  if (current.status !== "DRAFT" && current.status !== "REVISION_REQUIRED") {
+    throw new ProposalStateConflictError(`Pengajuan berstatus "${current.status}" tidak dapat diajukan kembali.`);
+  }
+
+  const policyRow = rowsOf(
+    await tx.execute(
+      sql`SELECT * FROM institution_disbursement_policies WHERE institution_id = ${institutionId}`
+    )
+  )[0];
+  const policy = policyFrom(policyRow, institutionId);
+
+  const docRows = rowsOf(
+    await tx.execute(
+      sql`SELECT * FROM proposal_documents WHERE proposal_id = ${proposalId} AND institution_id = ${institutionId}`
+    )
+  );
+  const docs = docRows.map(documentFrom);
+
+  const completenessIssues = validateProposalForSubmission(
+    {
+      programId: current.programId,
+      originOfRequest: current.originOfRequest,
+      purpose: current.purpose,
+      aidPeriod: current.aidPeriod,
+      personInCharge: current.personInCharge,
+      beneficiaries: current.beneficiaries,
+      aidLines: current.aidLines,
+    },
+    docs,
+    policy
+  );
+  if (completenessIssues.length > 0) {
+    throw new ProposalSubmissionIncompleteError(completenessIssues);
+  }
+
+  // Check recurring aid
+  const otherProposals = rowsOf(
+    await tx.execute(sql`
+      SELECT p.id, p.program_id, pr.name as program_name, p.status, p.aid_period_json, p.beneficiaries_json
+      FROM proposal_drafts p
+      LEFT JOIN programs pr ON pr.id = p.program_id
+      WHERE p.institution_id = ${institutionId}
+        AND p.id != ${proposalId}
+        AND p.status IN ('SUBMITTED', 'UNDER_EXAMINATION', 'READY_FOR_DECISION', 'APPROVED')
+    `)
+  );
+  const matches: RecurringAidMatch[] = [];
+  for (const op of otherProposals) {
+    const bList = JSON.parse(op.beneficiaries_json || "[]") as Beneficiary[];
+    const period = op.aid_period_json ? JSON.parse(op.aid_period_json) : null;
+    for (const ob of bList) {
+      matches.push({
+        proposalId: op.id,
+        programId: op.program_id ?? null,
+        programName: op.program_name ?? "Program tanpa judul",
+        aidPeriod: period,
+        status: op.status as ProposalStatus,
+        beneficiaryId: ob.id,
+        beneficiaryName: ob.name,
+        nik: ob.identityBasis.kind === "NIK" ? ob.identityBasis.value : null,
+        alternativeDesc: ob.identityBasis.kind === "ALTERNATIVE" ? ob.identityBasis.description : null,
+      });
+    }
+  }
+  const warnings = policy.warnRecurringAid ? evaluateRecurringAidWarnings(current.beneficiaries, matches) : [];
+
+  const dataSnapshot = {
+    programId: current.programId,
+    originOfRequest: current.originOfRequest,
+    purpose: current.purpose,
+    aidPeriod: current.aidPeriod,
+    personInCharge: current.personInCharge,
+    beneficiaries: current.beneficiaries,
+    aidLines: current.aidLines,
+    issues: current.issues,
+  };
+
+  // A document-only revision is still a new submission. Never replace a frozen version.
+  const alreadySubmitted = rowsOf(await tx.execute(sql`
+    SELECT 1 FROM proposal_versions WHERE proposal_id = ${proposalId} AND version = ${current.version}
+  `)).length > 0;
+  const submittedVersion = current.version + (alreadySubmitted ? 1 : 0);
+  if (alreadySubmitted) await tx.execute(sql`
+    INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
+    SELECT draft_id, ${submittedVersion}, account, officer_id FROM proposal_draft_contributors
+    WHERE draft_id = ${proposalId} AND version = ${current.version}
+    ON CONFLICT DO NOTHING
+  `);
+  await tx.execute(sql`
+    INSERT INTO proposal_versions (
+      proposal_id, version, institution_id, status, data_json, documents_json,
+      recurring_warnings_json, submitted_by, submitted_at, created_at
+    ) VALUES (
+      ${proposalId}, ${submittedVersion}, ${institutionId}, 'SUBMITTED',
+      ${JSON.stringify(dataSnapshot)}, ${JSON.stringify(docs)},
+      ${JSON.stringify(warnings)}, ${actor.account}, ${now}, ${now}
+    )
+  `);
+
+  return { current, policy, version: submittedVersion, warnings };
+}
+
 async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, operation: DraftOperation,
   mutate: (tx: { execute: (query: any) => Promise<any> }) => Promise<T>,
   ledger: OperationLedger = "proposal_draft_operations"): Promise<T> {
@@ -591,6 +727,7 @@ const policyFrom = (row: any, institutionId: string): DisbursementPolicy => {
     institutionId: row.institution_id,
     requireProposalLetter: Boolean(row.require_proposal_letter),
     requireRecipientVerification: Boolean(row.require_recipient_verification),
+    decisionOutsideApp: Boolean(row.decision_outside_app),
     requireIdentityDoc: Boolean(row.require_identity_doc),
     requireAlternativeIdProof: Boolean(row.require_alternative_id_proof),
     requireGuardianProof: Boolean(row.require_guardian_proof),
@@ -610,16 +747,17 @@ const decisionRecordFrom = (row: any): ProposalDecisionRecord => ({
   action: row.action as ProposalDecisionAction,
   decisionReference: row.decision_reference,
   decisionDate: row.decision_date,
-  decisionDocumentId: row.decision_document_id,
-  decisionDocumentSha256: row.decision_document_sha256,
+  basis: (row.basis ?? "SIGNED_IN_APP") as ProposalDecisionBasis,
+  decisionDocumentId: row.decision_document_id ?? null,
+  decisionDocumentSha256: row.decision_document_sha256 ?? null,
   notes: row.notes ?? null,
   rejectionReason: row.rejection_reason ?? null,
   rightsDigest: row.rights_digest,
   operatorOfficerId: row.operator_officer_id,
   operatorAccount: row.operator_account,
-  signerAccount: row.signer_account,
+  signerAccount: row.signer_account ?? null,
   mandateId: row.mandate_id,
-  signature: row.signature,
+  signature: row.signature ?? null,
   createdAt: asSeconds(row.created_at),
 });
 
@@ -1206,6 +1344,8 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
   // FALSE keeps a policy an institution already saved exactly as it was; a new
   // institution without a saved policy gets the code default instead (ADR-0040).
   `ALTER TABLE institution_disbursement_policies ADD COLUMN IF NOT EXISTS require_recipient_verification BOOLEAN NOT NULL DEFAULT FALSE;`,
+  // Same reasoning as above: a saved policy keeps deciding in the app (ADR-0041).
+  `ALTER TABLE institution_disbursement_policies ADD COLUMN IF NOT EXISTS decision_outside_app BOOLEAN NOT NULL DEFAULT FALSE;`,
   `CREATE TABLE IF NOT EXISTS proposal_decisions (
      id TEXT PRIMARY KEY,
      proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
@@ -1235,6 +1375,12 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
   // The aid lines an approval fixed, exactly as its rights digest covers them. The version's
   // data_json stays the submitted content; the decision carries what was decided on it.
   `ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS decided_aid_lines_json TEXT;`,
+  // A decision taken outside the app (ADR-0041) has no signer, signature or SK document here.
+  `ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS basis TEXT NOT NULL DEFAULT 'SIGNED_IN_APP';`,
+  `ALTER TABLE proposal_decisions ALTER COLUMN decision_document_id DROP NOT NULL;`,
+  `ALTER TABLE proposal_decisions ALTER COLUMN decision_document_sha256 DROP NOT NULL;`,
+  `ALTER TABLE proposal_decisions ALTER COLUMN signer_account DROP NOT NULL;`,
+  `ALTER TABLE proposal_decisions ALTER COLUMN signature DROP NOT NULL;`,
   `CREATE TABLE IF NOT EXISTS proposal_decision_challenges (
      nonce TEXT PRIMARY KEY,
      proposal_id TEXT NOT NULL,
@@ -1981,6 +2127,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             UPDATE institution_disbursement_policies SET
               require_proposal_letter = ${policy.requireProposalLetter},
               require_recipient_verification = ${policy.requireRecipientVerification},
+              decision_outside_app = ${policy.decisionOutsideApp},
               require_identity_doc = ${policy.requireIdentityDoc},
               require_alternative_id_proof = ${policy.requireAlternativeIdProof},
               require_guardian_proof = ${policy.requireGuardianProof},
@@ -2000,11 +2147,13 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             INSERT INTO institution_disbursement_policies (
               institution_id, require_proposal_letter, require_identity_doc,
               require_alternative_id_proof, require_guardian_proof, warn_recurring_aid,
-              sop_requires_multi_signer_quorum, require_recipient_verification, version, updated_at, updated_by
+              sop_requires_multi_signer_quorum, require_recipient_verification, decision_outside_app,
+              version, updated_at, updated_by
             ) VALUES (
               ${policy.institutionId}, ${policy.requireProposalLetter}, ${policy.requireIdentityDoc},
               ${policy.requireAlternativeIdProof}, ${policy.requireGuardianProof}, ${policy.warnRecurringAid},
-              ${Boolean(policy.sopRequiresMultiSignerQuorum)}, ${policy.requireRecipientVerification}, 1,
+              ${Boolean(policy.sopRequiresMultiSignerQuorum)}, ${policy.requireRecipientVerification},
+              ${policy.decisionOutsideApp}, 1,
               ${policy.updatedAt}, ${policy.updatedBy}
             ) RETURNING *
           `)
@@ -2143,112 +2292,9 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       now: number
     ): Promise<{ draft: StoredProposalDraft; warnings: RecurringAidWarning[] }> {
       return mutateOnce(db, institutionId, operation, async tx => {
-        const currentRaw = rowsOf(
-          await tx.execute(sql`
-            SELECT * FROM proposal_drafts WHERE id = ${proposalId} AND institution_id = ${institutionId} FOR UPDATE
-          `)
-        )[0];
-        if (!currentRaw) throw new ProposalDraftConflictError(proposalId);
-        const current = draftFrom(currentRaw);
-        if (current.version !== expectedVersion) throw new ProposalDraftConflictError(proposalId);
-        if (current.status !== "DRAFT" && current.status !== "REVISION_REQUIRED") {
-          throw new ProposalStateConflictError(`Pengajuan berstatus "${current.status}" tidak dapat diajukan kembali.`);
-        }
-
-        const policyRow = rowsOf(
-          await tx.execute(
-            sql`SELECT * FROM institution_disbursement_policies WHERE institution_id = ${institutionId}`
-          )
-        )[0];
-        const policy = policyFrom(policyRow, institutionId);
-
-        const docRows = rowsOf(
-          await tx.execute(
-            sql`SELECT * FROM proposal_documents WHERE proposal_id = ${proposalId} AND institution_id = ${institutionId}`
-          )
+        const { current, version: submittedVersion, warnings } = await freezeSubmission(
+          tx, institutionId, proposalId, expectedVersion, actor, now
         );
-        const docs = docRows.map(documentFrom);
-
-        const completenessIssues = validateProposalForSubmission(
-          {
-            programId: current.programId,
-            originOfRequest: current.originOfRequest,
-            purpose: current.purpose,
-            aidPeriod: current.aidPeriod,
-            personInCharge: current.personInCharge,
-            beneficiaries: current.beneficiaries,
-            aidLines: current.aidLines,
-          },
-          docs,
-          policy
-        );
-        if (completenessIssues.length > 0) {
-          throw new ProposalSubmissionIncompleteError(completenessIssues);
-        }
-
-        // Check recurring aid
-        const otherProposals = rowsOf(
-          await tx.execute(sql`
-            SELECT p.id, p.program_id, pr.name as program_name, p.status, p.aid_period_json, p.beneficiaries_json
-            FROM proposal_drafts p
-            LEFT JOIN programs pr ON pr.id = p.program_id
-            WHERE p.institution_id = ${institutionId}
-              AND p.id != ${proposalId}
-              AND p.status IN ('SUBMITTED', 'UNDER_EXAMINATION', 'READY_FOR_DECISION', 'APPROVED')
-          `)
-        );
-        const matches: RecurringAidMatch[] = [];
-        for (const op of otherProposals) {
-          const bList = JSON.parse(op.beneficiaries_json || "[]") as Beneficiary[];
-          const period = op.aid_period_json ? JSON.parse(op.aid_period_json) : null;
-          for (const ob of bList) {
-            matches.push({
-              proposalId: op.id,
-              programId: op.program_id ?? null,
-              programName: op.program_name ?? "Program tanpa judul",
-              aidPeriod: period,
-              status: op.status as ProposalStatus,
-              beneficiaryId: ob.id,
-              beneficiaryName: ob.name,
-              nik: ob.identityBasis.kind === "NIK" ? ob.identityBasis.value : null,
-              alternativeDesc: ob.identityBasis.kind === "ALTERNATIVE" ? ob.identityBasis.description : null,
-            });
-          }
-        }
-        const warnings = policy.warnRecurringAid ? evaluateRecurringAidWarnings(current.beneficiaries, matches) : [];
-
-        const dataSnapshot = {
-          programId: current.programId,
-          originOfRequest: current.originOfRequest,
-          purpose: current.purpose,
-          aidPeriod: current.aidPeriod,
-          personInCharge: current.personInCharge,
-          beneficiaries: current.beneficiaries,
-          aidLines: current.aidLines,
-          issues: current.issues,
-        };
-
-        // A document-only revision is still a new submission. Never replace a frozen version.
-        const alreadySubmitted = rowsOf(await tx.execute(sql`
-          SELECT 1 FROM proposal_versions WHERE proposal_id = ${proposalId} AND version = ${current.version}
-        `)).length > 0;
-        const submittedVersion = current.version + (alreadySubmitted ? 1 : 0);
-        if (alreadySubmitted) await tx.execute(sql`
-          INSERT INTO proposal_draft_contributors (draft_id, version, account, officer_id)
-          SELECT draft_id, ${submittedVersion}, account, officer_id FROM proposal_draft_contributors
-          WHERE draft_id = ${proposalId} AND version = ${current.version}
-          ON CONFLICT DO NOTHING
-        `);
-        await tx.execute(sql`
-          INSERT INTO proposal_versions (
-            proposal_id, version, institution_id, status, data_json, documents_json,
-            recurring_warnings_json, submitted_by, submitted_at, created_at
-          ) VALUES (
-            ${proposalId}, ${submittedVersion}, ${institutionId}, 'SUBMITTED',
-            ${JSON.stringify(dataSnapshot)}, ${JSON.stringify(docs)},
-            ${JSON.stringify(warnings)}, ${actor.account}, ${now}, ${now}
-          )
-        `);
 
         const updatedRaw = rowsOf(
           await tx.execute(sql`
@@ -2272,6 +2318,90 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         `);
 
         return { draft: draftFrom(updatedRaw), warnings };
+      });
+    },
+
+    /**
+     * Publishes a complete proposal on a decision the institution took outside the app
+     * (ADR-0041): the version is frozen exactly as a submission would freeze it, and the
+     * requested rights become the approved rights in the same transaction. The publishing
+     * amil is recorded as operator; there is deliberately no separate signer.
+     */
+    async publishProposalDraft(
+      institutionId: string,
+      proposalId: string,
+      expectedVersion: number,
+      publication: ProposalPublicationInput & { mandateId: string },
+      operation: DraftOperation,
+      actor: { account: string; officerId: string },
+      now: number
+    ): Promise<{ draft: StoredProposalDraft; decision: ProposalDecisionRecord; warnings: RecurringAidWarning[] }> {
+      return mutateOnce(db, institutionId, operation, async tx => {
+        const { current, policy, version, warnings } = await freezeSubmission(
+          tx, institutionId, proposalId, expectedVersion, actor, now
+        );
+        if (!policy.decisionOutsideApp) {
+          throw new ProposalStateConflictError(
+            "Kebijakan lembaga ini memutus pengajuan di aplikasi. Ajukan untuk pemeriksaan, bukan terbitkan langsung."
+          );
+        }
+
+        const decided = decidedAidLines(current.aidLines, { action: "APPROVE", approvedAidLines: [] });
+        if (!decided.ok) throw new ProposalStateConflictError(decided.error);
+        const intent = {
+          action: "APPROVE" as const,
+          decisionReference: publication.decisionReference,
+          decisionDate: publication.decisionDate,
+          notes: publication.notes,
+          rejectionReason: null,
+        };
+
+        const updatedRaw = rowsOf(
+          await tx.execute(sql`
+            UPDATE proposal_drafts SET
+              version = ${version}, status = 'APPROVED', aid_lines_json = ${JSON.stringify(decided.lines)},
+              examined_at = NULL, examined_by = NULL, submitted_at = ${now}, submitted_by = ${actor.account},
+              revision_reason = NULL, withdrawal_reason = NULL, examination_notes = NULL,
+              examination_checklist_json = NULL, updated_at = ${now}
+            WHERE id = ${proposalId} AND institution_id = ${institutionId} AND version = ${expectedVersion}
+            RETURNING *
+          `)
+        )[0];
+        await tx.execute(sql`
+          UPDATE proposal_versions SET status = 'APPROVED' WHERE proposal_id = ${proposalId} AND version = ${version}
+        `);
+
+        const basis: ProposalDecisionBasis = "RECORDED_OUTSIDE_APP";
+        const decisionRow = rowsOf(
+          await tx.execute(sql`
+            INSERT INTO proposal_decisions (
+              id, proposal_id, proposal_version, institution_id, action, basis,
+              decision_reference, decision_date, decision_document_id, decision_document_sha256,
+              notes, rejection_reason, rights_digest, operator_officer_id, operator_account, signer_account,
+              mandate_id, signature, created_at, decided_aid_lines_json
+            ) VALUES (
+              ${`dec-${crypto.randomUUID()}`}, ${proposalId}, ${version}, ${institutionId}, 'APPROVE', ${basis},
+              ${publication.decisionReference}, ${publication.decisionDate}, NULL, NULL,
+              ${publication.notes}, NULL, ${computeRightsDigest(decided.lines, intent)},
+              ${actor.officerId}, ${actor.account.toLowerCase()}, NULL,
+              ${publication.mandateId}, NULL, ${now}, ${JSON.stringify(decided.lines)}
+            )
+            RETURNING *
+          `)
+        )[0];
+
+        await tx.execute(sql`
+          INSERT INTO proposal_history (
+            proposal_id, institution_id, version, from_status, to_status, action,
+            actor_account, actor_officer_id, reason, notes, occurred_at
+          ) VALUES (
+            ${proposalId}, ${institutionId}, ${version}, ${current.status}, 'APPROVED', 'PUBLISH',
+            ${actor.account.toLowerCase()}, ${actor.officerId}, NULL,
+            ${`Diterbitkan atas keputusan internal: ${publication.decisionReference} (${publication.decisionDate})`}, ${now}
+          )
+        `);
+
+        return { draft: draftFrom(updatedRaw), decision: decisionRecordFrom(decisionRow), warnings };
       });
     },
 

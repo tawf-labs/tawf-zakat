@@ -4,8 +4,10 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import type { PrivateRequests } from "../workspace/privateRequests";
 import {
+  getInstitutionPolicy,
   submitProposalDraft,
   withdrawProposal,
+  type DisbursementPolicy,
   type ProposalDecision,
   type ProposalDraft,
   type ProposalStatus,
@@ -24,6 +26,7 @@ import { ProposalDecisionModal } from "./ProposalDecisionModal";
 import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
 import { ProposalRealizationBanner } from "./ProposalRealizationBanner";
 import { RecurringAidWarnings, recurringFlags } from "./RecurringAidWarnings";
+import { ProposalPublishControl } from "./ProposalPublishControl";
 
 const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
   DRAFT: { variant: "neutral", label: "Draf Pengajuan" },
@@ -99,6 +102,19 @@ export function ProposalDraftForm({
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [recordedDecision, setRecordedDecision] = useState<ProposalDecision | null>(null);
   const [showBeneficiaryList, setShowBeneficiaryList] = useState(false);
+
+  // Which path a complete draft takes is the institution's policy: publish on its own
+  // internal decision (ADR-0041), or submit for in-app examination and decision.
+  // An unreadable policy falls back to submission, which is never the weaker control.
+  const [policy, setPolicy] = useState<DisbursementPolicy | "unavailable" | null>(null);
+  useEffect(() => {
+    let current = true;
+    getInstitutionPolicy(requests)
+      .then((loaded) => { if (current) setPolicy(loaded); })
+      .catch(() => { if (current) setPolicy("unavailable"); });
+    return () => { current = false; };
+  }, [requests]);
+  const decidesOutsideApp = policy !== null && policy !== "unavailable" && policy.decisionOutsideApp;
 
   const isReadOnly =
     draft.status === "SUBMITTED" ||
@@ -360,7 +376,26 @@ export function ProposalDraftForm({
         </div>
 
         <div>
-          {!isReadOnly && draft.version > 0 && (
+          {!isReadOnly && draft.version > 0 && decidesOutsideApp && (
+            <ProposalPublishControl
+              requests={requests}
+              draft={draft}
+              disabled={dirty || submitting}
+              onPublished={(published, decision, warnings) => {
+                setSubmissionError(null);
+                setSubmissionIssues([]);
+                acceptSaved(published);
+                setRecordedDecision(decision);
+                setRecurringWarnings(warnings);
+                if (summary) onSaved(published, summary);
+              }}
+              onFailed={(message, issues) => {
+                setSubmissionError(message);
+                setSubmissionIssues(issues);
+              }}
+            />
+          )}
+          {!isReadOnly && draft.version > 0 && policy && !decidesOutsideApp && (
             <Button
               type="button"
               variant="primary"
@@ -378,7 +413,9 @@ export function ProposalDraftForm({
 
       <p className="text-xs text-stone-500">
         {!isReadOnly
-          ? "Draf dapat disimpan berkali-kali. Saat diajukan, kelengkapan administrasi dan dokumen wajib akan diverifikasi secara otomatis sebelum masuk antrean pemeriksaan."
+          ? decidesOutsideApp
+            ? "Draf dapat disimpan berkali-kali. Terbitkan setelah lembaga memutuskan lewat proses internalnya (mis. rapat pengurus); kelengkapan daftar penerima dan dokumen wajib diperiksa otomatis, lalu pengajuan langsung siap menerima donasi dan disalurkan."
+            : "Draf dapat disimpan berkali-kali. Saat diajukan, kelengkapan administrasi dan dokumen wajib akan diverifikasi secara otomatis sebelum masuk antrean pemeriksaan."
           : readOnlyMessage(draft.status)}
       </p>
 

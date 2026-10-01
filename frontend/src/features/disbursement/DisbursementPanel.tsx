@@ -5,6 +5,7 @@ import type { PrivateRequests } from "../workspace/privateRequests";
 import {
   archiveProgram,
   emptyProposalDraft,
+  getInstitutionPolicy,
   getProposalDraft,
   listPrograms,
   listProposalDrafts,
@@ -26,11 +27,22 @@ type PanelTab = "programs" | "queues" | "evidence";
 const PANEL_TABS: Array<{ id: PanelTab; label: string; Icon: typeof Layers; tone: string }> = [
   { id: "programs", label: "Program & Draf Pengajuan", Icon: Layers, tone: "text-stone-900" },
   { id: "queues", label: "Antrean Pemeriksa & Revisi", Icon: FileCheck, tone: "text-emerald-900" },
-  { id: "evidence", label: "Bukti Belum Lengkap", Icon: FileClock, tone: "text-amber-900" },
+  { id: "evidence", label: "Bukti Penyaluran Belum Lengkap", Icon: FileClock, tone: "text-amber-900" },
 ];
 
 function DisbursementPanelContent({ requests, canManage }: { requests: PrivateRequests; canManage: boolean }) {
   const [activeTab, setActiveTab] = useState<PanelTab>("programs");
+  // An institution that decides internally publishes straight to approved (ADR-0041), so
+  // the in-app examination queues would only ever be empty; they are not offered.
+  const [decidesOutsideApp, setDecidesOutsideApp] = useState(false);
+  useEffect(() => {
+    let current = true;
+    getInstitutionPolicy(requests)
+      .then((policy) => { if (current) setDecidesOutsideApp(policy.decisionOutsideApp); })
+      .catch(() => { if (current) setDecidesOutsideApp(false); });
+    return () => { current = false; };
+  }, [requests]);
+  const panelTabs = decidesOutsideApp ? PANEL_TABS.filter((tab) => tab.id !== "queues") : PANEL_TABS;
   const [programs, setPrograms] = useState<Program[]>([]);
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<ProposalDraftSummary[]>([]);
@@ -151,7 +163,7 @@ function DisbursementPanelContent({ requests, canManage }: { requests: PrivateRe
 
         {/* Panel Tabs */}
         <div className="flex flex-wrap gap-1 rounded-lg bg-stone-100 p-1 text-xs font-medium">
-          {PANEL_TABS.map(({ id, label, Icon, tone }) => (
+          {panelTabs.map(({ id, label, Icon, tone }) => (
             <button
               key={id}
               type="button"
