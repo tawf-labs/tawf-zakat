@@ -185,6 +185,18 @@ _Avoid_: Kekurangan dokumen saja; kesimpulan bahwa kecurangan sudah terbukti.
 Keadaan ketika sebagian bantuan yang disetujui telah disalurkan, sedangkan sisanya masih belum tersalurkan.
 _Avoid_: Selesai, hanya karena sudah ada satu realisasi.
 
+**Biaya operasional penyaluran**:
+Pengeluaran untuk menjalankan kegiatan penyaluran, misalnya sewa kendaraan, bensin, kemasan, atau dokumentasi, dicatat per item beserta pihak yang dibayar dan nota/kuitansinya, terpisah dari bantuan yang diterima penerima.
+_Avoid_: [[Realisasi penyaluran]]; gaji petugas sebagai uang muka.
+
+**Talangan petugas**:
+Biaya operasional yang dibayar petugas dengan uangnya sendiri lebih dulu dan kemudian diganti lembaga.
+_Avoid_: [[Panjar petugas]]; pinjaman pribadi petugas.
+
+**Panjar petugas**:
+Uang lembaga yang dibawa petugas sebelum kegiatan untuk membayar biaya operasional, lalu dipertanggungjawabkan dengan nota dan sisanya dikembalikan ke lembaga.
+_Avoid_: Gaji atau honor petugas; [[Talangan petugas]].
+
 **Periode bantuan**:
 Rentang yang menjadi cakupan pemberian bantuan kepada penerima.
 _Avoid_: Periode pelaporan, jika yang dimaksud adalah cakupan bantuan atau klaim penerima.
