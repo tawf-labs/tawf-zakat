@@ -36,6 +36,8 @@ import {
 import { normalizeFundType, type JenisDana } from "./contribution";
 import { type AidLine, type Beneficiary, type FundType } from "./disbursement";
 import type { ActivityTraceData } from "./realization-source";
+import { loadOperationalCosts } from "./operational-cost-sql";
+import { operationalCostTotals } from "./operational-cost";
 
 type Executor = { execute: (query: SQL) => Promise<unknown> };
 
@@ -542,6 +544,11 @@ async function loadActivityAccountability(
     `)
   );
 
+  // ADR-0042 rows sit beside the legacy advance/expense rows until #128 migrates them.
+  const costState = await loadOperationalCosts(executor, institutionId, proposal.id);
+  const costs = operationalCostTotals(costState.items, costState.panjar);
+  const plus = (legacy: string | undefined, added: string) => (BigInt(legacy ?? "0") + BigInt(added)).toString();
+
   return calculateActivityAccountability({
     activityId: activityRow.id,
     proposalId: proposal.id,
@@ -550,9 +557,9 @@ async function loadActivityAccountability(
     currencyUnit: activityRow.currency_unit,
     isRemainderClosed,
     totalAllocatedAmount: activityRow.total_allocated,
-    totalDirectExpensesIdr: expenses[0]?.direct_total ?? "0",
-    totalAccountedExpensesIdr: expenses[0]?.accounted_total ?? "0",
-    totalAdvancesIdr: advances[0]?.total ?? "0",
+    totalDirectExpensesIdr: plus(expenses[0]?.direct_total, costs.directExpensesIdr),
+    totalAccountedExpensesIdr: plus(expenses[0]?.accounted_total, costs.panjarAccountedIdr),
+    totalAdvancesIdr: plus(advances[0]?.total, costs.panjarNetIdr),
     totalContributionShortfall: await activityShortfall(executor, institutionId, activityId),
     aidLines: summarizeAidLines(
       aidLines,

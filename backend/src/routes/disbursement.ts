@@ -104,6 +104,7 @@ import {
   RevisionCapFloorError,
   RevisionNotFoundError,
   RevisionSupersededError,
+  MAX_COST_BATCH,
   type ProposalContributor,
   type StoredProposalDraft,
 } from "../disbursement-store";
@@ -120,6 +121,7 @@ import { createRestrictedDocuments, DocumentError } from "../restricted-document
 // no domain-specific wording, so a second copy here would just be a second
 // place for it to drift.
 import { operationalActor, OperationalAccessDenied, requestedIdr } from "../operational-access";
+import { isCalendarDate, MIN_CORRECTION_REASON, validateCostItemInput, validatePanjarInput } from "../operational-cost";
 import { readJson, text } from "./evidence-preparation";
 
 const randomHex = (bytes: number): Hex =>
@@ -2889,6 +2891,159 @@ disbursementRoutes.get("/proposals/:id/expenses", async (c) => {
   if (!access.ok) return access.response;
   const expenses = await runtime.disbursement.listExpenses(access.session.institutionId, access.draft.id);
   return c.json({ success: true, expenses });
+});
+
+// ---------------------------------------------------------------------------
+// Biaya operasional per item, panjar dan talangan (ADR-0042, #125)
+// ---------------------------------------------------------------------------
+
+const COSTS = "/proposals/:id/operational-costs";
+
+/** Every write here is retry-safe: the same operation id replays, a changed body is refused. */
+async function costWriter(c: Context, body: Record<string, unknown>) {
+  const runtime = runtimeOf();
+  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
+  if (!access.ok) return { ok: false as const, response: access.response };
+  const operationId = text(body.operationId);
+  if (!operationId) {
+    return { ok: false as const, response: badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.") };
+  }
+  return {
+    ok: true as const,
+    runtime,
+    institutionId: access.session.institutionId,
+    proposalId: access.draft.id,
+    actor: { account: access.session.account, officerId: access.officer.id },
+    operation: { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) },
+  };
+}
+
+const correctionReason = (body: Record<string, unknown>) => {
+  const reason = text(body.reason);
+  return reason.length >= MIN_CORRECTION_REASON ? reason : null;
+};
+
+const versionOf = (body: Record<string, unknown>) =>
+  typeof body.expectedVersion === "number" && Number.isInteger(body.expectedVersion) ? body.expectedVersion : null;
+
+disbursementRoutes.get(COSTS, async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const overview = await runtime.disbursement.getOperationalCosts(access.session.institutionId, access.draft.id);
+  return c.json({ success: true, ...overview });
+});
+
+/** Catat beberapa baris biaya sekaligus; tiap baris dinilai sendiri dan hasilnya dikembalikan per baris. */
+disbursementRoutes.post(`${COSTS}/items`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const items = body.items;
+  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_COST_BATCH) {
+    return badRequest(c, `Kirim 1 sampai ${MAX_COST_BATCH} baris biaya.`);
+  }
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const result = await writer.runtime.disbursement.recordCostItems(
+    writer.institutionId, writer.proposalId, items, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, ...result }, 201);
+});
+
+disbursementRoutes.post(`${COSTS}/items/:itemId/correct`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const expectedVersion = versionOf(body);
+  if (expectedVersion === null) return badRequest(c, "Versi baris yang dikoreksi (expectedVersion) wajib disertakan.");
+  const reason = correctionReason(body);
+  if (!reason) return badRequest(c, `Alasan koreksi wajib diisi (minimal ${MIN_CORRECTION_REASON} karakter).`);
+  const validated = validateCostItemInput(body.item);
+  if (!validated.ok) {
+    return c.json({ success: false, error: "Isian koreksi belum sah.", issues: validated.issues }, 400);
+  }
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const item = await writer.runtime.disbursement.correctCostItem(
+    writer.institutionId, writer.proposalId, c.req.param("itemId"),
+    { expectedVersion, reason, item: validated.value }, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, item });
+});
+
+disbursementRoutes.post(`${COSTS}/items/:itemId/void`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const expectedVersion = versionOf(body);
+  if (expectedVersion === null) return badRequest(c, "Versi baris yang dibatalkan (expectedVersion) wajib disertakan.");
+  const reason = correctionReason(body);
+  if (!reason) return badRequest(c, `Alasan pembatalan wajib diisi (minimal ${MIN_CORRECTION_REASON} karakter).`);
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const item = await writer.runtime.disbursement.voidCostItem(
+    writer.institutionId, writer.proposalId, c.req.param("itemId"),
+    { expectedVersion, reason }, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, item });
+});
+
+disbursementRoutes.get(`${COSTS}/items/:itemId/history`, async (c) => {
+  const runtime = runtimeOf();
+  const access = await realizationReader(c, runtime);
+  if (!access.ok) return access.response;
+  const history = await runtime.disbursement.costItemHistory(access.session.institutionId, access.draft.id, c.req.param("itemId"));
+  return c.json({ success: true, history });
+});
+
+/** Panjar: uang lembaga yang dibawa petugas, dipertanggungjawabkan dengan baris biaya. */
+disbursementRoutes.post(`${COSTS}/panjar`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const validated = validatePanjarInput(body);
+  if (!validated.ok) return c.json({ success: false, error: "Isian panjar belum sah.", issues: validated.issues }, 400);
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const panjar = await writer.runtime.disbursement.issuePanjar(
+    writer.institutionId, writer.proposalId, validated.value, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, panjar }, 201);
+});
+
+disbursementRoutes.post(`${COSTS}/panjar/:panjarId/returns`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const amountIdr = parsePositiveIdr(body.amountIdr);
+  const returnedOn = text(body.returnedOn);
+  const reference = text(body.reference);
+  if (!amountIdr || !isCalendarDate(returnedOn) || !reference) {
+    return badRequest(c, "Nominal pengembalian (rupiah bulat lebih dari nol), tanggal (YYYY-MM-DD), dan rujukannya wajib diisi.");
+  }
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const panjar = await writer.runtime.disbursement.returnPanjar(
+    writer.institutionId, writer.proposalId, c.req.param("panjarId"),
+    { amountIdr, returnedOn, reference }, writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, panjar }, 201);
+});
+
+/** Penggantian talangan satu petugas; baris yang sudah diganti tertutup untuk koreksi. */
+disbursementRoutes.post(`${COSTS}/reimbursements`, async (c) => {
+  const body = await readJson(c);
+  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+  const holderOfficerId = text(body.holderOfficerId);
+  const itemIds = Array.isArray(body.itemIds) ? body.itemIds.map(text).filter(Boolean) : [];
+  const paidOn = text(body.paidOn);
+  const reference = text(body.reference);
+  if (!holderOfficerId || itemIds.length === 0 || !isCalendarDate(paidOn) || !reference) {
+    return badRequest(c, "Petugas, baris talangan yang diganti, tanggal penggantian (YYYY-MM-DD), dan rujukan pembayarannya wajib diisi.");
+  }
+  const writer = await costWriter(c, body);
+  if (!writer.ok) return writer.response;
+  const reimbursement = await writer.runtime.disbursement.reimburseTalangan(
+    writer.institutionId, writer.proposalId, { holderOfficerId, itemIds, paidOn, reference },
+    writer.actor, writer.runtime.now(), writer.operation
+  );
+  return c.json({ success: true, reimbursement }, 201);
 });
 
 /** Antrean pengajuan yang memiliki realisasi dengan bukti belum lengkap. */

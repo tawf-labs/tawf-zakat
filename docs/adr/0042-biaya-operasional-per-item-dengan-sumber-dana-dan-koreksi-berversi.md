@@ -1,6 +1,7 @@
 # ADR-0042: Biaya Operasional per Item dengan Sumber Dana dan Koreksi Berversi
 
-- Status: Accepted — 2026-10-01, keputusan pengguna. Rancangan lengkap ada di [dokumen desain](../design/biaya-operasional-penyaluran.md). **Belum diimplementasi.**
+- Status: Accepted — 2026-10-01, keputusan pengguna. Rancangan lengkap ada di [dokumen desain](../design/biaya-operasional-penyaluran.md).
+- Implementasi: model data dan API selesai di #125 (2026-10-01). Nota/berkas (#126), UI grid (#127), dan migrasi data lama (#128) belum. Penolakan koreksi pada baris yang sudah tercakup laporan periode terbit belum ditegakkan, karena status terbit hanya terbaca dari registry on-chain.
 - Related: ADR-0039, ADR-0041. Mengganti rancangan uang muka dan biaya operasional pada `AdvancesAndExpensesModal` (ticket #95).
 
 Rancangan saat ini mencatat uang muka atas nama akun yang login, memakai label yang membingungkan ("Payee", "Dokumen rujukan"), tidak mampu menangani banyak petugas, dan tidak menyimpan foto bukti. Di Lazismu Tangsel, biaya kegiatan paling sering *ditalangi* petugas, kadang dibayar dari *panjar*, dan kadang dibayar langsung oleh bendahara. Petugas lapangan sering tidak punya akses ke platform, sehingga nota dikumpulkan lalu diinput admin. Struk kertas termal memudar, padahal audit dari Lazismu pusat membutuhkan struk dan kuitansi bertahun-tahun kemudian.

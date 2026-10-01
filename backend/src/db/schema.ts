@@ -1,4 +1,4 @@
-import { pgTable, primaryKey, uniqueIndex, serial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, primaryKey, uniqueIndex, serial, bigserial, text, integer, bigint, boolean, timestamp } from "drizzle-orm/pg-core";
 
 // 1. Merkle Batches Table
 export const merkleBatches = pgTable("merkle_batches", {
@@ -919,6 +919,86 @@ export const disbursementRealizationExpenses = pgTable("disbursement_realization
   recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
   recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
 });
+
+// Biaya operasional per item, panjar dan talangan (ADR-0042, #125). The runtime creates these
+// from `OPERATIONAL_COST_SCHEMA_STATEMENTS` in `../operational-cost-sql.ts`, the source of truth.
+export const operationalCostPanjar = pgTable("operational_cost_panjar", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  holderOfficerId: text("holder_officer_id").notNull().references(() => officerProfiles.id),
+  amountIdr: text("amount_idr").notNull(),
+  purpose: text("purpose").notNull(),
+  cashOutRef: text("cash_out_ref").notNull(),
+  issuedOn: text("issued_on").notNull(),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedByAccount: text("recorded_by_account").notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
+export const operationalCostPanjarReturns = pgTable("operational_cost_panjar_returns", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  panjarId: text("panjar_id").notNull().references(() => operationalCostPanjar.id),
+  amountIdr: text("amount_idr").notNull(),
+  returnedOn: text("returned_on").notNull(),
+  reference: text("reference").notNull(),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedByAccount: text("recorded_by_account").notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
+export const operationalCostReimbursements = pgTable("operational_cost_reimbursements", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  holderOfficerId: text("holder_officer_id").notNull().references(() => officerProfiles.id),
+  totalIdr: text("total_idr").notNull(),
+  paidOn: text("paid_on").notNull(),
+  reference: text("reference").notNull(),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedByAccount: text("recorded_by_account").notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
+export const operationalCostItems = pgTable("operational_cost_items", {
+  id: text("id").primaryKey(),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  proposalId: text("proposal_id").notNull().references(() => proposalDrafts.id),
+  version: integer("version").notNull(),
+  status: text("status").notNull(), // 'ACTIVE' | 'VOIDED'
+  spentOn: text("spent_on").notNull(),
+  purpose: text("purpose").notNull(),
+  quantity: text("quantity"),
+  unit: text("unit"),
+  unitPriceIdr: text("unit_price_idr"),
+  amountIdr: text("amount_idr").notNull(),
+  payee: text("payee").notNull(),
+  fundingKind: text("funding_kind").notNull(), // 'KAS_LEMBAGA' | 'TALANGAN' | 'PANJAR'
+  holderOfficerId: text("holder_officer_id").references(() => officerProfiles.id),
+  panjarId: text("panjar_id").references(() => operationalCostPanjar.id),
+  reimbursementId: text("reimbursement_id").references(() => operationalCostReimbursements.id),
+  recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
+  recordedByAccount: text("recorded_by_account").notNull(),
+  recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  seq: bigserial("seq", { mode: "number" }),
+});
+
+export const operationalCostItemVersions = pgTable("operational_cost_item_versions", {
+  itemId: text("item_id").notNull().references(() => operationalCostItems.id),
+  institutionId: text("institution_id").notNull().references(() => institutions.id),
+  version: integer("version").notNull(),
+  change: text("change").notNull(), // 'RECORD' | 'CORRECT' | 'VOID'
+  itemJson: text("item_json").notNull(),
+  reason: text("reason"),
+  actorOfficerId: text("actor_officer_id").notNull().references(() => officerProfiles.id),
+  actorAccount: text("actor_account").notNull(),
+  at: bigint("at", { mode: "number" }).notNull(),
+}, table => [primaryKey({ columns: [table.itemId, table.version] })]);
 
 export const disbursementRealizationOperations = pgTable("disbursement_realization_operations", {
   institutionId: text("institution_id").notNull().references(() => institutions.id),

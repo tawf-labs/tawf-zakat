@@ -6,6 +6,30 @@
 import { timingSafeEqual } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  OPERATIONAL_COST_SCHEMA_STATEMENTS,
+  costItemFrom,
+  fundingColumns,
+  itemSnapshot,
+  itemVersionFrom,
+  loadOperationalCosts,
+  reimbursementFrom,
+} from "./operational-cost-sql";
+import {
+  operationalCostTotals,
+  panjarRemainingIdr,
+  summarizeHolders,
+  validateCostItemInput,
+  type CostIssue,
+  type CostItemInput,
+  type CostItemRecord,
+  type CostItemVersionRecord,
+  type HolderSummary,
+  type OperationalCostTotals,
+  type PanjarInput,
+  type PanjarRecord,
+  type ReimbursementRecord,
+} from "./operational-cost";
+import {
   addDecimalStrings,
   approvedIdrOf,
   approvedQuantityOf,
@@ -486,6 +510,115 @@ async function freezeSubmission(
   `);
 
   return { current, policy, version: submittedVersion, warnings };
+}
+
+/** Proposal states in which costs may be recorded: once aid is decided, and after it ends. */
+const COST_RECORDING_STATUSES: ProposalStatus[] = ["APPROVED", "REMAINDER_CLOSED", "CANCELLED"];
+
+/** A batch is a spreadsheet paste, not a bulk import: bounded so one request stays one transaction. */
+export const MAX_COST_BATCH = 500;
+
+export type CostRecordingResult =
+  | { index: number; item: CostItemRecord }
+  | { index: number; issues: CostIssue[] };
+
+export type OperationalCostOverview = {
+  items: CostItemRecord[];
+  panjar: PanjarRecord[];
+  reimbursements: ReimbursementRecord[];
+  holders: HolderSummary[];
+  totals: OperationalCostTotals;
+};
+
+type CostActor = { account: string; officerId: string };
+
+/**
+ * Serialises every cost write on the proposal row (the same lock realization and
+ * reallocation take, #107 AC04) and refuses a proposal not yet decided.
+ */
+async function lockProposalForCosts(tx: Executor, institutionId: string, proposalId: string) {
+  const row = rowsOf(await tx.execute(sql`
+    SELECT id, status FROM proposal_drafts
+    WHERE id = ${proposalId} AND institution_id = ${institutionId}
+    FOR UPDATE
+  `))[0];
+  if (!row) throw new RealizationNotFoundError("Pengajuan tidak ditemukan.");
+  if (!COST_RECORDING_STATUSES.includes(row.status as ProposalStatus)) {
+    throw new ProposalStateConflictError(
+      `Biaya operasional hanya dicatat pada pengajuan yang sudah disetujui/terbit; status pengajuan ini "${row.status}".`
+    );
+  }
+}
+
+async function activeOfficerIds(tx: Executor, institutionId: string): Promise<Set<string>> {
+  return new Set(rowsOf(await tx.execute(sql`
+    SELECT id FROM officer_profiles WHERE institution_id = ${institutionId} AND is_active = TRUE
+  `)).map((row) => row.id as string));
+}
+
+/**
+ * Database-side checks of a row that already passed `validateCostItemInput`: the holder is
+ * an active officer of this institution, and a panjar row fits what that panjar has left.
+ * `spent` carries this batch's earlier rows, so a paste cannot overdraw a panjar either.
+ */
+function fundingIssue(
+  input: CostItemInput,
+  officers: Set<string>,
+  panjars: PanjarRecord[],
+  items: CostItemRecord[],
+  spent: Map<string, bigint>
+): CostIssue | null {
+  const source = input.fundingSource;
+  if (source.kind === "TALANGAN" && !officers.has(source.holderOfficerId)) {
+    return { field: "fundingSource", message: "Petugas yang menalangi tidak terdaftar sebagai petugas aktif lembaga ini." };
+  }
+  if (source.kind === "PANJAR") {
+    const panjar = panjars.find((entry) => entry.id === source.panjarId);
+    if (!panjar) return { field: "fundingSource", message: "Panjar yang dirujuk tidak ada pada pengajuan ini." };
+    const remaining = panjarRemainingIdr(panjar, items) - (spent.get(panjar.id) ?? 0n);
+    if (BigInt(input.amountIdr) > remaining) {
+      return { field: "fundingSource", message: `Biaya melebihi sisa panjar ${panjar.cashOutRef} (Rp${remaining > 0n ? remaining : 0n}).` };
+    }
+  }
+  return null;
+}
+
+async function insertItemVersion(
+  tx: Executor,
+  institutionId: string,
+  item: CostItemRecord,
+  change: "RECORD" | "CORRECT" | "VOID",
+  reason: string | null,
+  actor: CostActor,
+  now: number
+) {
+  await tx.execute(sql`
+    INSERT INTO operational_cost_item_versions (
+      item_id, institution_id, version, change, item_json, reason, actor_officer_id, actor_account, at
+    ) VALUES (
+      ${item.id}, ${institutionId}, ${item.version}, ${change}, ${JSON.stringify(itemSnapshot(item, item.status))},
+      ${reason}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+    )
+  `);
+}
+
+/** The current item, locked, and refused when it may no longer change (ADR-0042). */
+async function lockChangeableItem(tx: Executor, institutionId: string, proposalId: string, itemId: string, expectedVersion: number) {
+  const row = rowsOf(await tx.execute(sql`
+    SELECT * FROM operational_cost_items
+    WHERE id = ${itemId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
+    FOR UPDATE
+  `))[0];
+  if (!row) throw new RealizationNotFoundError("Baris biaya tidak ditemukan pada pengajuan ini.");
+  const item = costItemFrom(row);
+  if (item.version !== expectedVersion) {
+    throw new RealizationStateError("Baris biaya sudah diubah sejak versi yang Anda muat. Muat ulang sebelum mengoreksi.", "STALE_VERSION");
+  }
+  if (item.status === "VOIDED") throw new RealizationStateError("Baris biaya sudah dibatalkan dan tidak dapat diubah lagi.");
+  if (item.reimbursementId) {
+    throw new RealizationStateError("Talangan pada baris ini sudah diganti lembaga; baris tidak dapat dikoreksi atau dibatalkan.");
+  }
+  return item;
 }
 
 async function mutateOnce<T>(db: DisbursementDatabase, institutionId: string, operation: DraftOperation,
@@ -1097,6 +1230,11 @@ async function realizationSummaryOf(tx: Executor, institutionId: string, draft: 
     SELECT amount_idr FROM disbursement_realization_expenses
     WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
   `)).map((row) => ({ amountIdr: row.amount_idr as string }));
+  // ADR-0042 rows sit beside the legacy advance/expense rows until #128 migrates them.
+  const costState = await loadOperationalCosts(tx, institutionId, draft.id);
+  const costs = operationalCostTotals(costState.items, costState.panjar);
+  advances.push({ amountIdr: costs.panjarNetIdr });
+  expenses.push({ amountIdr: costs.totalItemsIdr });
   return calculateProposalRealizationSummary(
     {
       ...draft,
@@ -1569,6 +1707,7 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      result_json TEXT,
      PRIMARY KEY (institution_id, account, operation_id)
    );`,
+  ...OPERATIONAL_COST_SCHEMA_STATEMENTS,
 ] as const;
 
 /** What cancellation and remainder closure both carry: a signed institutional decision. */
@@ -3528,6 +3667,257 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       return disputesWithExaminations(db, institutionId, rows);
     },
 
+    // -----------------------------------------------------------------------
+    // Biaya operasional per item, panjar dan talangan (ADR-0042, #125)
+    // -----------------------------------------------------------------------
+
+    async getOperationalCosts(institutionId: string, proposalId: string): Promise<OperationalCostOverview> {
+      const state = await loadOperationalCosts(db, institutionId, proposalId);
+      const names = new Map(rowsOf(await db.execute(sql`
+        SELECT id, display_name FROM officer_profiles WHERE institution_id = ${institutionId}
+      `)).map((row) => [row.id as string, row.display_name as string]));
+      return {
+        ...state,
+        holders: summarizeHolders(state.items, state.panjar, names),
+        totals: operationalCostTotals(state.items, state.panjar),
+      };
+    },
+
+    /** Records each row on its own merits: valid rows are recorded, the others come back with their issues. */
+    async recordCostItems(
+      institutionId: string,
+      proposalId: string,
+      rows: unknown[],
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<{ results: CostRecordingResult[] }> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const officers = await activeOfficerIds(tx, institutionId);
+        const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        const spent = new Map<string, bigint>();
+        const results: CostRecordingResult[] = [];
+
+        for (const [index, raw] of rows.entries()) {
+          const validated = validateCostItemInput(raw);
+          if (!validated.ok) {
+            results.push({ index, issues: validated.issues });
+            continue;
+          }
+          const input = validated.value;
+          const issue = fundingIssue(input, officers, state.panjar, state.items, spent);
+          if (issue) {
+            results.push({ index, issues: [issue] });
+            continue;
+          }
+          if (input.fundingSource.kind === "PANJAR") {
+            const panjarId = input.fundingSource.panjarId;
+            spent.set(panjarId, (spent.get(panjarId) ?? 0n) + BigInt(input.amountIdr));
+          }
+
+          const funding = fundingColumns(input.fundingSource);
+          const row = rowsOf(await tx.execute(sql`
+            INSERT INTO operational_cost_items (
+              id, institution_id, proposal_id, version, status, spent_on, purpose, quantity, unit, unit_price_idr,
+              amount_idr, payee, funding_kind, holder_officer_id, panjar_id, reimbursement_id,
+              recorded_by_officer_id, recorded_by_account, recorded_at, updated_at
+            ) VALUES (
+              ${`opc-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, 1, 'ACTIVE', ${input.spentOn}, ${input.purpose},
+              ${input.quantity}, ${input.unit}, ${input.unitPriceIdr}, ${input.amountIdr}, ${input.payee},
+              ${funding.kind}, ${funding.holderOfficerId}, ${funding.panjarId}, NULL,
+              ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}, ${now}
+            )
+            RETURNING *
+          `))[0];
+          const item = costItemFrom(row);
+          await insertItemVersion(tx, institutionId, item, "RECORD", null, actor, now);
+          results.push({ index, item });
+        }
+        return { results };
+      }, "disbursement_realization_operations");
+    },
+
+    async issuePanjar(
+      institutionId: string,
+      proposalId: string,
+      input: PanjarInput,
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<PanjarRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        if (!(await activeOfficerIds(tx, institutionId)).has(input.holderOfficerId)) {
+          throw new RealizationInputError("Petugas penerima panjar tidak terdaftar sebagai petugas aktif lembaga ini.");
+        }
+        const id = `pjr-${crypto.randomUUID()}`;
+        await tx.execute(sql`
+          INSERT INTO operational_cost_panjar (
+            id, institution_id, proposal_id, holder_officer_id, amount_idr, purpose, cash_out_ref, issued_on,
+            recorded_by_officer_id, recorded_by_account, recorded_at
+          ) VALUES (
+            ${id}, ${institutionId}, ${proposalId}, ${input.holderOfficerId}, ${input.amountIdr}, ${input.purpose},
+            ${input.cashOutRef}, ${input.issuedOn}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+        `);
+        const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        return state.panjar.find((entry) => entry.id === id)!;
+      }, "disbursement_realization_operations");
+    },
+
+    /** Cash coming back from a panjar; never more than the panjar still leaves open. */
+    async returnPanjar(
+      institutionId: string,
+      proposalId: string,
+      panjarId: string,
+      input: { amountIdr: string; returnedOn: string; reference: string },
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<PanjarRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        const panjar = state.panjar.find((entry) => entry.id === panjarId);
+        if (!panjar) throw new RealizationNotFoundError("Panjar tidak ditemukan pada pengajuan ini.");
+        const remaining = panjarRemainingIdr(panjar, state.items);
+        if (BigInt(input.amountIdr) > remaining) {
+          throw new RealizationInputError(`Pengembalian melebihi sisa panjar ${panjar.cashOutRef} (Rp${remaining}).`);
+        }
+        await tx.execute(sql`
+          INSERT INTO operational_cost_panjar_returns (
+            id, institution_id, panjar_id, amount_idr, returned_on, reference,
+            recorded_by_officer_id, recorded_by_account, recorded_at
+          ) VALUES (
+            ${`pjk-${crypto.randomUUID()}`}, ${institutionId}, ${panjarId}, ${input.amountIdr}, ${input.returnedOn},
+            ${input.reference}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+        `);
+        return (await loadOperationalCosts(tx, institutionId, proposalId)).panjar.find((entry) => entry.id === panjarId)!;
+      }, "disbursement_realization_operations");
+    },
+
+    /** Pays back one officer's talangan rows at once; each row can be paid back only once. */
+    async reimburseTalangan(
+      institutionId: string,
+      proposalId: string,
+      input: { holderOfficerId: string; itemIds: string[]; paidOn: string; reference: string },
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<ReimbursementRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        const ids = [...new Set(input.itemIds)];
+        const items = ids.map((id) => state.items.find((item) => item.id === id));
+        if (items.some((item) => !item)) throw new RealizationInputError("Sebagian baris biaya tidak ada pada pengajuan ini.");
+        const rows = items as CostItemRecord[];
+        const foreign = rows.find((item) =>
+          item.status !== "ACTIVE" ||
+          item.fundingSource.kind !== "TALANGAN" ||
+          item.fundingSource.holderOfficerId !== input.holderOfficerId
+        );
+        if (foreign) {
+          throw new RealizationInputError(
+            `Baris "${foreign.purpose}" bukan talangan aktif milik petugas ini; penggantian hanya untuk talangan satu petugas.`
+          );
+        }
+        const paid = rows.find((item) => item.reimbursementId);
+        if (paid) throw new RealizationStateError(`Talangan "${paid.purpose}" sudah pernah diganti.`);
+
+        const total = rows.reduce((sum, item) => sum + BigInt(item.amountIdr), 0n).toString();
+        const id = `rmb-${crypto.randomUUID()}`;
+        const row = rowsOf(await tx.execute(sql`
+          INSERT INTO operational_cost_reimbursements (
+            id, institution_id, proposal_id, holder_officer_id, total_idr, paid_on, reference,
+            recorded_by_officer_id, recorded_by_account, recorded_at
+          ) VALUES (
+            ${id}, ${institutionId}, ${proposalId}, ${input.holderOfficerId}, ${total}, ${input.paidOn}, ${input.reference},
+            ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+          )
+          RETURNING *
+        `))[0];
+        await tx.execute(sql`
+          UPDATE operational_cost_items SET reimbursement_id = ${id}, updated_at = ${now}
+          WHERE institution_id = ${institutionId} AND id IN (${sql.join(ids.map((itemId) => sql`${itemId}`), sql`, `)})
+        `);
+        return reimbursementFrom(row, ids);
+      }, "disbursement_realization_operations");
+    },
+
+    /** Replaces an item's content as a new version; the earlier version stays readable (ADR-0042). */
+    async correctCostItem(
+      institutionId: string,
+      proposalId: string,
+      itemId: string,
+      input: { expectedVersion: number; reason: string; item: CostItemInput },
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<CostItemRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const current = await lockChangeableItem(tx, institutionId, proposalId, itemId, input.expectedVersion);
+        const state = await loadOperationalCosts(tx, institutionId, proposalId);
+        // The row's own current spend is given back to its panjar before the new amount is checked.
+        const others = state.items.filter((item) => item.id !== itemId);
+        const issue = fundingIssue(input.item, await activeOfficerIds(tx, institutionId), state.panjar, others, new Map());
+        if (issue) throw new RealizationInputError(issue.message);
+
+        const next = input.item;
+        const funding = fundingColumns(next.fundingSource);
+        const row = rowsOf(await tx.execute(sql`
+          UPDATE operational_cost_items SET
+            version = ${current.version + 1}, spent_on = ${next.spentOn}, purpose = ${next.purpose},
+            quantity = ${next.quantity}, unit = ${next.unit}, unit_price_idr = ${next.unitPriceIdr},
+            amount_idr = ${next.amountIdr}, payee = ${next.payee}, funding_kind = ${funding.kind},
+            holder_officer_id = ${funding.holderOfficerId}, panjar_id = ${funding.panjarId}, updated_at = ${now}
+          WHERE id = ${itemId} AND institution_id = ${institutionId} AND version = ${current.version}
+          RETURNING *
+        `))[0];
+        const item = costItemFrom(row);
+        await insertItemVersion(tx, institutionId, item, "CORRECT", input.reason, actor, now);
+        return item;
+      }, "disbursement_realization_operations");
+    },
+
+    /** A double entry stops counting but stays on record, struck through, with its reason. */
+    async voidCostItem(
+      institutionId: string,
+      proposalId: string,
+      itemId: string,
+      input: { expectedVersion: number; reason: string },
+      actor: CostActor,
+      now: number,
+      operation: DraftOperation
+    ): Promise<CostItemRecord> {
+      return mutateOnce(db, institutionId, operation, async (tx) => {
+        await lockProposalForCosts(tx, institutionId, proposalId);
+        const current = await lockChangeableItem(tx, institutionId, proposalId, itemId, input.expectedVersion);
+        const row = rowsOf(await tx.execute(sql`
+          UPDATE operational_cost_items SET version = ${current.version + 1}, status = 'VOIDED', updated_at = ${now}
+          WHERE id = ${itemId} AND institution_id = ${institutionId} AND version = ${current.version}
+          RETURNING *
+        `))[0];
+        const item = costItemFrom(row);
+        await insertItemVersion(tx, institutionId, item, "VOID", input.reason, actor, now);
+        return item;
+      }, "disbursement_realization_operations");
+    },
+
+    async costItemHistory(institutionId: string, proposalId: string, itemId: string): Promise<CostItemVersionRecord[]> {
+      const rows = rowsOf(await db.execute(sql`
+        SELECT v.* FROM operational_cost_item_versions v
+        JOIN operational_cost_items i ON i.id = v.item_id
+        WHERE v.institution_id = ${institutionId} AND i.proposal_id = ${proposalId} AND v.item_id = ${itemId}
+        ORDER BY v.version ASC
+      `));
+      if (rows.length === 0) throw new RealizationNotFoundError("Baris biaya tidak ditemukan pada pengajuan ini.");
+      return rows.map(itemVersionFrom);
+    },
+
     async recordAdvance(
       institutionId: string,
       proposalId: string,
@@ -4609,6 +4999,26 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         payee: row.payee,
         recordedAt: asSeconds(row.recorded_at),
       }));
+
+      // ADR-0042 rows join the legacy ones until #128 migrates them: a panjar reads as an
+      // advance net of what came back, a live cost row as an expense against its panjar.
+      const costState = await loadOperationalCosts(db, institutionId, null);
+      for (const panjar of costState.panjar) {
+        const returned = panjar.returns.reduce((sum, ret) => sum + BigInt(ret.amountIdr), 0n);
+        const net = BigInt(panjar.amountIdr) - returned;
+        advances.push({
+          id: panjar.id, proposalId: panjar.proposalId, amountIdr: (net > 0n ? net : 0n).toString(),
+          purpose: panjar.purpose, reference: panjar.cashOutRef, issuedAt: panjar.recordedAt,
+        });
+      }
+      for (const item of costState.items) {
+        if (item.status !== "ACTIVE") continue;
+        expenses.push({
+          id: item.id, proposalId: item.proposalId,
+          advanceId: item.fundingSource.kind === "PANJAR" ? item.fundingSource.panjarId : null,
+          amountIdr: item.amountIdr, purpose: item.purpose, payee: item.payee, recordedAt: item.recordedAt,
+        });
+      }
 
       return { realizations, advances, expenses };
     },
