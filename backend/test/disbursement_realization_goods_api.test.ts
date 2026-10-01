@@ -224,7 +224,7 @@ async function prepareApprovedGoodsProposal(options?: {
   expect(propRes.status).toBe(201);
   const draft = (await propRes.json()).draft;
 
-  for (const cat of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+  for (const cat of ["PROPOSAL_LETTER", "RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY"]) {
     expect((await post(`/proposals/${draft.id}/documents`, documentInput(cat), amilToken)).status).toBe(201);
   }
 

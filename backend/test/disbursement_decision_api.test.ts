@@ -175,7 +175,7 @@ async function prepareReadyProposal(options?: {
   const draft = (await propRes.json()).draft;
 
   // Upload required documents
-  for (const cat of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+  for (const cat of ["PROPOSAL_LETTER", "RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY"]) {
     expect((await post(`/proposals/${draft.id}/documents`, documentInput(cat), amilToken)).status).toBe(201);
   }
 

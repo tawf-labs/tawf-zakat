@@ -377,6 +377,7 @@ export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
 
 export type ProposalDocumentCategory =
   | "PROPOSAL_LETTER"
+  | "RECIPIENT_VERIFICATION"
   | "BENEFICIARY_IDENTITY"
   | "ALTERNATIVE_IDENTITY_PROOF"
   | "REPRESENTATION_PROOF"
@@ -386,6 +387,7 @@ export type ProposalDocumentCategory =
 
 export const PROPOSAL_DOCUMENT_CATEGORIES: ProposalDocumentCategory[] = [
   "PROPOSAL_LETTER",
+  "RECIPIENT_VERIFICATION",
   "BENEFICIARY_IDENTITY",
   "ALTERNATIVE_IDENTITY_PROOF",
   "REPRESENTATION_PROOF",
@@ -399,6 +401,7 @@ export const isProposalDocumentCategory = (value: unknown): value is ProposalDoc
 
 export const PROPOSAL_DOCUMENT_CATEGORY_LABELS: Record<ProposalDocumentCategory, string> = {
   PROPOSAL_LETTER: "Surat Permohonan / Proposal",
+  RECIPIENT_VERIFICATION: "Berita Acara / Surat Keterangan Verifikasi Penerima",
   BENEFICIARY_IDENTITY: "KTP / Kartu Keluarga",
   ALTERNATIVE_IDENTITY_PROOF: "Surat Keterangan Identitas Alternatif",
   REPRESENTATION_PROOF: "Surat Kuasa / Dokumen Perwakilan",
@@ -427,6 +430,8 @@ export type ProposalDocumentRecord = {
 export type DisbursementPolicy = {
   institutionId: string;
   requireProposalLetter: boolean;
+  /** One document verifying the whole roster, e.g. a berita acara or RT/RW letter (ADR-0040). */
+  requireRecipientVerification: boolean;
   requireIdentityDoc: boolean;
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;
@@ -437,12 +442,18 @@ export type DisbursementPolicy = {
   updatedBy: string;
 };
 
+/**
+ * One recipient verification document is enough by default; per-mustahik KTP/KK,
+ * alternative identity and guardian proofs are opt-in for institutions whose SOP
+ * asks for them (ADR-0040).
+ */
 export const DEFAULT_DISBURSEMENT_POLICY = (institutionId: string): DisbursementPolicy => ({
   institutionId,
-  requireProposalLetter: true,
-  requireIdentityDoc: true,
-  requireAlternativeIdProof: true,
-  requireGuardianProof: true,
+  requireProposalLetter: false,
+  requireRecipientVerification: true,
+  requireIdentityDoc: false,
+  requireAlternativeIdProof: false,
+  requireGuardianProof: false,
   warnRecurringAid: true,
   sopRequiresMultiSignerQuorum: false,
   version: 1,
@@ -463,7 +474,11 @@ export function validateProposalForSubmission(
   documents: Pick<ProposalDocumentRecord, "category" | "beneficiaryId" | "storageStatus">[],
   policy: Pick<
     DisbursementPolicy,
-    "requireProposalLetter" | "requireIdentityDoc" | "requireAlternativeIdProof" | "requireGuardianProof"
+    | "requireProposalLetter"
+    | "requireRecipientVerification"
+    | "requireIdentityDoc"
+    | "requireAlternativeIdProof"
+    | "requireGuardianProof"
   >
 ): ProposalCompletenessIssue[] {
   const issues: ProposalCompletenessIssue[] = [];
@@ -490,6 +505,19 @@ export function validateProposalForSubmission(
         rowIndex: null,
         field: "documents.proposalLetter",
         message: "Dokumen proposal / surat permohonan wajib diunggah sebelum pengajuan diajukan.",
+      });
+    }
+  }
+
+  if (policy.requireRecipientVerification) {
+    const hasVerification = storedDocs.some((d) => d.category === "RECIPIENT_VERIFICATION");
+    if (!hasVerification) {
+      issues.push({
+        scope: "document",
+        rowIndex: null,
+        field: "documents.recipientVerification",
+        message:
+          "Berita acara / surat keterangan verifikasi penerima (mis. dari RT/RW) wajib diunggah sebelum pengajuan diajukan.",
       });
     }
   }

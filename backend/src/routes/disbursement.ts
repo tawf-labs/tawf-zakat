@@ -37,6 +37,7 @@ import {
   evaluateRecurringAidWarnings,
   FUND_TYPES,
   isFundType,
+  DEFAULT_DISBURSEMENT_POLICY,
   isProposalDocumentCategory,
   SOP_QUORUM_HELD_MESSAGE,
   summarizeProposalDraft,
@@ -563,14 +564,18 @@ disbursementRoutes.post("/policy", async (c) => {
   if (auth.session.role !== "ADMIN") return refuse(c, 403, "forbidden");
 
   const expectedVersion = typeof body.expectedVersion === "number" ? body.expectedVersion : 1;
+  const defaults = DEFAULT_DISBURSEMENT_POLICY(auth.session.institutionId);
+  const flag = (key: keyof typeof defaults) =>
+    body[key] !== undefined ? Boolean(body[key]) : Boolean(defaults[key]);
   const policy = await runtime.disbursement.saveInstitutionPolicy(
     {
       institutionId: auth.session.institutionId,
-      requireProposalLetter: body.requireProposalLetter !== undefined ? Boolean(body.requireProposalLetter) : true,
-      requireIdentityDoc: body.requireIdentityDoc !== undefined ? Boolean(body.requireIdentityDoc) : true,
-      requireAlternativeIdProof: body.requireAlternativeIdProof !== undefined ? Boolean(body.requireAlternativeIdProof) : true,
-      requireGuardianProof: body.requireGuardianProof !== undefined ? Boolean(body.requireGuardianProof) : true,
-      warnRecurringAid: body.warnRecurringAid !== undefined ? Boolean(body.warnRecurringAid) : true,
+      requireProposalLetter: flag("requireProposalLetter"),
+      requireRecipientVerification: flag("requireRecipientVerification"),
+      requireIdentityDoc: flag("requireIdentityDoc"),
+      requireAlternativeIdProof: flag("requireAlternativeIdProof"),
+      requireGuardianProof: flag("requireGuardianProof"),
+      warnRecurringAid: flag("warnRecurringAid"),
       sopRequiresMultiSignerQuorum: Boolean(body.sopRequiresMultiSignerQuorum),
       version: expectedVersion,
       updatedAt: runtime.now(),

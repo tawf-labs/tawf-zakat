@@ -232,7 +232,7 @@ async function prepareApprovedProposal(options?: {
   expect(propRes.status).toBe(201);
   const draft = (await propRes.json()).draft;
 
-  expect((await post(`/proposals/${draft.id}/documents`, documentInput("PROPOSAL_LETTER"), amilToken)).status).toBe(201);
+  expect((await post(`/proposals/${draft.id}/documents`, documentInput("RECIPIENT_VERIFICATION"), amilToken)).status).toBe(201);
 
   const submitRes = await post(`/proposals/${draft.id}/submit`, { expectedVersion: draft.version, operationId: crypto.randomUUID() }, amilToken);
   if (submitRes.status !== 200) {

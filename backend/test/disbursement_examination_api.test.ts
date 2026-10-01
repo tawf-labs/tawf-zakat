@@ -127,7 +127,7 @@ const documentInput = (category = "PROPOSAL_LETTER") => ({
   contentBase64: Buffer.from("Bukti sintetis \u00e9 \u2713").toString("base64"),
 });
 async function completeAndSubmit(draft: { id: string; version: number }, token: string) {
-  for (const category of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+  for (const category of ["RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY"]) {
     expect((await post(`/proposals/${draft.id}/documents`, documentInput(category), token)).status).toBe(201);
   }
   const response = await post(`/proposals/${draft.id}/submit`, {
@@ -317,10 +317,11 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     expect(progRes.status).toBe(201);
     const { program } = await progRes.json();
 
-    // Configure strict policy
+    // Configure the strict per-mustahik policy (opt-in since ADR-0040)
     const policyRes = await post("/policy", {
       expectedVersion: 1,
       requireProposalLetter: true,
+      requireRecipientVerification: false,
       requireIdentityDoc: true,
       requireAlternativeIdProof: true,
       requireGuardianProof: true,
@@ -511,9 +512,9 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     expect(draftRes.status).toBe(201);
     const { draft } = await draftRes.json();
 
-    // Upload required docs: PROPOSAL_LETTER, ALTERNATIVE_IDENTITY_PROOF, and REPRESENTATION_PROOF
+    // Upload the roster verification plus ALTERNATIVE_IDENTITY_PROOF and REPRESENTATION_PROOF
     await post(`/proposals/${draft.id}/documents`, {
-      category: "PROPOSAL_LETTER",
+      category: "RECIPIENT_VERIFICATION",
       fileName: "surat_posko.pdf",
       mimeType: "application/pdf",
       contentBase64: Buffer.from("Surat Permohonan Posko").toString("base64"),
@@ -626,7 +627,7 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     const { draft: d1 } = await p1Res.json();
 
     await post(`/proposals/${d1.id}/documents`, {
-      category: "PROPOSAL_LETTER",
+      category: "RECIPIENT_VERIFICATION",
       fileName: "surat_p1.pdf",
       mimeType: "application/pdf",
       contentBase64: Buffer.from("Surat P1").toString("base64"),
@@ -677,7 +678,7 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     const { draft: d2 } = await p2Res.json();
 
     await post(`/proposals/${d2.id}/documents`, {
-      category: "PROPOSAL_LETTER",
+      category: "RECIPIENT_VERIFICATION",
       fileName: "surat_p2.pdf",
       mimeType: "application/pdf",
       contentBase64: Buffer.from("Surat P2").toString("base64"),
@@ -773,7 +774,7 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     const { draft } = await createRes.json();
 
     await post(`/proposals/${draft.id}/documents`, {
-      category: "PROPOSAL_LETTER",
+      category: "RECIPIENT_VERIFICATION",
       fileName: "proposal_usaha.pdf",
       mimeType: "application/pdf",
       contentBase64: Buffer.from("Surat Usaha").toString("base64"),
@@ -954,7 +955,7 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
     const { draft } = await dRes.json();
 
     await post(`/proposals/${draft.id}/documents`, {
-      category: "PROPOSAL_LETTER",
+      category: "RECIPIENT_VERIFICATION",
       fileName: "surat.pdf",
       mimeType: "application/pdf",
       contentBase64: Buffer.from("Surat").toString("base64"),
@@ -1250,10 +1251,10 @@ describe("Dokumen pengajuan dan pemeriksaan kelayakan (Ticket #91)", () => {
       await page.getByRole("button", { name: "Tandatangani dan masuk", exact: true }).click();
       await page.getByRole("button", { name: /Pengajuan Browser Sintetis/ }).click();
       await page.getByRole("button", { name: "Ajukan untuk Pemeriksaan", exact: true }).click();
-      await page.getByRole("alert").getByText(/surat permohonan wajib/).waitFor();
-      for (const [category, name] of [["PROPOSAL_LETTER", "surat-browser.txt"], ["BENEFICIARY_IDENTITY", "identitas-browser.txt"]]) {
+      await page.getByRole("alert").getByText(/verifikasi penerima \(mis\. dari RT\/RW\) wajib/).waitFor();
+      for (const [category, name] of [["RECIPIENT_VERIFICATION", "berita-acara-browser.txt"], ["BENEFICIARY_IDENTITY", "identitas-browser.txt"]]) {
         await page.getByLabel("Kategori Dokumen", { exact: true }).selectOption(category!);
-        await page.getByLabel("Penerima Manfaat (Opsional)", { exact: true }).selectOption(category === "PROPOSAL_LETTER" ? "" : "ben-fixture");
+        await page.getByLabel("Penerima Manfaat (Opsional)", { exact: true }).selectOption(category === "RECIPIENT_VERIFICATION" ? "" : "ben-fixture");
         await page.getByLabel("Pilih Berkas (Maks. 10 MB)", { exact: true }).setInputFiles({ name: name!, mimeType: "text/plain", buffer: Buffer.from("Bukti sintetis é ✓") });
         await page.getByRole("button", { name: "Unggah Dokumen", exact: true }).focus();
         await page.keyboard.press("Enter");

@@ -104,7 +104,7 @@ export function ProposalDocumentManager({ requests, proposalId, beneficiaries, a
                 : !error && <ProposalRequiredDocuments items={required} />}
           </TabsContent>
           <TabsContent value="upload" className="mt-0 space-y-4">
-            {beneficiaries.length > 1 && (
+            {beneficiaries.length > 1 && policy && policy !== "unavailable" && policy.requireIdentityDoc && (
               <BeneficiaryIdentityBulkUpload
                 requests={requests}
                 proposalId={proposalId}

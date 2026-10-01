@@ -199,6 +199,7 @@ describe("disbursementClient Ticket #91 methods", () => {
           policy: {
             institutionId: "sinar",
             requireProposalLetter: true,
+            requireRecipientVerification: true,
             requireIdentityDoc: true,
             requireAlternativeIdProof: true,
             requireGuardianProof: true,

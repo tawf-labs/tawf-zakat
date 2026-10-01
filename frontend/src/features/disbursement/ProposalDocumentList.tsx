@@ -6,6 +6,7 @@ import type { Beneficiary, ProposalDocument, ProposalDocumentCategory } from "./
 
 export const CATEGORY_LABELS: Record<ProposalDocumentCategory, string> = {
   PROPOSAL_LETTER: "Surat Permohonan",
+  RECIPIENT_VERIFICATION: "Berita Acara Verifikasi Penerima",
   BENEFICIARY_IDENTITY: "KTP/KK",
   ALTERNATIVE_IDENTITY_PROOF: "Identitas Alternatif",
   REPRESENTATION_PROOF: "Kuasa/Perwalian",

@@ -5,11 +5,14 @@ import type { Beneficiary, DisbursementPolicy, ProposalDocument } from "./disbur
 export type RequiredDocument = { key: string; label: string; done: boolean; beneficiaryId: string | null };
 
 /** The documents the institution's policy will ask for at submission, and which are already attached. */
-export function requiredDocuments(policy: Pick<DisbursementPolicy, "requireProposalLetter" | "requireIdentityDoc" | "requireAlternativeIdProof" | "requireGuardianProof">,
+export function requiredDocuments(policy: Pick<DisbursementPolicy, "requireProposalLetter" | "requireRecipientVerification" | "requireIdentityDoc" | "requireAlternativeIdProof" | "requireGuardianProof">,
   beneficiaries: Beneficiary[], documents: Pick<ProposalDocument, "category" | "beneficiaryId">[]): RequiredDocument[] {
   const items: RequiredDocument[] = [];
   if (policy.requireProposalLetter) {
     items.push({ key: "letter", label: "Surat permohonan (umum untuk seluruh pengajuan)", done: documents.some((d) => d.category === "PROPOSAL_LETTER"), beneficiaryId: null });
+  }
+  if (policy.requireRecipientVerification) {
+    items.push({ key: "verification", label: "Berita acara / surat keterangan verifikasi penerima, mis. dari RT/RW (satu untuk seluruh daftar)", done: documents.some((d) => d.category === "RECIPIENT_VERIFICATION"), beneficiaryId: null });
   }
   const byBeneficiary = new Map<string, Pick<ProposalDocument, "category">[]>();
   for (const d of documents) {
@@ -32,7 +35,8 @@ export function requiredDocuments(policy: Pick<DisbursementPolicy, "requirePropo
 }
 
 /**
- * A large roster means a large checklist (one line per mustahik's KTP/KK). The
+ * A large roster can mean a large checklist (one line per mustahik's KTP/KK, when
+ * the institution's policy asks for it). The
  * attached ones need no action, so the progress is summarised and only the
  * gaps are listed — searchable and in a bounded scroll box.
  */

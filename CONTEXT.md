@@ -316,9 +316,13 @@ Berkas pendukung yang hanya dapat diakses pihak berwenang, termasuk identitas pe
 Dokumen atau keterangan yang mendasari pengajuan dan penilaian kelayakan penerima.
 _Avoid_: BAST, bukti penyaluran, untuk dokumen sebelum bantuan diserahkan.
 
+**Berita acara verifikasi penerima**:
+Satu dokumen yang menyatakan hasil verifikasi kelayakan seluruh [[Daftar penerima pengajuan]], misalnya surat keterangan atau data dari RT/RW, sebagai [[Bukti pengajuan]] bagi seluruh daftar.
+_Avoid_: [[Berita Acara Serah Terima (BAST)]], yang menyatakan penyerahan setelah bantuan diberikan; salinan KTP/KK per mustahik.
+
 **Berita Acara Serah Terima (BAST)**:
 Dokumen yang menyatakan penyerahan dan penerimaan bantuan.
-_Avoid_: Bukti pengajuan.
+_Avoid_: Bukti pengajuan; [[Berita acara verifikasi penerima]].
 
 **Atestasi auditor**:
 Pernyataan auditor mengenai hasil pemeriksaan catatan dan bukti pada cakupan tertentu.

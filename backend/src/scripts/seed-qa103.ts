@@ -66,7 +66,7 @@ try {
       aidLines: [{ id: `${id}-aid`, beneficiaryId, aidType: "Simulasi bantuan", period: "2026-Q4",
         value: { kind: "MONEY", amountRequestedIdr: "1000000", amountApprovedIdr: null } }],
     });
-    for (const category of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+    for (const category of ["PROPOSAL_LETTER", "RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY"]) {
       await post(`/proposals/${id}/documents`, recorder, { category, fileName: "simulasi.txt", mimeType: "text/plain",
         beneficiaryId: category === "BENEFICIARY_IDENTITY" ? beneficiaryId : null,
         contentBase64: Buffer.from("SIMULASI QA #103 - bukan dokumen atau bantuan nyata").toString("base64") });

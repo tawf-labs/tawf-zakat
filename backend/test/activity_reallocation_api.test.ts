@@ -220,7 +220,7 @@ async function approvedProposal(
   );
   expect(created.status).toBe(201);
 
-  for (const category of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY"]) {
+  for (const category of ["PROPOSAL_LETTER", "RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY"]) {
     const doc = await post(
       `/proposals/${proposalId}/documents`,
       {

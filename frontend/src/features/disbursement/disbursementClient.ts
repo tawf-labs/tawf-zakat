@@ -80,6 +80,7 @@ export type ProposalStatus =
 
 export type ProposalDocumentCategory =
   | "PROPOSAL_LETTER"
+  | "RECIPIENT_VERIFICATION"
   | "BENEFICIARY_IDENTITY"
   | "ALTERNATIVE_IDENTITY_PROOF"
   | "REPRESENTATION_PROOF"
@@ -105,6 +106,7 @@ export type ProposalDocument = {
 export type DisbursementPolicy = {
   institutionId: string;
   requireProposalLetter: boolean;
+  requireRecipientVerification: boolean;
   requireIdentityDoc: boolean;
   requireAlternativeIdProof: boolean;
   requireGuardianProof: boolean;

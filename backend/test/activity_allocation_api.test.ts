@@ -174,8 +174,8 @@ async function approvedProposal(
   const letter = await post(
     `/proposals/${proposalId}/documents`,
     {
-      category: "PROPOSAL_LETTER",
-      fileName: "proposal_letter.txt",
+      category: "RECIPIENT_VERIFICATION",
+      fileName: "berita_acara_verifikasi.txt",
       mimeType: "text/plain",
       beneficiaryId: null,
       contentBase64: Buffer.from("Dokumen bukti sah").toString("base64"),

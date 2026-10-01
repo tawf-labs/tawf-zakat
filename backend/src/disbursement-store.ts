@@ -590,6 +590,7 @@ const policyFrom = (row: any, institutionId: string): DisbursementPolicy => {
   return {
     institutionId: row.institution_id,
     requireProposalLetter: Boolean(row.require_proposal_letter),
+    requireRecipientVerification: Boolean(row.require_recipient_verification),
     requireIdentityDoc: Boolean(row.require_identity_doc),
     requireAlternativeIdProof: Boolean(row.require_alternative_id_proof),
     requireGuardianProof: Boolean(row.require_guardian_proof),
@@ -1202,6 +1203,9 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
        AND c.version = (o.result_json::jsonb->>'version')::integer)
    ON CONFLICT DO NOTHING;`,
   `ALTER TABLE institution_disbursement_policies ADD COLUMN IF NOT EXISTS sop_requires_multi_signer_quorum BOOLEAN NOT NULL DEFAULT FALSE;`,
+  // FALSE keeps a policy an institution already saved exactly as it was; a new
+  // institution without a saved policy gets the code default instead (ADR-0040).
+  `ALTER TABLE institution_disbursement_policies ADD COLUMN IF NOT EXISTS require_recipient_verification BOOLEAN NOT NULL DEFAULT FALSE;`,
   `CREATE TABLE IF NOT EXISTS proposal_decisions (
      id TEXT PRIMARY KEY,
      proposal_id TEXT NOT NULL REFERENCES proposal_drafts(id) ON DELETE CASCADE,
@@ -1976,6 +1980,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           await db.execute(sql`
             UPDATE institution_disbursement_policies SET
               require_proposal_letter = ${policy.requireProposalLetter},
+              require_recipient_verification = ${policy.requireRecipientVerification},
               require_identity_doc = ${policy.requireIdentityDoc},
               require_alternative_id_proof = ${policy.requireAlternativeIdProof},
               require_guardian_proof = ${policy.requireGuardianProof},
@@ -1995,11 +2000,12 @@ export function createDisbursementStore(db: DisbursementDatabase) {
             INSERT INTO institution_disbursement_policies (
               institution_id, require_proposal_letter, require_identity_doc,
               require_alternative_id_proof, require_guardian_proof, warn_recurring_aid,
-              sop_requires_multi_signer_quorum, version, updated_at, updated_by
+              sop_requires_multi_signer_quorum, require_recipient_verification, version, updated_at, updated_by
             ) VALUES (
               ${policy.institutionId}, ${policy.requireProposalLetter}, ${policy.requireIdentityDoc},
               ${policy.requireAlternativeIdProof}, ${policy.requireGuardianProof}, ${policy.warnRecurringAid},
-              ${Boolean(policy.sopRequiresMultiSignerQuorum)}, 1, ${policy.updatedAt}, ${policy.updatedBy}
+              ${Boolean(policy.sopRequiresMultiSignerQuorum)}, ${policy.requireRecipientVerification}, 1,
+              ${policy.updatedAt}, ${policy.updatedBy}
             ) RETURNING *
           `)
         )[0];

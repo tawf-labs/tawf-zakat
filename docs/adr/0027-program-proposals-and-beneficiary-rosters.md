@@ -1,7 +1,7 @@
 # ADR-0027: Program Menaungi Pengajuan dengan Daftar Penerima
 
 - Status: Accepted — Q3–Q4 sesi `grill-with-docs`, 2026-09-15.
-- Related: ADR-0026, ADR-0021.
+- Related: ADR-0026, ADR-0021. Dukungan identitas Q13 diperinci [ADR-0040](0040-satu-berita-acara-verifikasi-untuk-seluruh-daftar-penerima.md): satu berita acara verifikasi untuk seluruh daftar secara bawaan.
 
 Satu program bantuan dapat menaungi banyak pengajuan penyaluran; satu pengajuan dapat mencakup satu atau banyak penerima dengan rincian bantuannya masing-masing. Identitas penanggung jawab dicatat terpisah. Alur awal dimulai oleh amil internal yang mencatat permohonan yang diterima lembaga beserta asalnya; portal pemohon eksternal menjadi kemungkinan perluasan berikutnya.
 

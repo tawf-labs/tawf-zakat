@@ -201,7 +201,7 @@ async function prepareApprovedProposal(options?: {
   expect(propRes.status).toBe(201);
   const draft = (await propRes.json()).draft;
 
-  for (const cat of ["PROPOSAL_LETTER", "BENEFICIARY_IDENTITY", ...(options?.beneficiary?.guardian ? ["REPRESENTATION_PROOF"] : [])]) {
+  for (const cat of ["PROPOSAL_LETTER", "RECIPIENT_VERIFICATION", "BENEFICIARY_IDENTITY", ...(options?.beneficiary?.guardian ? ["REPRESENTATION_PROOF"] : [])]) {
     expect((await post(`/proposals/${draft.id}/documents`, { ...documentInput(cat), ...(cat === "REPRESENTATION_PROOF" ? { beneficiaryId: "ben-1" } : {}) }, amilToken)).status).toBe(201);
   }
 

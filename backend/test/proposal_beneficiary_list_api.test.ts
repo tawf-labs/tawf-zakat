@@ -264,12 +264,12 @@ async function prepareApprovedProposalWithRealization(tokens: {
 
   const draft = await prepareDraftProposal(tokens.amilToken, program.id, initialRows);
 
-  // Upload proposal letter
+  // Upload the recipient verification document (berita acara)
   const docRes = await post(
     `${WORKSPACE}/proposals/${draft.id}/documents`,
     {
-      category: "PROPOSAL_LETTER",
-      fileName: "surat.txt",
+      category: "RECIPIENT_VERIFICATION",
+      fileName: "berita-acara.txt",
       mimeType: "text/plain",
       contentBase64: Buffer.from("Surat Pengajuan").toString("base64"),
     },

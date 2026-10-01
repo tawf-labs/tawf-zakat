@@ -8,7 +8,7 @@ export function ProposalDocumentUpload({ requests, proposalId, beneficiaries, on
   requests: PrivateRequests; proposalId: string; beneficiaries: Beneficiary[]; onUploaded: () => void;
 }) {
   const id = useId();
-  const [category, setCategory] = useState<ProposalDocumentCategory>("PROPOSAL_LETTER");
+  const [category, setCategory] = useState<ProposalDocumentCategory>("RECIPIENT_VERIFICATION");
   const [beneficiaryId, setBeneficiaryId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);

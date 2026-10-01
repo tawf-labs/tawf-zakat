@@ -503,6 +503,7 @@ export const proposalHistory = pgTable("proposal_history", {
 export const institutionDisbursementPolicies = pgTable("institution_disbursement_policies", {
   institutionId: text("institution_id").primaryKey().references(() => institutions.id),
   requireProposalLetter: boolean("require_proposal_letter").notNull().default(true),
+  requireRecipientVerification: boolean("require_recipient_verification").notNull().default(false),
   requireIdentityDoc: boolean("require_identity_doc").notNull().default(true),
   requireAlternativeIdProof: boolean("require_alternative_id_proof").notNull().default(true),
   requireGuardianProof: boolean("require_guardian_proof").notNull().default(true),
