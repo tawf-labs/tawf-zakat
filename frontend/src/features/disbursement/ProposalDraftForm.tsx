@@ -27,6 +27,7 @@ import { ProposalDecisionBanner } from "./ProposalDecisionBanner";
 import { ProposalRealizationBanner } from "./ProposalRealizationBanner";
 import { RecurringAidWarnings, recurringFlags } from "./RecurringAidWarnings";
 import { ProposalPublishControl } from "./ProposalPublishControl";
+import { COST_STATUSES, OperationalCostsTab, useCostDrafts } from "./OperationalCostsTab";
 
 const STATUS_BADGES: Record<ProposalStatus, { variant: "success" | "warning" | "danger" | "info" | "neutral"; label: string }> = {
   DRAFT: { variant: "neutral", label: "Draf Pengajuan" },
@@ -89,6 +90,8 @@ export function ProposalDraftForm({
   const [submissionIssues, setSubmissionIssues] = useState<{ field: string; message: string }[]>([]);
   const [recurringWarnings, setRecurringWarnings] = useState<RecurringAidWarning[]>([]);
   const [onlyRecurring, setOnlyRecurring] = useState(false);
+  const costDrafts = useCostDrafts();
+  const [costsFocus, setCostsFocus] = useState(0);
   const recurringRowFlags = useMemo(
     () => recurringFlags(recurringWarnings, (status) => STATUS_BADGES[status]?.label ?? status),
     [recurringWarnings],
@@ -304,7 +307,8 @@ export function ProposalDraftForm({
       )}
 
       <ProposalDecisionBanner requests={requests} draft={draft} recorded={recordedDecision} />
-      <ProposalRealizationBanner requests={requests} draft={draft} onDraftUpdated={setDraft} />
+      <ProposalRealizationBanner requests={requests} draft={draft} onDraftUpdated={setDraft}
+        onOpenCosts={() => setCostsFocus((n) => n + 1)} />
 
       <RecurringAidWarnings
         warnings={recurringWarnings}
@@ -330,6 +334,10 @@ export function ProposalDraftForm({
         onExport={draft.version > 0 ? rosterImport.exportRoster : undefined}
         saveControl={isReadOnly ? undefined : <>{statusBadge}{saveButton}</>}
         recurring={recurringRowFlags.size > 0 ? { flags: recurringRowFlags, only: onlyRecurring, onOnlyChange: setOnlyRecurring } : undefined}
+        costs={(COST_STATUSES as readonly string[]).includes(draft.status) ? {
+          focus: costsFocus,
+          render: (expanded) => <OperationalCostsTab requests={requests} proposalId={draft.id} expanded={expanded} drafts={costDrafts} />,
+        } : undefined}
       />
       {!isReadOnly && draft.version > 0 && <Button type="button" variant="outline" disabled={dirty || saving || unknown} onClick={() => setShowBeneficiaryList(true)}>
         Perbarui daftar penerima dari berkas

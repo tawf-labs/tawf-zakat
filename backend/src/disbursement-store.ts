@@ -4045,6 +4045,17 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       });
     },
 
+    /** Keperluan already typed anywhere in the institution, most used first, to suggest consistent wording. */
+    async costPurposes(institutionId: string, limit = 200): Promise<string[]> {
+      return rowsOf(await db.execute(sql`
+        SELECT purpose FROM operational_cost_items
+        WHERE institution_id = ${institutionId} AND status = 'ACTIVE'
+        GROUP BY purpose
+        ORDER BY COUNT(*) DESC, MAX(seq) DESC
+        LIMIT ${limit}
+      `)).map((row) => row.purpose as string);
+    },
+
     async costItemHistory(institutionId: string, proposalId: string, itemId: string): Promise<CostItemVersionRecord[]> {
       const rows = rowsOf(await db.execute(sql`
         SELECT v.* FROM operational_cost_item_versions v

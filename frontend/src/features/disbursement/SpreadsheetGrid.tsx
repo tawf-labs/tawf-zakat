@@ -33,6 +33,8 @@ type Editing = { r: number; c: number; initial: string };
 type Write = { r: number; c: number; text: string };
 /** An advisory marker on a row (not an error), e.g. a recipient already aided elsewhere. */
 export type RowFlag = { badge: string; detail: string };
+/** A row already recorded elsewhere: shown but never edited, pasted over or deleted here. */
+export type RowLock = "locked" | "voided";
 
 const ROW_HEADER_WIDTH = 76;
 const PAGE_STEP = 20;
@@ -61,6 +63,10 @@ export function SpreadsheetGrid<R>({
   flags,
   flagFilter,
   fill = false,
+  rowLock,
+  onOpenLocked,
+  onActiveRowChange,
+  unsavedNote = "Perubahan belum tersimpan sampai draf disimpan, dan dapat diurungkan dengan Ctrl+Z.",
 }: {
   label: string;
   /** Lower-case noun for one row, e.g. "penerima". */
@@ -89,6 +95,14 @@ export function SpreadsheetGrid<R>({
   flagFilter?: { label: string; active: boolean; onChange: (active: boolean) => void };
   /** Grow to the parent's height (fullscreen) instead of capping at 70vh. */
   fill?: boolean;
+  /** Rows recorded elsewhere: greyed out (struck through when voided) and read-only. */
+  rowLock?: (row: R) => RowLock | null;
+  /** Enter, F2 or a double click on a locked row, e.g. to open its attachment or its correction. */
+  onOpenLocked?: (row: R, columnId: string) => void;
+  /** The row holding the cursor, so the toolbar can offer actions on it. */
+  onActiveRowChange?: (id: string | null) => void;
+  /** The delete confirmation's note on how the removal is kept or undone. */
+  unsavedNote?: string;
 }) {
   const gridId = useId().replace(/:/g, "");
   const tableRef = useRef<HTMLTableElement>(null);
@@ -116,6 +130,7 @@ export function SpreadsheetGrid<R>({
     return errors;
   };
   const hasIssue = (row: R) => errorsOf(row).some(Boolean) || (serverIssues.get(rowId(row))?.length ?? 0) > 0;
+  const editable = (column: GridColumn<R>, row: R) => isEnabled(column, row) && !rowLock?.(row);
 
   // Which rows a filter shows is decided when the filter changes or rows are added/removed, not on
   // every keystroke: fixing a cell under "only problems" must not yank the row away mid-edit.
@@ -148,8 +163,14 @@ export function SpreadsheetGrid<R>({
   };
   // Deleting is offered for whole rows, picked by their row numbers, not for any cell selection.
   const selectedIds = rect && rect.c0 === 0 && rect.c1 === columns.length - 1
-    ? visible.slice(rect.r0, rect.r1 + 1).map((index) => rowId(rows[index]))
+    ? visible.slice(rect.r0, rect.r1 + 1).filter((index) => !rowLock?.(rows[index])).map((index) => rowId(rows[index]))
     : [];
+
+  const activeRowId = sel ? rowId(rows[visible[sel.anchor.r]]) : null;
+  useEffect(() => {
+    onActiveRowChange?.(activeRowId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRowId]);
 
   const cellId = (cell: Cell) => `${gridId}-r${cell.r}-c${cell.c}`;
   const focusGrid = () => tableRef.current?.focus({ preventScroll: true });
@@ -170,7 +191,7 @@ export function SpreadsheetGrid<R>({
       const index = indexOf(r);
       const column = columns[c];
       const row = next[index];
-      if (!column || row === undefined || !isEnabled(column, row)) continue;
+      if (!column || row === undefined || !editable(column, row)) continue;
       const value = column.normalize ? column.normalize(text) : text;
       if (value === column.value(row)) continue;
       const updated = column.apply!(row, value);
@@ -187,10 +208,14 @@ export function SpreadsheetGrid<R>({
   }
 
   function startEdit(cell: Cell, initial?: string) {
-    if (readOnly) return;
     const row = rows[visible[cell.r]];
     const column = columns[cell.c];
-    if (row === undefined || !isEnabled(column, row)) return;
+    if (row !== undefined && rowLock?.(row)) {
+      setSelection({ anchor: cell, extent: cell });
+      onOpenLocked?.(row, column.id);
+      return;
+    }
+    if (readOnly || row === undefined || !isEnabled(column, row)) return;
     const text = initial ?? column.value(row);
     editValue.current = text;
     setSelection({ anchor: cell, extent: cell });
@@ -372,7 +397,7 @@ export function SpreadsheetGrid<R>({
         clearSelection();
         return;
     }
-    if (key.length === 1 && !event.altKey && sel) {
+    if (key.length === 1 && !event.altKey && sel && !rowLock?.(rows[visible[sel.anchor.r]])) {
       handled();
       startEdit(sel.anchor, key);
     }
@@ -567,6 +592,7 @@ export function SpreadsheetGrid<R>({
                   errors={errorsOf(row)}
                   extra={serverIssues.get(rowId(row))}
                   flag={flags?.get(rowId(row))}
+                  lock={rowLock?.(row) ?? null}
                   selC0={inRows ? rect!.c0 : -1}
                   selC1={inRows ? rect!.c1 : -1}
                   activeC={sel && sel.anchor.r === r ? sel.anchor.c : -1}
@@ -607,7 +633,7 @@ export function SpreadsheetGrid<R>({
           <DialogHeader>
             <DialogTitle>Hapus {confirmIds?.length ?? 0} baris {itemLabel}?</DialogTitle>
             <DialogDescription>
-              {impact ? `${impact} ` : ""}Perubahan belum tersimpan sampai draf disimpan, dan dapat diurungkan dengan Ctrl+Z.
+              {impact ? `${impact} ` : ""}{unsavedNote}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -639,6 +665,7 @@ type GridRowProps<R> = {
   errors: (string | null)[];
   extra: string[] | undefined;
   flag: RowFlag | undefined;
+  lock: RowLock | null;
   selC0: number;
   selC1: number;
   activeC: number;
@@ -651,7 +678,7 @@ type GridRowProps<R> = {
 // Rows re-render only when their data or their slice of the selection changes; with hundreds of
 // rows this keeps arrow-key navigation and typing from repainting the whole sheet.
 const GridRow = memo(function GridRow<R>({
-  gridId, row, r, rowNumber, columns, errors, extra, flag, selC0, selC1, activeC, editing, editValue, onEditorKeyDown, onEditorBlur,
+  gridId, row, r, rowNumber, columns, errors, extra, flag, lock, selC0, selC1, activeC, editing, editValue, onEditorKeyDown, onEditorBlur,
 }: GridRowProps<R>) {
   const messages = [...errors.filter((e): e is string => e !== null), ...(extra ?? [])];
   const rowSelected = selC0 === 0 && selC1 === columns.length - 1;
@@ -684,6 +711,8 @@ const GridRow = memo(function GridRow<R>({
         const text = enabled ? column.value(row) : "";
         const bg = !enabled
           ? "bg-stone-100 text-stone-400"
+          : lock
+            ? `${selected ? "bg-stone-200" : "bg-stone-100"} ${lock === "voided" ? "text-stone-400 line-through" : "text-stone-600"}`
           : error
             ? selected ? "bg-red-100" : "bg-red-50"
             : selected ? "bg-emerald-50" : "bg-white";
@@ -698,7 +727,7 @@ const GridRow = memo(function GridRow<R>({
             aria-colindex={c + 2}
             aria-selected={selected}
             aria-invalid={error ? true : undefined}
-            aria-readonly={!enabled || !column.apply ? true : undefined}
+            aria-readonly={!enabled || !column.apply || lock ? true : undefined}
             title={error ?? (text.length > 24 ? text : undefined)}
             className={`h-8 border-b border-r border-stone-200 px-2 whitespace-nowrap truncate ${bg} ${
               column.mono ? "font-mono tabular-nums" : ""

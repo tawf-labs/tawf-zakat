@@ -20,7 +20,6 @@ import { RealizationEvidenceModal, evidencedIdr } from "./RealizationEvidenceMod
 import { RecipientConfirmationModal } from "./RecipientConfirmationModal";
 import { BatchConfirmationModal } from "./BatchConfirmationModal";
 import { RealizationDisputeModal } from "./RealizationDisputeModal";
-import { AdvancesAndExpensesModal } from "./AdvancesAndExpensesModal";
 import { ProposalRevisionModal } from "./ProposalRevisionModal";
 import { ProposalCancellationModal } from "./ProposalCancellationModal";
 import { ProposalClosureModal } from "./ProposalClosureModal";
@@ -29,7 +28,6 @@ import { ProposalBeneficiaryListModal } from "./ProposalBeneficiaryListModal";
 
 type Open =
   | { kind: "record" }
-  | { kind: "advances" }
   | { kind: "revision" }
   | { kind: "beneficiary-list" }
   | { kind: "cancel" }
@@ -52,10 +50,13 @@ export function ProposalRealizationBanner({
   requests,
   draft,
   onDraftUpdated,
+  onOpenCosts,
 }: {
   requests: PrivateRequests;
   draft: ProposalDraft;
   onDraftUpdated?: (draft: ProposalDraft) => void;
+  /** Brings the Biaya Operasional tab forward. */
+  onOpenCosts?: () => void;
 }) {
   const [downloadError, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Open>(null);
@@ -110,10 +111,9 @@ export function ProposalRealizationBanner({
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5" disabled={!loaded}
-          onClick={() => setOpen({ kind: "advances" })}>
-          <Banknote className="h-4 w-4" /> Uang muka & biaya
-        </Button>
+        {onOpenCosts && <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5" onClick={onOpenCosts}>
+          <Banknote className="h-4 w-4" /> Biaya operasional
+        </Button>}
         <Button type="button" variant="outline" size="sm" className="flex items-center gap-1.5 text-blue-700 hover:text-blue-800" disabled={!loaded || !!draft.activeRevisionId}
           onClick={() => setOpen({ kind: "revision" })}>
           <Edit3 className="h-4 w-4" /> Ajukan revisi
@@ -237,8 +237,6 @@ export function ProposalRealizationBanner({
       beneficiaryName={beneficiaryName(open.realization)} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {open?.kind === "batchConfirm" && <BatchConfirmationModal requests={requests} proposalId={draft.id} batchGroupId={open.batchGroupId}
       members={open.members} beneficiaryName={beneficiaryName} isOpen onClose={() => setOpen(null)} onChanged={reload} />}
-    {open?.kind === "advances" && <AdvancesAndExpensesModal requests={requests} proposalId={draft.id}
-      isOpen onClose={() => setOpen(null)} onChanged={reload} />}
     {loaded && open?.kind === "revision" && (
       <ProposalRevisionModal
         requests={requests}

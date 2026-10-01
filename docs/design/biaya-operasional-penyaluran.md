@@ -1,6 +1,6 @@
 # Biaya operasional penyaluran, talangan, dan panjar petugas
 
-- Status: **dikunci sebagai [ADR-0042](../adr/0042-biaya-operasional-per-item-dengan-sumber-dana-dan-koreksi-berversi.md) pada 2026-10-01; backend #125 dan #126 selesai, UI (#127) dan migrasi (#128) belum (lihat baris Implementasi di ADR).** ADR yang mengikat; dokumen ini menyimpan rincian dan alasannya. Fokus MVP adalah alur penyaluran; laporan keuangan tahunan dan pencatatan total hak amil dibahas terpisah.
+- Status: **dikunci sebagai [ADR-0042](../adr/0042-biaya-operasional-per-item-dengan-sumber-dana-dan-koreksi-berversi.md) pada 2026-10-01; #125, #126, dan UI #127 selesai, migrasi (#128) belum (lihat baris Implementasi di ADR).** ADR yang mengikat; dokumen ini menyimpan rincian dan alasannya. Fokus MVP adalah alur penyaluran; laporan keuangan tahunan dan pencatatan total hak amil dibahas terpisah.
 - Dasar: wawancara Lazismu Tangsel ([catatan kasar](../research/LAZISMU.md)) dan diskusi lanjutan dengan pengguna; ADR-0039 (MVP tanpa auditor/DPS), ADR-0041 (penerbitan atas keputusan internal).
 
 ## 1. Keadaan sekarang

@@ -2941,6 +2941,14 @@ disbursementRoutes.get(COSTS, async (c) => {
   return c.json({ success: true, ...overview });
 });
 
+/** Saran "Keperluan" dari isian sebelumnya di lembaga yang sama; saran boleh diabaikan. */
+disbursementRoutes.get("/operational-cost-purposes", async (c) => {
+  const runtime = runtimeOf();
+  const auth = await authenticateWorkspace(c, runtime, c.req.query("institutionId") ?? undefined);
+  if (!auth.ok) return auth.response;
+  return c.json({ success: true, purposes: await runtime.disbursement.costPurposes(auth.session.institutionId) });
+});
+
 /** Catat beberapa baris biaya sekaligus; tiap baris dinilai sendiri dan hasilnya dikembalikan per baris. */
 disbursementRoutes.post(`${COSTS}/items`, async (c) => {
   const body = await readJson(c);

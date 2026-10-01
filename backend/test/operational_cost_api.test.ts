@@ -321,6 +321,19 @@ describe("Biaya operasional per item (ADR-0042, #125)", () => {
     });
   });
 
+  it("suggests purposes already used in the institution, most used first, never another institution's", async () => {
+    const results = (await (await recordItems(proposal.id, [
+      line(), line({ purpose: "Sewa mobil", quantity: null, unit: null, unitPriceIdr: null, amountIdr: "300000" }), line(),
+    ], amil)).json()).results;
+    await post(`${costs(proposal.id)}/items/${results[1].item.id}/void`,
+      { operationId: crypto.randomUUID(), expectedVersion: 1, reason: "Input dobel dari nota" }, amil);
+    await recordItems((await publishedProposal(amil, admin)).id, [line({ purpose: "Kantong plastik" })], amil);
+
+    expect((await (await get("/operational-cost-purposes", amil)).json()).purposes).toEqual(["Bensin", "Kantong plastik"]);
+    expect((await (await get("/operational-cost-purposes", await signIn(amilBaitul, BAITUL))).json()).purposes).toEqual([]);
+    expect((await request("/operational-cost-purposes")).status).toBe(401);
+  });
+
   it("requires the realization mandate, an approved proposal and the caller's own institution", async () => {
     const reader = await signIn(readerSinar, SINAR);
     expect((await recordItems(proposal.id, [line()], reader)).status).toBe(403);

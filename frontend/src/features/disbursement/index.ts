@@ -10,7 +10,6 @@ export { RecordRealizationModal } from "./RecordRealizationModal";
 export { RealizationEvidenceModal } from "./RealizationEvidenceModal";
 export { RecipientConfirmationModal } from "./RecipientConfirmationModal";
 export { RealizationDisputeModal } from "./RealizationDisputeModal";
-export { AdvancesAndExpensesModal } from "./AdvancesAndExpensesModal";
 export { IncompleteEvidenceQueuePanel } from "./IncompleteEvidenceQueuePanel";
 export { ProposalRevisionModal } from "./ProposalRevisionModal";
 export { RevisionDeltaReview } from "./RevisionDeltaReview";

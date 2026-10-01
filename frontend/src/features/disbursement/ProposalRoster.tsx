@@ -10,7 +10,7 @@ import { LIST_PAGE_SIZE, Pager, pageOf, usePage } from "./Pagination";
 import { SpreadsheetGrid, type GridColumn, type RowFlag } from "./SpreadsheetGrid";
 import { aidLineColumns, beneficiaryColumns, CLIENT_VALIDATED_FIELDS } from "./rosterColumns";
 
-type Tab = "recipients" | "aidLines";
+type Tab = "recipients" | "aidLines" | "costs";
 type Roster = Pick<ProposalDraft, "beneficiaries" | "aidLines">;
 
 const idOf = (row: { id: string }) => row.id;
@@ -79,6 +79,7 @@ export function ProposalRoster({
   onExport,
   saveControl,
   recurring,
+  costs,
 }: {
   draft: ProposalDraft;
   setDraft: (draft: ProposalDraft) => void;
@@ -93,11 +94,13 @@ export function ProposalRoster({
   saveControl?: ReactNode;
   /** Recipients already aided by other proposals, marked on their rows with a filter toggle. */
   recurring?: { flags: Map<string, RowFlag>; only: boolean; onOnlyChange: (only: boolean) => void };
+  /** The Biaya Operasional tab of an approved proposal; `focus` changes to bring it forward. */
+  costs?: { render: (expanded: boolean) => ReactNode; focus: number };
 }) {
   const [tab, setTab] = useState<Tab>("recipients");
   const [expanded, setExpanded] = useState(false);
-  const [queries, setQueries] = useState<Record<Tab, string>>({ recipients: "", aidLines: "" });
-  const [onlyIssues, setOnlyIssues] = useState<Record<Tab, boolean>>({ recipients: false, aidLines: false });
+  const [queries, setQueries] = useState<Record<Tab, string>>({ recipients: "", aidLines: "", costs: "" });
+  const [onlyIssues, setOnlyIssues] = useState<Record<Tab, boolean>>({ recipients: false, aidLines: false, costs: false });
   const history = useRosterHistory(draft, setDraft);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const editable = !readOnly && !locked;
@@ -111,6 +114,13 @@ export function ProposalRoster({
   useEffect(() => {
     if (onlyRecurring) setTab("recipients");
   }, [onlyRecurring]);
+
+  const costsFocus = costs?.focus ?? 0;
+  useEffect(() => {
+    if (costsFocus === 0) return;
+    setTab("costs");
+    document.getElementById("proposal-roster")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [costsFocus]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -162,15 +172,16 @@ export function ProposalRoster({
           <TabsList>
             <TabsTrigger value="recipients">Penerima ({draft.beneficiaries.length})</TabsTrigger>
             <TabsTrigger value="aidLines">Rincian bantuan ({draft.aidLines.length})</TabsTrigger>
+            {costs && <TabsTrigger value="costs">Biaya operasional</TabsTrigger>}
           </TabsList>
           <div className="flex flex-wrap items-center gap-2">
-            {onOpenImport && editable && (
+            {onOpenImport && editable && tab !== "costs" && (
               <Button type="button" variant="outline" size="sm" onClick={onOpenImport} className="text-xs">
                 <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5 text-emerald-600" />
                 Impor XLSX / CSV
               </Button>
             )}
-            {onExport && draft.beneficiaries.length > 0 && (
+            {onExport && draft.beneficiaries.length > 0 && tab !== "costs" && (
               <Button
                 type="button"
                 variant="outline"
@@ -244,6 +255,11 @@ export function ProposalRoster({
               onQueryChange={gridProps("aidLines").onQueryChange} />
           )}
         </TabsContent>
+        {costs && (
+          <TabsContent value="costs" className={expanded ? "mt-0 flex min-h-0 flex-1 flex-col" : "mt-0"}>
+            {costs.render(expanded)}
+          </TabsContent>
+        )}
       </Tabs>
       {expanded && saveControl && <div className="flex flex-wrap items-center justify-end gap-3 border-t border-stone-200 pt-3">{saveControl}</div>}
     </div>
@@ -251,7 +267,7 @@ export function ProposalRoster({
 
   return (
     <section id="proposal-roster" aria-label="Penerima dan rincian bantuan" className="scroll-mt-4">
-      <h3 className="mb-2 text-sm font-semibold text-stone-900">Penerima dan rincian bantuan</h3>
+      <h3 className="mb-2 text-sm font-semibold text-stone-900">Penerima dan rincian bantuan{costs ? ", biaya operasional" : ""}</h3>
       {expanded ? createPortal(content, document.body) : content}
     </section>
   );
