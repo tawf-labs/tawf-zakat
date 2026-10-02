@@ -3737,6 +3737,11 @@ export function createDisbursementStore(db: DisbursementDatabase) {
     // Biaya operasional per item, panjar dan talangan (ADR-0042, #125)
     // -----------------------------------------------------------------------
 
+    /** Confirmed publications of reports frozen from this store's realizations (#129). */
+    async listPeriodLocks(institutionId: string): Promise<PeriodLock[]> {
+      return loadPeriodLocks(db, institutionId);
+    },
+
     async getOperationalCosts(institutionId: string, proposalId: string): Promise<OperationalCostOverview> {
       const state = await loadOperationalCosts(db, institutionId, proposalId);
       const names = new Map(rowsOf(await db.execute(sql`

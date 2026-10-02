@@ -60,8 +60,8 @@ export function RecoveryPanel({ requests, preparationId, canRecover }: { request
     </>}
     {files?.map(file => <div key={file.id} className="space-y-1 border-t pt-2 text-sm">
       <p>{fileLabels[file.availability] ?? "Belum diperiksa"} · {file.id}</p>
-      {canRecover && file.availability !== "AVAILABLE" && file.contentSha256 && <label className="block">Pulihkan backup berkas {file.id}
-        <input type="file" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; event.target.value = ""; if (selected) void restore(file.id, selected); }} />
+      {canRecover && file.availability !== "AVAILABLE" && file.contentSha256 && <label className="inline-flex min-h-11 cursor-pointer items-center rounded-full border border-[#0F3D30]/20 px-4 text-xs font-medium text-[#0F3D30] hover:bg-[#0F3D30]/5 focus-within:ring-2 focus-within:ring-[#0F3D30]">Pulihkan backup berkas {file.id}
+        <input type="file" className="sr-only" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; event.target.value = ""; if (selected) void restore(file.id, selected); }} />
       </label>}
     </div>)}
     {error && <p role="alert">{error}</p>}

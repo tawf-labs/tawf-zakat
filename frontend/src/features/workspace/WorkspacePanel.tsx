@@ -15,7 +15,7 @@ import {
 import type { PrivateRequests } from "./privateRequests";
 import { WorkspaceShell, WorkspaceShortcut } from "./WorkspaceShell";
 import { workspaceSections } from "./workspaceNavigation";
-import { EvidencePackagePanel } from "./EvidencePackagePanel";
+import { PeriodReportPanel } from "./PeriodReportPanel";
 import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
@@ -306,7 +306,7 @@ function ReadyWorkspace({
         case "disbursement": return <DisbursementPanel requests={requests} canManage={capabilities.manageDisbursement} />;
         case "activities": return <ActivityPanel requests={requests} canManage={capabilities.manageDisbursement} allocationRevision={allocationRevision} />;
         case "certificates": return <CertificateIssuancePanel requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />;
-        case "evidence": return <EvidencePackagePanel requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />;
+        case "evidence": return <PeriodReportPanel requests={requests} canPrepare={capabilities.prepareEvidence} />;
         case "identity": return <WorkspaceAuthority requests={requests} workspace={workspace} view="identity" />;
         case "members": return capabilities.manageMembers ? <>
           <WorkspaceAuthority requests={requests} workspace={workspace} view="management" />

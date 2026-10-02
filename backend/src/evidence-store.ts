@@ -29,6 +29,7 @@ import { sql } from "drizzle-orm";
 import type { DiscrepancyKind } from "./reconciliation";
 import type { PublicSummary } from "./evidence-snapshot";
 import type { SourceManifest, NormalizedRow, SourceIssue } from "./evidence-source";
+import type { PackageRow, PreparationRow } from "./period-report-flow";
 
 /** Any Drizzle PostgreSQL handle that can also open a transaction. */
 export type EvidenceDatabase = {
@@ -383,6 +384,42 @@ export function createEvidenceStore(db: EvidenceDatabase) {
     async listReportPackages(institutionId: string, preparationId: string): Promise<{id: string; digest: string}[]> {
       return rowsOf(await db.execute(sql`SELECT id, digest FROM report_packages
         WHERE institution_id = ${institutionId} AND preparation_id = ${preparationId} ORDER BY id`));
+    },
+    /**
+     * What the list of period reports needs, for every preparation of the institution:
+     * the period, the two manifests' origin and cut-off, and each package's identity,
+     * status and verdict. Snapshot and package bodies stay in the database.
+     */
+    async listPeriodReportRows(institutionId: string): Promise<{ preparations: PreparationRow[]; packages: PackageRow[] }> {
+      const heads = rowsOf(await db.execute(sql`
+        SELECT p.id, p.period_kind, p.period_year, p.created_at, s.role, s.manifest_json
+        FROM evidence_preparations p
+        LEFT JOIN evidence_sources s ON s.preparation_id = p.id
+        WHERE p.institution_id = ${institutionId}
+      `));
+      const preparations = new Map<string, PreparationRow>();
+      for (const row of heads) {
+        const prep = preparations.get(row.id) ?? {
+          id: row.id, periodKind: row.period_kind, periodYear: Number(row.period_year),
+          createdAt: asSeconds(row.created_at), source: null, claim: null,
+        };
+        if (row.manifest_json) {
+          const manifest = JSON.parse(row.manifest_json);
+          if (row.role === "SOURCE") prep.source = { origin: manifest.origin, format: manifest.format, cutOff: manifest.cutOff };
+          if (row.role === "CLAIM") prep.claim = { origin: manifest.origin, format: manifest.format };
+        }
+        preparations.set(row.id, prep);
+      }
+      const packages = rowsOf(await db.execute(sql`
+        SELECT id, preparation_id, canonical FROM report_packages WHERE institution_id = ${institutionId}
+      `)).map((row): PackageRow => {
+        const body = JSON.parse(row.canonical);
+        return {
+          id: row.id, preparationId: row.preparation_id, status: body.status, reportId: body.reportId,
+          version: body.version, outcome: body.verdict?.outcome,
+        };
+      });
+      return { preparations: [...preparations.values()], packages };
     },
     async ensureSchema(): Promise<void> {
       for (const statement of [...EVIDENCE_SCHEMA_STATEMENTS,

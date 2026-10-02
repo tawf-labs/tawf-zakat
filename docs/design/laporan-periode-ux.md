@@ -84,8 +84,16 @@ Tidak ada yang dihapus; hanya dipindah.
 ## 4. Perubahan backend yang diperlukan
 
 - **Laporan tanpa pembanding:** paket harus dapat dibentuk bila hanya data aplikasi yang ada. API pembekuan sudah menerima stream realisasi di sisi klaim maupun sumber. Tiket pertama memastikan bentuk yang jujur, yaitu kedua sisi dari stream realisasi atau sisi klaim yang meniru sumber. Pilihannya diberi catatan batas pemeriksaan "tidak dibandingkan dengan pembukuan", dan validator tetap memeriksanya.
+  - **Ditetapkan (#130): kedua sisi dari stream realisasi.** `POST /api/evidence/period-reports` membaca catatan realisasi satu kali, lalu membangun sisi sumber dan sisi klaim dari bacaan yang sama, masing-masing dengan berkas provenance-nya. Sisi klaim berlabel *Data aplikasi (tanpa rekap pembukuan)* dan catatan manifesnya memuat kalimat batas pemeriksaan. Kalimat yang sama (`NOT_COMPARED_NOTE` di `backend/src/period-report-flow.ts`) menjadi catatan cakupan pertama snapshot, sehingga ikut masuk keterbatasan dan pernyataan laporan. Rekonsiliasinya seimbang karena kedua sisi sama, dan validator tetap memeriksa paket seperti paket lain. #132 mengganti sisi klaim dengan rekap pembukuan bila diunggah.
+  - Wizard hanya mengirim periode dan batas data. Label, Rupiah, cakupan *ON*, dan toleransi nol diisi server. Batas data di masa depan ditolak. Langkah 2 mengunci dengan batas data persis yang dipakai pratinjaunya (`GET …/period-reports/preview`).
 - **Rekap pembukuan sebagai spreadsheet di sisi klaim:** pembaca tabular saat ini hanya untuk sisi sumber.
 - **Ringkasan laporan per lembaga:** status, versi terbit, dan batas data per periode, agar daftar tidak perlu membaca registry per paket di browser.
+  - **Dibangun (#130):** `GET /api/evidence/period-reports` membaca baris lokal saja: persiapan beserta manifesnya, paket laporan, dan kunci periode dari publikasi yang terkonfirmasi (#129). Satu kartu per periode. Statusnya:
+    - *Terbit · versi N*: ada publikasi terkonfirmasi untuk salah satu paket periode itu.
+    - *Dikoreksi*: sudah terbit, lalu data dikunci lagi sesudah data versi terbit; koreksi sedang disiapkan.
+    - *Siap diterbitkan*: belum terbit, dan data terbaru punya paket beku yang lolos pemeriksaan otomatis.
+    - *Draf*: selain itu.
+  - Karena kunci periode hanya dibuat untuk laporan bersumber stream realisasi, laporan lama dari sumber tempel tidak pernah tampil sebagai *Terbit* di daftar ini. Status registry-nya tetap terbaca di Detail teknis.
 - **Label angka laporan** yang manusiawi untuk setiap `figure.name`.
 
 ## 5. Di luar cakupan

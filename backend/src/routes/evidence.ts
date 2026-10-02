@@ -50,7 +50,6 @@ import {
   buildDisbursementRealizationSide,
   currentStatusOf,
   failedRealizationSide,
-  type ActivityTraceData,
   type RealizationProvenance,
   type RealizationScope,
 } from "../realization-source";
@@ -63,6 +62,8 @@ import {
 import type { DisbursementStore } from "../disbursement-store";
 import { readTabularSource, readUpload } from "../source-import";
 import draftRoutes from "./evidence-drafts";
+import periodReportRoutes from "./period-reports";
+import { readRealizationRecords } from "../realization-read";
 import {
   checkAgreement,
   executeFreezeAndStorePreparation,
@@ -246,29 +247,15 @@ async function readRealizationSide(
   activities: ActivityStore | undefined,
   scope: RealizationScope
 ): Promise<{ side: SubmittedSide; provenanceFile: SubmittedFile | null; coverageNotes: string[] }> {
-  let data;
-  try {
-    data = await disbursement.readRealizationSourceData(scope.institution.id);
-  } catch (error) {
-    console.error("[evidence] realization source read failed", error);
+  const read = await readRealizationRecords(disbursement, activities, scope.institution.id);
+  if (!read.ok) {
     return {
       side: failedRealizationSide(scope, "Catatan realisasi penyaluran tidak dapat dibaca dari penyimpanan"),
       provenanceFile: null,
       coverageNotes: [],
     };
   }
-  // The activity trace is a relation of the source, not the source itself: when it
-  // cannot be read the realizations still freeze, and the provenance says why the trace is absent.
-  let activityTrace: ActivityTraceData | { unavailable: string } | undefined;
-  if (activities) {
-    try {
-      activityTrace = await activities.readActivityTrace(scope.institution.id);
-    } catch (error) {
-      console.error("[evidence] activity trace read failed", error);
-      activityTrace = { unavailable: "Kegiatan penyaluran dan alokasi kontribusi tidak dapat dibaca dari penyimpanan." };
-    }
-  }
-  return buildDisbursementRealizationSide({ ...scope, ...data, activityTrace });
+  return buildDisbursementRealizationSide({ ...scope, ...read.data, activityTrace: read.activityTrace });
 }
 
 /**
@@ -301,6 +288,7 @@ async function currentRealizationView(
 }
 
 evidenceRoutes.route("/", draftRoutes);
+evidenceRoutes.route("/period-reports", periodReportRoutes);
 
 // --------------------------------------------------------------------------
 // Standard Preparation Pipeline (POST /api/evidence)

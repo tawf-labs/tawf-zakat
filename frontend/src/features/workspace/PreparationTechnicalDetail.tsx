@@ -2,9 +2,8 @@ import type { PrivateRequests } from "./privateRequests";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { ReportPackageForm } from "./ReportPackageForm";
 import { useEffect, useState } from "react";
-import { AlertTriangle, FileWarning, FileText, Lock, RefreshCw, ScrollText } from "lucide-react";
+import { AlertTriangle, FileWarning, Lock } from "lucide-react";
 import { Badge } from "../../components/ui/Badge";
-import { EvidencePreparationForm } from "./EvidencePreparationForm";
 import { RealizationDrillDownCard } from "./RealizationDrillDownCard";
 import { WorkspaceRequestError } from "./workspaceClient";
 import { Button } from "../../components/ui/Button";
@@ -13,10 +12,8 @@ import { bucketLabel, DISCREPANCY_LABELS } from "../reconciliation/format";
 import {
   downloadEvidenceFile,
   fetchEvidencePreparation,
-  listEvidencePreparations,
   type EvidenceFile,
   type EvidencePreparation,
-  type EvidenceSummary,
 } from "./evidenceClient";
 import {
   describeChainScope,
@@ -356,135 +353,38 @@ function PreparationDetail({
   );
 }
 
-export function EvidencePackagePanel({ requests, canPrepare, scopeUnit, scopeLevel }: {
-  requests: PrivateRequests; canPrepare: boolean; scopeUnit: string; scopeLevel: string;
+/**
+ * Everything one locked data set holds for an examiner, as the old evidence page
+ * showed it: manifests and cut-off, findings, frozen realizations, files with their
+ * SHA-256, the commitment, registry recovery and the report package form. Moved
+ * behind *Detail teknis* by ADR-0043; nothing here was removed.
+ */
+export function PreparationTechnicalDetail({ preparationId, requests, canPrepare }: {
+  preparationId: string; requests: PrivateRequests; canPrepare: boolean;
 }) {
-  const [summaries, setSummaries] = useState<EvidenceSummary[] | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<{
-    preparation: EvidencePreparation;
-    commitmentVerified: boolean;
-  } | null>(null);
+  const [detail, setDetail] = useState<{ preparation: EvidencePreparation; commitmentVerified: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [refresh, setRefresh] = useState(0);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [savedId, setSavedId] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    listEvidencePreparations(requests).then(({ preparations }) => {
-      if (!cancelled) { setSummaries(preparations); setError(null); }
-    }).catch((caught) => {
-      if (!cancelled) { setSummaries([]); setError(caught instanceof Error ? caught.message : "Daftar snapshot tidak dapat dibaca."); }
-    });
-    return () => { cancelled = true; };
-  }, [requests, refresh]);
-
-  useEffect(() => {
-    if (!openId) {
-      setDetail(null);
-      return;
-    }
     let cancelled = false;
     setDetail(null);
-    setDetailError(null);
-    fetchEvidencePreparation(openId, requests)
-      .then((next) => {
-        if (!cancelled) setDetail(next);
-      })
-      .catch((caught: any) => {
-        if (cancelled) return;
-        setDetail(null);
-        setDetailError(caught?.message ?? "Paket bukti tidak dapat dibuka.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [openId, requests, refresh]);
+    setError(null);
+    fetchEvidencePreparation(preparationId, requests)
+      .then((next) => { if (!cancelled) setDetail(next); })
+      .catch((caught: any) => { if (!cancelled) setError(caught?.message ?? "Data laporan tidak dapat dibuka."); });
+    return () => { cancelled = true; };
+  }, [preparationId, requests]);
 
-  if (summaries === null) {
-    return (
-      <div className="rounded-2xl border border-stone-200 bg-white p-6 text-sm text-stone-600">
-        Memuat paket bukti…
-      </div>
-    );
-  }
-
+  if (error) return <p role="alert" className="text-sm text-red-700">{error}</p>;
+  if (!detail) return <p className="text-sm text-stone-600">Membuka data laporan…</p>;
   return (
-    <section className="rounded-2xl border border-stone-200 bg-white p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
-          <ScrollText className="h-4 w-4" /> Snapshot sumber dan hasil rekonsiliasi ({summaries.length})
-        </h3>
-        <Button variant="outline" onClick={() => setRefresh((value) => value + 1)}>
-          <RefreshCw className="mr-2 h-4 w-4" /> Muat ulang
-        </Button>
-      </header>
-
-      {canPrepare && <EvidencePreparationForm requests={requests} scopeUnit={scopeUnit} scopeLevel={scopeLevel}
-        onSaved={(id) => { setSavedId(id); setOpenId(id); setRefresh((value) => value + 1); }} />}
-      {savedId && <p role="status" className="mt-3 text-sm text-emerald-800">Snapshot tersimpan: {savedId}. Hasil pemeriksaan dapat dibuka di bawah.</p>}
-
-      {error && (
-        <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          {error}
-        </p>
-      )}
-
-      {summaries.length === 0 ? (
-        <p className="mt-4 rounded-lg border border-dashed border-stone-300 bg-stone-50 p-4 text-sm text-stone-600">
-          Belum ada snapshot yang dibekukan pada ruang kerja ini.
-        </p>
-      ) : (
-        <ul className="mt-4 space-y-3">
-          {summaries.map((summary) => {
-            const outcome = describeOutcome(summary.outcome, summary.findingCount);
-            const isOpen = openId === summary.id;
-            return (
-              <li key={summary.id} className="rounded-xl border border-stone-200">
-                <button
-                  type="button"
-                  onClick={() => setOpenId(isOpen ? null : summary.id)}
-                  className="flex w-full flex-wrap items-center justify-between gap-3 p-4 text-left"
-                  aria-expanded={isOpen}
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2 text-sm font-semibold text-stone-900">
-                      <FileText className="h-4 w-4 shrink-0 text-stone-400" />
-                      <span className="truncate">{summary.label}</span>
-                    </span>
-                    <span className="mt-1 block text-xs text-stone-500">
-                      {summary.periodKind} {summary.periodYear} · {summary.currencyUnit} ·{" "}
-                      <span className="font-mono">{summary.id}</span>
-                    </span>
-                  </span>
-                  <Badge>{outcome.label}</Badge>
-                </button>
-
-                {isOpen && (
-                  <div className="border-t border-stone-100 p-4">
-                    {detail && detail.preparation.id === summary.id ? (
-                      <>
-                      <PreparationDetail
-                        preparation={detail.preparation}
-                        commitmentVerified={detail.commitmentVerified}
-                        requests={requests}
-                      />
-                      <RecoveryPanel key={`recovery:${summary.id}:${requests.contextId}`} requests={requests} preparationId={summary.id} canRecover={canPrepare} />
-                      <ReportPackageForm key={`${summary.id}:${requests.contextId}`} preparationId={summary.id} requests={requests} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
-                      </>
-                    ) : detailError ? (
-                      <p role="alert" className="text-sm text-red-700">{detailError} Gunakan Muat ulang untuk mencoba lagi.</p>
-                    ) : (
-                      <p className="text-sm text-stone-600">Membuka snapshot…</p>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
+    <div className="space-y-4">
+      <p className="text-xs text-stone-500">
+        {detail.preparation.label} · <span className="font-mono">{detail.preparation.id}</span>
+      </p>
+      <PreparationDetail preparation={detail.preparation} commitmentVerified={detail.commitmentVerified} requests={requests} />
+      <RecoveryPanel key={`recovery:${preparationId}:${requests.contextId}`} requests={requests} preparationId={preparationId} canRecover={canPrepare} />
+      <ReportPackageForm key={`${preparationId}:${requests.contextId}`} preparationId={preparationId} requests={requests} canPrepare={canPrepare} commitmentSalt={detail.preparation.commitmentSalt} />
+    </div>
   );
 }
