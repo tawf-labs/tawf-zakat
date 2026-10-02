@@ -152,6 +152,11 @@ describe("Laporan periode dari data aplikasi (#130)", () => {
     expect(review.blockers).toEqual([]);
     expect(review.limitations).toContain(NOT_COMPARED_NOTE);
     expect(review.figures.length).toBeGreaterThan(0);
+
+    // Without a registry the report is still written and checked; publishing says why it cannot happen.
+    const material = await (await get(`${REPORTS}/${preparation.id}/report`, amil)).json();
+    expect(material.publicationUnavailable).toBe("Registry laporan belum dikonfigurasi pada deployment ini.");
+    expect(material.identity).toEqual({ reportId: `laporan-penyaluran-akhir-tahun-${YEAR}`, version: "1", predecessor: null });
   });
 
   it("menolak batas data di masa depan, periode tak dikenal, dan pembaca tanpa kewenangan menyiapkan", async () => {

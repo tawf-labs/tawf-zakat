@@ -87,7 +87,7 @@ describe("Laporan periode: tinjau, tulis, periksa, terbitkan (#131)", () => {
     expect(material.identity).toEqual({ reportId: `laporan-penyaluran-akhir-tahun-${YEAR}`, version: "1", predecessor: null });
     expect(material.correctionRequired).toBe(false);
     expect(material.comparedWithBookkeeping).toBe(false);
-    expect(material.publicationAvailable).toBe(true);
+    expect(material.publicationUnavailable).toBeNull();
     expect(material.ready).toBeNull();
     const byName = Object.fromEntries(material.figures.map((f: any) => [f.name, f.label]));
     expect(byName["SOURCE.total"]).toBe("Total disalurkan menurut data aplikasi");
@@ -167,6 +167,28 @@ describe("Laporan periode: tinjau, tulis, periksa, terbitkan (#131)", () => {
       if (saved.key === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = saved.key;
       if (saved.url === undefined) delete process.env.DEEPSEEK_BASE_URL; else process.env.DEEPSEEK_BASE_URL = saved.url;
       stub.stop(true);
+    }
+  });
+
+  it("registry terbaca tetapi penulisan ditutup: alasan penerbitan belum dibuka dinyatakan, versi tetap dari registry", async () => {
+    const db = database.handle();
+    const { amil } = await recordOneHandover();
+    for (const [closed, reason] of [
+      [{ validator: true }, "Layanan pemeriksa otomatis untuk penerbitan belum dikonfigurasi pada deployment ini."],
+      [{ budget: true }, "Pengiriman ke registry belum dibuka pada deployment ini."],
+    ] as const) {
+      const registry = await anvil.runtime(db, closed);
+      configureWorkspace({
+        store, disbursement: createDisbursementStore(db), evidence: createEvidenceStore(db), activities: createActivityStore(db),
+        files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
+        ethCall: registry.chain.accountSignatureCall, now: () => Math.floor(Date.now() / 1000), sessionTtlSeconds: 3600, challengeTtlSeconds: 300,
+        registry,
+      });
+      // Semester I: the shared Anvil chain holds no publication of it, so the registry answers version 1.
+      const locked = (await (await post(REPORTS, { period: { kind: "SEMESTER", year: YEAR } }, amil)).json()).preparation;
+      const material = await (await get(`${REPORTS}/${locked.id}/report`, amil)).json();
+      expect(material.publicationUnavailable).toBe(reason);
+      expect(material.identity).toEqual({ reportId: `laporan-penyaluran-semester-i-${YEAR}`, version: "1", predecessor: null });
     }
   });
 

@@ -162,12 +162,13 @@ export function PeriodReportReviewWizard({ preparationId, periodName, requests, 
                 <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-500">Narasi</h5>
                 <p className="mt-1 whitespace-pre-wrap text-sm text-stone-800">{saved!.draft?.narrative}</p>
               </section>
-              {material.publicationAvailable ? (
+              {material.publicationUnavailable === null ? (
                 <PeriodReportPublishStep saved={saved!} preparationId={preparationId} requests={requests} onPublished={onChanged} />
               ) : (
-                <p className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-700">
-                  Penerbitan belum tersedia pada deployment ini karena registry laporan belum dikonfigurasi. Laporan tersimpan dan siap diterbitkan.
-                </p>
+                <div role="status" className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-700">
+                  <p className="font-semibold">Penerbitan belum dibuka</p>
+                  <p className="mt-1">{material.publicationUnavailable} Laporan tersimpan dengan status siap diterbitkan; operator perlu membuka penerbitan lebih dulu.</p>
+                </div>
               )}
               <Button type="button" variant="ghost" onClick={onClose}>Tutup</Button>
             </div>

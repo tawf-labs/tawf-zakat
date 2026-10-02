@@ -31,6 +31,7 @@ import {
   periodReportId,
   periodReportLabel,
   previewOf,
+  publicationUnavailable,
   staffReasons,
   summarizePeriodReports,
   withoutBookkeeping,
@@ -254,7 +255,7 @@ routes.get("/:preparationId/report", async (c) => {
       figures: material.review.figures,
       limitations: material.review.limitations,
       blockers: material.review.blockers,
-      publicationAvailable: Boolean(runtime.registry),
+      publicationUnavailable: publicationUnavailable(runtime.registry),
       ready,
     });
   } catch (error) {

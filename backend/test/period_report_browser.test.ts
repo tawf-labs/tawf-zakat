@@ -197,6 +197,17 @@ describe("Laporan periode di browser (#130)", () => {
       await page.getByText("Data aplikasi (tanpa rekap pembukuan)").first().waitFor();
       await shot("05-detail-teknis");
 
+      // No registry here: the report is still written and checked, and publishing says why it cannot happen.
+      const review = page.getByRole("region", { name: `Tinjau dan terbitkan Akhir tahun ${YEAR}` });
+      await review.getByLabel("Narasi laporan").fill("Lembaga menyalurkan Rp1.000.000 kepada mustahik.");
+      await review.getByLabel(/Saya menyertakan seluruh sumber/).check();
+      await review.getByRole("button", { name: "Periksa laporan" }).click();
+      await review.getByText("Hasil pemeriksaan otomatis: lolos").waitFor();
+      await review.getByText("Penerbitan belum dibuka").waitFor();
+      await review.getByText(/Registry laporan belum dikonfigurasi pada deployment ini\./).waitFor();
+      expect(await review.getByRole("button", { name: "Sahkan dan terbitkan" }).count()).toBe(0);
+      await shot("06-penerbitan-belum-dibuka");
+
       expect(errors).toEqual([]);
     } finally {
       await browser?.close();

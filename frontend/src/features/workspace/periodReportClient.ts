@@ -82,7 +82,8 @@ export type ReportMaterial = {
   figures: ReportFigure[];
   limitations: string[];
   blockers: string[];
-  publicationAvailable: boolean;
+  /** Why this deployment cannot publish yet (no registry, validator or relay budget), or null. */
+  publicationUnavailable: string | null;
   /** A frozen package that passed and carries this identity: step 5 continues from it. */
   ready: SavedReportPackage | null;
 };

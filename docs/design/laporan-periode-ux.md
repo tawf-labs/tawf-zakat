@@ -103,6 +103,7 @@ Tidak ada yang dihapus; hanya dipindah.
   - Penulisan paket mengikuti aturan rute paket laporan: hanya peran `OFFICER`.
   - Langkah 5 memakai relay penerbitan yang ada. **Sahkan dan terbitkan** meminta pengesahan validator, tanda tangan akun pengesah, dan pengiriman. Statusnya tampil sebagai *Menunggu konfirmasi* sampai *Terbit*, dengan kirim ulang yang aman.
   - Publikasi terkonfirmasi membuat kunci periode biaya operasional (#129) karena sumbernya stream realisasi.
+  - Penerbitan dianggap terbuka hanya bila tiga hal ada: registry (`REPORT_REGISTRY_*`), kunci layanan pemeriksa (`REPORT_REGISTRY_VALIDATOR_KEY`), dan anggaran relay (`REPORT_REGISTRY_BUDGET_WEI`, `_GAS_LIMIT`, `_MAX_FEE_PER_GAS_WEI`). Bila salah satu tidak ada, langkah 5 menampilkan *Penerbitan belum dibuka* beserta alasannya, bukan tombol yang gagal saat diklik. Riwayat terbit tetap dibaca dari registry bila koneksinya ada.
   - Langkah 3 (#132) belum ada; setelah data dikunci, wizard langsung ke langkah 4.
 
 ## 5. Di luar cakupan

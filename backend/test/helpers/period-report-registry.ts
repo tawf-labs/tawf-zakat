@@ -41,15 +41,21 @@ export async function startPeriodReportRegistry(port: number) {
   return {
     rpc,
     mine: () => rpc.request({ method: "evm_mine" as any }),
-    /** The registry runtime over a database whose schema this creates. */
-    async runtime(db: Parameters<typeof createRegistryStore>[0]) {
+    /**
+     * The registry runtime over a database whose schema this creates. `closed` leaves out
+     * the validator key or the relay budget, as a deployment with writes closed does.
+     */
+    async runtime(db: Parameters<typeof createRegistryStore>[0], closed: { validator?: boolean; budget?: boolean } = {}) {
       const store = createRegistryStore(db);
       await store.ensureSchema();
       const budgetConfig = { maxWei: 10n ** 20n, gasLimit: 5_000_000n, maxFeePerGas: 2_000_000_000n }; // Isolated Anvil only.
       const budget = createRegistryBudgetStore(db, budgetConfig, `31337:${registry.toLowerCase()}:${privateKeyToAccount(relayerKey).address.toLowerCase()}`);
       await budget.ensureSchema();
-      const chain = createRegistryChain({ rpcUrl, chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: relayerKey, budgetConfig, budget });
-      return { store, chain, endorsement: createReportEndorsement(validatorKey) };
+      const chain = createRegistryChain({
+        rpcUrl, chainId: 31337, address: registry, requiredConfirmations: 2, privateKey: relayerKey,
+        ...(closed.budget ? {} : { budgetConfig, budget }),
+      });
+      return { store, chain, ...(closed.validator ? {} : { endorsement: createReportEndorsement(validatorKey) }) };
     },
     async stop() {
       if (node.exitCode === null) { node.kill(); await node.exited; }

@@ -258,3 +258,15 @@ export function staffReasons(verdict: Verdict): string[] {
   }
   return [...new Set(reasons)];
 }
+
+/**
+ * Why this deployment cannot publish a report yet, or `null` when it can. Reading the
+ * registry is not enough: publishing also needs the validator service's key and an
+ * explicit relay budget, and either may be deliberately left closed.
+ */
+export function publicationUnavailable(registry: { endorsement?: unknown; chain: { relayEnabled: boolean } } | undefined): string | null {
+  if (!registry) return "Registry laporan belum dikonfigurasi pada deployment ini.";
+  if (!registry.endorsement) return "Layanan pemeriksa otomatis untuk penerbitan belum dikonfigurasi pada deployment ini.";
+  if (!registry.chain.relayEnabled) return "Pengiriman ke registry belum dibuka pada deployment ini.";
+  return null;
+}

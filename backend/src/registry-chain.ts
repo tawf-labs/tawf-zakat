@@ -319,6 +319,8 @@ function registryAdapter(config: RegistryConfig, reference?: RegistryReference) 
       if (hash !== attempt.hash) throw new Error("Identitas transaksi berubah.");
     },
     observe,
+    /** Whether this deployment may send transactions at all: the relay refuses without an explicit budget. */
+    relayEnabled: Boolean(config.budgetConfig && config.budget),
   };
   return adapter;
 }
