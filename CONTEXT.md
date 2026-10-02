@@ -405,3 +405,7 @@ _Avoid_: Pengesahan lembaga, atestasi auditor, bukti kebenaran seluruh sumber.
 **Penerbitan laporan**:
 Penetapan suatu versi laporan sebagai terbit setelah pengesahan lembaga dan pengesahan layanan validator diterima untuk paket yang sama.
 _Avoid_: Unduhan draf, pencatatan bukti pemeriksaan, untuk tindakan yang belum memenuhi pengesahan penerbitan.
+
+**Kunci periode laporan**:
+Catatan lokal bahwa sebuah laporan periode bersumber realisasi sudah terbit, sehingga baris biaya operasional yang dicatat di dalam periode dan sebelum cut-off sumbernya hanya dapat diubah untuk menyiapkan versi koreksi laporan itu.
+_Avoid_: Penutupan buku, pengunci pengajuan.

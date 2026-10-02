@@ -31,7 +31,22 @@ export type CostItem = CostItemInput & {
   recordedByOfficerId: string;
   recordedAt: number;
   updatedAt: number;
+  /** The published period report that froze this row; it then changes only for that report's correction (#129). */
+  lockedBy?: CostItemLockRef | null;
+  /** Changed after such a report was published, declared for its correction. */
+  correctedAfterPublication?: boolean;
 };
+
+export type CostItemLockRef = {
+  packageId: string;
+  reportId: string;
+  version: string;
+  period: { kind: "SEMESTER" | "AKHIR_TAHUN"; year: number };
+};
+
+const PERIOD_LABELS = { SEMESTER: "Semester I", AKHIR_TAHUN: "Akhir Tahun" } as const;
+export const lockLabel = (lock: CostItemLockRef) =>
+  `laporan "${lock.reportId}" versi ${lock.version} (${PERIOD_LABELS[lock.period.kind]} ${lock.period.year})`;
 
 export type CostItemVersion = {
   itemId: string;
@@ -39,6 +54,8 @@ export type CostItemVersion = {
   change: "RECORD" | "CORRECT" | "VOID";
   item: CostItemInput & { status: "ACTIVE" | "VOIDED" };
   reason: string | null;
+  /** The published report this change was declared for, when the row was already locked by it. */
+  reportCorrectionFor: string | null;
   actorOfficerId: string;
   actorAccount: string;
   at: number;
@@ -137,14 +154,14 @@ export const correctCostItem = (
   requests: PrivateRequests,
   proposalId: string,
   itemId: string,
-  input: { operationId: string; expectedVersion: number; reason: string; item: CostItemInput },
+  input: { operationId: string; expectedVersion: number; reason: string; item: CostItemInput; forReportCorrection?: string | null },
 ) => requests.json<{ item: CostItem }>(`${costs(proposalId)}/items/${itemId}/correct`, postJson(input)).then((r) => r.item);
 
 export const voidCostItem = (
   requests: PrivateRequests,
   proposalId: string,
   itemId: string,
-  input: { operationId: string; expectedVersion: number; reason: string },
+  input: { operationId: string; expectedVersion: number; reason: string; forReportCorrection?: string | null },
 ) => requests.json<{ item: CostItem }>(`${costs(proposalId)}/items/${itemId}/void`, postJson(input)).then((r) => r.item);
 
 export const getCostItemHistory = (requests: PrivateRequests, proposalId: string, itemId: string) =>

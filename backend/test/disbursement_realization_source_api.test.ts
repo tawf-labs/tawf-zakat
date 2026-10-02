@@ -42,6 +42,7 @@ import { recoverDecidedAidLines } from "../src/proposal-decision-lines";
 import { reportRegistryAbi } from "../../shared/report-registry-abi";
 import { attestationTypedData, evidenceTypedData } from "../../shared/report-registry";
 import { createRegistryStore } from "../src/registry-store";
+import { recoverRegistry } from "../src/registry-recovery";
 import { createRegistryBudgetStore } from "../src/registry-budget";
 import { createRegistryChain } from "../src/registry-chain";
 import { createReportEndorsement } from "../src/report-endorsement";
@@ -2246,5 +2247,107 @@ describe("Registry lokal: laporan bersumber realisasi (Issue #98)", () => {
     const oldDrill = await (await get(`${EVIDENCE}/${first.id}/drill-down`, amilToken)).json();
     expect(oldDrill.provenances[0].realizations.map((r: any) => r.beneficiary.name)).toEqual(["Pak Arif"]);
     expect(oldDrill.provenances[0].totals.totalRealizedIdr).toBe("500000");
+  }, 60000);
+
+  it("laporan terbit mengunci koreksi baris biaya yang dicakupnya; koreksi untuk versi pengganti tetap mungkin (#129)", async () => {
+    let { draft } = await prepareApprovedProposal({
+      beneficiaries: [{ id: "ben-a", name: "Pak Arif", nik: "3201123456780061" }],
+      lines: [{ id: "line-a", beneficiaryId: "ben-a", aidType: "Santunan", kind: "MONEY", amountRequestedIdr: "500000" }],
+    });
+    let amilToken = await signIn(amilSinar);
+    // The report covers the year the registry's wall clock is in.
+    const year = new Date(clock * 1000).getUTCFullYear();
+    const period = { kind: "AKHIR_TAHUN", year };
+    const costs = `/proposals/${draft.id}/operational-costs`;
+    const correct = (itemId: string, expectedVersion: number, extra: Record<string, unknown> = {}) =>
+      post(`${costs}/items/${itemId}/correct`, {
+        operationId: crypto.randomUUID(), expectedVersion, reason: "Struk tertulis lebih kecil",
+        item: { spentOn: "2026-09-28", purpose: "Bensin", amountIdr: "90000", payee: "SPBU 34.153", fundingSource: { kind: "KAS_LEMBAGA" } },
+        ...extra,
+      }, amilToken);
+    const overview = async () => (await (await get(costs, amilToken)).json()).items as any[];
+    const locks = async () => {
+      const result: any = await database.handle().execute(sql`SELECT package_id, report_id, version, cut_off_seconds FROM report_period_locks`);
+      return (result.rows ?? result) as any[];
+    };
+
+    // Recorded before the cut-off: a row the report will freeze, and its talangan and panjar.
+    await recordAt(draft, amilToken, "line-a", "ben-a", "500000", clock - 3600);
+    const covered = await recordCost(draft.id, null, "100000", "Bensin", "SPBU 34.153", amilToken);
+    const panjarId = await issuePanjar(draft.id, "200000", "Belanja kegiatan", "BKK-129", amilToken);
+    const talanganRes = await post(`${costs}/items`, { items: [{
+      spentOn: "2026-09-28", purpose: "Sewa mobil", amountIdr: "300000", payee: "Rental Pak Udin",
+      fundingSource: { kind: "TALANGAN", holderOfficerId: "off-amil-sinar" },
+    }] }, amilToken);
+    const talangan = (await talanganRes.json()).results[0].item;
+
+    // Frozen but not yet published: a draft report locks nothing, and the row still corrects.
+    const cutOff = new Date(clock * 1000).toISOString();
+    const institution = (await store.getInstitution(SINAR))!;
+    const frozen = await post(EVIDENCE, {
+      label: "Laporan biaya terkunci", period, currencyUnit: "IDR", balanceSheetScope: "ON",
+      claim: pastedClaim("500000", { scopeUnit: institution.scopeUnit, scopeLevel: institution.scopeLevel, cutOff, period } as any),
+      source: { internal: { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff } },
+    }, amilToken);
+    expect(frozen.status).toBe(201);
+    const preparation = (await frozen.json()).preparation;
+    const v1 = await freezeReportVersion(preparation.id, amilToken, { reportId: `biaya-terkunci-${year}`, version: "1" });
+    expect((await correct(covered.id, 1)).status).toBe(200);
+    expect(await locks()).toEqual([]);
+
+    await publish(v1, amilToken, "biaya-v1");
+    expect((await versionOf(v1, amilToken)).publication).toBe("PUBLISHED");
+    // The confirmation is stored by the registry's recovery cycle, as the server's polling loop does.
+    await recoverRegistry({ store: createRegistryStore(database.handle()), chain }, SINAR);
+    expect(await locks()).toEqual([
+      { package_id: v1.id, report_id: `biaya-terkunci-${year}`, version: "1", cut_off_seconds: expect.anything() },
+    ]);
+    expect(Number((await locks())[0].cut_off_seconds)).toBe(clock);
+
+    // Recorded after the cut-off: outside what the report froze.
+    clock += 3600;
+    amilToken = await signIn(amilSinar);
+    const later = await recordCost(draft.id, null, "100000", "Bensin", "SPBU 34.153", amilToken);
+
+    const refused = await correct(covered.id, 2);
+    expect(refused.status).toBe(409);
+    const body = await refused.json();
+    expect(body.reason).toBe("PERIOD_LOCKED");
+    expect(body.error).toContain(`laporan "biaya-terkunci-${year}" versi 1 (Akhir Tahun ${year})`);
+    expect(body.lock).toEqual({ packageId: v1.id, reportId: `biaya-terkunci-${year}`, version: "1", period });
+    expect((await post(`${costs}/items/${covered.id}/void`,
+      { operationId: crypto.randomUUID(), expectedVersion: 2, reason: "Input dobel dari nota" }, amilToken)).status).toBe(409);
+    expect((await correct(later.id, 1)).status).toBe(200);
+
+    // Talangan and panjar settle after publication: new events, not changes to frozen rows.
+    expect((await post(`${costs}/reimbursements`, { operationId: crypto.randomUUID(), holderOfficerId: "off-amil-sinar",
+      itemIds: [talangan.id], paidOn: "2026-10-02", reference: "Transfer BSI 9001" }, amilToken)).status).toBe(201);
+    expect((await post(`${costs}/panjar/${panjarId}/returns`, { operationId: crypto.randomUUID(), amountIdr: "200000",
+      returnedOn: "2026-10-02", reference: "Setor kas" }, amilToken)).status).toBe(201);
+
+    let items = await overview();
+    expect(items.find((i) => i.id === covered.id).lockedBy).toEqual({ packageId: v1.id, reportId: `biaya-terkunci-${year}`, version: "1", period });
+    expect(items.find((i) => i.id === later.id).lockedBy).toBeNull();
+
+    // The lock is durable: a restarted server still refuses.
+    await database.reopen();
+    const db = database.handle();
+    store = createWorkspaceStore(db);
+    disbursement = createDisbursementStore(db);
+    evidence = createEvidenceStore(db);
+    activities = createActivityStore(db);
+    contributions = createContributionStore(db);
+    configureRuntime(disbursement);
+    amilToken = await signIn(amilSinar);
+    expect((await correct(covered.id, 2)).status).toBe(409);
+
+    // Declared as preparing the report's correction, the change is kept with that report named.
+    expect((await correct(covered.id, 2, { forReportCorrection: "paket-lain" })).status).toBe(409);
+    expect((await correct(covered.id, 2, { forReportCorrection: v1.id })).status).toBe(200);
+    const history = (await (await get(`${costs}/items/${covered.id}/history`, amilToken)).json()).history;
+    expect(history.map((v: any) => [v.version, v.reportCorrectionFor])).toEqual([[1, null], [2, null], [3, v1.id]]);
+    items = await overview();
+    expect(items.find((i) => i.id === covered.id)).toMatchObject({ amountIdr: "90000", correctedAfterPublication: true });
+    expect(items.find((i) => i.id === later.id).correctedAfterPublication).toBe(false);
   }, 60000);
 });

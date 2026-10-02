@@ -126,6 +126,13 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
       ) VALUES ('exp-lama', ${SINAR}, ${draft.id}, NULL, '15000', 'Fotokopi daftar penerima', 'Fotocopy Jaya', 'KW-LAMA-9', 'off-amil', ${NOW - 86400})
     `);
     await createDisbursementStore(database.handle()).ensureSchema();
+    // A published period report froze it: its cut-off falls before anything this test records (#129).
+    await database.handle().execute(sql`
+      INSERT INTO report_period_locks (institution_id, package_id, intent_id, report_id, version, period_kind, period_year,
+        from_seconds, to_seconds, cut_off_seconds, transaction_hash, locked_at)
+      VALUES (${SINAR}, 'pkg-biaya-1', 'intent-biaya-1', 'biaya-2026', '1', 'AKHIR_TAHUN', 2026,
+        ${NOW - 10 * 86400}, ${NOW + 400 * 86400}, ${NOW - 3600}, '0x00', ${NOW})
+    `);
 
     const built = await Bun.build({
       entrypoints: [new URL("../../frontend/test/officer-smoke.tsx", import.meta.url).pathname],
@@ -279,6 +286,27 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
       await files.getByRole("img", { name: "Foto STR-0457 belakang.png" }).waitFor();
       await shot("05-nota-files");
       await files.getByRole("button", { name: "Tutup" }).last().click();
+
+      // The carried-over row lies inside a published period report (#129): it changes only for that report's correction.
+      await grid.getByText("terkunci laporan").first().waitFor();
+      expect(await grid.getByText("terkunci laporan").count()).toBe(1);
+      await grid.getByRole("gridcell", { name: "Fotokopi daftar penerima" }).click();
+      await page.getByRole("button", { name: "Koreksi", exact: true }).first().click();
+      const lockedCorrection = page.getByRole("dialog", { name: "Koreksi baris biaya" });
+      await lockedCorrection.getByText('Baris ini tercakup laporan "biaya-2026" versi 1 (Akhir Tahun 2026) yang sudah terbit.', { exact: false }).waitFor();
+      await lockedCorrection.getByLabel("Total (Rp)").fill("12500");
+      await lockedCorrection.getByLabel(/Alasan koreksi/).fill("Kuitansi asli tertulis Rp12.500");
+      await lockedCorrection.getByRole("button", { name: "Simpan koreksi" }).click();
+      await lockedCorrection.getByText("Nyatakan bahwa koreksi ini untuk versi koreksi laporan.").waitFor();
+      await lockedCorrection.getByLabel(/Perubahan ini untuk versi koreksi laporan tersebut/).check();
+      await shot("08-locked-correction");
+      await lockedCorrection.getByRole("button", { name: "Simpan koreksi" }).click();
+      await lockedCorrection.waitFor({ state: "detached" });
+      await grid.getByRole("gridcell", { name: "Fotokopi daftar penerima" }).click();
+      await page.getByRole("button", { name: "Riwayat", exact: true }).first().click();
+      const lockedHistory = page.getByRole("dialog", { name: "Riwayat baris biaya" });
+      await lockedHistory.getByText('Diubah setelah laporan terbit, untuk versi koreksi laporan "biaya-2026" versi 1 (Akhir Tahun 2026).').waitFor();
+      await lockedHistory.getByRole("button", { name: "Tutup" }).first().click();
 
       // Fullscreen keeps unrecorded drafts.
       await page.getByRole("button", { name: "Perluas" }).click();

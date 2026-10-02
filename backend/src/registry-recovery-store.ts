@@ -2,7 +2,8 @@
 import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { EvidenceDatabase } from "./evidence-store";
-import { subjectOf, type StoredIntent } from "./registry-store";
+import { isAttestation, subjectOf, type StoredIntent } from "./registry-store";
+import { followPublication } from "./period-lock";
 import type { RecordingObservation, Hex } from "../../shared/report-registry";
 
 const rows = (result: any): any[] => result.rows ?? result;
@@ -23,6 +24,8 @@ export async function persistObservation(tx: Transaction, { intent, observation,
   if (!current) throw new Error("Percobaan registry tidak ditemukan.");
   const next = { ...JSON.parse(current.intent), observation, transactionHash: hash };
   await tx.execute(sql`UPDATE registry_intents SET intent=${JSON.stringify(next)} WHERE institution_id=${institution} AND id=${intent.id}`);
+  // A confirmed publication locks the cost rows its report covered (#129), in this same transaction.
+  if (!isAttestation(intent)) await followPublication(tx, intent, observation.state, hash);
 }
 
 export function createRecoveryStore(db: EvidenceDatabase) {

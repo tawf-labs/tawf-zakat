@@ -57,9 +57,29 @@ export type CostItemVersionRecord = {
   /** The row exactly as it stood at this version. */
   item: CostItemInput & { status: CostItemStatus };
   reason: string | null;
+  /**
+   * The published report this change was made for, when the row was already covered by a
+   * published period report and the change was declared as preparing its correction (#129).
+   */
+  reportCorrectionFor: string | null;
   actorOfficerId: string;
   actorAccount: string;
   at: number;
+};
+
+/** The published period report that froze a cost row (#129). */
+export type CostItemLockRef = {
+  packageId: string;
+  reportId: string;
+  version: string;
+  period: { kind: "SEMESTER" | "AKHIR_TAHUN"; year: number };
+};
+
+/** A cost row as the tab shows it: with the report that locks it, if any. */
+export type CostItemView = CostItemRecord & {
+  lockedBy: CostItemLockRef | null;
+  /** Changed after a report covering it was published, for that report's correction. */
+  correctedAfterPublication: boolean;
 };
 
 export type PanjarInput = {

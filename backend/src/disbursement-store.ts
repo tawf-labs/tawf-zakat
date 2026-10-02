@@ -19,6 +19,7 @@ import {
   reimbursementFrom,
   type StoredReceiptFile,
 } from "./operational-cost-sql";
+import { loadPeriodLocks, locksCovering, periodLabel, type PeriodLock } from "./period-lock";
 import {
   operationalCostTotals,
   panjarRemainingIdr,
@@ -27,7 +28,9 @@ import {
   validateCostItemInput,
   type CostIssue,
   type CostItemInput,
+  type CostItemLockRef,
   type CostItemRecord,
+  type CostItemView,
   type CostItemVersionRecord,
   type HolderSummary,
   type OperationalCostTotals,
@@ -293,6 +296,14 @@ export class RealizationStateError extends Error {
   }
 }
 
+/** A cost row a published period report covered (#129): it changes only for that report's correction. */
+export class CostPeriodLockedError extends Error {
+  constructor(message: string, readonly lock: CostItemLockRef) {
+    super(message);
+    this.name = "CostPeriodLockedError";
+  }
+}
+
 export class RealizationChallengeSpentError extends Error {
   constructor(message = "Tantangan konfirmasi sudah digunakan atau kedaluwarsa.") {
     super(message);
@@ -533,7 +544,7 @@ export type CostRecordingResult =
   | { index: number; issues: CostIssue[] };
 
 export type OperationalCostOverview = {
-  items: CostItemRecord[];
+  items: CostItemView[];
   panjar: PanjarRecord[];
   reimbursements: ReimbursementRecord[];
   receipts: ReceiptRecord[];
@@ -618,16 +629,43 @@ async function insertItemVersion(
   change: "RECORD" | "CORRECT" | "VOID",
   reason: string | null,
   actor: CostActor,
-  now: number
+  now: number,
+  reportCorrectionFor: string | null = null
 ) {
   await tx.execute(sql`
     INSERT INTO operational_cost_item_versions (
-      item_id, institution_id, version, change, item_json, reason, actor_officer_id, actor_account, at
+      item_id, institution_id, version, change, item_json, reason, actor_officer_id, actor_account, at,
+      report_correction_package_id
     ) VALUES (
       ${item.id}, ${institutionId}, ${item.version}, ${change}, ${JSON.stringify(itemSnapshot(item, item.status))},
-      ${reason}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}
+      ${reason}, ${actor.officerId}, ${actor.account.toLowerCase()}, ${now}, ${reportCorrectionFor}
     )
   `);
+}
+
+const lockRef = (lock: PeriodLock): CostItemLockRef =>
+  ({ packageId: lock.packageId, reportId: lock.reportId, version: lock.version, period: lock.period });
+
+/**
+ * Refuses a change to a row a published period report covered (#129), unless the change is
+ * declared as preparing the correction of a report that covers it. Returns that report's
+ * package, kept with the version; a declaration on a row no report covers is not kept.
+ */
+async function assertOutsidePublishedPeriod(
+  tx: Executor,
+  institutionId: string,
+  item: CostItemRecord,
+  forReportCorrection: string | null
+): Promise<string | null> {
+  const covering = locksCovering(await loadPeriodLocks(tx, institutionId), item.recordedAt);
+  if (covering.length === 0) return null;
+  if (forReportCorrection && covering.some((lock) => lock.packageId === forReportCorrection)) return forReportCorrection;
+  const lock = covering[0]!;
+  throw new CostPeriodLockedError(
+    `Baris ini tercakup laporan "${lock.reportId}" versi ${lock.version} (${periodLabel(lock.period)}) yang sudah terbit. ` +
+      "Baris hanya dapat diubah untuk menyiapkan versi koreksi laporan itu.",
+    lockRef(lock)
+  );
 }
 
 /** The current item, locked, and refused when it may no longer change (ADR-0042). */
@@ -3704,8 +3742,18 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       const names = new Map(rowsOf(await db.execute(sql`
         SELECT id, display_name FROM officer_profiles WHERE institution_id = ${institutionId}
       `)).map((row) => [row.id as string, row.display_name as string]));
+      const locks = await loadPeriodLocks(db, institutionId);
+      const correctedAfterPublication = new Set(rowsOf(await db.execute(sql`
+        SELECT DISTINCT v.item_id FROM operational_cost_item_versions v
+        JOIN operational_cost_items i ON i.id = v.item_id
+        WHERE v.institution_id = ${institutionId} AND i.proposal_id = ${proposalId} AND v.report_correction_package_id IS NOT NULL
+      `)).map((row) => row.item_id as string));
       return {
         ...state,
+        items: state.items.map((item) => {
+          const covering = locksCovering(locks, item.recordedAt)[0];
+          return { ...item, lockedBy: covering ? lockRef(covering) : null, correctedAfterPublication: correctedAfterPublication.has(item.id) };
+        }),
         receipts: await loadReceipts(db, institutionId, proposalId),
         holders: summarizeHolders(state.items, state.panjar, names),
         totals: operationalCostTotals(state.items, state.panjar),
@@ -3884,7 +3932,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       institutionId: string,
       proposalId: string,
       itemId: string,
-      input: { expectedVersion: number; reason: string; item: CostItemInput },
+      input: { expectedVersion: number; reason: string; item: CostItemInput; forReportCorrection?: string | null },
       actor: CostActor,
       now: number,
       operation: DraftOperation
@@ -3892,6 +3940,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       return mutateOnce(db, institutionId, operation, async (tx) => {
         await lockProposalForCosts(tx, institutionId, proposalId);
         const current = await lockChangeableItem(tx, institutionId, proposalId, itemId, input.expectedVersion);
+        const reportCorrectionFor = await assertOutsidePublishedPeriod(tx, institutionId, current, input.forReportCorrection ?? null);
         const state = await loadOperationalCosts(tx, institutionId, proposalId);
         // The row's own current spend is given back to its panjar before the new amount is checked.
         const others = state.items.filter((item) => item.id !== itemId);
@@ -3913,7 +3962,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         `))[0];
         const item = costItemFrom(row);
         await markReceiptEvidenced(tx, institutionId, item.receiptId, now);
-        await insertItemVersion(tx, institutionId, item, "CORRECT", input.reason, actor, now);
+        await insertItemVersion(tx, institutionId, item, "CORRECT", input.reason, actor, now, reportCorrectionFor);
         return item;
       }, "disbursement_realization_operations");
     },
@@ -3923,7 +3972,7 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       institutionId: string,
       proposalId: string,
       itemId: string,
-      input: { expectedVersion: number; reason: string },
+      input: { expectedVersion: number; reason: string; forReportCorrection?: string | null },
       actor: CostActor,
       now: number,
       operation: DraftOperation
@@ -3931,13 +3980,14 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       return mutateOnce(db, institutionId, operation, async (tx) => {
         await lockProposalForCosts(tx, institutionId, proposalId);
         const current = await lockChangeableItem(tx, institutionId, proposalId, itemId, input.expectedVersion);
+        const reportCorrectionFor = await assertOutsidePublishedPeriod(tx, institutionId, current, input.forReportCorrection ?? null);
         const row = rowsOf(await tx.execute(sql`
           UPDATE operational_cost_items SET version = ${current.version + 1}, status = 'VOIDED', updated_at = ${now}
           WHERE id = ${itemId} AND institution_id = ${institutionId} AND version = ${current.version}
           RETURNING *
         `))[0];
         const item = costItemFrom(row);
-        await insertItemVersion(tx, institutionId, item, "VOID", input.reason, actor, now);
+        await insertItemVersion(tx, institutionId, item, "VOID", input.reason, actor, now, reportCorrectionFor);
         return item;
       }, "disbursement_realization_operations");
     },

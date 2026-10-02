@@ -279,7 +279,7 @@ describe("Migrasi uang muka & biaya lama ke model ADR-0042 (#128)", () => {
 
     const history = (await (await get(`/proposals/${proposal.id}/operational-costs/items/exp-lama-1/history`, amil)).json()).history;
     expect(history).toEqual([{
-      itemId: "exp-lama-1", version: 1, change: "RECORD", reason: "Dipindahkan dari catatan biaya lama.",
+      itemId: "exp-lama-1", version: 1, change: "RECORD", reason: "Dipindahkan dari catatan biaya lama.", reportCorrectionFor: null,
       actorOfficerId: "off-amil", actorAccount: amilSinar.address.toLowerCase(), at: ISSUED + 120,
       item: {
         spentOn: "2027-01-15", purpose: "Beras 20 kg", quantity: null, unit: null, unitPriceIdr: null, amountIdr: "300000",

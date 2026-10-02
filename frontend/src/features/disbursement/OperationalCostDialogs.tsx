@@ -8,6 +8,7 @@ import { MutationFeedback, useRealizationMutation } from "./useRealizationMutati
 import {
   correctCostItem,
   getCostItemHistory,
+  lockLabel,
   reimburseTalangan,
   returnPanjar,
   voidCostItem,
@@ -103,6 +104,26 @@ export function CostFieldsForm({ fields, onChange, ctx, purposes, receiptChoice,
 
 type DialogBase = { requests: PrivateRequests; proposalId: string; onClose: () => void };
 
+/**
+ * A row a published period report froze changes only to prepare that report's correction
+ * (#129): the officer says so, and the version keeps the report it was changed for.
+ */
+function PublishedLockNotice({ item, declared, onDeclare, disabled }: {
+  item: CostItem; declared: boolean; onDeclare: (declared: boolean) => void; disabled: boolean;
+}) {
+  if (!item.lockedBy) return null;
+  return <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
+    <p>
+      Baris ini tercakup {lockLabel(item.lockedBy)} yang sudah terbit. Angkanya sudah menjadi bagian laporan, jadi baris hanya
+      boleh diubah untuk menyiapkan versi koreksi laporan itu.
+    </p>
+    <label className="flex items-start gap-2 font-semibold">
+      <input type="checkbox" checked={declared} disabled={disabled} className="mt-0.5" onChange={(e) => onDeclare(e.target.checked)} />
+      Perubahan ini untuk versi koreksi laporan tersebut; riwayat baris akan mencatatnya.
+    </label>
+  </div>;
+}
+
 export function CorrectionDialog({ requests, proposalId, item, ctx, purposes, onClose }: DialogBase & {
   item: CostItem; ctx: CostContext; purposes: readonly string[];
 }) {
@@ -110,12 +131,14 @@ export function CorrectionDialog({ requests, proposalId, item, ctx, purposes, on
   const [fields, setFields] = useState(() => fieldsOfItem(item, ctx));
   const [reason, setReason] = useState("");
   const [tried, setTried] = useState(false);
+  const [declared, setDeclared] = useState(false);
   const operation = useRealizationMutation(requests,
     (p: { operationId: string; item: CostItemInput; reason: string }) =>
-      correctCostItem(requests, proposalId, item.id, { operationId: p.operationId, expectedVersion: item.version, reason: p.reason, item: p.item }),
+      correctCostItem(requests, proposalId, item.id, { operationId: p.operationId, expectedVersion: item.version, reason: p.reason, item: p.item,
+        forReportCorrection: item.lockedBy ? item.lockedBy.packageId : null }),
     () => onClose());
   const issues = costRowIssues(fields, ctx);
-  const valid = Object.keys(issues).length === 0 && reason.trim().length >= MIN_REASON;
+  const valid = Object.keys(issues).length === 0 && reason.trim().length >= MIN_REASON && (!item.lockedBy || declared);
   const submit = () => {
     setTried(true);
     if (!valid) return;
@@ -129,6 +152,8 @@ export function CorrectionDialog({ requests, proposalId, item, ctx, purposes, on
         Isian lama tetap tersimpan sebagai riwayat. Baris akan menampilkan nilai baru dengan tanda "dikoreksi".
       </DialogDescription>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <PublishedLockNotice item={item} declared={declared} onDeclare={setDeclared} disabled={operation.locked} />
+        {tried && item.lockedBy && !declared && <p className="text-[11px] text-red-700">Nyatakan bahwa koreksi ini untuk versi koreksi laporan.</p>}
         <CostFieldsForm fields={fields} onChange={setFields} ctx={ctx} purposes={purposes} receiptChoice="select"
           disabled={operation.locked} showIssues={tried} />
         <div>
@@ -150,10 +175,13 @@ export function CorrectionDialog({ requests, proposalId, item, ctx, purposes, on
 export function VoidDialog({ requests, proposalId, item, ctx, onClose }: DialogBase & { item: CostItem; ctx: CostContext }) {
   const id = useId();
   const [reason, setReason] = useState("");
+  const [declared, setDeclared] = useState(false);
   const operation = useRealizationMutation(requests,
     (p: { operationId: string; reason: string }) =>
-      voidCostItem(requests, proposalId, item.id, { operationId: p.operationId, expectedVersion: item.version, reason: p.reason }),
+      voidCostItem(requests, proposalId, item.id, { operationId: p.operationId, expectedVersion: item.version, reason: p.reason,
+        forReportCorrection: item.lockedBy ? item.lockedBy.packageId : null }),
     () => onClose());
+  const ready = reason.trim().length >= MIN_REASON && (!item.lockedBy || declared);
   return <Dialog open onOpenChange={(open) => { if (!open && !operation.locked) onClose(); }}>
     <DialogContent className="max-w-lg" showCloseButton={!operation.locked}>
       <DialogTitle>Batalkan baris biaya?</DialogTitle>
@@ -163,8 +191,9 @@ export function VoidDialog({ requests, proposalId, item, ctx, onClose }: DialogB
       </DialogDescription>
       <form className="space-y-3" onSubmit={(e) => {
         e.preventDefault();
-        if (reason.trim().length >= MIN_REASON) void operation.submit((operationId) => ({ operationId, reason: reason.trim() }));
+        if (ready) void operation.submit((operationId) => ({ operationId, reason: reason.trim() }));
       }}>
+        <PublishedLockNotice item={item} declared={declared} onDeclare={setDeclared} disabled={operation.locked} />
         <label className={labelClass} htmlFor={`${id}-reason`}>Alasan pembatalan (wajib, minimal {MIN_REASON} karakter)
           <textarea id={`${id}-reason`} value={reason} disabled={operation.locked} rows={2} className={inputClass}
             placeholder="mis. Input dobel dari nota yang sama" onChange={(e) => setReason(e.target.value)} />
@@ -173,7 +202,7 @@ export function VoidDialog({ requests, proposalId, item, ctx, onClose }: DialogB
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" size="sm" disabled={operation.locked} onClick={onClose}>Kembali</Button>
           <Button type="submit" size="sm" className="bg-red-700 text-white hover:bg-red-800"
-            disabled={operation.locked || reason.trim().length < MIN_REASON}>Batalkan baris</Button>
+            disabled={operation.locked || !ready}>Batalkan baris</Button>
         </div>
       </form>
     </DialogContent>
@@ -203,6 +232,10 @@ export function HistoryDialog({ requests, proposalId, item, ctx, onClose, onCorr
             {new Date(version.at * 1000).toLocaleString("id-ID")}
           </p>
           {version.reason && <p className="text-stone-700">Alasan: {version.reason}</p>}
+          {version.reportCorrectionFor && <p className="font-semibold text-amber-900">
+            Diubah setelah laporan terbit, untuk versi koreksi{" "}
+            {item.lockedBy?.packageId === version.reportCorrectionFor ? lockLabel(item.lockedBy) : "laporan tersebut"}.
+          </p>}
           <p className={`mt-1 text-stone-600 ${version.item.status === "VOIDED" ? "line-through" : ""}`}>
             {displayDate(version.item.spentOn)} · {version.item.purpose}
             {version.item.quantity ? ` · ${version.item.quantity} ${version.item.unit ?? ""} × ${formatIdrAmount(version.item.unitPriceIdr)}` : ""}

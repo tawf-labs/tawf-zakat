@@ -223,6 +223,9 @@ function CostSheet({ requests, proposalId, overview, ctx, purposes, expanded, fr
     const byKey = new Map<string, RowFlag>();
     for (const item of overview.items) {
       if (item.status === "VOIDED") byKey.set(item.id, { badge: "batal", detail: "Baris dibatalkan; tidak dihitung. Buka riwayat untuk alasannya." });
+      else if (item.lockedBy) byKey.set(item.id, { badge: "terkunci laporan", detail: item.correctedAfterPublication
+        ? "Tercakup laporan terbit; dikoreksi untuk versi koreksi laporan. Riwayat menyimpan versi sebelumnya."
+        : "Tercakup laporan periode yang sudah terbit; hanya dapat diubah untuk versi koreksi laporan itu." });
       else if (item.version > 1) byKey.set(item.id, { badge: "dikoreksi", detail: "Baris dikoreksi; versi sebelumnya ada di riwayat." });
       else if (item.reimbursementId) byKey.set(item.id, { badge: "diganti", detail: "Talangan sudah diganti lembaga; baris tidak dapat dikoreksi." });
     }
@@ -399,6 +402,7 @@ function MobileCosts({ rows, ctx, purposes, locked, query, onQueryChange, server
           <span className="flex gap-1">
             {item.status === "VOIDED" && <span className="rounded bg-stone-200 px-1.5 text-[10px] font-semibold">batal</span>}
             {item.status === "ACTIVE" && item.version > 1 && <span className="rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-900">dikoreksi</span>}
+            {item.status === "ACTIVE" && item.lockedBy && <span className="rounded bg-sky-100 px-1.5 text-[10px] font-semibold text-sky-900">terkunci laporan</span>}
             {item.reimbursementId && <span className="rounded bg-emerald-100 px-1.5 text-[10px] font-semibold text-emerald-900">diganti</span>}
           </span>
         </div>

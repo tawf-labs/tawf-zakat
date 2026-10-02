@@ -101,6 +101,7 @@ import {
   RealizationOtpInvalidError,
   RealizationSelfExaminationError,
   RealizationStateError,
+  CostPeriodLockedError,
   RevisionCapFloorError,
   RevisionNotFoundError,
   RevisionSupersededError,
@@ -151,6 +152,9 @@ disbursementRoutes.onError((error, c) => {
   }
   if (error instanceof RealizationSelfExaminationError)
     return c.json({ success: false, error: error.message }, 403);
+  if (error instanceof CostPeriodLockedError) {
+    return c.json({ success: false, reason: "PERIOD_LOCKED", error: error.message, lock: error.lock }, 409);
+  }
   if (
     error instanceof RealizationCapExceededError ||
     error instanceof RealizationStateError
@@ -2881,6 +2885,12 @@ const correctionReason = (body: Record<string, unknown>) => {
   return reason.length >= MIN_CORRECTION_REASON ? reason : null;
 };
 
+/**
+ * The published report a change to a locked row is declared for (#129): the package id of
+ * that report's version. Absent for an ordinary correction.
+ */
+const reportCorrectionOf = (body: Record<string, unknown>) => text(body.forReportCorrection) || null;
+
 const versionOf = (body: Record<string, unknown>) =>
   typeof body.expectedVersion === "number" && Number.isInteger(body.expectedVersion) ? body.expectedVersion : null;
 
@@ -2931,7 +2941,8 @@ disbursementRoutes.post(`${COSTS}/items/:itemId/correct`, async (c) => {
   if (!writer.ok) return writer.response;
   const item = await writer.runtime.disbursement.correctCostItem(
     writer.institutionId, writer.proposalId, c.req.param("itemId"),
-    { expectedVersion, reason, item: validated.value }, writer.actor, writer.runtime.now(), writer.operation
+    { expectedVersion, reason, item: validated.value, forReportCorrection: reportCorrectionOf(body) },
+    writer.actor, writer.runtime.now(), writer.operation
   );
   return c.json({ success: true, item });
 });
@@ -2947,7 +2958,7 @@ disbursementRoutes.post(`${COSTS}/items/:itemId/void`, async (c) => {
   if (!writer.ok) return writer.response;
   const item = await writer.runtime.disbursement.voidCostItem(
     writer.institutionId, writer.proposalId, c.req.param("itemId"),
-    { expectedVersion, reason }, writer.actor, writer.runtime.now(), writer.operation
+    { expectedVersion, reason, forReportCorrection: reportCorrectionOf(body) }, writer.actor, writer.runtime.now(), writer.operation
   );
   return c.json({ success: true, item });
 });

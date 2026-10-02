@@ -8,6 +8,7 @@
  */
 
 import { sql } from "drizzle-orm";
+import { PERIOD_LOCK_SCHEMA_STATEMENTS } from "./period-lock";
 import type {
   CostItemChange,
   CostItemInput,
@@ -146,6 +147,9 @@ export const OPERATIONAL_COST_SCHEMA_STATEMENTS = [
   `ALTER TABLE operational_cost_items ADD COLUMN IF NOT EXISTS receipt_id TEXT REFERENCES operational_cost_receipts (id);`,
   // A nota carried over from the old free-text "Dokumen rujukan" (#128): text only, no file.
   `ALTER TABLE operational_cost_receipts ADD COLUMN IF NOT EXISTS legacy BOOLEAN NOT NULL DEFAULT FALSE;`,
+  // A change to a row a published report covered names that report (#129).
+  `ALTER TABLE operational_cost_item_versions ADD COLUMN IF NOT EXISTS report_correction_package_id TEXT;`,
+  ...PERIOD_LOCK_SCHEMA_STATEMENTS,
 ] as const;
 
 // The old rows kept only a timestamp; a cost row and a panjar need a calendar date. WIB has no
@@ -286,6 +290,7 @@ export const itemVersionFrom = (row: any): CostItemVersionRecord => ({
   // Versions frozen before receipts existed (#125) carry no receiptId.
   item: { receiptId: null, ...JSON.parse(row.item_json) },
   reason: row.reason ?? null,
+  reportCorrectionFor: row.report_correction_package_id ?? null,
   actorOfficerId: row.actor_officer_id,
   actorAccount: row.actor_account,
   at: seconds(row.at),

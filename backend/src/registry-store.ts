@@ -1,4 +1,5 @@
 import { createRecoveryStore, persistObservation } from "./registry-recovery-store";
+import { PERIOD_LOCK_SCHEMA_STATEMENTS } from "./period-lock";
 import { sql } from "drizzle-orm";
 import type { EvidenceDatabase } from "./evidence-store";
 import type { AttestationIntent, RecordingIntent, Hex, RecordingObservation } from "../../shared/report-registry";
@@ -47,6 +48,7 @@ export function createRegistryStore(db: EvidenceDatabase) {
          PRIMARY KEY(institution_id,intent_id), FOREIGN KEY(institution_id,intent_id) REFERENCES registry_intents(institution_id,id))`,
         // Added for attestations; existing rows are recording or publication intents.
         `ALTER TABLE registry_intents ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'RECORDING'`,
+        ...PERIOD_LOCK_SCHEMA_STATEMENTS,
       ]) await db.execute(sql.raw(statement));
       await recovery.ensureSchema();
     },
