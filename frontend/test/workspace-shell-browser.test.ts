@@ -58,15 +58,15 @@ it.skipIf(!process.env.REGISTRY_BROWSER_EXECUTABLE && !Bun.which("chromium"))("w
         const select = page.getByRole("combobox", { name: "Bagian ruang kerja", exact: true });
         expect(await select.isVisible()).toBe(true);
         expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-        await select.selectOption("evidence");
+        await select.selectOption("identity");
       } else {
         expect(await page.getByRole("navigation", { name: "Bagian ruang kerja" }).isVisible()).toBe(true);
-        await page.getByRole("button", { name: "Bukti & laporan", exact: true }).click();
+        await page.getByRole("button", { name: "Identitas & mandat", exact: true }).click();
       }
-      await page.getByRole("heading", { name: "Bukti & laporan", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Identitas & mandat", exact: true }).waitFor();
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      const headingTop = (await page.getByRole("heading", { name: "Bukti & laporan", exact: true }).boundingBox())!.y;
+      const headingTop = (await page.getByRole("heading", { name: "Identitas & mandat", exact: true }).boundingBox())!.y;
       expect(headingTop).toBeGreaterThanOrEqual(112);
       expect(headingTop).toBeLessThan(500);
       if (process.env.WORKSPACE_SCREENSHOT_DIR && (width === 375 || width === 1440)) {

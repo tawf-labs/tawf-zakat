@@ -2,7 +2,7 @@
 
 - Status: Accepted — 2026-10-01, keputusan pengguna setelah wawancara Lazismu Tangsel ([catatan kasar](../research/LAZISMU.md)).
 - Related: ADR-0006, ADR-0021, ADR-0022, ADR-0028, ADR-0038.
-- Diubah 2026-10-02 (keputusan pengguna): menu *Temuan pemeriksaan* dihapus dari sidebar ruang kerja agar UI MVP seminimal mungkin. Komponen, API, kontrak, dan tes temuan serta atestasi auditor tetap dipertahankan dan dapat dimunculkan lagi; bagian lain yang menyebut auditor belum diubah.
+- Diubah 2026-10-02 (keputusan pengguna): agar UI MVP seminimal mungkin, sidebar ruang kerja tidak lagi menampilkan *Temuan pemeriksaan*, *Bukti & laporan*, dan *Otoritas lembaga*. Komponen, API, kontrak, dan tesnya tetap dipertahankan dan dapat dimunculkan lagi. Akibatnya, membekukan paket bukti dan menerbitkan laporan periode tidak lagi tersedia dari UI ruang kerja (hanya lewat API), sehingga kunci periode biaya operasional (ADR-0042, #129) baru berlaku bila laporan diterbitkan lewat jalur itu.
 
 MVP produk dapat dijalankan lembaga tanpa ada pengguna yang memegang peran auditor ataupun DPS. Alur MVP terdiri dari program bantuan, pengajuan penyaluran (penyusun → pemeriksa → pemberi persetujuan menurut SOP, ADR-0028), realisasi, dan penerbitan laporan periode. Tidak ada langkah dalam alur itu yang menunggu auditor atau DPS. Penerbitan laporan cukup dengan pengesahan lembaga dan pengesahan layanan validator (ADR-0022); kedudukan DPS ditetapkan ADR-0038. Di Lazismu Tangsel, program dijalankan bendahara, DPS hanya memberi pendapat, dan audit dilakukan atas instruksi Lazismu pusat setelah kegiatan dengan memeriksa struk, kuitansi, bukti transfer, dan rekening koran. Audit tersebut tetap berlangsung di luar aplikasi dan tidak menjadi syarat MVP.
 

@@ -12,11 +12,9 @@ import {
   type OperationalMandate,
   type Workspace,
 } from "./workspaceClient";
-import { AuthorityPanel } from "./AuthorityPanel";
 import type { PrivateRequests } from "./privateRequests";
 import { WorkspaceShell, WorkspaceShortcut } from "./WorkspaceShell";
 import { workspaceSections } from "./workspaceNavigation";
-import { EvidencePackagePanel } from "./EvidencePackagePanel";
 import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
@@ -301,15 +299,13 @@ function ReadyWorkspace({
               <p className="mt-3 text-xs leading-relaxed text-stone-600">Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan diperiksa di catatan publik; keanggotaan di sini tidak menggantikannya.</p>
             </details>
           </section>
-          <section><h3 className="mb-3 text-sm font-semibold text-[#17332c]">Mulai pekerjaan</h3><div className="grid gap-3 sm:grid-cols-2">{sections.filter(section => ["contributions", "disbursement", "activities", "evidence"].includes(section.id)).map(section => <WorkspaceShortcut key={section.id} section={section} onClick={() => navigate(section.id)} />)}</div></section>
+          <section><h3 className="mb-3 text-sm font-semibold text-[#17332c]">Mulai pekerjaan</h3><div className="grid gap-3 sm:grid-cols-2">{sections.filter(section => ["contributions", "disbursement", "activities"].includes(section.id)).map(section => <WorkspaceShortcut key={section.id} section={section} onClick={() => navigate(section.id)} />)}</div></section>
         </>;
         case "contributions": return <ContributionPanel requests={requests} canManage={capabilities.prepareEvidence} canRecord={workspace.mandates?.some(m => m.isActive && m.function === "RECORD_CONTRIBUTIONS") ?? false} onAllocated={() => setAllocationRevision(value => value + 1)} />;
         case "disbursement": return <DisbursementPanel requests={requests} canManage={capabilities.manageDisbursement} />;
         case "activities": return <ActivityPanel requests={requests} canManage={capabilities.manageDisbursement} allocationRevision={allocationRevision} />;
         case "certificates": return <CertificateIssuancePanel requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />;
-        case "evidence": return <EvidencePackagePanel requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />;
         case "identity": return <WorkspaceAuthority requests={requests} workspace={workspace} view="identity" />;
-        case "authority": return <AuthorityPanel requests={requests} workspace={workspace} />;
         case "members": return capabilities.manageMembers ? <>
           <WorkspaceAuthority requests={requests} workspace={workspace} view="management" />
           {members && <section className="rounded-2xl border border-[#dbe7dd] bg-white p-6 shadow-xs">

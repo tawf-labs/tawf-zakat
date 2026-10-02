@@ -5,7 +5,6 @@ import {
   Building2,
   ChevronRight,
   ClipboardCheck,
-  FileText,
   HandCoins,
   LayoutDashboard,
   LogOut,
@@ -24,10 +23,8 @@ const icons: Record<WorkspaceSectionId, LucideIcon> = {
   disbursement: HandCoins,
   activities: ClipboardCheck,
   certificates: BadgeCheck,
-  evidence: FileText,
   identity: UserRound,
   members: Users,
-  authority: ShieldCheck,
 };
 
 export function WorkspaceShell({
