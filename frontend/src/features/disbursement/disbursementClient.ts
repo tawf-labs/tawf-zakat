@@ -930,33 +930,6 @@ export type RealizationDispute = {
   examinations: DisputeExamination[];
 };
 
-export type RealizationAdvance = {
-  id: string;
-  institutionId: string;
-  proposalId: string;
-  officerId: string;
-  officerAccount: string;
-  amountIdr: string;
-  purpose: string;
-  reference: string;
-  accountedIdr: string;
-  unaccountedIdr: string;
-  issuedAt: number;
-};
-
-export type RealizationExpense = {
-  id: string;
-  institutionId: string;
-  proposalId: string;
-  advanceId: string | null;
-  amountIdr: string;
-  purpose: string;
-  payee: string;
-  documentRef: string;
-  recordedByOfficerId: string;
-  recordedAt: number;
-};
-
 export type IncompleteEvidenceQueueItem = {
   proposalId: string;
   purpose: string;
@@ -1108,34 +1081,6 @@ export const listRealizationDisputes = (requests: PrivateRequests, proposalId: s
   requests
     .json<{ disputes: RealizationDispute[] }>(`${realizationPath(proposalId, realizationId)}/disputes`)
     .then((r) => r.disputes);
-
-export const recordRealizationAdvance = (
-  requests: PrivateRequests,
-  proposalId: string,
-  input: { operationId: string; amountIdr: string; purpose: string; reference: string }
-) =>
-  requests
-    .json<{ advance: RealizationAdvance }>(`/api/workspace/proposals/${proposalId}/advances`, postJson(input))
-    .then((r) => r.advance);
-
-export const listRealizationAdvances = (requests: PrivateRequests, proposalId: string) =>
-  requests
-    .json<{ advances: RealizationAdvance[] }>(`/api/workspace/proposals/${proposalId}/advances`)
-    .then((r) => r.advances);
-
-export const recordRealizationExpense = (
-  requests: PrivateRequests,
-  proposalId: string,
-  input: { operationId: string; amountIdr: string; purpose: string; payee: string; documentRef: string; advanceId: string | null }
-) =>
-  requests
-    .json<{ expense: RealizationExpense }>(`/api/workspace/proposals/${proposalId}/expenses`, postJson(input))
-    .then((r) => r.expense);
-
-export const listRealizationExpenses = (requests: PrivateRequests, proposalId: string) =>
-  requests
-    .json<{ expenses: RealizationExpense[] }>(`/api/workspace/proposals/${proposalId}/expenses`)
-    .then((r) => r.expenses);
 
 export const listIncompleteEvidenceQueue = (requests: PrivateRequests) =>
   requests

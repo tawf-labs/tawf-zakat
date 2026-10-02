@@ -6,6 +6,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  LEGACY_COST_MIGRATION_STATEMENTS,
   OPERATIONAL_COST_SCHEMA_STATEMENTS,
   costItemFrom,
   fundingColumns,
@@ -21,6 +22,7 @@ import {
 import {
   operationalCostTotals,
   panjarRemainingIdr,
+  panjarUsedIdr,
   summarizeHolders,
   validateCostItemInput,
   type CostIssue,
@@ -1057,31 +1059,38 @@ const realizationDisputeFrom = (row: any, examinations: DisputeExaminationRecord
   examinations,
 });
 
-const advanceFrom = (row: any, accounted: bigint): OperationalAdvanceRecord => ({
-  id: row.id,
-  institutionId: row.institution_id,
-  proposalId: row.proposal_id,
-  officerId: row.officer_id,
-  officerAccount: row.officer_account,
-  amountIdr: row.amount_idr,
-  purpose: row.purpose,
-  reference: row.reference,
-  accountedIdr: accounted.toString(),
-  unaccountedIdr: (BigInt(row.amount_idr) - accounted).toString(),
-  issuedAt: asSeconds(row.issued_at),
+// The old uang muka and biaya shapes (#95), read from the ADR-0042 rows they were carried
+// into (#128), so the old GET routes stay consistent with the tab during the transition.
+const advanceFrom = (
+  institutionId: string,
+  panjar: PanjarRecord,
+  items: CostItemRecord[],
+  account: string
+): OperationalAdvanceRecord => ({
+  id: panjar.id,
+  institutionId,
+  proposalId: panjar.proposalId,
+  officerId: panjar.holderOfficerId,
+  officerAccount: account,
+  amountIdr: panjar.amountIdr,
+  purpose: panjar.purpose,
+  reference: panjar.cashOutRef,
+  accountedIdr: panjarUsedIdr(panjar.id, items),
+  unaccountedIdr: panjarRemainingIdr(panjar, items).toString(),
+  issuedAt: panjar.recordedAt,
 });
 
-const expenseFrom = (row: any): OperationalExpenseRecord => ({
-  id: row.id,
-  institutionId: row.institution_id,
-  proposalId: row.proposal_id,
-  advanceId: row.advance_id ?? null,
-  amountIdr: row.amount_idr,
-  purpose: row.purpose,
-  payee: row.payee,
-  documentRef: row.document_ref,
-  recordedByOfficerId: row.recorded_by_officer_id,
-  recordedAt: asSeconds(row.recorded_at),
+const expenseFrom = (institutionId: string, item: CostItemRecord, documentRef: string): OperationalExpenseRecord => ({
+  id: item.id,
+  institutionId,
+  proposalId: item.proposalId,
+  advanceId: item.fundingSource.kind === "PANJAR" ? item.fundingSource.panjarId : null,
+  amountIdr: item.amountIdr,
+  purpose: item.purpose,
+  payee: item.payee,
+  documentRef,
+  recordedByOfficerId: item.recordedByOfficerId,
+  recordedAt: item.recordedAt,
 });
 
 type Executor = { execute: (query: any) => Promise<any> };
@@ -1248,19 +1257,11 @@ async function realizationSummaryOf(tx: Executor, institutionId: string, draft: 
     WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
     ORDER BY recorded_at ASC, id ASC
   `)).map(realizationRecordFrom);
-  const advances = rowsOf(await tx.execute(sql`
-    SELECT amount_idr FROM disbursement_realization_advances
-    WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
-  `)).map((row) => ({ amountIdr: row.amount_idr as string }));
-  const expenses = rowsOf(await tx.execute(sql`
-    SELECT amount_idr FROM disbursement_realization_expenses
-    WHERE institution_id = ${institutionId} AND proposal_id = ${draft.id}
-  `)).map((row) => ({ amountIdr: row.amount_idr as string }));
-  // ADR-0042 rows sit beside the legacy advance/expense rows until #128 migrates them.
+  // Panjar net of what came back counts as advances, every live cost row as an expense.
   const costState = await loadOperationalCosts(tx, institutionId, draft.id);
   const costs = operationalCostTotals(costState.items, costState.panjar);
-  advances.push({ amountIdr: costs.panjarNetIdr });
-  expenses.push({ amountIdr: costs.totalItemsIdr });
+  const advances = [{ amountIdr: costs.panjarNetIdr }];
+  const expenses = [{ amountIdr: costs.totalItemsIdr }];
   return calculateProposalRealizationSummary(
     {
       ...draft,
@@ -1734,6 +1735,7 @@ export const DISBURSEMENT_SCHEMA_STATEMENTS = [
      PRIMARY KEY (institution_id, account, operation_id)
    );`,
   ...OPERATIONAL_COST_SCHEMA_STATEMENTS,
+  ...LEGACY_COST_MIGRATION_STATEMENTS,
 ] as const;
 
 /** What cancellation and remainder closure both carry: a signed institutional decision. */
@@ -4067,108 +4069,21 @@ export function createDisbursementStore(db: DisbursementDatabase) {
       return rows.map(itemVersionFrom);
     },
 
-    async recordAdvance(
-      institutionId: string,
-      proposalId: string,
-      input: { amountIdr: string; purpose: string; reference: string },
-      actor: { account: string; officerId: string },
-      now: number,
-      operation: DraftOperation
-    ): Promise<OperationalAdvanceRecord> {
-      return mutateOnce(db, institutionId, operation, async (tx) => {
-        // The proposal is the point everything spending against it queues on: a
-        // reallocation reading this activity's remainder must not run beside a new
-        // advance, or both read the same rupiah as free (#107 AC04).
-        await tx.execute(sql`
-          SELECT id FROM proposal_drafts
-          WHERE id = ${proposalId} AND institution_id = ${institutionId}
-          FOR UPDATE
-        `);
-        const row = rowsOf(await tx.execute(sql`
-          INSERT INTO disbursement_realization_advances (
-            id, institution_id, proposal_id, officer_id, officer_account, amount_idr, purpose, reference, issued_at
-          ) VALUES (
-            ${`adv-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${actor.officerId}, ${actor.account.toLowerCase()},
-            ${input.amountIdr}, ${input.purpose}, ${input.reference}, ${now}
-          )
-          RETURNING *
-        `))[0];
-        return advanceFrom(row, 0n);
-      }, "disbursement_realization_operations");
-    },
-
     async listAdvances(institutionId: string, proposalId: string): Promise<OperationalAdvanceRecord[]> {
-      const rows = rowsOf(await db.execute(sql`
-        SELECT * FROM disbursement_realization_advances
+      const { items, panjar } = await loadOperationalCosts(db, institutionId, proposalId);
+      const accounts = new Map(rowsOf(await db.execute(sql`
+        SELECT id, recorded_by_account FROM operational_cost_panjar
         WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
-        ORDER BY issued_at ASC, id ASC
-      `));
-      const accounted = new Map<string, bigint>();
-      for (const expense of rowsOf(await db.execute(sql`
-        SELECT advance_id, amount_idr FROM disbursement_realization_expenses
-        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId} AND advance_id IS NOT NULL
-      `))) {
-        accounted.set(expense.advance_id, (accounted.get(expense.advance_id) ?? 0n) + BigInt(expense.amount_idr));
-      }
-      return rows.map((row) => advanceFrom(row, accounted.get(row.id) ?? 0n));
-    },
-
-    /** An expense may account for an advance of the same proposal, never beyond what the advance still leaves open. */
-    async recordExpense(
-      institutionId: string,
-      proposalId: string,
-      input: { advanceId: string | null; amountIdr: string; purpose: string; payee: string; documentRef: string },
-      actor: { officerId: string },
-      now: number,
-      operation: DraftOperation
-    ): Promise<OperationalExpenseRecord> {
-      return mutateOnce(db, institutionId, operation, async (tx) => {
-        // Taken before the advance row, and before any spend is read, for the same
-        // reason as `recordAdvance` above (#107 AC04).
-        await tx.execute(sql`
-          SELECT id FROM proposal_drafts
-          WHERE id = ${proposalId} AND institution_id = ${institutionId}
-          FOR UPDATE
-        `);
-        if (input.advanceId) {
-          const advance = rowsOf(await tx.execute(sql`
-            SELECT * FROM disbursement_realization_advances
-            WHERE id = ${input.advanceId} AND institution_id = ${institutionId} AND proposal_id = ${proposalId}
-            FOR UPDATE
-          `))[0];
-          if (!advance) throw new RealizationInputError("Uang muka yang dirujuk tidak ditemukan pada pengajuan ini.");
-          const accounted = rowsOf(await tx.execute(sql`
-            SELECT amount_idr FROM disbursement_realization_expenses
-            WHERE institution_id = ${institutionId} AND advance_id = ${input.advanceId}
-          `)).reduce((total, row) => total + BigInt(row.amount_idr), 0n);
-          if (accounted + BigInt(input.amountIdr) > BigInt(advance.amount_idr)) {
-            throw new RealizationInputError(
-              `Biaya melebihi sisa uang muka yang belum dipertanggungjawabkan (Rp${BigInt(advance.amount_idr) - accounted}).`
-            );
-          }
-        }
-
-        const row = rowsOf(await tx.execute(sql`
-          INSERT INTO disbursement_realization_expenses (
-            id, institution_id, proposal_id, advance_id, amount_idr, purpose, payee, document_ref,
-            recorded_by_officer_id, recorded_at
-          ) VALUES (
-            ${`exp-${crypto.randomUUID()}`}, ${institutionId}, ${proposalId}, ${input.advanceId},
-            ${input.amountIdr}, ${input.purpose}, ${input.payee}, ${input.documentRef},
-            ${actor.officerId}, ${now}
-          )
-          RETURNING *
-        `))[0];
-        return expenseFrom(row);
-      }, "disbursement_realization_operations");
+      `)).map((row) => [row.id as string, row.recorded_by_account as string]));
+      return panjar.map((p) => advanceFrom(institutionId, p, items, accounts.get(p.id) ?? ""));
     },
 
     async listExpenses(institutionId: string, proposalId: string): Promise<OperationalExpenseRecord[]> {
-      return rowsOf(await db.execute(sql`
-        SELECT * FROM disbursement_realization_expenses
-        WHERE institution_id = ${institutionId} AND proposal_id = ${proposalId}
-        ORDER BY recorded_at ASC, id ASC
-      `)).map(expenseFrom);
+      const { items } = await loadOperationalCosts(db, institutionId, proposalId);
+      const references = new Map((await loadReceipts(db, institutionId, proposalId)).map((r) => [r.id, r.reference]));
+      return items
+        .filter((item) => item.status === "ACTIVE")
+        .map((item) => expenseFrom(institutionId, item, item.receiptId ? references.get(item.receiptId) ?? "" : ""));
     },
 
     async listIncompleteEvidenceQueue(institutionId: string): Promise<Array<{
@@ -5122,35 +5037,10 @@ export function createDisbursementStore(db: DisbursementDatabase) {
         };
       });
 
-      const advances: RealizationAdvanceItem[] = rowsOf(await db.execute(sql`
-        SELECT * FROM disbursement_realization_advances
-        WHERE institution_id = ${institutionId}
-        ORDER BY issued_at ASC, id ASC
-      `)).map((row) => ({
-        id: row.id,
-        proposalId: row.proposal_id,
-        amountIdr: row.amount_idr,
-        purpose: row.purpose,
-        reference: row.reference,
-        issuedAt: asSeconds(row.issued_at),
-      }));
-
-      const expenses: RealizationExpenseItem[] = rowsOf(await db.execute(sql`
-        SELECT * FROM disbursement_realization_expenses
-        WHERE institution_id = ${institutionId}
-        ORDER BY recorded_at ASC, id ASC
-      `)).map((row) => ({
-        id: row.id,
-        proposalId: row.proposal_id,
-        advanceId: row.advance_id ?? null,
-        amountIdr: row.amount_idr,
-        purpose: row.purpose,
-        payee: row.payee,
-        recordedAt: asSeconds(row.recorded_at),
-      }));
-
-      // ADR-0042 rows join the legacy ones until #128 migrates them: a panjar reads as an
-      // advance net of what came back, a live cost row as an expense against its panjar.
+      // A panjar reads as an advance net of what came back, a live cost row as an expense
+      // against its panjar. The old uang muka and biaya rows were carried into these (#128).
+      const advances: RealizationAdvanceItem[] = [];
+      const expenses: RealizationExpenseItem[] = [];
       const costState = await loadOperationalCosts(db, institutionId, null);
       for (const panjar of costState.panjar) {
         const returned = panjar.returns.reduce((sum, ret) => sum + BigInt(ret.amountIdr), 0n);
@@ -5168,6 +5058,10 @@ export function createDisbursementStore(db: DisbursementDatabase) {
           amountIdr: item.amountIdr, purpose: item.purpose, payee: item.payee, recordedAt: item.recordedAt,
         });
       }
+      // In time order, as the old rows were read: carried rows took their sequence numbers
+      // after rows already typed in the tab. Rows of one batch share a time and keep their order.
+      advances.sort((a, b) => a.issuedAt - b.issuedAt);
+      expenses.sort((a, b) => a.recordedAt - b.recordedAt);
 
       return { realizations, advances, expenses };
     },

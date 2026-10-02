@@ -84,12 +84,31 @@ const post = (url: string, body: unknown, token?: string) => {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(
-      /\/(advances|expenses|disputes|examinations|realizations|revisions)$/.test(url)
+      /\/(disputes|examinations|realizations|revisions|panjar|items)$/.test(url)
         ? { operationId: crypto.randomUUID(), ...(body as object) }
         : body
     ),
   });
 };
+
+/** Panjar and biaya operasional, recorded in the Biaya operasional tab (ADR-0042). */
+async function issuePanjar(proposalId: string, amountIdr: string, purpose: string, cashOutRef: string, token: string) {
+  const res = await post(`/proposals/${proposalId}/operational-costs/panjar`,
+    { holderOfficerId: "off-amil-sinar", amountIdr, purpose, cashOutRef, issuedOn: "2024-04-20" }, token);
+  expect(res.status).toBe(201);
+  return (await res.json()).panjar.id as string;
+}
+
+async function recordCost(proposalId: string, panjarId: string | null, amountIdr: string, purpose: string, payee: string, token: string) {
+  const res = await post(`/proposals/${proposalId}/operational-costs/items`, { items: [{
+    spentOn: "2024-04-20", purpose, amountIdr, payee, fundingSource: panjarId ? { kind: "PANJAR", panjarId } : { kind: "KAS_LEMBAGA" },
+  }] }, token);
+  expect(res.status).toBe(201);
+  const [result] = (await res.json()).results;
+  expect(result.issues).toBeUndefined();
+  return result.item;
+}
+
 const get = (url: string, token?: string) => {
   const fullUrl = url.startsWith("http") ? url : `${BASE}${url.startsWith("/") ? "" : "/"}${url}`;
   return request(fullUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -690,29 +709,8 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
     // 3. Rekam uang muka petugas & biaya operasional pengadaan beras (AC07), sebelum cut-off
     clock = 1713600000; // 2024-04-20
     amilToken = await signIn(amilSinar);
-    const advRes = await post(
-      `/proposals/${draft.id}/advances`,
-      {
-        amountIdr: "250000",
-        purpose: "Uang muka transportasi tim distribusi",
-        reference: "ADV-001",
-      },
-      amilToken
-    );
-    expect(advRes.status).toBe(201);
-
-    const expRes = await post(
-      `/proposals/${draft.id}/expenses`,
-      {
-        advanceId: null,
-        amountIdr: "150000",
-        purpose: "Biaya karung dan pengemasan beras",
-        payee: "Toko Plastik Makmur",
-        documentRef: "NOTA-PACK-01",
-      },
-      amilToken
-    );
-    expect(expRes.status).toBe(201);
+    await issuePanjar(draft.id, "250000", "Uang muka transportasi tim distribusi", "ADV-001", amilToken);
+    await recordCost(draft.id, null, "150000", "Biaya karung dan pengemasan beras", "Toko Plastik Makmur", amilToken);
 
     // 4. Bekukan paket bukti menggunakan DISBURSEMENT_REALIZATIONS dengan cut-off 2024-05-01
     clock = CUT_OFF_SECONDS;
@@ -1704,26 +1702,16 @@ describe("Sumber Laporan dari Realisasi dan Penelusuran Bukti (Issue #98)", () =
       amilToken
     );
     expect(realRes.status).toBe(201);
-    const advRes = await post(`/proposals/${draft.id}/advances`, { amountIdr: "500000", purpose: "Pembelian beras", reference: "ADV-BERAS" }, amilToken);
-    expect(advRes.status).toBe(201);
-    const advanceId = (await advRes.json()).advance.id;
-    const expense = async (amountIdr: string, linked: boolean, ref: string) =>
-      expect(
-        (
-          await post(
-            `/proposals/${draft.id}/expenses`,
-            { advanceId: linked ? advanceId : null, amountIdr, purpose: "Pengadaan", payee: "Toko Beras", documentRef: ref },
-            amilToken
-          )
-        ).status
-      ).toBe(201);
-    await expense("300000", true, "NOTA-1");
-    await expense("50000", false, "NOTA-2");
+    const advanceId = await issuePanjar(draft.id, "500000", "Pembelian beras", "ADV-BERAS", amilToken);
+    const expense = (amountIdr: string, linked: boolean) =>
+      recordCost(draft.id, linked ? advanceId : null, amountIdr, "Pengadaan", "Toko Beras", amilToken);
+    await expense("300000", true);
+    await expense("50000", false);
 
     // Pertanggungjawaban sesudah cut-off belum mengurangi sisa pada snapshot.
     clock = CUT_OFF_SECONDS + 3600;
     amilToken = await signIn(amilSinar);
-    await expense("100000", true, "NOTA-3");
+    await expense("100000", true);
 
     const freezeRes = await post(
       EVIDENCE,

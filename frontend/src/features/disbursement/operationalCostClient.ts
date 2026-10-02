@@ -99,6 +99,8 @@ export type Receipt = {
   recordedAt: number;
   /** Set once a recorded row cites it; its files can then no longer be deleted. */
   evidencedAt: number | null;
+  /** Carried over from the old "Dokumen rujukan" text: the number only, no file. */
+  legacy: boolean;
   files: ReceiptFile[];
 };
 

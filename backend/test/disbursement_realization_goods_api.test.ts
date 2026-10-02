@@ -79,9 +79,25 @@ const post = (path: string, body: unknown, token?: string) =>
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(/\/(advances|expenses|disputes|examinations)$/.test(path)
+    body: JSON.stringify(/\/(panjar|items|disputes|examinations)$/.test(path)
       ? { operationId: crypto.randomUUID(), ...(body as object) } : body),
   });
+
+/** Panjar and biaya operasional, recorded in the Biaya operasional tab (ADR-0042). */
+async function issuePanjar(proposalId: string, amountIdr: string, purpose: string, cashOutRef: string, token: string) {
+  const res = await post(`/proposals/${proposalId}/operational-costs/panjar`,
+    { holderOfficerId: "off-amil-sinar", amountIdr, purpose, cashOutRef, issuedOn: "2026-09-28" }, token);
+  expect(res.status).toBe(201);
+  return (await res.json()).panjar.id as string;
+}
+
+async function recordCost(proposalId: string, panjarId: string, amountIdr: string, purpose: string, payee: string, token: string) {
+  const res = await post(`/proposals/${proposalId}/operational-costs/items`, { items: [{
+    spentOn: "2026-09-28", purpose, amountIdr, payee, fundingSource: { kind: "PANJAR", panjarId },
+  }] }, token);
+  expect(res.status).toBe(201);
+  expect((await res.json()).results[0].issues).toBeUndefined();
+}
 
 const get = (path: string, token?: string) =>
   request(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -887,24 +903,11 @@ describe("Realisasi Bantuan Barang, Kuantitas Desimal, Alokasi BAST, dan Biaya O
       ],
     });
 
-    // 1. Catat uang muka operasional pembelian & sewa truk beras: Rp 2.000.000
-    const advRes = await post(`/proposals/${draft.id}/advances`, {
-      amountIdr: "2000000",
-      purpose: "Uang muka pembelian beras dan sewa pick-up",
-      reference: "ADV-OP-001",
-    }, amilToken);
-    expect(advRes.status).toBe(201);
-    const advance = (await advRes.json()).advance;
+    // 1. Catat panjar operasional pembelian & sewa truk beras: Rp 2.000.000
+    const panjarId = await issuePanjar(draft.id, "2000000", "Uang muka pembelian beras dan sewa pick-up", "ADV-OP-001", amilToken);
 
     // 2. Catat biaya operasional riil belanja karung beras: Rp 500.000
-    const expRes = await post(`/proposals/${draft.id}/expenses`, {
-      advanceId: advance.id,
-      amountIdr: "500000",
-      purpose: "Pembelian karung dan tali pengikat",
-      payee: "Toko Plastik Maju",
-      documentRef: "KWT-PLASTIK-09",
-    }, amilToken);
-    expect(expRes.status).toBe(201);
+    await recordCost(draft.id, panjarId, "500000", "Pembelian karung dan tali pengikat", "Toko Plastik Maju", amilToken);
 
     // 3. Catat realisasi penyaluran barang ke penerima: 50 kg beras
     const realRes = await realize(draft, amilToken, [
@@ -928,8 +931,8 @@ describe("Realisasi Bantuan Barang, Kuantitas Desimal, Alokasi BAST, dan Biaya O
     const { draft, amilToken } = await prepareApprovedGoodsProposal({ lines: [
       { beneficiaryIndex: 1, aidType: "Beras", unit: "kg", quantityRequested: "10", valuedAmountIdr: "100000", valuationBasis: "Penawaran A: 10 kg × Rp10.000" },
     ] });
-    const advance = (await (await post(`/proposals/${draft.id}/advances`, { amountIdr: "200000", purpose: "Pembelian beras", reference: "ADV-HARGA" }, amilToken)).json()).advance;
-    expect((await post(`/proposals/${draft.id}/expenses`, { advanceId: advance.id, amountIdr: "120000", purpose: "Harga aktual beras 10 kg × Rp12.000", payee: "Pemasok A", documentRef: "NOTA-AKTUAL" }, amilToken)).status).toBe(201);
+    const panjarId = await issuePanjar(draft.id, "200000", "Pembelian beras", "ADV-HARGA", amilToken);
+    await recordCost(draft.id, panjarId, "120000", "Harga aktual beras 10 kg × Rp12.000", "Pemasok A", amilToken);
     const result = await realize(draft, amilToken, [goodsItem(draft, 0)]);
     expect(result.status).toBe(201);
     const { records, summary } = await result.json();

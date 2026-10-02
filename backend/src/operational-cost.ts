@@ -135,6 +135,8 @@ export type ReceiptRecord = ReceiptInput & {
   recordedAt: number;
   /** When a cost row first cited it; from then on none of its files may be deleted. */
   evidencedAt: number | null;
+  /** Carried over from the old free-text "Dokumen rujukan" (#128): the number only, no file. */
+  legacy: boolean;
   files: ReceiptFileRecord[];
 };
 

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AccessContextChanged, type PrivateRequests } from "../workspace/privateRequests";
 import { getProposalRealizationSummary, getProposalRealizations, listRealizationDocuments,
-  listRealizationAdvances, listRealizationExpenses, listRealizationDisputes, listIncompleteEvidenceQueue } from "./disbursementClient";
+  listRealizationDisputes, listIncompleteEvidenceQueue } from "./disbursementClient";
 
 export const realizationKey = (requests: PrivateRequests) => ["realizations", requests.contextId] as const;
 const proposalKey = (requests: PrivateRequests, id: string) => [...realizationKey(requests), id] as const;
@@ -14,13 +14,6 @@ export function useRealizationOverview(requests: PrivateRequests, id: string, en
   return { loaded: summary.data && records.data && documents.data
     ? { ...summary.data, realizations: records.data, documents: documents.data } : null,
     error: summary.error ?? records.error ?? documents.error };
-}
-
-export function useRealizationAccounts(requests: PrivateRequests, id: string, enabled: boolean) {
-  const key = proposalKey(requests, id);
-  const advances = useQuery({ queryKey: [...key, "advances"], queryFn: () => listRealizationAdvances(requests, id), enabled });
-  const expenses = useQuery({ queryKey: [...key, "expenses"], queryFn: () => listRealizationExpenses(requests, id), enabled });
-  return { advances: advances.data ?? [], expenses: expenses.data ?? [], error: advances.error ?? expenses.error };
 }
 
 export function useRealizationDisputes(requests: PrivateRequests, proposalId: string, id: string, enabled: boolean) {

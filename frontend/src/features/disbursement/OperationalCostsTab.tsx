@@ -7,7 +7,6 @@ import type { PrivateRequests } from "../workspace/privateRequests";
 import { formatIdrAmount } from "../workspace/mandateLabels";
 import { SpreadsheetGrid, type RowFlag } from "./SpreadsheetGrid";
 import { MutationFeedback, useRealizationMutation } from "./useRealizationMutation";
-import { useRealizationAccounts } from "./useRealizationQueries";
 import { useOperationalCosts } from "./useOperationalCosts";
 import {
   createReceipt,
@@ -101,7 +100,6 @@ export function OperationalCostsTab({ requests, proposalId, expanded, drafts }: 
   const { overview, ctx, purposes, error, fresh } = useOperationalCosts(requests, proposalId);
   const [sheet, setSheet] = useState<Sheet>("costs");
   const [open, setOpen] = useState<Open>(null);
-  const legacy = useRealizationAccounts(requests, proposalId, true);
 
   if (!overview || !ctx) {
     return error
@@ -140,17 +138,6 @@ export function OperationalCostsTab({ requests, proposalId, expanded, drafts }: 
           onOpenFiles={(receipt) => setOpen({ kind: "files", receiptId: receipt.id })} />
       </TabsContent>
     </Tabs>
-
-    {(legacy.advances.length > 0 || legacy.expenses.length > 0) && <details className="rounded-lg border border-stone-200 bg-white p-3 text-xs">
-      <summary className="cursor-pointer font-semibold text-stone-800">
-        Catatan uang muka & biaya lama ({legacy.advances.length + legacy.expenses.length}) · hanya-baca
-      </summary>
-      <p className="mt-1 text-stone-600">Dicatat sebelum biaya per item; akan dipindahkan ke lembar ini saat migrasi data.</p>
-      <ul className="mt-2 space-y-1">
-        {legacy.advances.map((a) => <li key={a.id}>Uang muka · {a.purpose} · {formatIdrAmount(a.amountIdr)} · ref {a.reference}</li>)}
-        {legacy.expenses.map((e) => <li key={e.id}>Biaya · {e.purpose} · {formatIdrAmount(e.amountIdr)} · dibayarkan kepada {e.payee} · nota {e.documentRef}</li>)}
-      </ul>
-    </details>}
 
     {open?.kind === "correct" && item(open.itemId) && <CorrectionDialog {...dialogBase} item={item(open.itemId)!} ctx={ctx} purposes={purposes} />}
     {open?.kind === "void" && item(open.itemId) && <VoidDialog {...dialogBase} item={item(open.itemId)!} ctx={ctx} />}

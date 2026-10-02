@@ -104,7 +104,9 @@ export function ReceiptsSheet({ requests, proposalId, receipts, items, onOpenFil
                 <button type="button" className="inline-flex items-center gap-1 font-semibold text-emerald-800 underline" onClick={() => onOpenFiles(receipt)}>
                   <Paperclip className="h-3.5 w-3.5" /> {receipt.files.length} berkas
                 </button>
-                {receipt.files.length === 0 && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">belum ada foto</span>}
+                {receipt.files.length === 0 && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                  {receipt.legacy ? "data lama tanpa lampiran" : "belum ada foto"}
+                </span>}
               </td>
             </tr>)}
           </tbody>
@@ -246,7 +248,11 @@ export function ReceiptFilesDialog({ requests, proposalId, receipt, onClose }: {
         tambahkan berkas baru atau koreksi barisnya.
       </p>}
       {receipt.files.length === 0
-        ? <p className="text-xs text-stone-600">Belum ada foto atau PDF.</p>
+        ? <p className="text-xs text-stone-600">
+          {receipt.legacy
+            ? "Data lama tanpa lampiran: nomor ini dipindahkan dari kolom \"Dokumen rujukan\" formulir lama. Tambahkan foto atau PDF bila notanya masih ada."
+            : "Belum ada foto atau PDF."}
+        </p>
         : <ul className="space-y-1 text-xs">
           {receipt.files.map((file) => <li key={file.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 p-2">
             <span className="font-semibold">{file.fileName}</span>

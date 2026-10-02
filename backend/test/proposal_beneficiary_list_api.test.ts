@@ -1364,7 +1364,9 @@ describe("Proposal beneficiary list comparison and revision (Ticket #97)", () =>
     const otpCode = /kode (\d{6})/.exec(outbox.at(-1)?.body ?? "")?.[1];
     expect(otpCode).toBeDefined();
     expect((await post(`/proposals/${draft.id}/realizations/${cash.id}/otp-verify`, { nonce, otpCode }, amilToken)).status).toBe(200);
-    const expense = await post(`/proposals/${draft.id}/expenses`, { operationId: crypto.randomUUID(), amountIdr: "50000", purpose: "Transport", payee: "Relawan", documentRef: "KW-97", advanceId: null }, amilToken);
+    const expense = await post(`/proposals/${draft.id}/operational-costs/items`, { operationId: crypto.randomUUID(), items: [{
+      spentOn: "2026-09-18", purpose: "Transport", amountIdr: "50000", payee: "Relawan", fundingSource: { kind: "KAS_LEMBAGA" },
+    }] }, amilToken);
     expect(expense.status).toBe(201);
     const frozenVersion = await (await get(`/proposals/${draft.id}/versions/${draft.version}`, amilToken)).json();
     const period = { kind: "AKHIR_TAHUN", year: 2026 };
@@ -1374,7 +1376,7 @@ describe("Proposal beneficiary list comparison and revision (Ticket #97)", () =>
     expect(freeze.status).toBe(201);
     const frozenId = (await freeze.json()).preparation.id;
     const frozen = await (await get(`http://localhost:3001/api/evidence/${frozenId}`, amilToken)).json();
-    const tables = ["disbursement_realizations", "disbursement_realization_challenges", "disbursement_realization_expenses", "contributions", "contribution_allocations"];
+    const tables = ["disbursement_realizations", "disbursement_realization_challenges", "operational_cost_items", "contributions", "contribution_allocations"];
     const before = await Promise.all(tables.map(async table => {
       const result: any = await database.handle().execute(sql`SELECT * FROM ${sql.identifier(table)}`);
       return result.rows ?? result;

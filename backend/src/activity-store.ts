@@ -526,28 +526,9 @@ async function loadActivityAccountability(
     `)
   );
 
-  const advances = rowsOf(
-    await executor.execute(sql`
-      SELECT COALESCE(SUM(amount_idr::numeric), 0)::text AS total
-      FROM disbursement_realization_advances
-      WHERE institution_id = ${institutionId} AND proposal_id = ${proposal.id}
-    `)
-  );
-
-  const expenses = rowsOf(
-    await executor.execute(sql`
-      SELECT
-        COALESCE(SUM(CASE WHEN advance_id IS NULL THEN amount_idr::numeric ELSE 0 END), 0)::text AS direct_total,
-        COALESCE(SUM(CASE WHEN advance_id IS NOT NULL THEN amount_idr::numeric ELSE 0 END), 0)::text AS accounted_total
-      FROM disbursement_realization_expenses
-      WHERE institution_id = ${institutionId} AND proposal_id = ${proposal.id}
-    `)
-  );
-
-  // ADR-0042 rows sit beside the legacy advance/expense rows until #128 migrates them.
+  // The old uang muka and biaya rows were carried into these (#128); nothing reads them directly.
   const costState = await loadOperationalCosts(executor, institutionId, proposal.id);
   const costs = operationalCostTotals(costState.items, costState.panjar);
-  const plus = (legacy: string | undefined, added: string) => (BigInt(legacy ?? "0") + BigInt(added)).toString();
 
   return calculateActivityAccountability({
     activityId: activityRow.id,
@@ -557,9 +538,9 @@ async function loadActivityAccountability(
     currencyUnit: activityRow.currency_unit,
     isRemainderClosed,
     totalAllocatedAmount: activityRow.total_allocated,
-    totalDirectExpensesIdr: plus(expenses[0]?.direct_total, costs.directExpensesIdr),
-    totalAccountedExpensesIdr: plus(expenses[0]?.accounted_total, costs.panjarAccountedIdr),
-    totalAdvancesIdr: plus(advances[0]?.total, costs.panjarNetIdr),
+    totalDirectExpensesIdr: costs.directExpensesIdr,
+    totalAccountedExpensesIdr: costs.panjarAccountedIdr,
+    totalAdvancesIdr: costs.panjarNetIdr,
     totalContributionShortfall: await activityShortfall(executor, institutionId, activityId),
     aidLines: summarizeAidLines(
       aidLines,

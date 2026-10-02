@@ -895,6 +895,8 @@ export const disbursementRealizationDisputeExaminations = pgTable("disbursement_
   examinedAt: bigint("examined_at", { mode: "number" }).notNull(),
 });
 
+// Uang muka and biaya of the retired modal (#95). Kept as they were, but read by nothing: on
+// startup their rows are carried into the operational_cost_* tables below (#128).
 export const disbursementRealizationAdvances = pgTable("disbursement_realization_advances", {
   id: text("id").primaryKey(),
   institutionId: text("institution_id").notNull().references(() => institutions.id),
@@ -974,6 +976,7 @@ export const operationalCostReceipts = pgTable("operational_cost_receipts", {
   issuedOn: text("issued_on").notNull(),
   issuer: text("issuer"),
   evidencedAt: bigint("evidenced_at", { mode: "number" }),
+  legacy: boolean("legacy").notNull().default(false),
   recordedByOfficerId: text("recorded_by_officer_id").notNull().references(() => officerProfiles.id),
   recordedByAccount: text("recorded_by_account").notNull(),
   recordedAt: bigint("recorded_at", { mode: "number" }).notNull(),

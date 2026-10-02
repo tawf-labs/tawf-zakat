@@ -2823,35 +2823,17 @@ disbursementRoutes.get("/proposals/:id/realizations/:realizationId/disputes", as
   return c.json({ success: true, disputes });
 });
 
-/** Catat uang muka petugas, terpisah dari bantuan yang diterima. */
-disbursementRoutes.post("/proposals/:id/advances", async (c) => {
-  const runtime = runtimeOf();
-  const body = await readJson(c);
-  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
+/**
+ * The old uang muka and biaya forms (#95) are retired (ADR-0042, #128): their rows were carried
+ * into panjar and cost rows, and new ones are recorded in the Biaya operasional tab. Their GET
+ * routes stay for the transition and read those carried rows.
+ */
+const RETIRED_COST_FORM =
+  "Formulir uang muka dan biaya operasional lama sudah dihentikan. Catat panjar dan biaya di tab Biaya operasional pada pengajuan ini.";
 
-  const amountIdr = parsePositiveIdr(body.amountIdr);
-  const purpose = text(body.purpose);
-  const reference = text(body.reference);
-  if (!amountIdr || !purpose || !reference) {
-    return badRequest(c, "Nominal uang muka (rupiah bulat lebih dari nol), tujuan, dan nomor referensi wajib diisi.");
-  }
-
-  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
-  if (!access.ok) return access.response;
-
-  const operationId = text(body.operationId);
-  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
-
-  const advance = await runtime.disbursement.recordAdvance(
-    access.session.institutionId,
-    access.draft.id,
-    { amountIdr, purpose, reference },
-    { account: access.session.account, officerId: access.officer.id },
-    runtime.now(),
-    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
-  );
-  return c.json({ success: true, advance }, 201);
-});
+for (const path of ["/proposals/:id/advances", "/proposals/:id/expenses"]) {
+  disbursementRoutes.post(path, (c) => c.json({ success: false, reason: "retired", error: RETIRED_COST_FORM }, 410));
+}
 
 disbursementRoutes.get("/proposals/:id/advances", async (c) => {
   const runtime = runtimeOf();
@@ -2859,37 +2841,6 @@ disbursementRoutes.get("/proposals/:id/advances", async (c) => {
   if (!access.ok) return access.response;
   const advances = await runtime.disbursement.listAdvances(access.session.institutionId, access.draft.id);
   return c.json({ success: true, advances });
-});
-
-/** Catat biaya operasional: nominal, tujuan, payee dan dokumen rujukan. Tidak membuat pembayaran otomatis. */
-disbursementRoutes.post("/proposals/:id/expenses", async (c) => {
-  const runtime = runtimeOf();
-  const body = await readJson(c);
-  if (!body) return badRequest(c, "Badan permintaan bukan JSON yang sah.");
-
-  const amountIdr = parsePositiveIdr(body.amountIdr);
-  const purpose = text(body.purpose);
-  const payee = text(body.payee);
-  const documentRef = text(body.documentRef);
-  if (!amountIdr || !purpose || !payee || !documentRef) {
-    return badRequest(c, "Nominal biaya (rupiah bulat lebih dari nol), tujuan, payee, dan dokumen referensi wajib diisi.");
-  }
-
-  const access = await realizationActor(c, runtime, institutionOf(body), ["RECORD_REALIZATION"]);
-  if (!access.ok) return access.response;
-
-  const operationId = text(body.operationId);
-  if (!operationId) return badRequest(c, "Identitas penyimpanan (operationId) wajib disertakan agar pengulangan aman.");
-
-  const expense = await runtime.disbursement.recordExpense(
-    access.session.institutionId,
-    access.draft.id,
-    { advanceId: text(body.advanceId) || null, amountIdr, purpose, payee, documentRef },
-    { officerId: access.officer.id },
-    runtime.now(),
-    { id: operationId, account: access.session.account, requestHash: requestHash([c.req.path, body]) }
-  );
-  return c.json({ success: true, expense }, 201);
 });
 
 disbursementRoutes.get("/proposals/:id/expenses", async (c) => {

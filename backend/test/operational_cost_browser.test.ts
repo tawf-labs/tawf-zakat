@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { sql } from "drizzle-orm";
 import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
 import { createWorkspaceStore } from "../src/tenancy-store";
@@ -118,6 +119,14 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
     }, amil);
     expect(published.status).toBe(200);
 
+    // A biaya the retired modal recorded, carried over on the next start (#128).
+    await database.handle().execute(sql`
+      INSERT INTO disbursement_realization_expenses (
+        id, institution_id, proposal_id, advance_id, amount_idr, purpose, payee, document_ref, recorded_by_officer_id, recorded_at
+      ) VALUES ('exp-lama', ${SINAR}, ${draft.id}, NULL, '15000', 'Fotokopi daftar penerima', 'Fotocopy Jaya', 'KW-LAMA-9', 'off-amil', ${NOW - 86400})
+    `);
+    await createDisbursementStore(database.handle()).ensureSchema();
+
     const built = await Bun.build({
       entrypoints: [new URL("../../frontend/test/officer-smoke.tsx", import.meta.url).pathname],
       target: "browser",
@@ -181,7 +190,8 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
       // Lembar Biaya: paste four rows from Excel into the draft row.
       await page.getByRole("tab", { name: /^Biaya \(/ }).click();
       const grid = page.getByRole("grid", { name: "Biaya operasional" });
-      await grid.getByRole("gridcell").first().click();
+      // The carried-over row is locked above the draft row; paste into the draft.
+      await grid.getByRole("gridcell").and(page.locator(':not([aria-readonly="true"])')).first().click();
       await page.evaluate((tsv: string) => {
         const data = new DataTransfer();
         data.setData("text/plain", tsv);
@@ -201,7 +211,8 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
       await page.getByText(/terpakai Rp 250\.000 · sisa Rp 50\.000/).waitFor();
       expect(await grid.locator('td[aria-readonly="true"]', { hasText: "Tali rafia" }).count()).toBe(0);
       expect(await grid.locator("th[title*='melebihi sisa panjar']").count()).toBe(1);
-      await page.getByText(/^Baris 4: Sumber dana: Biaya melebihi sisa panjar BKK-001/).waitFor();
+      // Row 5 of the grid: the carried-over row and the three just recorded sit above it.
+      await page.getByText(/^Baris 5: Sumber dana: Biaya melebihi sisa panjar BKK-001/).waitFor();
       expect(await grid.locator('td[aria-readonly="true"]', { hasText: "Bensin" }).count()).toBe(1);
       await shot("02-recorded-locked");
 
@@ -246,6 +257,7 @@ describe("Tab Biaya Operasional di browser (#127)", () => {
       // Lembar Nota: the two numbers typed in the grid became notas; photos are matched by file name.
       await page.getByRole("tab", { name: /^Nota/ }).click();
       await page.getByRole("cell", { name: "KW-012", exact: true }).waitFor();
+      await page.getByRole("row", { name: /KW-LAMA-9.*data lama tanpa lampiran/ }).waitFor();
       await page.locator('input[type="file"][multiple]').first().setInputFiles([
         { name: "KW-012.jpg", mimeType: "image/jpeg", buffer: Buffer.from(JPG) },
         { name: "STR-0457 belakang.png", mimeType: "image/png", buffer: PNG },

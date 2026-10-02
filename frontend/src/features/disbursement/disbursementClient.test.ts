@@ -304,7 +304,7 @@ describe("disbursementClient Ticket #93 methods", () => {
 });
 
 describe("disbursementClient Ticket #94 realization methods", () => {
-  it("sends the realization, evidence, confirmation, dispute and advance requests the API routes accept", async () => {
+  it("sends the realization, evidence, confirmation and dispute requests the API routes accept", async () => {
     const client = await import("./disbursementClient");
     const calls: { path: string; method: string; body: any }[] = [];
     const requests = mockRequests(async (path, init) => {
@@ -314,8 +314,6 @@ describe("disbursementClient Ticket #94 realization methods", () => {
       if (path.endsWith("/realization-documents")) return { documents: [] };
       if (path.endsWith("/otp-verify") || path.endsWith("/bast-verify")) return { realization: { id: "rea-1" } };
       if (path.endsWith("/disputes") && !init?.method) return { disputes: [] };
-      if (path.endsWith("/advances")) return init?.method ? { advance: { id: "adv-1" } } : { advances: [] };
-      if (path.endsWith("/expenses")) return init?.method ? { expense: { id: "exp-1" } } : { expenses: [] };
       if (path.endsWith("/incomplete-evidence")) return { queue: [] };
       return {};
     });
@@ -340,10 +338,6 @@ describe("disbursementClient Ticket #94 realization methods", () => {
     await client.recordRealizationDispute(requests, "prop-1", "rea-1", { operationId: "op-recordRealizationDispute", complainantType: "BENEFICIARY", subject: "AMOUNT", reason: "Kurang", disputedAmountIdr: "100000" });
     await client.examineRealizationDispute(requests, "prop-1", "rea-1", "disp-1", { operationId: "op-examineRealizationDispute", outcome: "RESOLVED", notes: "Selesai" });
     await client.listRealizationDisputes(requests, "prop-1", "rea-1");
-    await client.recordRealizationAdvance(requests, "prop-1", { operationId: "op-recordRealizationAdvance", amountIdr: "1000000", purpose: "Transport", reference: "ADV-1" });
-    await client.listRealizationAdvances(requests, "prop-1");
-    await client.recordRealizationExpense(requests, "prop-1", { operationId: "op-recordRealizationExpense", amountIdr: "250000", purpose: "Sewa", payee: "Rental", documentRef: "KWT-1", advanceId: "adv-1" });
-    await client.listRealizationExpenses(requests, "prop-1");
     await client.listIncompleteEvidenceQueue(requests);
 
     const base = "/api/workspace/proposals";
@@ -359,10 +353,6 @@ describe("disbursementClient Ticket #94 realization methods", () => {
       `POST ${base}/prop-1/realizations/rea-1/disputes`,
       `POST ${base}/prop-1/realizations/rea-1/disputes/disp-1/examinations`,
       `GET ${base}/prop-1/realizations/rea-1/disputes`,
-      `POST ${base}/prop-1/advances`,
-      `GET ${base}/prop-1/advances`,
-      `POST ${base}/prop-1/expenses`,
-      `GET ${base}/prop-1/expenses`,
       `GET ${base}/queue/incomplete-evidence`,
     ]);
     expect(calls[0]!.body).toMatchObject({ operationId: "op-1", expectedVersion: 3, items: [{ method: "CASH", paymentRecipient: { name: "SD Negeri 1" } }] });

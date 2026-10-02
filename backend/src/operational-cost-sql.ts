@@ -144,6 +144,94 @@ export const OPERATIONAL_COST_SCHEMA_STATEMENTS = [
      seq BIGSERIAL
    );`,
   `ALTER TABLE operational_cost_items ADD COLUMN IF NOT EXISTS receipt_id TEXT REFERENCES operational_cost_receipts (id);`,
+  // A nota carried over from the old free-text "Dokumen rujukan" (#128): text only, no file.
+  `ALTER TABLE operational_cost_receipts ADD COLUMN IF NOT EXISTS legacy BOOLEAN NOT NULL DEFAULT FALSE;`,
+] as const;
+
+// The old rows kept only a timestamp; a cost row and a panjar need a calendar date. WIB has no
+// daylight saving, so a fixed +7 hours gives the institution's date without timezone data.
+const wibDate = (column: string) => `to_char(to_timestamp(${column} + 25200) AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
+
+// The old expense kept the recorder's officer id but not the account they signed in with: take
+// the membership that officer held when the row was recorded.
+const recorderAccount = (expense: string) => `COALESCE((
+  SELECT lower(m.account_address) FROM institution_memberships m
+  WHERE m.institution_id = ${expense}.institution_id AND m.officer_id = ${expense}.recorded_by_officer_id
+  ORDER BY (m.created_at <= to_timestamp(${expense}.recorded_at)) DESC, m.created_at DESC
+  LIMIT 1
+), '')`;
+
+// One nota per distinct "Dokumen rujukan" within a proposal, so its id is derived from that text.
+const legacyReceiptId = (expense: string) =>
+  `'nta-legacy-' || md5(${expense}.institution_id || chr(31) || ${expense}.proposal_id || chr(31) || btrim(${expense}.document_ref))`;
+
+/**
+ * Carries the old uang muka and biaya rows (`disbursement_realization_advances`/`_expenses`,
+ * ticket #95) into the ADR-0042 model (#128). Each old row keeps its id, so every statement
+ * skips what an earlier start already carried over and running it again adds nothing. The old
+ * tables stay as they were; nothing reads them any more.
+ *
+ * - an uang muka becomes a panjar held by the officer who recorded it, with its amount,
+ *   purpose, reference and time;
+ * - a biaya becomes a cost row funded by that panjar when it named one, otherwise by kas
+ *   lembaga; its "Dokumen rujukan" becomes a nota with no file, marked as old data.
+ */
+export const LEGACY_COST_MIGRATION_STATEMENTS = [
+  `INSERT INTO operational_cost_panjar (
+     id, institution_id, proposal_id, holder_officer_id, amount_idr, purpose, cash_out_ref, issued_on,
+     recorded_by_officer_id, recorded_by_account, recorded_at
+   )
+   SELECT a.id, a.institution_id, a.proposal_id, a.officer_id, a.amount_idr, a.purpose, a.reference, ${wibDate("a.issued_at")},
+     a.officer_id, a.officer_account, a.issued_at
+   FROM disbursement_realization_advances a
+   ORDER BY a.issued_at ASC, a.id ASC
+   ON CONFLICT (id) DO NOTHING;`,
+  `INSERT INTO operational_cost_receipts (
+     id, institution_id, proposal_id, kind, reference, issued_on, issuer, evidenced_at,
+     recorded_by_officer_id, recorded_by_account, recorded_at, legacy
+   )
+   SELECT id, institution_id, proposal_id, 'NOTA', reference, ${wibDate("recorded_at")}, NULL,
+     recorded_at, recorded_by_officer_id, account, recorded_at, TRUE
+   FROM (
+     -- Each nota takes the date, recorder and time of the first biaya that cited it.
+     SELECT DISTINCT ON (e.institution_id, e.proposal_id, btrim(e.document_ref))
+       ${legacyReceiptId("e")} AS id, e.institution_id, e.proposal_id, btrim(e.document_ref) AS reference,
+       e.recorded_at, e.recorded_by_officer_id, ${recorderAccount("e")} AS account, e.id AS expense_id
+     FROM disbursement_realization_expenses e
+     WHERE btrim(e.document_ref) <> ''
+     ORDER BY e.institution_id, e.proposal_id, btrim(e.document_ref), e.recorded_at ASC, e.id ASC
+   ) first_cited
+   ORDER BY recorded_at ASC, expense_id ASC
+   ON CONFLICT (id) DO NOTHING;`,
+  `INSERT INTO operational_cost_items (
+     id, institution_id, proposal_id, version, status, spent_on, purpose, quantity, unit, unit_price_idr,
+     amount_idr, payee, funding_kind, holder_officer_id, panjar_id, reimbursement_id, receipt_id,
+     recorded_by_officer_id, recorded_by_account, recorded_at, updated_at
+   )
+   SELECT e.id, e.institution_id, e.proposal_id, 1, 'ACTIVE', ${wibDate("e.recorded_at")}, e.purpose, NULL, NULL, NULL,
+     e.amount_idr, e.payee,
+     CASE WHEN e.advance_id IS NULL THEN 'KAS_LEMBAGA' ELSE 'PANJAR' END, NULL, e.advance_id, NULL,
+     CASE WHEN btrim(e.document_ref) <> '' THEN ${legacyReceiptId("e")} END,
+     e.recorded_by_officer_id, ${recorderAccount("e")}, e.recorded_at, e.recorded_at
+   FROM disbursement_realization_expenses e
+   ORDER BY e.recorded_at ASC, e.id ASC
+   ON CONFLICT (id) DO NOTHING;`,
+  // The first version is frozen from the carried row itself, in the shape `itemSnapshot` writes.
+  `INSERT INTO operational_cost_item_versions (
+     item_id, institution_id, version, change, item_json, reason, actor_officer_id, actor_account, at
+   )
+   SELECT i.id, i.institution_id, 1, 'RECORD',
+     json_build_object(
+       'spentOn', i.spent_on, 'purpose', i.purpose, 'quantity', NULL, 'unit', NULL, 'unitPriceIdr', NULL,
+       'amountIdr', i.amount_idr, 'payee', i.payee,
+       'fundingSource', CASE WHEN i.panjar_id IS NULL THEN json_build_object('kind', 'KAS_LEMBAGA')
+                             ELSE json_build_object('kind', 'PANJAR', 'panjarId', i.panjar_id) END,
+       'receiptId', i.receipt_id, 'status', 'ACTIVE'
+     )::text,
+     'Dipindahkan dari catatan biaya lama.', i.recorded_by_officer_id, i.recorded_by_account, i.recorded_at
+   FROM operational_cost_items i
+   JOIN disbursement_realization_expenses e ON e.id = i.id
+   ON CONFLICT (item_id, version) DO NOTHING;`,
 ] as const;
 
 const rowsOf = (result: any): any[] => (Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : []);
@@ -315,6 +403,7 @@ const receiptFrom = (row: any, files: ReceiptFileRecord[]): ReceiptRecord => ({
   recordedByOfficerId: row.recorded_by_officer_id,
   recordedAt: seconds(row.recorded_at),
   evidencedAt: row.evidenced_at === null || row.evidenced_at === undefined ? null : seconds(row.evidenced_at),
+  legacy: row.legacy === true,
   files,
 });
 

@@ -87,7 +87,7 @@ const post = (path: string, body: unknown, token: string) =>
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(
-      typeof body === "object" && body !== null && /\/(advances|expenses|reallocate)$/.test(path)
+      typeof body === "object" && body !== null && /\/(panjar|items|reallocate)$/.test(path)
         ? { operationId: crypto.randomUUID(), ...(body as object) }
         : body
     ),
@@ -346,11 +346,18 @@ async function beneficiaryShares(activityId: string, status: "ACTIVE" | "REVERSE
   return result.rows ?? result;
 }
 
+/** A panjar held by the recording amil, in the Biaya operasional tab (ADR-0042). */
 async function recordAdvance(proposalId: string, amountIdr: string, purpose: string, reference: string, token: string) {
-  const res = await post(`/proposals/${proposalId}/advances`, { amountIdr, purpose, reference }, token);
+  const res = await post(`/proposals/${proposalId}/operational-costs/panjar`,
+    { holderOfficerId: "off-sinar-amil", amountIdr, purpose, cashOutRef: reference, issuedOn: "2026-09-28" }, token);
   expect(res.status).toBe(201);
-  return (await res.json()).advance;
+  return (await res.json()).panjar;
 }
+
+const costRow = (amountIdr: string, purpose: string, payee: string, panjarId: string | null) => ({
+  spentOn: "2026-09-28", purpose, amountIdr, payee,
+  fundingSource: panjarId ? { kind: "PANJAR", panjarId } : { kind: "KAS_LEMBAGA" },
+});
 
 async function recordExpense(
   proposalId: string,
@@ -360,13 +367,11 @@ async function recordExpense(
   advanceId: string | null,
   token: string
 ) {
-  const res = await post(
-    `/proposals/${proposalId}/expenses`,
-    { amountIdr, purpose, payee, documentRef: `KWT-${crypto.randomUUID().slice(0, 8)}`, advanceId },
-    token
-  );
+  const res = await post(`/proposals/${proposalId}/operational-costs/items`, { items: [costRow(amountIdr, purpose, payee, advanceId)] }, token);
   expect(res.status).toBe(201);
-  return (await res.json()).expense;
+  const [result] = (await res.json()).results;
+  expect(result.issues).toBeUndefined();
+  return result.item;
 }
 
 async function realizeAid(
@@ -1344,14 +1349,8 @@ describe("Allocation Reallocation & Activity Accountability (Issue #107, Spec #1
     // the proposal, and together they would commit 1.600.000 against 1.000.000.
     const [expenseRes, reallocRes] = await Promise.all([
       post(
-        `/proposals/${proposalA.id}/expenses`,
-        {
-          amountIdr: "800000",
-          purpose: "Pembelian mendadak",
-          payee: "CV Pangan",
-          documentRef: "KWT-XD-01",
-          advanceId: null,
-        },
+        `/proposals/${proposalA.id}/operational-costs/items`,
+        { items: [costRow("800000", "Pembelian mendadak", "CV Pangan", null)] },
         tokens.amil
       ),
       post(

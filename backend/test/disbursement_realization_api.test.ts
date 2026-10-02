@@ -82,9 +82,25 @@ const post = (path: string, body: unknown, token?: string) =>
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(/\/(advances|expenses|disputes|examinations)$/.test(path)
+    body: JSON.stringify(/\/(panjar|items|disputes|examinations)$/.test(path)
       ? { operationId: crypto.randomUUID(), ...(body as object) } : body),
   });
+
+/** Panjar and cost rows of the Biaya operasional tab (ADR-0042), recorded for the signed-in amil. */
+const costsPath = (draft: { id: string }) => `/proposals/${draft.id}/operational-costs`;
+const panjarBody = (overrides: Record<string, unknown> = {}) => ({
+  holderOfficerId: "off-amil-sinar", amountIdr: "1", purpose: "Transport", cashOutRef: "ADV-1", issuedOn: "2026-09-28", ...overrides,
+});
+const costRow = (overrides: Record<string, unknown> = {}) => ({
+  spentOn: "2026-09-28", purpose: "Sewa", amountIdr: "1", payee: "Rental", fundingSource: { kind: "KAS_LEMBAGA" }, ...overrides,
+});
+/** Records one cost row; the fields the server refused, or none when it was recorded. */
+async function costIssues(draft: { id: string }, row: Record<string, unknown>, token: string): Promise<string[]> {
+  const res = await post(`${costsPath(draft)}/items`, { items: [row] }, token);
+  expect(res.status).toBe(201);
+  const [result] = (await res.json()).results;
+  return (result.issues ?? []).map((issue: { field: string }) => issue.field);
+}
 
 const get = (path: string, token?: string) =>
   request(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -518,8 +534,8 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
 
     for (const amountIdr of ["abc", "0", "-5", "1.5", "1234567890123456789", " "]) {
       expect((await realize(draft, amilToken, [item(draft, 0, { amountIdr })])).status).toBe(400);
-      expect((await post(`/proposals/${draft.id}/advances`, { amountIdr, purpose: "Transport", reference: "ADV-1" }, amilToken)).status).toBe(400);
-      expect((await post(`/proposals/${draft.id}/expenses`, { amountIdr, purpose: "Sewa", payee: "Rental", documentRef: "KWT-1" }, amilToken)).status).toBe(400);
+      expect((await post(`${costsPath(draft)}/panjar`, panjarBody({ amountIdr }), amilToken)).status).toBe(400);
+      expect(await costIssues(draft, costRow({ amountIdr }), amilToken)).toContain("amountIdr");
       expect((await post(
         `/proposals/${draft.id}/realizations/${rec.id}/disputes`,
         { complainantType: "BENEFICIARY", subject: "AMOUNT", reason: "Kurang", disputedAmountIdr: amountIdr },
@@ -748,7 +764,7 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
     expect((await post(path, { notes: "Seluruh nominal terbukti" }, examinerToken)).status).toBe(200);
   });
 
-  it("replays advance, expense, dispute and examination writes without duplicating durable records", async () => {
+  it("replays panjar, cost, dispute and examination writes without duplicating durable records", async () => {
     const { draft, amilToken, examinerToken } = await prepareApprovedProposal();
     const retry = async (path: string, input: object, token: string, status: number) => {
       const body = { ...input, operationId: crypto.randomUUID() };
@@ -765,14 +781,14 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
       expect((await post(path, { ...body, notes: "different payload" }, token)).status).toBe(409);
       return result;
     };
-    const { advance } = await retry(`/proposals/${draft.id}/advances`, { amountIdr: "1000000", purpose: "Transport", reference: "ADV-retry" }, amilToken, 201);
-    await retry(`/proposals/${draft.id}/expenses`, { advanceId: advance.id, amountIdr: "100000", purpose: "Transport", payee: "Rental", documentRef: "KWT-1" }, amilToken, 201);
+    const { panjar } = await retry(`${costsPath(draft)}/panjar`, panjarBody({ amountIdr: "1000000", cashOutRef: "ADV-retry" }), amilToken, 201);
+    await retry(`${costsPath(draft)}/items`, { items: [costRow({ amountIdr: "100000", fundingSource: { kind: "PANJAR", panjarId: panjar.id } })] }, amilToken, 201);
     const rec = await realizeOne(draft, amilToken);
     const path = `/proposals/${draft.id}/realizations/${rec.id}/disputes`;
     const { dispute } = await retry(path, { complainantType: "BENEFICIARY", subject: "AMOUNT", reason: "Jumlah berbeda", disputedAmountIdr: "100000" }, amilToken, 201);
     await retry(`${path}/${dispute.id}/examinations`, { outcome: "RESOLVED", notes: "Diperiksa" }, examinerToken, 200);
-    for (const table of ["advances", "expenses", "disputes", "dispute_examinations"]) {
-      expect(await rowsOf(`SELECT id FROM disbursement_realization_${table}`)).toHaveLength(1);
+    for (const table of ["operational_cost_panjar", "operational_cost_items", "disbursement_realization_disputes", "disbursement_realization_dispute_examinations"]) {
+      expect(await rowsOf(`SELECT id FROM ${table}`)).toHaveLength(1);
     }
   });
 
@@ -892,29 +908,29 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
     expect((await other.json()).confirmedCount).toBe(2);
   });
 
-  it("keeps officer advances and expenses apart from aid, accounting expenses only against an advance of the same proposal", async () => {
+  it("keeps panjar and operational costs apart from aid, spending only a panjar of the same proposal", async () => {
     const { draft, amilToken, approverToken } = await prepareApprovedProposal({ perBeneficiaryAmount: "5000000" });
     const other = await prepareApprovedProposal();
 
-    const advRes = await post(`/proposals/${draft.id}/advances`, { amountIdr: "1500000", purpose: "Transport relawan", reference: "ADV-OP-2026-001" }, amilToken);
-    expect(advRes.status).toBe(201);
-    const advance = (await advRes.json()).advance;
-    expect(advance).toMatchObject({ amountIdr: "1500000", accountedIdr: "0", unaccountedIdr: "1500000", officerId: "off-amil-sinar" });
-    expect((await post(`/proposals/${draft.id}/advances`, { amountIdr: "1", purpose: "x", reference: "y" }, approverToken)).status).toBe(403);
+    const issued = await post(`${costsPath(draft)}/panjar`, panjarBody({ amountIdr: "1500000", cashOutRef: "ADV-OP-2026-001" }), amilToken);
+    expect(issued.status).toBe(201);
+    const panjar = (await issued.json()).panjar;
+    expect(panjar).toMatchObject({ amountIdr: "1500000", holderOfficerId: "off-amil-sinar", recordedByOfficerId: "off-amil-sinar" });
+    expect((await post(`${costsPath(draft)}/panjar`, panjarBody(), approverToken)).status).toBe(403);
 
-    const expense = (body: Record<string, unknown>, proposal = draft) =>
-      post(`/proposals/${proposal.id}/expenses`, { amountIdr: "350000", purpose: "Sewa mobil", payee: "Rental Berkah", documentRef: "KWT-RENTAL-01", ...body }, amilToken);
+    const fromPanjar = (overrides: Record<string, unknown> = {}, panjarId = panjar.id) =>
+      costRow({ amountIdr: "350000", purpose: "Sewa mobil", payee: "Rental Berkah", fundingSource: { kind: "PANJAR", panjarId }, ...overrides });
+    expect(await costIssues(draft, fromPanjar({}, "pjr-tidak-ada"), amilToken)).toEqual(["fundingSource"]);
+    expect(await costIssues(other.draft, fromPanjar(), amilToken)).toEqual(["fundingSource"]);
+    expect(await costIssues(draft, fromPanjar({ amountIdr: "1500001" }), amilToken)).toEqual(["fundingSource"]);
+    expect(await rowsOf("SELECT id FROM operational_cost_items")).toEqual([]);
 
-    expect((await expense({ advanceId: "adv-tidak-ada" })).status).toBe(400);
-    expect((await expense({ advanceId: advance.id }, other.draft)).status).toBe(400);
-    expect((await expense({ advanceId: advance.id, amountIdr: "1500001" })).status).toBe(400);
-    expect(await rowsOf("SELECT id FROM disbursement_realization_expenses")).toEqual([]);
+    expect(await costIssues(draft, fromPanjar(), amilToken)).toEqual([]);
+    expect(await costIssues(draft, costRow({ amountIdr: "50000", payee: "Fotokopi Jaya" }), amilToken)).toEqual([]);
 
-    expect((await expense({ advanceId: advance.id })).status).toBe(201);
-    expect((await expense({ advanceId: null, amountIdr: "50000", payee: "Fotokopi Jaya" })).status).toBe(201);
-
+    // The retired list keeps reading the same rows during the transition (#128).
     const [listed] = (await (await get(`/proposals/${draft.id}/advances`, amilToken)).json()).advances;
-    expect(listed).toMatchObject({ accountedIdr: "350000", unaccountedIdr: "1150000" });
+    expect(listed).toMatchObject({ id: panjar.id, accountedIdr: "350000", unaccountedIdr: "1150000" });
     expect(Object.keys(listed)).not.toContain("status");
 
     const summary = await summaryOf(draft, amilToken);
@@ -1210,31 +1226,6 @@ describe("Realisasi IDR bertahap dan bukti pembayaran (Ticket #94)", () => {
       await dialog.getByRole("button", { name: "Tutup", exact: true }).click();
       await firstEvent().getByText("Diperselisihkan, konfirmasi ditahan (OTP)", { exact: true }).waitFor();
 
-      await page.getByRole("button", { name: "Uang muka & biaya", exact: true }).click();
-      dialog = page.getByRole("dialog");
-      const advanceForm = dialog.locator("form").nth(0);
-      await advanceForm.getByLabel("Nominal (Rp)").fill("1000000");
-      await advanceForm.getByLabel("Tujuan", { exact: true }).fill("Transport lapangan");
-      await advanceForm.getByLabel("Referensi pertanggungjawaban").fill("ADV-smoke");
-      dropNextWritePath = `/api/workspace/proposals/${draft.id}/advances`;
-      await advanceForm.getByRole("button", { name: "Catat uang muka" }).click();
-      await dialog.getByRole("button", { name: "Kirim ulang penyimpanan" }).click();
-      await dialog.getByText(/Ref ADV-smoke/).waitFor();
-      expect(await rowsOf("SELECT id FROM disbursement_realization_advances")).toHaveLength(1);
-      const expenseForm = dialog.locator("form").nth(1);
-      await expenseForm.getByLabel("Nominal (Rp)").fill("100000");
-      await expenseForm.getByLabel("Tujuan", { exact: true }).fill("Sewa kendaraan");
-      await expenseForm.getByLabel("Payee", { exact: true }).fill("Rental Sintetis");
-      await expenseForm.getByLabel("Dokumen rujukan").fill("KWT-smoke");
-      const advanceId = (await rowsOf("SELECT id FROM disbursement_realization_advances"))[0].id;
-      await expenseForm.getByLabel("Mempertanggungjawabkan uang muka (opsional)").selectOption(advanceId);
-      dropNextWritePath = `/api/workspace/proposals/${draft.id}/expenses`;
-      await expenseForm.getByRole("button", { name: "Catat biaya" }).click();
-      await dialog.getByRole("button", { name: "Kirim ulang penyimpanan" }).click();
-      await dialog.getByText(/Payee Rental Sintetis/).waitFor();
-      expect(await rowsOf("SELECT id FROM disbursement_realization_expenses")).toHaveLength(1);
-      expect(await realizationOverflow(page)).toEqual([]);
-      await dialog.getByRole("button", { name: "Tutup", exact: true }).click();
       await page.close();
 
       // A separate authorized officer resolves the objection and examines the full BAST on phone.
