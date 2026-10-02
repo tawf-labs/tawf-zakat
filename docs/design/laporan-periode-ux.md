@@ -98,8 +98,8 @@ Tidak ada yang dihapus; hanya dipindah.
 
 Diterbitkan sebagai issue GitHub dan dikerjakan berurutan:
 
-1. Daftar laporan periode, wizard langkah 1–2, dan Detail teknis.
-2. Tinjau, tulis, periksa, dan terbitkan (langkah 4–5).
-3. Bandingkan dengan pembukuan (langkah 3), termasuk spreadsheet di sisi klaim.
-4. Koreksi laporan terbit dengan wizard.
-5. Penghimpunan sebagai sumber internal laporan periode.
+1. #130 Daftar laporan periode, wizard langkah 1–2, dan Detail teknis.
+2. #131 Tinjau, tulis, periksa, dan terbitkan (langkah 4–5).
+3. #132 Bandingkan dengan pembukuan (langkah 3), termasuk spreadsheet di sisi klaim.
+4. #133 Koreksi laporan terbit dengan wizard.
+5. #134 Penghimpunan sebagai sumber internal laporan periode.
