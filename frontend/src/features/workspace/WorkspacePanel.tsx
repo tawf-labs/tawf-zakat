@@ -21,7 +21,6 @@ import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
 import { ActivityPanel } from "../activities";
-import { AuditFindingQueuePanel } from "./AuditFindingQueuePanel";
 import { CertificateIssuancePanel } from "./CertificateIssuancePanel";
 
 const demoOfficers: OfficerWithAccounts[] = [
@@ -309,7 +308,6 @@ function ReadyWorkspace({
         case "activities": return <ActivityPanel requests={requests} canManage={capabilities.manageDisbursement} allocationRevision={allocationRevision} />;
         case "certificates": return <CertificateIssuancePanel requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />;
         case "evidence": return <EvidencePackagePanel requests={requests} canPrepare={capabilities.prepareEvidence} scopeUnit={institution.scopeUnit} scopeLevel={institution.scopeLevel} />;
-        case "audit": return <AuditFindingQueuePanel requests={requests} />;
         case "identity": return <WorkspaceAuthority requests={requests} workspace={workspace} view="identity" />;
         case "authority": return <AuthorityPanel requests={requests} workspace={workspace} />;
         case "members": return capabilities.manageMembers ? <>
