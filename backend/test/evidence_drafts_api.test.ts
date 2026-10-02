@@ -144,7 +144,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       const res = await get(`${EVIDENCE}/template`, token);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("spreadsheetml.sheet");
-      expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v1.xlsx");
+      expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v2.xlsx");
 
       const buffer = new Uint8Array(await res.arrayBuffer());
       const wb = XLSX.read(buffer, { type: "array" });
@@ -157,7 +157,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       const res = await get(`${EVIDENCE}/template?format=csv`, token);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("text/csv");
-      expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v1.csv");
+      expect(res.headers.get("Content-Disposition")).toContain("tawf.source.template.v2.csv");
 
       const text = await res.text();
       expect(text).toContain("identitas_entri");
@@ -687,7 +687,7 @@ describe("Report Source XLSX/CSV Import and Private Drafts (Ticket #88)", () => 
       // One ZAKAT row: the manifest says ZAKAT, not all five fund types.
       expect(preview.manifest.fundTypes).toEqual(["ZAKAT"]);
       expect(preview.manifest.period).toEqual(SCOPE.period);
-      expect(preview.manifest.mappingVersion).toBe("tawf.source.template.v1");
+      expect(preview.manifest.mappingVersion).toBe("tawf.source.template.v2");
       expect(preview.manifest.transactionDetail).toBe("PRESENT");
     });
 

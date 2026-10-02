@@ -477,7 +477,7 @@ const FIGURE_BUCKET_LABELS: Record<string, string> = {
  * a bookkeeping recap rather than being one.
  */
 function sideWording(manifest: import("./evidence-source").SourceManifest) {
-  const fromApp = manifest.origin === "INTERNAL_LEDGER" && manifest.format === "internal-disbursement-realization";
+  const fromApp = manifest.origin === "INTERNAL_LEDGER" && ["internal-disbursement-realization", "internal-contribution-collection"].includes(manifest.format);
   const verb = fromApp ? "disalurkan" : "";
   if (manifest.role === "SOURCE") return { verb, where: fromApp ? "menurut data aplikasi" : "menurut sumber", noun: fromApp ? "data aplikasi" : "sumber" };
   return fromApp
@@ -492,7 +492,21 @@ export function computeSnapshotFigures(
   const figures: Figure[] = [];
   for (const side of snapshot.sides) {
     if (side.status !== "READ") continue;
-    const rows = side.rows.filter(r => !r.isDeclaredTotal && (snapshot.balanceSheetScope === "BOTH" || r.balanceSheet === snapshot.balanceSheetScope));
+    const scopedRows = side.rows.filter(r => !r.isDeclaredTotal && (snapshot.balanceSheetScope === "BOTH" || r.balanceSheet === snapshot.balanceSheetScope));
+    const rows = scopedRows.filter(r => r.flow !== "COLLECTION");
+    if (side.manifest.flows?.includes("COLLECTION") || scopedRows.some(r => r.flow === "COLLECTION")) {
+      const collection = scopedRows.filter(r => r.flow === "COLLECTION");
+      const where = sideWording(side.manifest).where;
+      const addCollection = (name: string, label: string, selected: typeof collection) => figures.push({ name, label,
+        value: { amount: selected.reduce((sum, row) => sum + BigInt(row.amount), 0n), unit: snapshot.currencyUnit } });
+      addCollection(`${side.manifest.role}.COLLECTION.total`, `Total dihimpun ${where}`, collection);
+      for (const bucket of [...side.manifest.fundTypes].sort()) {
+        for (const position of snapshot.balanceSheetScope === "BOTH" ? ["ON", "OFF"] : [snapshot.balanceSheetScope]) {
+          addCollection(`${side.manifest.role}.COLLECTION.${bucket}.${position}`, `${FIGURE_BUCKET_LABELS[bucket] ?? bucket} dihimpun ${where}${position === "OFF" ? " (di luar neraca)" : ""}`,
+            collection.filter(r => r.bucket === bucket && r.balanceSheet === position));
+        }
+      }
+    }
     const { verb, where } = sideWording(side.manifest);
     const add = (name: string, label: string, selected: typeof rows) => figures.push({ name, label,
       value: { amount: selected.reduce((sum, row) => sum + BigInt(row.amount), 0n), unit: snapshot.currencyUnit } });

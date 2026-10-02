@@ -31,6 +31,7 @@ export type PeriodReportPreview = {
   cutOff: string;
   byFundType: { fundType: string; amountIdr: string }[];
   totalIdr: string;
+  collection?: { totalIdr: string; byFundType: { fundType: string; amountIdr: string }[]; afterCutOff: number };
   goods: { unit: string; quantity: string; handovers: number }[];
   recipients: number;
   handovers: number;

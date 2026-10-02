@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
@@ -21,6 +21,9 @@ import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
 import { DISBURSEMENT_REALIZATION_FORMAT } from "../src/realization-source";
 import { NOT_COMPARED_NOTE, summarizePeriodReports, type PackageRow, type PreparationRow } from "../src/period-report-flow";
 import { PROVENANCE_FILE_NAMES } from "../../shared/realization-provenance";
+import { COLLECTION_PROVENANCE_FILE_NAMES } from "../../shared/collection-provenance";
+import { CONTRIBUTION_COLLECTION_STREAM } from "../src/collection-source";
+import { workspaceRuntime } from "../src/workspace-runtime";
 import {
   adminSinar, amilSinar, EVIDENCE, get, NOW, post, publishedProposal, readerSinar, realize, REPORTS, SINAR, seedInstitution, signIn, YEAR,
 } from "./helpers/period-report-fixture";
@@ -78,7 +81,7 @@ beforeEach(async () => {
   await createContributionStore(db).ensureSchema();
   await activities.ensureSchema();
   configureWorkspace({
-    store, disbursement, evidence, activities, files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
+    store, disbursement, evidence, activities, contributions: createContributionStore(db), files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
     ethCall: async () => "0x", now: () => Math.floor(Date.now() / 1000), sessionTtlSeconds: 3600, challengeTtlSeconds: 300,
   });
   await seedInstitution(store);
@@ -143,7 +146,7 @@ describe("Laporan periode dari data aplikasi (#130)", () => {
     expect(claim.manifest.note).toContain(NOT_COMPARED_NOTE);
     expect(preparation.snapshot.coverageNotes[0]).toBe(NOT_COMPARED_NOTE);
     expect(preparation.files.map((f: any) => f.fileName).sort()).toEqual(
-      [PROVENANCE_FILE_NAMES.CLAIM, PROVENANCE_FILE_NAMES.SOURCE].sort()
+      [PROVENANCE_FILE_NAMES.CLAIM, PROVENANCE_FILE_NAMES.SOURCE, ...Object.values(COLLECTION_PROVENANCE_FILE_NAMES)].sort()
     );
     expect(preparation.files.every((f: any) => f.storageStatus === "STORED")).toBe(true);
 
@@ -211,6 +214,112 @@ describe("Laporan periode dari data aplikasi (#130)", () => {
     ({ reports } = await (await get(REPORTS, amil)).json());
     expect(reports[0].status).toBe("DIKOREKSI");
     expect(reports[0].preparations).toHaveLength(2);
+  });
+});
+
+describe("Penghimpunan Rupiah dalam laporan periode (#134)", () => {
+  const actor = { account: amilSinar.address, officerId: "off-amil" };
+  const operation = () => ({ operationId: crypto.randomUUID(), account: actor.account, requestHash: crypto.randomUUID() });
+  const create = (amountExact: string, receivedAt: number, recordedAt = NOW - 600, currencyUnit: "IDR" | "USDC_6DP" = "IDR") =>
+    createContributionStore(database.handle()).createContribution(SINAR, { sourceChannel: "CASH", sourceReference: crypto.randomUUID(),
+      currencyUnit, amountExact, fundType: "ZAKAT", purpose: "Penghimpunan", receivedAt, donorName: "Donatur Privat", donorContact: "081234567890" }, actor, recordedAt);
+  const preview = async (token: string, cutOff = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString(), kind = "AKHIR_TAHUN") =>
+    (await (await get(`${REPORTS}/preview?periodKind=${kind}&year=${YEAR}&cutOff=${encodeURIComponent(cutOff)}`, token)).json()).preview;
+
+  it("memfilter periode, waktu penerimaan dan pencatatan; membekukan penghimpunan tanpa mencampur penyaluran", async () => {
+    const { amil } = await recordPeriod();
+    const january = Math.floor(Date.UTC(YEAR, 0, 15) / 1000);
+    const cutoff = new Date((NOW - 300) * 1000).toISOString();
+    const contribution = await create("9007199254740993", january);
+    await create("200", NOW - 200, NOW - 600); // received after cutoff
+    await create("300", january, NOW - 200); // backdated but recorded after cutoff
+    await create("400", Math.floor(Date.UTC(YEAR - 1, 0, 15) / 1000));
+    await create("500", january, NOW - 600, "USDC_6DP");
+    await create("600", Math.floor(Date.UTC(YEAR, 6, 15) / 1000));
+    const annual = await preview(amil, cutoff);
+    expect(annual.collection.totalIdr).toBe("9007199254741593");
+    expect(annual.collection.afterCutOff).toBe(2);
+    expect(annual.totalIdr).toBe("0"); // realizations themselves were recorded after this cutoff
+    const current = await preview(amil);
+    expect(current.totalIdr).toBe("1500000");
+    expect(current.byFundType.find((r: any) => r.fundType === "ZAKAT").amountIdr).toBe("1000000");
+    expect((await preview(amil, cutoff, "SEMESTER")).collection.totalIdr).toBe("9007199254740993");
+    const locked = await post(REPORTS, { period: { kind: "AKHIR_TAHUN", year: YEAR }, cutOff: cutoff }, amil);
+    expect(locked.status).toBe(201);
+    const { preparation } = await locked.json();
+    const source = preparation.sources.find((s: any) => s.role === "SOURCE");
+    expect(source.rows.filter((r: any) => r.flow === "COLLECTION").map((r: any) => r.amount).sort()).toEqual(["600", "9007199254740993"]);
+    const file = preparation.files.find((f: any) => f.fileName === COLLECTION_PROVENANCE_FILE_NAMES.SOURCE);
+    const downloaded = await get(`${EVIDENCE}/${preparation.id}/files/${file.id}`, amil);
+    expect(downloaded.status).toBe(200);
+    const provenance = await downloaded.json();
+    const stored = await createEvidenceStore(database.handle()).getPreparation(SINAR, preparation.id);
+    const storageRef = stored!.files.find(f => f.fileName === COLLECTION_PROVENANCE_FILE_NAMES.SOURCE)!.storageRef!;
+    const ciphertext = await readFile(storageRef);
+    expect(ciphertext.includes(Buffer.from("tawf.collection.provenance"))).toBe(false);
+    expect(ciphertext.includes(Buffer.from(contribution.id))).toBe(false);
+    expect(provenance.totals.totalIdr).toBe(annual.collection.totalIdr);
+    expect(provenance.contributions.find((c: any) => c.contributionId === contribution.id)).toMatchObject({ version: 1, effectiveAmountIdr: "9007199254740993" });
+    expect(JSON.stringify(provenance)).not.toContain("081234567890");
+    expect(JSON.stringify(provenance)).not.toContain("Donatur Privat");
+    const contributions = createContributionStore(database.handle());
+    await contributions.correctContribution(SINAR, { contributionId: contribution.id, expectedVersion: 1, correctionType: "AMOUNT",
+      amountExact: "1000", reason: "Salah nominal", sourceProofRef: "bank-proof", endorsementMandateId: "unused" }, operation(), actor, NOW - 100);
+    // Reading a previously locked report never follows the mutable contribution.
+    const figures = (await (await get(`${REPORTS}/${preparation.id}/report`, amil)).json()).figures;
+    expect(figures.find((f: any) => f.name === "SOURCE.COLLECTION.total").value.amount).toBe(annual.collection.totalIdr);
+    expect(figures.find((f: any) => f.name === "SOURCE.total").value.amount).toBe("0");
+    expect((await preview(amil, cutoff)).collection.totalIdr).toBe(annual.collection.totalIdr);
+  });
+
+  it("mengikuti koreksi nominal, duplikat, dan refund dibayar; tidak mengurangi keputusan refund atau pembayaran yang baru dicatat setelah cutoff", async () => {
+    const amil = await signIn(amilSinar);
+    const contributions = createContributionStore(database.handle());
+    const january = Math.floor(Date.UTC(YEAR, 0, 15) / 1000);
+    const c = await create("1000", january);
+    await contributions.correctContribution(SINAR, { contributionId: c.id, expectedVersion: 1, correctionType: "AMOUNT", amountExact: "800",
+      reason: "Nominal yang benar", sourceProofRef: "bank-proof", endorsementMandateId: "unused" }, operation(), actor, NOW - 500);
+    const refund = await contributions.decideRefund(SINAR, { contributionId: c.id, expectedVersion: 2, amountExact: "200", reason: "Pengembalian", policyBasis: "Kebijakan lembaga" }, operation(), actor, NOW - 450);
+    expect((await preview(amil, new Date((NOW - 400) * 1000).toISOString())).collection.totalIdr).toBe("800");
+    await contributions.payRefund(SINAR, { contributionId: c.id, refundId: refund.id, paidAt: NOW - 440, paymentProofRef: "transfer-refund" }, operation(), actor, NOW - 350);
+    // Payment dated earlier but recorded later must not rewrite what was known then.
+    expect((await preview(amil, new Date((NOW - 400) * 1000).toISOString())).collection.totalIdr).toBe("800");
+    expect((await preview(amil)).collection.totalIdr).toBe("600");
+    const duplicate = await create("700", january);
+    await contributions.correctContribution(SINAR, { contributionId: duplicate.id, expectedVersion: 1, correctionType: "DUPLICATE",
+      reason: "Pencatatan ganda", sourceProofRef: "same-bank-row", endorsementMandateId: "unused" }, operation(), actor, NOW - 200);
+    expect((await preview(amil)).collection.totalIdr).toBe("600");
+    await contributions.correctContribution(SINAR, { contributionId: c.id, expectedVersion: 3, correctionType: "AMOUNT", amountExact: "100",
+      reason: "Koreksi setelah refund", sourceProofRef: "bank-proof-2", endorsementMandateId: "unused" }, operation(), actor, NOW - 100);
+    expect((await preview(amil)).collection.totalIdr).toBe("0"); // clamp like donor/activity funding
+  });
+
+  it("menawarkan stream internal tersendiri dan provenance; tidak menerima nama provenance dari pengunggah", async () => {
+    const amil = await signIn(amilSinar);
+    await create("1200", Math.floor(Date.UTC(YEAR, 0, 15) / 1000));
+    const offered = (await (await get(`${EVIDENCE}/internal-sources?year=${YEAR}`, amil)).json()).streams.find((s: any) => s.stream === CONTRIBUTION_COLLECTION_STREAM);
+    expect(offered).toMatchObject({ available: true, currencyUnit: "IDR", bucket: "PENGHIMPUNAN" });
+    const body = { label: "Penghimpunan", period: { kind: "AKHIR_TAHUN", year: YEAR }, currencyUnit: "IDR", balanceSheetScope: "ON",
+      tolerance: { amount: "0", unit: "IDR" }, claim: { internal: { stream: CONTRIBUTION_COLLECTION_STREAM } }, source: { internal: { stream: CONTRIBUTION_COLLECTION_STREAM } } };
+    const frozen = await post(EVIDENCE, body, amil);
+    expect(frozen.status).toBe(201);
+    const preparation = (await frozen.json()).preparation;
+    expect(preparation.files.map((f: any) => f.fileName).sort()).toEqual(Object.values(COLLECTION_PROVENANCE_FILE_NAMES).sort());
+    expect(preparation.findings).toEqual([]);
+    for (const fileName of Object.values(COLLECTION_PROVENANCE_FILE_NAMES)) {
+      const forged = await post(EVIDENCE, { ...body, files: [{ role: "SOURCE", fileName, mimeType: "application/json", contentBase64: Buffer.from("{}").toString("base64") }] }, amil);
+      expect(forged.status).toBe(400);
+    }
+  });
+
+  it("menolak penyimpanan kontribusi yang tidak tersedia atau gagal, bukan melaporkan nol", async () => {
+    const amil = await signIn(amilSinar);
+    const runtime = workspaceRuntime()!;
+    for (const contributions of [undefined, { ...runtime.contributions!, listContributions: async () => { throw new Error("storage unavailable"); } }]) {
+      configureWorkspace({ ...runtime, contributions });
+      expect((await get(`${REPORTS}/preview?periodKind=AKHIR_TAHUN&year=${YEAR}`, amil)).status).toBe(503);
+      expect((await post(REPORTS, { period: { kind: "AKHIR_TAHUN", year: YEAR } }, amil)).status).toBe(503);
+    }
   });
 });
 

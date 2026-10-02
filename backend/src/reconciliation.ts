@@ -21,6 +21,7 @@ export type LedgerEntry = {
   key: string; // identitas entri: kode PZ, txHash+logIndex, atau trxId
   bucket: string; // jenis dana / kategori
   balanceSheet: BalanceSheetPosition;
+  flow?: "COLLECTION" | "DISTRIBUTION";
   value: Money;
   /** Hak amil attributed to this collection row; omitted means unknown, not zero. */
   amilAmount?: Money;
@@ -408,6 +409,35 @@ export function reconcile(
   options: ReconciliationOptions
 ): ReconciliationReport {
   const allowedBuckets = options.allowedBuckets ?? JENIS_DANA;
+  const allRows = [...claim.entries, ...source.entries, ...(claim.declaredTotals ?? []), ...(source.declaredTotals ?? [])];
+  if (allRows.some(row => row.flow !== undefined)) {
+    const unit = validateSide(source, "source", allowedBuckets, validateSide(claim, "claim", allowedBuckets, null)) ?? options.tolerance?.unit ?? "IDR";
+    const flowOptions = { ...options, tolerance: options.tolerance ?? money(0n, unit) };
+    if (allRows.some(row => row.flow !== undefined && !["COLLECTION", "DISTRIBUTION"].includes(row.flow))) {
+      throw new ReconciliationInputError("Arus laporan tidak dikenal.");
+    }
+    const scopeFlow = (side: LedgerSide, flow: "COLLECTION" | "DISTRIBUTION"): LedgerSide => {
+      const strip = (rows: LedgerEntry[]) => rows.filter(row => (row.flow ?? "DISTRIBUTION") === flow).map(({ flow: _, ...row }) => row);
+      // Realization-specific basis belongs to distribution; uploaded collection
+      // entries must still derive their own basis and retain ceiling findings.
+      const { amilBasis, ...rest } = side;
+      return { ...rest, entries: strip(side.entries), declaredTotals: strip(side.declaredTotals ?? []),
+        ...(flow === "DISTRIBUTION" && amilBasis ? { amilBasis } : {}) };
+    };
+    const reports = (["COLLECTION", "DISTRIBUTION"] as const).map(flow => ({ flow,
+      report: reconcile(scopeFlow(claim, flow), scopeFlow(source, flow), flowOptions) }));
+    const base = reports[1].report;
+    const checks = reports.flatMap(({ flow, report }) => report.amilAssessment.checks.map(check => ({ ...check, key: `${flow}:${check.key}` })));
+    return { ...base, balanced: reports.every(({ report }) => report.balanced),
+      amilAssessment: { status: checks.some(check => check.status === "EXCEEDED") ? "EXCEEDED"
+        : checks.some(check => check.status === "NOT_CHECKED") ? "NOT_CHECKED" : "WITHIN_CEILING", checks },
+      netDelta: money(reports.reduce((sum, { report }) => sum + report.netDelta.amount, 0n), base.netDelta.unit),
+      absoluteDelta: money(reports.reduce((sum, { report }) => sum + report.absoluteDelta.amount, 0n), base.absoluteDelta.unit),
+      discrepancies: reports.flatMap(({ flow, report }) => report.discrepancies.map(finding => ({ ...finding,
+        key: `${flow}:${finding.key}`, label: `${flow === "COLLECTION" ? "Penghimpunan" : "Penyaluran"}: ${finding.label ?? finding.key}` }))).sort(compareDiscrepancies),
+      entryCounts: { claim: claim.entries.length, source: source.entries.length,
+        matched: reports.reduce((sum, { report }) => sum + report.entryCounts.matched, 0) } };
+  }
 
   let unit = validateSide(claim, "claim", allowedBuckets, null);
   unit = validateSide(source, "source", allowedBuckets, unit);

@@ -86,6 +86,7 @@ export type SourceManifest = {
   note: string | null;
   /** Only for server-built on-chain sources. Omitted entirely otherwise. */
   chainScope?: ChainScope;
+  flows?: ("COLLECTION" | "DISTRIBUTION")[];
 };
 
 /**
@@ -127,6 +128,7 @@ export type UnverifiedRecord = {
  * position are columns of their own, so nothing is inferred from the key later.
  */
 export type NormalizedRow = {
+  flow?: "COLLECTION" | "DISTRIBUTION";
   key: string;
   bucket: string;
   balanceSheet: BalanceSheetPosition;
@@ -301,9 +303,17 @@ function readManifest(
     );
   }
 
+  let flows: SourceManifest["flows"];
+  if (record.flows !== undefined) {
+    if (!Array.isArray(record.flows) || record.flows.length === 0 || new Set(record.flows).size !== record.flows.length ||
+      record.flows.some(flow => flow !== "COLLECTION" && flow !== "DISTRIBUTION")) {
+      bad("flows", "Cakupan arus harus berisi COLLECTION dan/atau DISTRIBUTION tanpa duplikasi.");
+    } else flows = record.flows as NonNullable<SourceManifest["flows"]>;
+  }
   if (issues.some((issue) => issue.scope === "manifest")) return null;
 
   return {
+    ...(flows ? { flows } : {}),
     role,
     label,
     origin,
@@ -454,9 +464,16 @@ function readRow(
     }
   }
 
+  const flow = record.flow;
+  if (flow !== undefined && flow !== "COLLECTION" && flow !== "DISTRIBUTION") {
+    bad("flow", "Arus harus COLLECTION atau DISTRIBUTION."); broken = true;
+  } else if (manifest.flows && (!flow || !manifest.flows.includes(flow))) {
+    bad("flow", "Arus baris wajib diisi sesuai cakupan manifest."); broken = true;
+  }
   if (broken || amount === null) return null;
 
   return {
+    ...(flow === "COLLECTION" || flow === "DISTRIBUTION" ? { flow } : {}),
     key,
     bucket,
     balanceSheet: balanceSheet as BalanceSheetPosition,
@@ -581,6 +598,7 @@ const entryFrom = (row: NormalizedRow): LedgerEntry => ({
   key: row.key,
   bucket: row.bucket,
   balanceSheet: row.balanceSheet,
+  ...(row.flow ? { flow: row.flow } : {}),
   value: money(BigInt(row.amount), row.unit),
   ...(row.amilAmount !== null ? { amilAmount: money(BigInt(row.amilAmount), row.unit) } : {}),
   ...(row.label !== null ? { label: row.label } : {}),

@@ -80,7 +80,7 @@ export function previewOf(side: SubmittedSide, provenance: RealizationProvenance
   const byFund = new Map<string, bigint>();
   if (side.status === "READ") {
     for (const row of side.rows) {
-      if (row.isDeclaredTotal || row.unit !== "IDR") continue;
+      if (row.isDeclaredTotal || row.unit !== "IDR" || row.flow === "COLLECTION") continue;
       byFund.set(row.bucket, (byFund.get(row.bucket) ?? 0n) + BigInt(row.amount));
     }
   }

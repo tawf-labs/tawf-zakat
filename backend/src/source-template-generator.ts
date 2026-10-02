@@ -8,7 +8,7 @@
 import * as XLSX from "xlsx";
 import { sanitizeForExport } from "./tabular-reader";
 
-export const SOURCE_TEMPLATE_VERSION = "tawf.source.template.v1";
+export const SOURCE_TEMPLATE_VERSION = "tawf.source.template.v2";
 
 /** The name both the download header and the browser's save dialog use. */
 export const sourceTemplateFileName = (format: "xlsx" | "csv"): string =>
@@ -24,6 +24,7 @@ const TEMPLATE_HEADERS = [
   "uraian",
   "referensi",
   "apakah_total",
+  "arus",
 ];
 
 const SYNTHETIC_SAMPLE_ROWS = [
@@ -73,7 +74,13 @@ const SYNTHETIC_SAMPLE_ROWS = [
   ],
 ];
 
+const FLOW_SAMPLE_ROWS = [
+  ...SYNTHETIC_SAMPLE_ROWS.map(row => [...row, "DISTRIBUTION"]),
+  ["KONTRIBUSI-001", "ZAKAT", "ON", "2500000000", "IDR", "", "Penghimpunan setelah koreksi dan pengembalian dibayar", "BANK-001", "", "COLLECTION"],
+];
+
 const INSTRUCTION_ROWS = [
+  ["arus", "Wajib untuk laporan dua arus", "COLLECTION (penghimpunan) atau DISTRIBUTION (penyaluran). Jumlah dan total diperiksa terpisah per arus; jangan menjumlahkan keduanya. Pada berkas lama tanpa kolom arus, entri tetap diperlakukan sebagai penyaluran."],
   ["PETUNJUK PENGISIAN TEMPLATE SUMBER LAPORAN ZKT"],
   ["Versi Template", SOURCE_TEMPLATE_VERSION],
   [""],
@@ -140,7 +147,7 @@ export function generateSourceXlsxTemplate(): Uint8Array {
   XLSX.utils.book_append_sheet(wb, wsInstructions, "Petunjuk");
 
   // 2. Data Sheet
-  const dataAoa = [TEMPLATE_HEADERS, ...SYNTHETIC_SAMPLE_ROWS];
+  const dataAoa = [TEMPLATE_HEADERS, ...FLOW_SAMPLE_ROWS];
   const wsData = XLSX.utils.aoa_to_sheet(dataAoa);
   XLSX.utils.book_append_sheet(wb, wsData, "Sumber_Laporan");
 
@@ -157,7 +164,7 @@ export function generateSourceXlsxTemplate(): Uint8Array {
  * export path that eventually does not.
  */
 export function generateSourceCsvTemplate(): string {
-  const rows = [TEMPLATE_HEADERS, ...SYNTHETIC_SAMPLE_ROWS];
+  const rows = [TEMPLATE_HEADERS, ...FLOW_SAMPLE_ROWS];
   return rows
     .map((row) =>
       row

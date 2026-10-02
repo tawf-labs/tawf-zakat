@@ -6,6 +6,8 @@
  * is copied at freeze time: nothing here is a pointer to live data.
  */
 
+import { COLLECTION_PROVENANCE_FILE_NAMES } from "./collection-provenance";
+
 export type ProvenanceRole = "CLAIM" | "SOURCE";
 
 /**
@@ -19,7 +21,7 @@ export const PROVENANCE_FILE_NAMES: Record<ProvenanceRole, string> = {
 };
 
 export const isReservedProvenanceFileName = (fileName: string): boolean =>
-  Object.values(PROVENANCE_FILE_NAMES).includes(fileName);
+  [...Object.values(PROVENANCE_FILE_NAMES), ...Object.values(COLLECTION_PROVENANCE_FILE_NAMES)].includes(fileName);
 
 export type ProvenanceDocument = {
   id: string;

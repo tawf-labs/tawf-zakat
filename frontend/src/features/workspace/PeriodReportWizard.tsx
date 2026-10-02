@@ -55,6 +55,17 @@ function PreviewTables({ preview }: { preview: PeriodReportPreview }) {
         <Figure label="Biaya operasional" value={rp(costs.totalIdr)} detail={`Langsung ${rp(costs.directIdr)} · dari panjar ${rp(costs.fromAdvanceIdr)}`} />
       </dl>
 
+      {preview.collection && <section aria-label="Dihimpun per jenis dana">
+        <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-500">Penghimpunan Rupiah</h5>
+        <p className="mt-2 text-lg font-semibold tabular-nums text-stone-900">{rp(preview.collection.totalIdr)}</p>
+        <table className="mt-2 w-full text-sm"><tbody>{preview.collection.byFundType.map(row => (
+          <tr key={row.fundType} className="border-t border-stone-100"><td className="py-2 text-stone-700">{bucketLabel(row.fundType)}</td>
+            <td className="py-2 text-right tabular-nums text-stone-900">{rp(row.amountIdr)}</td></tr>
+        ))}</tbody></table>
+        <p className="mt-2 text-xs text-stone-500">Setelah koreksi dan pengembalian yang sudah dibayar. Keputusan pengembalian yang belum dibayar belum mengurangi angka.</p>
+        {preview.collection.afterCutOff > 0 && <p className="mt-2 text-xs text-amber-800">{preview.collection.afterCutOff} kontribusi dalam periode dicatat sesudah batas data dan belum ikut laporan ini.</p>}
+      </section>}
+
       <section aria-label="Disalurkan per jenis dana">
         <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-500">Disalurkan per jenis dana</h5>
         {preview.byFundType.length === 0 ? (

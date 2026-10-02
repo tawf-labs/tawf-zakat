@@ -49,7 +49,7 @@ beforeEach(async () => {
   for (const s of [store, disbursement, evidence, createContributionStore(db), activities]) await s.ensureSchema();
   registry = await anvil.runtime(db);
   configureWorkspace({
-    store, disbursement, evidence, activities, files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
+    store, disbursement, evidence, activities, contributions: createContributionStore(db), files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
     ethCall: registry.chain.accountSignatureCall, now: () => Math.floor(Date.now() / 1000), sessionTtlSeconds: 3600, challengeTtlSeconds: 300,
     registry,
   });

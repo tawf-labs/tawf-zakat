@@ -122,6 +122,18 @@ async function readInternalUsdc(
   };
 }
 
+import { CONTRIBUTION_COLLECTION_STREAM, buildCollectionSide, readCollectionRecords } from "../collection-source";
+import type { ContributionStore } from "../contribution-store";
+
+async function readCollectionSide(store: ContributionStore, scope: RealizationScope): Promise<{ side: SubmittedSide; provenanceFile: SubmittedFile | null; coverageNotes: string[] }> {
+  try { return buildCollectionSide(scope, await readCollectionRecords(store, scope.institution.id)); }
+  catch {
+    const manifest = buildCollectionSide(scope, []).side.manifest;
+    return { side: { manifest, status: "FAILED", detail: "Catatan penghimpunan tidak dapat dibaca dari penyimpanan", unverified: [] },
+      provenanceFile: null, coverageNotes: [] };
+  }
+}
+
 type InternalRequest =
   | {
       stream: typeof USDC_DEPOSIT_STREAM;
@@ -129,7 +141,7 @@ type InternalRequest =
       toBlock: number | null;
     }
   | {
-      stream: typeof DISBURSEMENT_REALIZATION_STREAM;
+      stream: typeof DISBURSEMENT_REALIZATION_STREAM | typeof CONTRIBUTION_COLLECTION_STREAM;
       cutOff: string | null;
     };
 
@@ -166,19 +178,19 @@ function readInternalRequest(
     return { stream: USDC_DEPOSIT_STREAM, fromBlock: bound("fromBlock"), toBlock: bound("toBlock") };
   }
 
-  if (stream === DISBURSEMENT_REALIZATION_STREAM) {
+  if (stream === DISBURSEMENT_REALIZATION_STREAM || stream === CONTRIBUTION_COLLECTION_STREAM) {
     const cutOff = typeof asked.cutOff === "string" ? asked.cutOff : null;
     if (cutOff !== null && isNaN(Date.parse(cutOff))) {
       issues.push(issue(`${where}.cutOff`, "Batas cut-off harus berupa string ISO 8601 yang sah."));
       return null;
     }
-    return { stream: DISBURSEMENT_REALIZATION_STREAM, cutOff };
+    return { stream, cutOff };
   }
 
   issues.push(
     issue(
       `${where}.stream`,
-      `Sumber internal yang tersedia adalah "${USDC_DEPOSIT_STREAM}" dan "${DISBURSEMENT_REALIZATION_STREAM}". ` +
+      `Sumber internal yang tersedia adalah "${USDC_DEPOSIT_STREAM}", "${DISBURSEMENT_REALIZATION_STREAM}", dan "${CONTRIBUTION_COLLECTION_STREAM}". ` +
         `Diterima: ${JSON.stringify(asked.stream)}.`
     )
   );
@@ -188,7 +200,7 @@ function readInternalRequest(
 /** The header an internal source can be examined under, checked before any read. */
 function checkInternalHeader(
   header: Header,
-  stream: typeof USDC_DEPOSIT_STREAM | typeof DISBURSEMENT_REALIZATION_STREAM,
+  stream: typeof USDC_DEPOSIT_STREAM | typeof DISBURSEMENT_REALIZATION_STREAM | typeof CONTRIBUTION_COLLECTION_STREAM,
   issues: SourceIssue[]
 ): void {
   if (stream === USDC_DEPOSIT_STREAM) {
@@ -209,7 +221,10 @@ function checkInternalHeader(
         )
       );
     }
-  } else if (stream === DISBURSEMENT_REALIZATION_STREAM) {
+  } else if (stream === DISBURSEMENT_REALIZATION_STREAM || stream === CONTRIBUTION_COLLECTION_STREAM) {
+    if (stream === CONTRIBUTION_COLLECTION_STREAM && header.balanceSheetScope !== "ON") {
+      issues.push(issue("balanceSheetScope", "Penghimpunan kontribusi dicatat on balance sheet; gunakan ON."));
+    }
     if (header.currencyUnit !== "IDR") {
       issues.push(
         issue(
@@ -323,6 +338,10 @@ evidenceRoutes.post("/", async (c) => {
     internalAsked.CLAIM?.stream === DISBURSEMENT_REALIZATION_STREAM ||
     internalAsked.SOURCE?.stream === DISBURSEMENT_REALIZATION_STREAM;
 
+  const wantsInternalCollection = Object.values(internalAsked).some(asked => asked?.stream === CONTRIBUTION_COLLECTION_STREAM);
+  if (wantsInternalCollection && header) checkInternalHeader(header, CONTRIBUTION_COLLECTION_STREAM, issues);
+  if (wantsInternalCollection && !runtime.contributions) return unconfigured(c, "Penyimpanan kontribusi Rupiah");
+
   if (wantsInternalUsdc && header) checkInternalHeader(header, USDC_DEPOSIT_STREAM, issues);
   if (wantsInternalRealization && header) checkInternalHeader(header, DISBURSEMENT_REALIZATION_STREAM, issues);
 
@@ -355,14 +374,14 @@ evidenceRoutes.post("/", async (c) => {
 
   const realization: Partial<Record<"CLAIM" | "SOURCE", Awaited<ReturnType<typeof readRealizationSide>>>> = {};
 
-  if (wantsInternalRealization && header && issues.length === 0) {
+  if ((wantsInternalRealization || wantsInternalCollection) && header && issues.length === 0) {
     const institution = await runtime.store.getInstitution(auth.session.institutionId);
     if (!institution) return refuse(c, 404, "not-found");
 
     for (const role of ["CLAIM", "SOURCE"] as const) {
       const asked = internalAsked[role];
-      if (asked?.stream !== DISBURSEMENT_REALIZATION_STREAM) continue;
-      realization[role] = await readRealizationSide(runtime.disbursement!, runtime.activities, {
+      if (asked?.stream !== DISBURSEMENT_REALIZATION_STREAM && asked?.stream !== CONTRIBUTION_COLLECTION_STREAM) continue;
+      const scope: RealizationScope = {
         institution: {
           id: auth.session.institutionId,
           legalName: institution.legalName,
@@ -373,14 +392,17 @@ evidenceRoutes.post("/", async (c) => {
         cutOff: asked.cutOff ?? new Date(runtime.now() * 1000).toISOString(),
         role,
         balanceSheetScope: header.balanceSheetScope,
-      });
+      };
+      realization[role] = asked.stream === CONTRIBUTION_COLLECTION_STREAM
+        ? await readCollectionSide(runtime.contributions!, scope)
+        : await readRealizationSide(runtime.disbursement!, runtime.activities, scope);
     }
   }
 
   const claim =
     internalAsked.CLAIM?.stream === USDC_DEPOSIT_STREAM
       ? { side: internalUsdc?.claim ?? null, issues: [] as SourceIssue[] }
-      : internalAsked.CLAIM?.stream === DISBURSEMENT_REALIZATION_STREAM
+      : internalAsked.CLAIM?.stream === DISBURSEMENT_REALIZATION_STREAM || internalAsked.CLAIM?.stream === CONTRIBUTION_COLLECTION_STREAM
       ? { side: realization.CLAIM?.side ?? null, issues: [] as SourceIssue[] }
       : normalizeSide(body.claim, "CLAIM", auth.session.institutionId);
 
@@ -396,7 +418,7 @@ evidenceRoutes.post("/", async (c) => {
   const upload = readUpload(body.sourceTable) ?? readUpload(declaredSource?.tabular);
   if (internalAsked.SOURCE?.stream === USDC_DEPOSIT_STREAM) {
     source = { side: internalUsdc?.source ?? null, issues: [] };
-  } else if (internalAsked.SOURCE?.stream === DISBURSEMENT_REALIZATION_STREAM) {
+  } else if (internalAsked.SOURCE?.stream === DISBURSEMENT_REALIZATION_STREAM || internalAsked.SOURCE?.stream === CONTRIBUTION_COLLECTION_STREAM) {
     source = { side: realization.SOURCE?.side ?? null, issues: [] };
   } else if (upload) {
     const tabularIssues: SourceIssue[] = [];
@@ -602,6 +624,16 @@ evidenceRoutes.get("/internal-sources", async (c) => {
       coverageNotes: built.coverageNotes,
     });
   }
+
+  const collectionScope: RealizationScope = {
+    institution: { id: auth.session.institutionId, legalName: institution.legalName, scopeUnit: institution.scopeUnit, scopeLevel: institution.scopeLevel },
+    period: { kind, year }, cutOff: new Date(runtime.now() * 1000).toISOString(), role: "SOURCE", balanceSheetScope: "ON",
+  };
+  const collection = runtime.contributions ? await readCollectionSide(runtime.contributions, collectionScope) : null;
+  streams.push({ stream: CONTRIBUTION_COLLECTION_STREAM, bucket: "PENGHIMPUNAN", currencyUnit: "IDR", balanceSheetScope: "ON",
+    available: collection?.side.status === "READ", reason: !collection ? "Penyimpanan kontribusi Rupiah belum dikonfigurasi pada deployment ini."
+      : collection.side.status === "READ" ? null : collection.side.detail,
+    chainScope: null, cutOff: collectionScope.cutOff, sides: collection ? [describeSide(collection.side)] : [], coverageNotes: collection?.coverageNotes ?? [] });
 
   return c.json({
     success: true,

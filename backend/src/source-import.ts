@@ -100,6 +100,8 @@ export function sourceManifestFrom(input: {
     cutOff: text(declared.cutOff) || input.readAt,
     format: input.format.toUpperCase(),
     mappingVersion: SOURCE_TEMPLATE_VERSION,
+    ...(Array.isArray(declared.flows) && declared.flows.length > 0 && declared.flows.every(flow => flow === "COLLECTION" || flow === "DISTRIBUTION")
+      ? { flows: declared.flows as NonNullable<SourceManifest["flows"]> } : {}),
     transactionDetail: input.hasTransactionDetail ? "PRESENT" : "NOT_AVAILABLE",
     note: text(declared.note) || null,
   };
@@ -147,6 +149,10 @@ export function readTabularSource(
     return null;
   }
 
+  if (declared?.flows !== undefined && (!Array.isArray(declared.flows) || declared.flows.length === 0 ||
+    new Set(declared.flows).size !== declared.flows.length || declared.flows.some(flow => flow !== "COLLECTION" && flow !== "DISTRIBUTION"))) {
+    issues.push(manifestIssue("flows", "Cakupan arus harus COLLECTION dan/atau DISTRIBUTION tanpa duplikasi."));
+  }
   const declaredFundTypes = Array.isArray(declared?.fundTypes) ? (declared!.fundTypes as string[]) : [];
   const working = sourceManifestFrom({
     institutionId,
@@ -173,6 +179,9 @@ export function readTabularSource(
     hasTransactionDetail: mapping.hasTransactionDetail,
   });
 
+  if (!manifest.flows && mapping.totalsByFlow) {
+    manifest.flows = mapping.totalsByFlow.map(total => total.flow);
+  }
   for (const found of mapping.issues) issues.push(found);
 
   return {
@@ -199,6 +208,7 @@ export const previewOf = (read: ReadTabular) => ({
   invalidCount: read.mapping.invalidRowCount,
   isPartial: read.mapping.isPartial,
   calculableTotal: read.mapping.calculableTotal,
+  ...(read.mapping.totalsByFlow ? { totalsByFlow: read.mapping.totalsByFlow } : {}),
   allRowsPreview: read.mapping.allRowsPreview,
   issues: read.mapping.issues,
 });

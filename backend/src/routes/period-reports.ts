@@ -53,10 +53,12 @@ import {
   type EvidenceRuntime,
 } from "./evidence-preparation";
 
+import { buildCollectionSide, readCollectionRecords, withCollection } from "../collection-source";
+
 const routes = new Hono();
 
 const READ_FAILED =
-  "Data penyaluran tidak dapat dibaca dari penyimpanan, sehingga data laporan belum dikunci. Coba lagi atau hubungi operator.";
+  "Data penghimpunan atau penyaluran tidak dapat dibaca dari penyimpanan, sehingga data laporan belum dikunci. Coba lagi atau hubungi operator.";
 
 /** The period and cut-off a request names, or the reason it cannot be used. */
 function readScope(raw: { kind: unknown; year: unknown; cutOff: unknown }, now: number): { period: ReportingPeriod; cutOff: string } | string {
@@ -111,6 +113,7 @@ routes.get("/preview", async (c) => {
   if (session instanceof Response) return session;
   const { runtime, auth } = session;
   if (!runtime.disbursement) return unconfigured(c, "Penyimpanan realisasi penyaluran");
+  if (!runtime.contributions) return unconfigured(c, "Penyimpanan kontribusi Rupiah");
 
   const asked = readScope({ kind: c.req.query("periodKind"), year: c.req.query("year"), cutOff: c.req.query("cutOff") }, runtime.now());
   if (typeof asked === "string") return badRequest(c, asked);
@@ -120,7 +123,12 @@ routes.get("/preview", async (c) => {
   const read = await readRealizationRecords(runtime.disbursement, runtime.activities, auth.session.institutionId);
   if (!read.ok) return c.json({ success: false, error: READ_FAILED }, 503);
   const built = buildDisbursementRealizationSide({ ...scope, role: "SOURCE", ...read.data, activityTrace: read.activityTrace });
-  return c.json({ success: true, preview: previewOf(built.side, built.provenance) });
+  try {
+    const collection = buildCollectionSide(scope, await readCollectionRecords(runtime.contributions, auth.session.institutionId));
+    return c.json({ success: true, preview: { ...previewOf(built.side, built.provenance), collection: collection.preview } });
+  } catch {
+    return c.json({ success: false, error: READ_FAILED }, 503);
+  }
 });
 
 routes.post("/", async (c) => {
@@ -132,6 +140,7 @@ routes.post("/", async (c) => {
   if (!auth.ok) return auth.response;
   if (!authorize(auth.session.role, "prepareEvidence")) return refuse(c, 403, "forbidden");
   if (!runtime.disbursement) return unconfigured(c, "Penyimpanan realisasi penyaluran");
+  if (!runtime.contributions) return unconfigured(c, "Penyimpanan kontribusi Rupiah");
 
   const period = typeof body.period === "object" && body.period !== null ? (body.period as Record<string, unknown>) : {};
   const asked = readScope({ kind: period.kind, year: period.year, cutOff: body.cutOff }, runtime.now());
@@ -143,9 +152,17 @@ routes.post("/", async (c) => {
   // gap between two moments as a difference between two ledgers.
   const read = await readRealizationRecords(runtime.disbursement, runtime.activities, auth.session.institutionId);
   if (!read.ok) return c.json({ success: false, error: READ_FAILED }, 503);
+  let collectionRecords;
+  try { collectionRecords = await readCollectionRecords(runtime.contributions, auth.session.institutionId); }
+  catch { return c.json({ success: false, error: READ_FAILED }, 503); }
   const records = { ...read.data, activityTrace: read.activityTrace };
   const source = buildDisbursementRealizationSide({ ...scope, role: "SOURCE", ...records });
   const claim = buildDisbursementRealizationSide({ ...scope, role: "CLAIM", ...records });
+  let sourceCollection, claimCollection;
+  try {
+    sourceCollection = buildCollectionSide({ ...scope, role: "SOURCE" }, collectionRecords);
+    claimCollection = buildCollectionSide({ ...scope, role: "CLAIM" }, collectionRecords);
+  } catch { return c.json({ success: false, error: READ_FAILED }, 503); }
 
   return executeFreezeAndStorePreparation(
     c,
@@ -158,11 +175,11 @@ routes.post("/", async (c) => {
       balanceSheetScope: "ON",
       tolerance: { amount: "0", unit: "IDR" },
     },
-    withoutBookkeeping(claim.side),
-    source.side,
-    [claim.provenanceFile, source.provenanceFile],
+    withoutBookkeeping(withCollection(claim.side, claimCollection.side)),
+    withCollection(source.side, sourceCollection.side),
+    [claim.provenanceFile, source.provenanceFile, claimCollection.provenanceFile, sourceCollection.provenanceFile],
     null,
-    [NOT_COMPARED_NOTE, ...source.coverageNotes]
+    [NOT_COMPARED_NOTE, ...source.coverageNotes, ...sourceCollection.coverageNotes]
   );
 });
 

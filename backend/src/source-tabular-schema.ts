@@ -34,6 +34,10 @@ const COLUMN_ALIASES: Record<string, string> = {
   key_entri: "key",
   nomor_entri: "key",
 
+  flow: "flow",
+  arus: "flow",
+  jenis_arus: "flow",
+
   // Bucket / Fund type
   bucket: "bucket",
   jenis_dana: "bucket",
@@ -103,7 +107,8 @@ export type TabularSourceMappingResult = {
   totalRows: number;
   validRowCount: number;
   invalidRowCount: number;
-  calculableTotal: string; // BigInt sum of valid non-total rows
+  calculableTotal: string; // Legacy/distribution total, never combined with collection
+  totalsByFlow?: { flow: "COLLECTION" | "DISTRIBUTION"; amount: string }[];
   isPartial: boolean; // True if there are invalid rows
   /** The fund types this file actually carries, in the order they were first seen. */
   observedFundTypes: string[];
@@ -240,6 +245,7 @@ export function mapSourceTabular(
   const labelCol = colMap.get("label");
   const referenceCol = colMap.get("reference");
   const isTotalCol = colMap.get("is_total");
+  const flowCol = colMap.get("flow");
 
   for (let idx = 0; idx < table.rows.length; idx++) {
     const row = table.rows[idx];
@@ -409,11 +415,17 @@ export function mapSourceTabular(
       hasTransactionDetail = true;
     }
 
+    const rawFlow = flowCol ? (rawCells[flowCol] ?? "").trim().toUpperCase() : "";
+    const flow = rawFlow === "PENGHIMPUNAN" ? "COLLECTION" : rawFlow === "PENYALURAN" ? "DISTRIBUTION" : rawFlow;
+    if ((flowCol && !flow) || (flow && flow !== "COLLECTION" && flow !== "DISTRIBUTION") || (manifest.flows && (!flow || !manifest.flows.includes(flow as "COLLECTION" | "DISTRIBUTION")))) {
+      rowIssues.push({ scope: "row", rowIndex: idx, field: "flow", message: `${at(rowNumber, "flow")}: arus harus COLLECTION (penghimpunan) atau DISTRIBUTION (penyaluran), sesuai manifest.` });
+    }
     const isValid = rowIssues.length === 0;
 
     let normalized: NormalizedRow | null = null;
     if (isValid && amountStr !== "") {
       normalized = {
+        ...(flow === "COLLECTION" || flow === "DISTRIBUTION" ? { flow } : {}),
         key: rawKey,
         bucket: isDeclaredTotal ? GRAND_TOTAL_BUCKET : rawBucket,
         balanceSheet,
@@ -428,7 +440,7 @@ export function mapSourceTabular(
         declaredTotals.push(normalized);
       } else {
         validRows.push(normalized);
-        calculableTotalBigInt += BigInt(amountStr);
+        if (flow !== "COLLECTION") calculableTotalBigInt += BigInt(amountStr);
       }
     } else {
       invalidRows.push({
@@ -459,6 +471,8 @@ export function mapSourceTabular(
     validRowCount: validRows.length + declaredTotals.length,
     invalidRowCount: invalidRows.length,
     calculableTotal: calculableTotalBigInt.toString(),
+    ...(flowCol || manifest.flows ? { totalsByFlow: (["COLLECTION", "DISTRIBUTION"] as const).map(flow => ({ flow,
+      amount: validRows.filter(row => row.flow === flow).reduce((sum, row) => sum + BigInt(row.amount), 0n).toString() })) } : {}),
     isPartial: invalidRows.length > 0,
     observedFundTypes,
     hasTransactionDetail,
