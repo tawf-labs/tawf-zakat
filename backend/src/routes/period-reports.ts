@@ -4,7 +4,8 @@
  *   GET  /api/evidence/period-reports           one summary per period, for the list
  *   GET  /api/evidence/period-reports/preview   step 2: what the app holds for a period
  *   POST /api/evidence/period-reports           step 2: lock that data as a snapshot
- *   GET  /api/evidence/period-reports/:id/report            step 4: figures, limits, identity
+ *   GET  /api/evidence/period-reports/:id/report            step 4: figures, limits, identity; for a
+ *                                                           correction, what changed since the version it succeeds (#133)
  *   POST /api/evidence/period-reports/:id/report            step 4: write and check; freeze when it passes
  *   POST /api/evidence/period-reports/:id/report/narrative  step 4: a narrative suggestion from AI
  *
@@ -26,6 +27,7 @@ import type { ReportingPeriod } from "../reconciliation";
 import { buildDisbursementRealizationSide, type RealizationScope } from "../realization-source";
 import { readRealizationRecords } from "../realization-read";
 import {
+  correctionComparison,
   NOT_COMPARED_NOTE,
   nextVersion,
   periodReportId,
@@ -41,6 +43,8 @@ import { withRegistryRead } from "../registry-read";
 import { PUBLISH_ACTION } from "../report-history";
 import { draftReport } from "../report-drafter";
 import { DISBURSEMENT_REALIZATION_FORMAT } from "../realization-source";
+import { PROVENANCE_FILE_NAMES } from "../../../shared/realization-provenance";
+import { createRestrictedDocuments } from "../restricted-documents";
 import {
   executeFreezeAndStorePreparation,
   readJson,
@@ -222,6 +226,42 @@ async function readyPackage(runtime: EvidenceRuntime, material: Awaited<ReturnTy
   return ready[0] ?? null;
 }
 
+/** Operational costs in a preparation's locked realization data, or `null` when its record cannot be read. */
+async function lockedCosts(runtime: EvidenceRuntime, institutionId: string, preparationId: string): Promise<string | null> {
+  const record = await runtime.evidence.getPreparation(institutionId, preparationId);
+  const file = record?.files.find((f) => f.role === "SOURCE" && f.fileName === PROVENANCE_FILE_NAMES.SOURCE);
+  if (!file) return null;
+  try {
+    const { bytes } = await createRestrictedDocuments(runtime.evidence, runtime.files).read({ institutionId, preparationId }, file.id);
+    const expenses = JSON.parse(new TextDecoder().decode(bytes))?.totals?.expensesIdr;
+    return typeof expenses === "string" && /^\d+$/.test(expenses) ? expenses : null;
+  } catch {
+    // Not shown as zero: the comparison leaves costs out rather than invent a change.
+    return null;
+  }
+}
+
+/**
+ * For a correction, what changed since the version it succeeds: each figure before and
+ * after, each version's cut-off, and its costs. `null` when this is no correction, or when
+ * the predecessor was not written in this app and has nothing local to compare against.
+ */
+async function correctionOf(runtime: EvidenceRuntime, material: Awaited<ReturnType<typeof reportMaterial>>, institutionId: string) {
+  const predecessor = material.identity.predecessor;
+  if (!predecessor) return null;
+  let compared;
+  try {
+    compared = await material.packages.correction(institutionId, material.record.id, predecessor);
+  } catch (error) {
+    if (error instanceof PackageError && error.status === 404) return null;
+    throw error;
+  }
+  return correctionComparison(compared, {
+    before: await lockedCosts(runtime, institutionId, compared.predecessor.preparationId),
+    after: await lockedCosts(runtime, institutionId, material.record.id),
+  });
+}
+
 async function officer(c: Context) {
   const runtime = runtimeWithStore(c);
   if (runtime instanceof Response) return runtime;
@@ -251,6 +291,7 @@ routes.get("/:preparationId/report", async (c) => {
       period: material.period,
       identity: material.identity,
       correctionRequired: material.identity.predecessor !== null,
+      correction: await correctionOf(runtime, material, auth.session.institutionId),
       comparedWithBookkeeping: material.comparedWithBookkeeping,
       figures: material.review.figures,
       limitations: material.review.limitations,

@@ -6,7 +6,16 @@ import { formatRupiah } from "./evidenceText";
 import type { SavedReportPackage } from "./evidenceClient";
 import type { PrivateRequests } from "./privateRequests";
 import { PeriodReportPublishStep } from "./PeriodReportPublishStep";
-import { checkReport, readReportMaterial, suggestNarrative, type ReportFigure, type ReportMaterial } from "./periodReportClient";
+import {
+  checkReport,
+  formatCutOff,
+  readReportMaterial,
+  suggestNarrative,
+  type CorrectionComparison,
+  type FigureChange,
+  type ReportFigure,
+  type ReportMaterial,
+} from "./periodReportClient";
 
 /**
  * Langkah 4–5: tinjau dan tulis, lalu periksa dan terbitkan (ADR-0043, #131).
@@ -15,9 +24,13 @@ import { checkReport, readReportMaterial, suggestNarrative, type ReportFigure, t
  * id comes from the period, the version and predecessor from the registry, and every
  * figure is claimed by the server exactly as computed. The automatic check answers
  * *Lolos* or *Belum lolos* with reasons; a passing package is frozen and published.
+ *
+ * A correction (#133) also shows what changed since the version it succeeds: each figure
+ * before and after, the cut-off of each version's data, and the operational costs.
  */
 
-const value = (figure: ReportFigure) => figure.value.unit === "IDR" ? `Rp${formatRupiah(figure.value.amount)}` : formatQuantity(figure.value);
+const formatValue = (value: ReportFigure["value"]) => value.unit === "IDR" ? `Rp${formatRupiah(value.amount)}` : formatQuantity(value);
+const value = (figure: ReportFigure) => formatValue(figure.value);
 const inputClass = "mt-1 block w-full rounded-lg border border-stone-300 bg-white p-2 text-sm text-stone-900 focus:border-[#0F3D30] focus:ring-1 focus:ring-[#0F3D30]";
 
 function FigureGroup({ title, figures, note }: { title: string; figures: ReportFigure[]; note?: string }) {
@@ -55,8 +68,92 @@ function Figures({ material }: { material: ReportMaterial }) {
   );
 }
 
-export function PeriodReportReviewWizard({ preparationId, periodName, requests, onClose, onChanged }: {
+const CHANGE_LABELS: Record<FigureChange["state"], string> = {
+  TETAP: "tetap",
+  BERUBAH: "berubah",
+  DITAMBAHKAN: "baru",
+  TIDAK_LAGI_TERSEDIA: "tidak ada lagi",
+};
+
+function CutOffChange({ correction }: { correction: CorrectionComparison }) {
+  const { before, after } = correction.cutOff;
+  const version = correction.predecessor.version;
+  if (!before || !after) return null;
+  // Two cut-offs within one minute would read as the same time; say the seconds then.
+  const sameMinute = formatCutOff(before) === formatCutOff(after);
+  const show = (iso: string) => sameMinute ? new Date(iso).toLocaleString("id-ID", { dateStyle: "long", timeStyle: "medium" }) : formatCutOff(iso);
+  return (
+    <p>
+      {before === after
+        ? <>Batas data sama dengan versi {version}: {formatCutOff(after)}.</>
+        : <>Batas data berubah dari <span className="font-semibold">{show(before)}</span> (versi {version}) menjadi{" "}
+          <span className="font-semibold">{show(after)}</span>. Data yang dicatat di antara keduanya ikut masuk koreksi ini.</>}
+    </p>
+  );
+}
+
+function CorrectionChanges({ correction, comparedWithBookkeeping, onOpenCosts }: {
+  correction: CorrectionComparison; comparedWithBookkeeping: boolean; onOpenCosts?: () => void;
+}) {
+  const version = correction.predecessor.version;
+  // Without a recap the comparison side mirrors the app's data; its rows would only repeat the ones above them.
+  const figures = correction.figures.filter((f) => comparedWithBookkeeping || !f.name.startsWith("CLAIM."));
+  const changed = figures.filter((f) => f.state !== "TETAP").length;
+  const { costs } = correction;
+  return (
+    <section aria-label={`Perubahan dibanding versi ${version}`} className="space-y-3 rounded-lg border border-amber-200 bg-white p-3">
+      <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-500">Perubahan dibanding versi {version}</h5>
+      <div className="space-y-1 text-xs text-stone-700">
+        <CutOffChange correction={correction} />
+        <p>
+          {changed === 0
+            ? "Tidak ada angka laporan yang berubah."
+            : `${changed} angka laporan berubah.`}
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-stone-500">
+              <th scope="col" className="py-1 pr-3 font-medium">Angka</th>
+              <th scope="col" className="py-1 pr-3 text-right font-medium">Versi {version}</th>
+              <th scope="col" className="py-1 pr-3 text-right font-medium">Sesudah koreksi</th>
+              <th scope="col" className="py-1 text-right font-medium"><span className="sr-only">Perubahan</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {figures.map((f) => (
+              <tr key={f.name} className={`border-t border-stone-100 ${f.state === "TETAP" ? "" : "bg-amber-50"}`}>
+                <td className="py-2 pr-3 text-stone-700">{f.label}</td>
+                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums text-stone-500">{f.before ? formatValue(f.before) : "—"}</td>
+                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums font-semibold text-stone-900">{f.after ? formatValue(f.after) : "—"}</td>
+                <td className={`whitespace-nowrap py-2 text-right text-xs ${f.state === "TETAP" ? "text-stone-400" : "font-semibold text-amber-800"}`}>{CHANGE_LABELS[f.state]}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="space-y-1 text-xs text-stone-700">
+        {costs && (costs.before === costs.after
+          ? <p>Biaya operasional dalam data laporan tetap Rp{formatRupiah(costs.after)}.</p>
+          : <p>
+              Biaya operasional dalam data laporan berubah dari Rp{formatRupiah(costs.before)} menjadi{" "}
+              <span className="font-semibold">Rp{formatRupiah(costs.after)}</span>. Baris biaya yang diubah sesudah versi {version} terbit
+              tercatat dengan pernyataan koreksi laporan di riwayat barisnya.
+            </p>)}
+        <p>
+          Perlu membetulkan baris biaya yang terkunci versi {version}? Koreksi barisnya di tab Biaya operasional dengan pernyataan koreksi
+          laporan, lalu kunci ulang data koreksi dari kartu laporan.
+          {onOpenCosts && <>{" "}<button type="button" className="font-semibold text-emerald-800 underline" onClick={onOpenCosts}>Buka Biaya operasional</button></>}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+export function PeriodReportReviewWizard({ preparationId, periodName, requests, onClose, onChanged, onOpenCosts }: {
   preparationId: string; periodName: string; requests: PrivateRequests; onClose: () => void; onChanged: () => void;
+  onOpenCosts?: () => void;
 }) {
   const [material, setMaterial] = useState<ReportMaterial | null>(null);
   const [saved, setSaved] = useState<SavedReportPackage | null>(null);
@@ -107,8 +204,16 @@ export function PeriodReportReviewWizard({ preparationId, periodName, requests, 
         <>
           <p className="text-xs text-stone-600">
             Versi {material.identity.version}
-            {material.identity.predecessor ? ", mengoreksi versi yang sudah terbit" : ""} · <span className="font-mono">{material.identity.reportId}</span>
+            {material.correction ? `, mengoreksi versi ${material.correction.predecessor.version} yang sudah terbit`
+              : material.identity.predecessor ? ", mengoreksi versi yang sudah terbit" : ""} · <span className="font-mono">{material.identity.reportId}</span>
           </p>
+          {material.correction ? (
+            <CorrectionChanges correction={material.correction} comparedWithBookkeeping={material.comparedWithBookkeeping} onOpenCosts={onOpenCosts} />
+          ) : material.correctionRequired && (
+            <p className="rounded-lg border border-stone-200 bg-white p-3 text-xs text-stone-600">
+              Versi yang dikoreksi tidak disusun di aplikasi ini, sehingga perbandingan angka per versi tidak tersedia.
+            </p>
+          )}
           <Figures material={material} />
 
           <section aria-label="Batas pemeriksaan" className="rounded-lg border border-stone-200 bg-white p-3">
@@ -125,7 +230,9 @@ export function PeriodReportReviewWizard({ preparationId, periodName, requests, 
                 <label className="block text-sm font-medium text-stone-800">
                   Alasan koreksi
                   <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} />
-                  <span className="text-xs font-normal text-stone-500">Laporan periode ini sudah pernah terbit; versi ini menggantikannya.</span>
+                  <span className="text-xs font-normal text-stone-500">
+                    Wajib. Laporan periode ini sudah pernah terbit; versi ini menggantikannya dan alasannya ikut tercatat bersama laporan.
+                  </span>
                 </label>
               )}
               <label className="block text-sm font-medium text-stone-800">

@@ -55,6 +55,18 @@ Satu daftar laporan dan satu wizard. Pola visualnya mengikuti panel Penyaluran: 
 
 *Buat koreksi* membuka wizard yang sama dengan pendahulu terisi otomatis. Alasan koreksi wajib. Langkah 4 menampilkan tabel *sebelum → sesudah* per angka. Baris biaya yang terkunci laporan (ADR-0042, #129) dikoreksi di tab Biaya operasional dengan pernyataan koreksi laporan.
 
+**Dibangun (#133):**
+- Kartu laporan memuat daftar *Versi terbit* dari kunci periode (`versions` pada `GET /api/evidence/period-reports`), terbaru lebih dulu. Hanya versi terbaru berlabel *Berlaku* dan punya tombol **Buat koreksi**. Versi lama tetap tampil dengan label *Dikoreksi* beserta tautan ringkasan publiknya.
+- **Buat koreksi** membuka wizard langkah 1–2 dengan periode terkunci. Wizard menyebut versi yang dikoreksi dan versi penggantinya, serta menjelaskan bahwa baris biaya *terkunci laporan* dikoreksi di tab Biaya operasional dengan centang pernyataan koreksi laporan, lalu data dikunci ulang. Tombolnya membuka Penyaluran.
+- Saat koreksi sedang disiapkan (status *Dikoreksi*), kartu menawarkan *Lanjutkan koreksi* dan *Kunci ulang data koreksi*.
+- `GET …/:id/report` mengembalikan `correction` untuk versi yang menyusul paket resmi:
+  - tiap angka sebelum dan sesudah (`figureChanges` dari `packages.correction`, dibaca dari byte paket pendahulu, bukan dihitung ulang);
+  - batas data tiap versi;
+  - total biaya operasional dari berkas penelusuran realisasi tiap versi. Biaya bukan angka laporan, tetapi koreksi sering dibuat karena baris biaya.
+  
+  Nilainya `null` untuk versi pertama, atau bila pendahulu tidak disusun di aplikasi ini; wizard lalu menyatakan perbandingan tidak tersedia.
+- Langkah 4 menampilkan tabel itu tanpa baris sisi pembanding bila tidak ada rekap pembukuan, karena isinya sama dengan data aplikasi. Perubahan batas data ditulis sebagai kalimat.
+
 ### 2.4 Detail teknis
 
 Bagian tertutup di tiap laporan, untuk pemeriksa:

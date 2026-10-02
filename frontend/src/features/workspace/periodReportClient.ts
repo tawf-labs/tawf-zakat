@@ -21,6 +21,8 @@ export type PeriodReportSummary = {
   fromApp: boolean;
   comparedWithBookkeeping: boolean;
   published: { packageId: string; reportId: string; version: string; publishedAt: number } | null;
+  /** Every confirmed publication, newest first; only the newest is current, older ones are *Dikoreksi*. */
+  versions: { packageId: string; version: string; publishedAt: number; superseded: boolean }[];
   preparations: { id: string; createdAt: number; cutOff: string | null; fromApp: boolean }[];
 };
 
@@ -74,10 +76,29 @@ export function formatCutOff(iso: string): string {
 
 export type ReportFigure = { name: string; label: string; value: { amount: string; unit: "IDR" | "USDC_6DP" | "BPS" | "COUNT" | "JAM" } };
 
+export type FigureChange = {
+  name: string;
+  label: string;
+  before: ReportFigure["value"] | null;
+  after: ReportFigure["value"] | null;
+  state: "TETAP" | "BERUBAH" | "DITAMBAHKAN" | "TIDAK_LAGI_TERSEDIA";
+};
+
+/** A correction against the version it succeeds (#133). */
+export type CorrectionComparison = {
+  predecessor: { packageId: string; version: string };
+  cutOff: { before: string | null; after: string | null };
+  figures: FigureChange[];
+  /** Operational costs in each version's locked data; null when either could not be read. */
+  costs: { before: string; after: string } | null;
+};
+
 export type ReportMaterial = {
   period: Period;
   identity: { reportId: string; version: string; predecessor: string | null };
   correctionRequired: boolean;
+  /** Null for a first version, or when the version being corrected was not written in this app. */
+  correction: CorrectionComparison | null;
   comparedWithBookkeeping: boolean;
   figures: ReportFigure[];
   limitations: string[];

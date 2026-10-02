@@ -22,6 +22,9 @@ import {
  * baru** button, following the Penyaluran panel. Everything an examiner needs from
  * the locked data - manifests, commitment, files, registry recovery - sits behind
  * each card's *Detail teknis*, closed until asked for.
+ *
+ * A published report lists its versions; the current one offers **Buat koreksi** (#133),
+ * which reopens the wizard on the same period, and older ones stay readable as *Dikoreksi*.
  */
 
 const STATUS_VARIANTS: Record<PeriodReportStatus, "neutral" | "info" | "success" | "warning"> = {
@@ -33,14 +36,18 @@ const STATUS_VARIANTS: Record<PeriodReportStatus, "neutral" | "info" | "success"
 
 const periodKey = (period: Period) => `${period.year}:${period.kind}`;
 
-function ReportCard({ report, open, onToggle, requests, canPrepare, canWriteReport, reviewing, onReview, onChanged }: {
+function ReportCard({ report, open, onToggle, requests, canPrepare, canWriteReport, reviewing, onReview, onChanged, onOpenCosts }: {
   report: PeriodReportSummary; open: boolean; onToggle: () => void; requests: PrivateRequests; canPrepare: boolean;
   /** Report packages are written by officers (the report package routes' own rule). */
   canWriteReport: boolean;
   /** The locked data the review wizard is open on, if any. */
   reviewing: string | null; onReview: (preparationId: string | null) => void; onChanged: () => void;
+  onOpenCosts?: () => void;
 }) {
   const [technical, setTechnical] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
+  // A correction locks the period's data again; only a report built from the app's data has a flow to correct it with.
+  const canCorrect = canPrepare && report.fromApp && report.published !== null && !reviewing && !correcting;
   return (
     <li className="rounded-xl border border-stone-200 bg-white">
       <button type="button" onClick={onToggle} aria-expanded={open}
@@ -65,15 +72,49 @@ function ReportCard({ report, open, onToggle, requests, canPrepare, canWriteRepo
           {report.fromApp && !report.comparedWithBookkeeping && (
             <p className="text-xs text-stone-600">Angka disusun dari data aplikasi dan tidak dibandingkan dengan pembukuan bendahara.</p>
           )}
-          {report.published && (
-            <p className="text-xs text-stone-600">
-              Versi {report.published.version} terbit {formatCutOff(new Date(report.published.publishedAt * 1000).toISOString())}.{" "}
-              <a className="underline" href={`/transparansi/laporan?packageId=${encodeURIComponent(report.published.packageId)}`} target="_blank" rel="noreferrer">Lihat ringkasan publik</a>
-            </p>
+          {report.versions.length > 0 && (
+            <section aria-label="Versi terbit">
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-500">Versi terbit</h5>
+              <ul className="mt-2 space-y-2">
+                {report.versions.map((version) => (
+                  <li key={version.packageId} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-stone-200 p-2 text-xs text-stone-600">
+                    <span className="font-semibold text-stone-800">Versi {version.version}</span>
+                    <span>terbit {formatCutOff(new Date(version.publishedAt * 1000).toISOString())}</span>
+                    {/* Superseded by a later version, yet still readable: what was published stays on record. */}
+                    <Badge variant={version.superseded ? "warning" : "success"}>{version.superseded ? "Dikoreksi" : "Berlaku"}</Badge>
+                    <a className="underline" href={`/transparansi/laporan?packageId=${encodeURIComponent(version.packageId)}`} target="_blank" rel="noreferrer">Lihat ringkasan publik</a>
+                    {!version.superseded && canCorrect && report.status === "TERBIT" && (
+                      <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={() => setCorrecting(true)}>Buat koreksi</Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
-          {reviewing ? (
+          {correcting && report.published ? (
+            <PeriodReportWizard
+              requests={requests}
+              correcting={{ period: report.period, name: report.name, version: report.published.version }}
+              onOpenCosts={onOpenCosts}
+              onCancel={() => setCorrecting(false)}
+              onLocked={(preparationId) => {
+                setCorrecting(false);
+                if (canWriteReport) onReview(preparationId);
+                onChanged();
+              }}
+            />
+          ) : reviewing ? (
             <PeriodReportReviewWizard key={reviewing} preparationId={reviewing} periodName={report.name} requests={requests}
-              onClose={() => onReview(null)} onChanged={onChanged} />
+              onClose={() => onReview(null)} onChanged={onChanged} onOpenCosts={onOpenCosts} />
+          ) : report.status === "DIKOREKSI" ? (
+            <div className="flex flex-wrap gap-2">
+              {canWriteReport && report.fromApp && (
+                <Button type="button" variant="outline" onClick={() => onReview(report.preparationId)}>Lanjutkan koreksi</Button>
+              )}
+              {canCorrect && (
+                <Button type="button" variant="ghost" onClick={() => setCorrecting(true)}>Kunci ulang data koreksi</Button>
+              )}
+            </div>
           ) : canWriteReport && report.fromApp && report.status !== "TERBIT" && (
             <Button type="button" variant="outline" onClick={() => onReview(report.preparationId)}>Tinjau dan terbitkan</Button>
           )}
@@ -99,7 +140,11 @@ function ReportCard({ report, open, onToggle, requests, canPrepare, canWriteRepo
   );
 }
 
-export function PeriodReportPanel({ requests, canPrepare, canWriteReport }: { requests: PrivateRequests; canPrepare: boolean; canWriteReport: boolean }) {
+export function PeriodReportPanel({ requests, canPrepare, canWriteReport, onOpenCosts }: {
+  requests: PrivateRequests; canPrepare: boolean; canWriteReport: boolean;
+  /** Opens Penyaluran, where a cost row a published report locked is corrected (#129). */
+  onOpenCosts?: () => void;
+}) {
   const [reports, setReports] = useState<PeriodReportSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -143,7 +188,7 @@ export function PeriodReportPanel({ requests, canPrepare, canWriteReport }: { re
                 canWriteReport={canWriteReport} reviewing={reviewing?.key === key ? reviewing.preparationId : null}
                 onReview={(preparationId) => setReviewing(preparationId ? { key, preparationId } : null)}
                 onChanged={() => { setNotice(null); setRefresh((value) => value + 1); }}
-                onToggle={() => setOpenKey(openKey === key ? null : key)} />
+                onToggle={() => setOpenKey(openKey === key ? null : key)} onOpenCosts={onOpenCosts} />
             );
           })}
         </ul>

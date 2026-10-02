@@ -151,6 +151,11 @@ export type PeriodReportSummary = {
   fromApp: boolean;
   comparedWithBookkeeping: boolean;
   published: { packageId: string; reportId: string; version: string; publishedAt: number } | null;
+  /**
+   * Every confirmed publication of this period, newest first (#133). Only the newest is
+   * current; an older one stays readable as *Dikoreksi*, superseded by a later version.
+   */
+  versions: { packageId: string; version: string; publishedAt: number; superseded: boolean }[];
   /** Every locked data set of this period, newest first, for the technical details. */
   preparations: { id: string; createdAt: number; cutOff: string | null; fromApp: boolean }[];
 };
@@ -187,7 +192,8 @@ export function summarizePeriodReports(input: {
     const latest = rows[0]!;
     const ids = new Set(rows.map((r) => r.id));
     const owner = new Map(input.packages.filter((p) => ids.has(p.preparationId)).map((p) => [p.id, p.preparationId]));
-    const lock = input.locks.filter((l) => owner.has(l.packageId)).sort((a, b) => b.lockedAt - a.lockedAt)[0];
+    const published = input.locks.filter((l) => owner.has(l.packageId)).sort((a, b) => b.lockedAt - a.lockedAt);
+    const lock = published[0];
     const publishedPreparation = lock ? rows.find((r) => r.id === owner.get(lock.packageId)) : undefined;
 
     let status: PeriodReportStatus;
@@ -205,6 +211,7 @@ export function summarizePeriodReports(input: {
       // Without a recap the claim side is the stream itself (`withoutBookkeeping`).
       comparedWithBookkeeping: !fromStream(latest.claim),
       published: lock ? { packageId: lock.packageId, reportId: lock.reportId, version: lock.version, publishedAt: lock.lockedAt } : null,
+      versions: published.map((l, index) => ({ packageId: l.packageId, version: l.version, publishedAt: l.lockedAt, superseded: index > 0 })),
       preparations: rows.map((r) => ({ id: r.id, createdAt: r.createdAt, cutOff: r.source?.cutOff ?? null, fromApp: isFromApp(r) })),
     });
   }
@@ -269,4 +276,52 @@ export function publicationUnavailable(registry: { endorsement?: unknown; chain:
   if (!registry.endorsement) return "Layanan pemeriksa otomatis untuk penerbitan belum dikonfigurasi pada deployment ini.";
   if (!registry.chain.relayEnabled) return "Pengiriman ke registry belum dibuka pada deployment ini.";
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Koreksi laporan terbit (#133)
+// ---------------------------------------------------------------------------
+
+type FigureValue = { amount: string; unit: string };
+export type FigureChange = {
+  name: string;
+  label: string;
+  before: FigureValue | null;
+  after: FigureValue | null;
+  state: "TETAP" | "BERUBAH" | "DITAMBAHKAN" | "TIDAK_LAGI_TERSEDIA";
+};
+
+/** What step 4 of a correction shows against the version it succeeds, in staff terms. */
+export type CorrectionComparison = {
+  predecessor: { packageId: string; version: string };
+  /** The cut-off of the data each version was locked at. */
+  cutOff: { before: string | null; after: string | null };
+  figures: FigureChange[];
+  /**
+   * Operational costs in each version's locked data. They are no report figure, yet a
+   * correction is often made for a cost row (#129), so its effect is shown here too.
+   * `null` when either version's realization record could not be read.
+   */
+  costs: { before: string; after: string } | null;
+};
+
+/**
+ * Narrows the package module's correction material (`packages.correction`) to what staff
+ * read: the figures before and after, the cut-off of each version's data, and the costs.
+ */
+export function correctionComparison(
+  compared: {
+    predecessor: { id: string; version: string };
+    sources: { role: string; before: { cutOff?: string } | null; after: { cutOff?: string } | null }[];
+    changes: FigureChange[];
+  },
+  costs: { before: string | null; after: string | null },
+): CorrectionComparison {
+  const source = compared.sources.find((side) => side.role === "SOURCE");
+  return {
+    predecessor: { packageId: compared.predecessor.id, version: compared.predecessor.version },
+    cutOff: { before: source?.before?.cutOff ?? null, after: source?.after?.cutOff ?? null },
+    figures: compared.changes,
+    costs: costs.before !== null && costs.after !== null ? { before: costs.before, after: costs.after } : null,
+  };
 }

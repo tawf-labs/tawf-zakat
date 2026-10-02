@@ -18,10 +18,9 @@ import { createContributionStore } from "../src/contribution-store";
 import { createActivityStore } from "../src/activity-store";
 import { createEncryptedFileStore } from "../src/evidence-files";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
-import { evidenceTypedData } from "../../shared/report-registry";
 import { NOT_COMPARED_NOTE } from "../src/period-report-flow";
 import {
-  adminSinar, amilSinar, EVIDENCE, get, post, readerSinar, recordOneHandover, REPORTS, SINAR, seedInstitution, signIn, YEAR,
+  adminSinar, get, post, readerSinar, recordOneHandover, REPORTS, SINAR, seedInstitution, signIn, YEAR,
 } from "./helpers/period-report-fixture";
 import { startPeriodReportRegistry } from "./helpers/period-report-registry";
 
@@ -61,21 +60,6 @@ afterAll(async () => {
   await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   await anvil.stop();
 });
-
-/** Prepares, signs and relays the publication of a frozen package, then mines past the confirmations. */
-async function publish(saved: any, token: string) {
-  const path = `${EVIDENCE}/${saved.preparationId}/reports/${saved.id}/publication`;
-  const prepared = await post(path, { retryId: crypto.randomUUID(), digest: saved.digest }, token);
-  expect(prepared.status).toBe(201);
-  const { intent } = await prepared.json();
-  const signature = await amilSinar.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
-  const sent = await post(`${path}/${intent.id}/submit`, { signature }, token);
-  expect(sent.status).toBe(200);
-  await anvil.mine();
-  await anvil.mine();
-  // Reading the intent observes the chain; a confirmed publication is stored with its period lock.
-  return (await (await get(`${path}/${intent.id}`, token)).json()).intent;
-}
 
 describe("Laporan periode: tinjau, tulis, periksa, terbitkan (#131)", () => {
   it("mengisi identitas dari periode dan registry, memeriksa narasi, membekukan, dan menerbitkan dengan kunci periode", async () => {
@@ -126,7 +110,7 @@ describe("Laporan periode: tinjau, tulis, periksa, terbitkan (#131)", () => {
     expect((await (await get(REPORTS, amil)).json()).reports[0].status).toBe("SIAP_TERBIT");
 
     // Step 5 through the existing relay: confirmed, published, and the period's costs locked.
-    const intent = await publish(passed.package, amil);
+    const intent = await anvil.publish(passed.package, amil);
     expect(intent.observation.state).toBe("CONFIRMED");
     const [report] = (await (await get(REPORTS, amil)).json()).reports;
     expect(report.status).toBe("TERBIT");

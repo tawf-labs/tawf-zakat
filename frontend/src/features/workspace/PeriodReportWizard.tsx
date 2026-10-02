@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Lock } from "lucide-react";
+import { ArrowLeft, Lock, Receipt } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { bucketLabel } from "../reconciliation/format";
 import { formatRupiah } from "./evidenceText";
@@ -20,6 +20,11 @@ import {
  * balance sheet scope are the flow's own and never shown. Step 2 shows what the app
  * holds for that period, in staff language, and locks exactly that: the cut-off the
  * preview was read at is the cut-off the snapshot is frozen with.
+ *
+ * *Buat koreksi* (#133) opens the same wizard on a published report's period: the period
+ * is fixed, and the version being corrected and the next one are the app's to fill in.
+ * A cost row the published version locked is corrected in the Biaya operasional tab, under
+ * the report-correction statement (#129), before the data is locked again.
  */
 
 const PERIOD_OPTIONS: { kind: PeriodKind; label: string; hint: string }[] = [
@@ -121,22 +126,44 @@ function PreviewTables({ preview }: { preview: PeriodReportPreview }) {
   );
 }
 
-export function PeriodReportWizard({ requests, onLocked, onCancel }: {
+/** What a correction tells staff about the cost rows the published version locked (#129). */
+function LockedCostsNotice({ version, onOpenCosts }: { version: string; onOpenCosts?: () => void }) {
+  return (
+    <section aria-label="Baris biaya yang terkunci laporan" className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-950">
+      <p className="flex items-center gap-2 text-sm font-semibold"><Receipt className="h-4 w-4" aria-hidden /> Perlu membetulkan biaya operasional?</p>
+      <p className="mt-1">
+        Baris biaya yang masuk versi {version} berlabel <span className="font-semibold">terkunci laporan</span> dan tidak dapat diubah
+        diam-diam. Koreksi atau batalkan barisnya di tab <span className="font-semibold">Biaya operasional</span> pada pengajuannya,
+        lalu centang pernyataan bahwa perubahan itu untuk versi koreksi laporan ini. Riwayat baris mencatat pernyataan tersebut.
+      </p>
+      <p className="mt-1">Setelah barisnya dibetulkan, kembali ke sini dan kunci data laporan agar angka barunya ikut masuk.</p>
+      {onOpenCosts && (
+        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={onOpenCosts}>Buka Biaya operasional di Penyaluran</Button>
+      )}
+    </section>
+  );
+}
+
+export function PeriodReportWizard({ requests, onLocked, onCancel, correcting, onOpenCosts }: {
   requests: PrivateRequests;
   onLocked: (preparationId: string, period: Period) => void;
   onCancel: () => void;
+  /** A correction of a published report: its period is fixed and its current version named. */
+  correcting?: { period: Period; name: string; version: string };
+  onOpenCosts?: () => void;
 }) {
   const thisYear = new Date().getFullYear();
   const [step, setStep] = useState<1 | 2>(1);
-  const [kind, setKind] = useState<PeriodKind>("AKHIR_TAHUN");
-  const [year, setYear] = useState(thisYear);
+  const [kind, setKind] = useState<PeriodKind>(correcting?.period.kind ?? "AKHIR_TAHUN");
+  const [year, setYear] = useState(correcting?.period.year ?? thisYear);
   const [cutOffMode, setCutOffMode] = useState<"NOW" | "CHOSEN">("NOW");
   const [chosenCutOff, setChosenCutOff] = useState("");
   const [preview, setPreview] = useState<PeriodReportPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const period: Period = { kind, year };
-  const periodName = `${PERIOD_OPTIONS.find((o) => o.kind === kind)!.label} ${year}`;
+  const periodName = correcting?.name ?? `${PERIOD_OPTIONS.find((o) => o.kind === kind)!.label} ${year}`;
+  const title = correcting ? `Koreksi laporan penyaluran ${correcting.name}` : "Laporan periode baru";
 
   const showData = async () => {
     setError(null);
@@ -169,9 +196,9 @@ export function PeriodReportWizard({ requests, onLocked, onCancel }: {
   };
 
   return (
-    <section aria-label="Laporan periode baru" className="rounded-xl border border-stone-200 bg-stone-50 p-4">
+    <section aria-label={title} className="rounded-xl border border-stone-200 bg-stone-50 p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-stone-900">Laporan periode baru</h4>
+        <h4 className="text-sm font-semibold text-stone-900">{title}</h4>
         <ol className="flex gap-2 text-xs text-stone-500">
           <li className={step === 1 ? "font-semibold text-emerald-800" : ""}>1. Periode</li>
           <li aria-hidden>›</li>
@@ -181,6 +208,17 @@ export function PeriodReportWizard({ requests, onLocked, onCancel }: {
 
       {step === 1 ? (
         <div className="mt-4 space-y-4">
+          {correcting ? (
+            <>
+              <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                Versi {correcting.version} laporan ini sudah terbit. Koreksi mengunci data periode yang sama sekali lagi dan menerbitkannya
+                sebagai versi {/^\d+$/.test(correcting.version) ? Number(correcting.version) + 1 : "berikutnya"} yang menggantikan versi {correcting.version}.
+                Versi {correcting.version} tetap dapat dibaca dengan tanda <span className="font-semibold">Dikoreksi</span>. Alasan koreksi
+                ditulis di langkah tinjau.
+              </p>
+              <LockedCostsNotice version={correcting.version} onOpenCosts={onOpenCosts} />
+            </>
+          ) : (<>
           <fieldset>
             <legend className="text-sm font-medium text-stone-800">Periode laporan</legend>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -200,6 +238,7 @@ export function PeriodReportWizard({ requests, onLocked, onCancel }: {
               {[thisYear, thisYear - 1, thisYear - 2].map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </label>
+          </>)}
 
           <fieldset>
             <legend className="text-sm font-medium text-stone-800">Batas data laporan</legend>

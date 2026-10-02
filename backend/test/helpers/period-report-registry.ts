@@ -12,7 +12,8 @@ import { createRegistryStore } from "../../src/registry-store";
 import { createRegistryBudgetStore } from "../../src/registry-budget";
 import { createRegistryChain } from "../../src/registry-chain";
 import { createReportEndorsement } from "../../src/report-endorsement";
-import { amilSinar, SINAR } from "./period-report-fixture";
+import { evidenceTypedData } from "../../../shared/report-registry";
+import { amilSinar, EVIDENCE, get, post, SINAR } from "./period-report-fixture";
 
 const deployer = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
 const relayerKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
@@ -38,9 +39,27 @@ export async function startPeriodReportRegistry(port: number) {
   await write("enrollInstitution", [SINAR, deployer.address]);
   await write("setSignatory", [SINAR, amilSinar.address, true]);
 
+  const mine = () => rpc.request({ method: "evm_mine" as any });
   return {
     rpc,
-    mine: () => rpc.request({ method: "evm_mine" as any }),
+    mine,
+    /**
+     * Publishes a frozen package over the existing relay as the officer's endorsing account,
+     * mines past the confirmations, and reads the intent back: the read observes the chain,
+     * so a confirmed publication is stored with its period lock.
+     */
+    async publish(saved: { id: string; preparationId: string; digest: string }, token: string) {
+      const path = `${EVIDENCE}/${saved.preparationId}/reports/${saved.id}/publication`;
+      const prepared = await post(path, { retryId: crypto.randomUUID(), digest: saved.digest }, token);
+      if (prepared.status !== 201) throw new Error(`Penerbitan gagal disiapkan: ${prepared.status} ${await prepared.text()}`);
+      const { intent } = await prepared.json();
+      const signature = await amilSinar.signTypedData(evidenceTypedData(intent.domain, intent.authorization));
+      const sent = await post(`${path}/${intent.id}/submit`, { signature }, token);
+      if (sent.status !== 200) throw new Error(`Penerbitan gagal dikirim: ${sent.status} ${await sent.text()}`);
+      await mine();
+      await mine();
+      return (await (await get(`${path}/${intent.id}`, token)).json()).intent;
+    },
     /**
      * The registry runtime over a database whose schema this creates. `closed` leaves out
      * the validator key or the relay budget, as a deployment with writes closed does.
