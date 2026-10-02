@@ -8,7 +8,7 @@ const capabilities = { viewWorkspace: true, prepareEvidence: false, manageMember
 describe("compact workspace navigation", () => {
   it("keeps read-only operational and authority modules reachable", () => {
     expect(workspaceSections(capabilities).map(section => section.id)).toEqual([
-      "overview", "contributions", "disbursement", "activities", "certificates", "identity",
+      "overview", "contributions", "disbursement", "activities", "certificates", "evidence", "identity",
     ]);
   });
   it("offers member administration only when the API grants it", () => {
