@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/Button";
 import type { PrivateRequests } from "./privateRequests";
 import { PreparationTechnicalDetail } from "./PreparationTechnicalDetail";
 import { PeriodReportWizard } from "./PeriodReportWizard";
+import { PeriodReportReviewWizard } from "./PeriodReportReviewWizard";
 import {
   formatCutOff,
   listPeriodReports,
@@ -32,8 +33,12 @@ const STATUS_VARIANTS: Record<PeriodReportStatus, "neutral" | "info" | "success"
 
 const periodKey = (period: Period) => `${period.year}:${period.kind}`;
 
-function ReportCard({ report, open, onToggle, requests, canPrepare }: {
+function ReportCard({ report, open, onToggle, requests, canPrepare, canWriteReport, reviewing, onReview, onChanged }: {
   report: PeriodReportSummary; open: boolean; onToggle: () => void; requests: PrivateRequests; canPrepare: boolean;
+  /** Report packages are written by officers (the report package routes' own rule). */
+  canWriteReport: boolean;
+  /** The locked data the review wizard is open on, if any. */
+  reviewing: string | null; onReview: (preparationId: string | null) => void; onChanged: () => void;
 }) {
   const [technical, setTechnical] = useState(false);
   return (
@@ -61,7 +66,16 @@ function ReportCard({ report, open, onToggle, requests, canPrepare }: {
             <p className="text-xs text-stone-600">Angka disusun dari data aplikasi dan tidak dibandingkan dengan pembukuan bendahara.</p>
           )}
           {report.published && (
-            <p className="text-xs text-stone-600">Versi {report.published.version} terbit {formatCutOff(new Date(report.published.publishedAt * 1000).toISOString())}.</p>
+            <p className="text-xs text-stone-600">
+              Versi {report.published.version} terbit {formatCutOff(new Date(report.published.publishedAt * 1000).toISOString())}.{" "}
+              <a className="underline" href={`/transparansi/laporan?packageId=${encodeURIComponent(report.published.packageId)}`} target="_blank" rel="noreferrer">Lihat ringkasan publik</a>
+            </p>
+          )}
+          {reviewing ? (
+            <PeriodReportReviewWizard key={reviewing} preparationId={reviewing} periodName={report.name} requests={requests}
+              onClose={() => onReview(null)} onChanged={onChanged} />
+          ) : canWriteReport && report.fromApp && report.status !== "TERBIT" && (
+            <Button type="button" variant="outline" onClick={() => onReview(report.preparationId)}>Tinjau dan terbitkan</Button>
           )}
           <details className="rounded-lg border border-stone-200 bg-stone-50" onToggle={(event) => setTechnical(event.currentTarget.open)}>
             <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold uppercase tracking-wide text-stone-600">Detail teknis</summary>
@@ -85,13 +99,14 @@ function ReportCard({ report, open, onToggle, requests, canPrepare }: {
   );
 }
 
-export function PeriodReportPanel({ requests, canPrepare }: { requests: PrivateRequests; canPrepare: boolean }) {
+export function PeriodReportPanel({ requests, canPrepare, canWriteReport }: { requests: PrivateRequests; canPrepare: boolean; canWriteReport: boolean }) {
   const [reports, setReports] = useState<PeriodReportSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<{ key: string; preparationId: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +140,9 @@ export function PeriodReportPanel({ requests, canPrepare }: { requests: PrivateR
             const key = periodKey(report.period);
             return (
               <ReportCard key={key} report={report} open={openKey === key} requests={requests} canPrepare={canPrepare}
+                canWriteReport={canWriteReport} reviewing={reviewing?.key === key ? reviewing.preparationId : null}
+                onReview={(preparationId) => setReviewing(preparationId ? { key, preparationId } : null)}
+                onChanged={() => { setNotice(null); setRefresh((value) => value + 1); }}
                 onToggle={() => setOpenKey(openKey === key ? null : key)} />
             );
           })}
@@ -135,10 +153,12 @@ export function PeriodReportPanel({ requests, canPrepare }: { requests: PrivateR
         <PeriodReportWizard
           requests={requests}
           onCancel={() => setCreating(false)}
-          onLocked={(_, period) => {
+          onLocked={(preparationId, period) => {
             setCreating(false);
-            setNotice("Data laporan dikunci. Laporan tersimpan sebagai draf di daftar ini.");
+            setNotice("Data laporan dikunci. Lanjutkan dengan meninjau angka dan menulis narasi.");
             setOpenKey(periodKey(period));
+            // Step 3 (bookkeeping comparison, #132) is optional and not built yet: go on to step 4.
+            if (canWriteReport) setReviewing({ key: periodKey(period), preparationId });
             setRefresh((value) => value + 1);
           }}
         />

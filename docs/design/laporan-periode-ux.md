@@ -95,6 +95,15 @@ Tidak ada yang dihapus; hanya dipindah.
     - *Draf*: selain itu.
   - Karena kunci periode hanya dibuat untuk laporan bersumber stream realisasi, laporan lama dari sumber tempel tidak pernah tampil sebagai *Terbit* di daftar ini. Status registry-nya tetap terbaca di Detail teknis.
 - **Label angka laporan** yang manusiawi untuk setiap `figure.name`.
+  - **Dibangun (#131):** `computeSnapshotFigures` memberi label dari istilah §3, misalnya *Zakat mal disalurkan menurut data aplikasi*. Sisi klaim yang meniru data aplikasi berlabel *sisi pembanding (data aplikasi, tanpa rekap pembukuan)*. Label ikut tersimpan di paket, sehingga paket lama tetap memakai label lamanya.
+- **Langkah 4–5 (#131):**
+  - `GET /api/evidence/period-reports/:id/report` mengembalikan angka, batas pemeriksaan, dan identitas laporan. Identitas laporan diambil dari periode (`laporan-penyaluran-akhir-tahun-2026`). Versi dan pendahulu dibaca dari garis resmi registry: versi 1 bila belum ada yang terbit, atau versi berikutnya yang menyusul paket resmi.
+  - `POST …/report` menerima narasi, centang pernyataan, dan (untuk koreksi) alasan. Server mengklaim setiap angka persis seperti hitungannya, lalu menjalankan validator. Paket yang lolos langsung dibekukan. Yang belum lolos dikembalikan dengan alasan dalam bahasa staf (`staffReasons`).
+  - `POST …/report/narrative` hanya mengisi narasi dari AI. Angka tidak pernah diambil dari AI.
+  - Penulisan paket mengikuti aturan rute paket laporan: hanya peran `OFFICER`.
+  - Langkah 5 memakai relay penerbitan yang ada. **Sahkan dan terbitkan** meminta pengesahan validator, tanda tangan akun pengesah, dan pengiriman. Statusnya tampil sebagai *Menunggu konfirmasi* sampai *Terbit*, dengan kirim ulang yang aman.
+  - Publikasi terkonfirmasi membuat kunci periode biaya operasional (#129) karena sumbernya stream realisasi.
+  - Langkah 3 (#132) belum ada; setelah data dikunci, wizard langsung ke langkah 4.
 
 ## 5. Di luar cakupan
 

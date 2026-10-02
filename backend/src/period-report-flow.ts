@@ -211,3 +211,50 @@ export function summarizePeriodReports(input: {
   // Newest year first; within a year the full-year report before the half-year one.
   return summaries.sort((a, b) => b.period.year - a.period.year || (a.period.kind === "AKHIR_TAHUN" ? -1 : 1));
 }
+
+// ---------------------------------------------------------------------------
+// Tinjau, tulis, periksa (#131)
+// ---------------------------------------------------------------------------
+
+/** The report identity the flow gives a period; staff never type one. */
+export const periodReportId = (period: ReportingPeriod) =>
+  `laporan-penyaluran-${period.kind === "SEMESTER" ? "semester-i" : "akhir-tahun"}-${period.year}`;
+
+/**
+ * The version a new package of this report takes, from the registry's official line:
+ * the first version when nothing is published, otherwise the next one, succeeding the
+ * official package. A label the flow did not write is not guessed at.
+ */
+export function nextVersion(official: { packageId: string; version: string }): { version: string; predecessor: string | null } {
+  if (!official.packageId) return { version: "1", predecessor: null };
+  const current = /^\d+$/.test(official.version) ? Number(official.version) : null;
+  return { version: current === null ? `${official.version}-koreksi` : String(current + 1), predecessor: official.packageId };
+}
+
+type Verdict = {
+  outcome: "LOLOS" | "DITOLAK";
+  prerequisites: string[];
+  findings: { kind: string; message: string; excerpt?: string }[];
+};
+
+/** Why an automatic check did not pass, in words staff act on. Nothing when it passed. */
+export function staffReasons(verdict: Verdict): string[] {
+  if (verdict.outcome === "LOLOS") return [];
+  const reasons = verdict.prerequisites.map((note) =>
+    note.startsWith("Pernyataan cakupan")
+      ? "Centang pernyataan bahwa seluruh sumber dan batas pemeriksaan disertakan dalam laporan."
+      : note.startsWith("Klaim wajib") || note === "Angka bersumber belum tersedia."
+      ? "Angka laporan belum lengkap. Muat ulang langkah ini; bila tetap terjadi, hubungi operator."
+      : note === "Draf belum tersedia."
+      ? "Narasi laporan belum ditulis."
+      : note
+  );
+  for (const finding of verdict.findings) {
+    reasons.push(
+      finding.kind === "ANGKA_NARASI_TIDAK_DIKLAIM"
+        ? `Narasi menyebut angka "${finding.excerpt ?? ""}" yang tidak ada di daftar angka laporan. Hapus angka itu atau samakan dengan angka di atas.`
+        : finding.message
+    );
+  }
+  return [...new Set(reasons)];
+}

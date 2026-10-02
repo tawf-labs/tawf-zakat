@@ -188,7 +188,7 @@ describe("Laporan periode di browser (#130)", () => {
       await card.getByText(/^Batas data /).waitFor();
       await page.getByText("Angka disusun dari data aplikasi dan tidak dibandingkan dengan pembukuan bendahara.").waitFor();
       const summary = page.getByText("Detail teknis", { exact: true });
-      expect(await summary.evaluate((el) => (el.parentElement as HTMLDetailsElement).open)).toBe(false);
+      expect(await summary.evaluate((el: HTMLElement) => (el.parentElement as HTMLDetailsElement).open)).toBe(false);
       expect(await page.getByText(/Commitment/).count()).toBe(0);
       await shot("04-daftar-draf");
 

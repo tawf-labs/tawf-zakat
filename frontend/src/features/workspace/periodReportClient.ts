@@ -1,5 +1,5 @@
 import type { PrivateRequests } from "./privateRequests";
-import type { EvidencePreparation } from "./evidenceClient";
+import type { EvidencePreparation, SavedReportPackage } from "./evidenceClient";
 
 /**
  * Laporan periode dari data aplikasi (ADR-0043, #130).
@@ -67,3 +67,35 @@ export function formatCutOff(iso: string): string {
   if (Number.isNaN(at.getTime())) return iso;
   return at.toLocaleString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+// ---------------------------------------------------------------------------
+// Langkah 4–5 (#131)
+// ---------------------------------------------------------------------------
+
+export type ReportFigure = { name: string; label: string; value: { amount: string; unit: "IDR" | "USDC_6DP" | "BPS" | "COUNT" | "JAM" } };
+
+export type ReportMaterial = {
+  period: Period;
+  identity: { reportId: string; version: string; predecessor: string | null };
+  correctionRequired: boolean;
+  comparedWithBookkeeping: boolean;
+  figures: ReportFigure[];
+  limitations: string[];
+  blockers: string[];
+  publicationAvailable: boolean;
+  /** A frozen package that passed and carries this identity: step 5 continues from it. */
+  ready: SavedReportPackage | null;
+};
+
+export const readReportMaterial = (requests: PrivateRequests, preparationId: string): Promise<ReportMaterial> =>
+  requests.json(`${BASE}/${preparationId}/report`);
+
+/** Writes the package from the narrative alone; the server claims every figure as computed and freezes it when it passes. */
+export const checkReport = (
+  requests: PrivateRequests, preparationId: string,
+  input: { narrative: string; disclosed: boolean; correctionReason: string | null },
+): Promise<{ package: SavedReportPackage; reasons: string[] }> =>
+  requests.json(`${BASE}/${preparationId}/report`, { method: "POST", body: JSON.stringify(input) });
+
+export const suggestNarrative = (requests: PrivateRequests, preparationId: string): Promise<{ narrative: string }> =>
+  requests.json(`${BASE}/${preparationId}/report/narrative`, { method: "POST", body: "{}" });

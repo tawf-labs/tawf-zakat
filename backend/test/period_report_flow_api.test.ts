@@ -9,10 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 import { sql } from "drizzle-orm";
-import app from "../src/index";
 import { createTestWorkspaceDatabase, type TestWorkspaceDatabase } from "./helpers/workspace-database";
 import { createWorkspaceStore, type WorkspaceStore } from "../src/tenancy-store";
 import { createDisbursementStore } from "../src/disbursement-store";
@@ -21,81 +18,16 @@ import { createContributionStore } from "../src/contribution-store";
 import { createActivityStore } from "../src/activity-store";
 import { createEncryptedFileStore } from "../src/evidence-files";
 import { configureWorkspace, resetWorkspace } from "../src/workspace-runtime";
-import { institutionRecordOf, SYNTHETIC_INSTITUTIONS } from "../src/fixtures/institutions";
 import { DISBURSEMENT_REALIZATION_FORMAT } from "../src/realization-source";
 import { NOT_COMPARED_NOTE, summarizePeriodReports, type PackageRow, type PreparationRow } from "../src/period-report-flow";
 import { PROVENANCE_FILE_NAMES } from "../../shared/realization-provenance";
-
-const BASE = "http://localhost:3001/api/workspace";
-const REPORTS = "http://localhost:3001/api/evidence/period-reports";
-const EVIDENCE = "http://localhost:3001/api/evidence";
-const SINAR = "lpz-sinar-amanah";
-const adminSinar = privateKeyToAccount(`0x${"11".repeat(32)}` as Hex);
-const amilSinar = privateKeyToAccount(`0x${"22".repeat(32)}` as Hex);
-const readerSinar = privateKeyToAccount(`0x${"33".repeat(32)}` as Hex);
-const NOW = Math.floor(Date.now() / 1000);
-const YEAR = new Date(NOW * 1000).getUTCFullYear();
+import {
+  adminSinar, amilSinar, EVIDENCE, get, NOW, post, publishedProposal, readerSinar, realize, REPORTS, SINAR, seedInstitution, signIn, YEAR,
+} from "./helpers/period-report-fixture";
 
 let database: TestWorkspaceDatabase;
 let store: WorkspaceStore;
 let tempDir: string;
-
-const request = (url: string, init: RequestInit = {}) => app.fetch(new Request(url, init));
-const post = (url: string, body: unknown, token: string) =>
-  request(url.startsWith("http") ? url : `${BASE}${url}`, {
-    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
-  });
-const get = (url: string, token: string) => request(url, { headers: { Authorization: `Bearer ${token}` } });
-
-async function signIn(account: typeof amilSinar): Promise<string> {
-  const minted = await request(`${BASE}/challenge`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ institutionId: SINAR, account: account.address }),
-  });
-  const { challenge, typedData } = await minted.json();
-  const signature = await account.signTypedData({
-    ...typedData,
-    message: { ...typedData.message, issuedAt: BigInt(typedData.message.issuedAt), expiresAt: BigInt(typedData.message.expiresAt) },
-  });
-  const session = await request(`${BASE}/session`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nonce: challenge.nonce, signature }),
-  });
-  return (await session.json()).token;
-}
-
-/** A program with one proposal published on the institution's internal decision. */
-async function publishedProposal(admin: string, amil: string, input: {
-  program: string; fundType: string; lines: Array<{ id: string; beneficiaryId: string; name: string; value: Record<string, unknown> }>;
-}) {
-  const programId = (await (await post("/programs", {
-    name: input.program, purpose: "Santunan", fundType: input.fundType, scope: "Tangerang Selatan", referenceCeiling: "100000000",
-  }, admin)).json()).program.id;
-  const draft = (await (await post("/proposals", {
-    expectedVersion: 0, operationId: crypto.randomUUID(), programId, originOfRequest: "Data RT", purpose: input.program,
-    personInCharge: "Bendahara", aidPeriod: { start: `${YEAR}-01-01`, end: `${YEAR}-12-31` },
-    beneficiaries: input.lines.map((line, index) => ({
-      id: line.beneficiaryId, name: line.name, asnaf: "Fakir", addressOrScope: "RT 03",
-      identityBasis: { kind: "NIK", value: `367401010101${String(index + 1).padStart(4, "0")}` }, guardian: null, paymentRecipient: null,
-    })),
-    aidLines: input.lines.map((line) => ({ id: line.id, beneficiaryId: line.beneficiaryId, aidType: "Bantuan", period: `${YEAR}-01`, value: line.value })),
-  }, amil)).json()).draft;
-  await post(`/proposals/${draft.id}/documents`, {
-    category: "RECIPIENT_VERIFICATION", fileName: "ba.txt", mimeType: "text/plain", beneficiaryId: null,
-    contentBase64: Buffer.from("Berita acara").toString("base64"),
-  }, amil);
-  const published = await post(`/proposals/${draft.id}/publish`, {
-    operationId: crypto.randomUUID(), expectedVersion: draft.version, decisionReference: "Rapat pengurus", decisionDate: `${YEAR}-01-02`,
-  }, amil);
-  expect(published.status).toBe(200);
-  return (await published.json()).draft as { id: string; version: number };
-}
-
-async function realize(draft: { id: string; version: number }, items: Record<string, unknown>[], amil: string) {
-  const res = await post(`/proposals/${draft.id}/realizations`, {
-    expectedVersion: draft.version, operationId: crypto.randomUUID(),
-    items: items.map((item) => ({ reportedAt: NOW - 7200, ...item })),
-  }, amil);
-  expect(res.status).toBe(201);
-}
 
 /** Two programs, three handovers, one panjar with a cost against it and one direct cost. */
 async function recordPeriod() {
@@ -149,20 +81,7 @@ beforeEach(async () => {
     store, disbursement, evidence, activities, files: createEncryptedFileStore({ directory: tempDir, key: Buffer.alloc(32, 9) }),
     ethCall: async () => "0x", now: () => Math.floor(Date.now() / 1000), sessionTtlSeconds: 3600, challengeTtlSeconds: 300,
   });
-  for (const inst of SYNTHETIC_INSTITUTIONS) await store.upsertInstitution(institutionRecordOf(inst));
-  await store.upsertMembership({ institutionId: SINAR, account: adminSinar.address, role: "ADMIN" });
-  await store.upsertMembership({ institutionId: SINAR, account: amilSinar.address, role: "OFFICER" });
-  await store.upsertMembership({ institutionId: SINAR, account: readerSinar.address, role: "READER" });
-  for (const [id, displayName, account, role] of [
-    ["off-admin", "Admin Sinar", adminSinar, "ADMIN"], ["off-amil", "Amil Sinar", amilSinar, "OFFICER"],
-  ] as const) {
-    await store.createOfficerProfile({ id, institutionId: SINAR, displayName, account: account.address, role, actor: adminSinar.address, now: NOW });
-  }
-  for (const [officerId, fn] of [["off-admin", "MANAGE_PROGRAMS"], ["off-amil", "PREPARE_PROPOSALS"], ["off-amil", "RECORD_REALIZATION"]] as const) {
-    await store.grantMandate({ institutionId: SINAR, actor: adminSinar.address, now: NOW, mandate: {
-      officerId, function: fn, scopeType: "ALL_PROGRAMS", assignmentRef: `SK/${fn}`, validFrom: NOW - 86400, validUntil: NOW + 86400 * 30,
-    } });
-  }
+  await seedInstitution(store);
 });
 
 afterAll(async () => {

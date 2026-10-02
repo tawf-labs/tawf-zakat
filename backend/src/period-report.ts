@@ -465,6 +465,26 @@ export const figureByName = (figures: PeriodFigures, name: string): Figure | und
   figures.figures.find((item) => item.name === name);
 
 /** Reconciliation scope has ledger totals, never invented donations or asnaf. */
+const FIGURE_BUCKET_LABELS: Record<string, string> = {
+  ZAKAT: "Zakat mal", FITRAH: "Zakat fitrah", INFAK_SEDEKAH: "Infak/sedekah", KURBAN: "Kurban",
+  DSKL: "Dana sosial keagamaan lainnya", DEPOSIT_USDC: "Deposit USDC",
+};
+
+/**
+ * How a snapshot figure is named to people (ADR-0043, #131): the staff glossary's
+ * words, never the machine name. A side read from the realization stream speaks of
+ * what was distributed; a claim side that is that same stream says it stands in for
+ * a bookkeeping recap rather than being one.
+ */
+function sideWording(manifest: import("./evidence-source").SourceManifest) {
+  const fromApp = manifest.origin === "INTERNAL_LEDGER" && manifest.format === "internal-disbursement-realization";
+  const verb = fromApp ? "disalurkan" : "";
+  if (manifest.role === "SOURCE") return { verb, where: fromApp ? "menurut data aplikasi" : "menurut sumber", noun: fromApp ? "data aplikasi" : "sumber" };
+  return fromApp
+    ? { verb, where: "pada sisi pembanding (data aplikasi, tanpa rekap pembukuan)", noun: "sisi pembanding" }
+    : { verb, where: "menurut rekap pembukuan", noun: "rekap pembukuan" };
+}
+
 export function computeSnapshotFigures(
   snapshot: import("./evidence-snapshot").EvidenceSnapshot,
   result: import("./reconciliation").ReconciliationReport | null,
@@ -473,18 +493,25 @@ export function computeSnapshotFigures(
   for (const side of snapshot.sides) {
     if (side.status !== "READ") continue;
     const rows = side.rows.filter(r => !r.isDeclaredTotal && (snapshot.balanceSheetScope === "BOTH" || r.balanceSheet === snapshot.balanceSheetScope));
-    const add = (name: string, selected: typeof rows) => figures.push({ name, label: name,
+    const { verb, where } = sideWording(side.manifest);
+    const add = (name: string, label: string, selected: typeof rows) => figures.push({ name, label,
       value: { amount: selected.reduce((sum, row) => sum + BigInt(row.amount), 0n), unit: snapshot.currencyUnit } });
-    add(`${side.manifest.role}.total`, rows);
+    add(`${side.manifest.role}.total`, ["Total", verb, where].filter(Boolean).join(" "), rows);
     for (const bucket of [...side.manifest.fundTypes].sort()) {
       for (const position of snapshot.balanceSheetScope === "BOTH" ? ["ON", "OFF"] : [snapshot.balanceSheetScope]) {
-        add(`${side.manifest.role}.${bucket}.${position}`, rows.filter(r => r.bucket === bucket && r.balanceSheet === position));
+        const place = position === "OFF" ? " (di luar neraca)" : snapshot.balanceSheetScope === "BOTH" ? " (dalam neraca)" : "";
+        const label = [FIGURE_BUCKET_LABELS[bucket] ?? bucket.replace(/_/g, " "), verb, where].filter(Boolean).join(" ") + place;
+        add(`${side.manifest.role}.${bucket}.${position}`, label, rows.filter(r => r.bucket === bucket && r.balanceSheet === position));
       }
     }
   }
   if (result) {
-    figures.push({ name: "rekonsiliasi.selisih", label: "Selisih klaim dikurangi sumber", value: result.netDelta });
-    figures.push({ name: "rekonsiliasi.selisih_absolut", label: "Jumlah selisih absolut", value: result.absoluteDelta });
+    const noun = (role: "CLAIM" | "SOURCE") => {
+      const side = snapshot.sides.find(s => s.manifest.role === role);
+      return side ? sideWording(side.manifest).noun : role === "CLAIM" ? "rekap pembukuan" : "sumber";
+    };
+    figures.push({ name: "rekonsiliasi.selisih", label: `Selisih ${noun("CLAIM")} dikurangi ${noun("SOURCE")}`, value: result.netDelta });
+    figures.push({ name: "rekonsiliasi.selisih_absolut", label: `Jumlah seluruh perbedaan ${noun("CLAIM")} dan ${noun("SOURCE")}`, value: result.absoluteDelta });
   }
   return figures.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
