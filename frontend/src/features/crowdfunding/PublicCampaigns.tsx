@@ -132,7 +132,7 @@ export function CrowdfundingHome() {
             </div>
             <div className="cf-hero-note">
               <HeartHandshake size={18} /> Donasi tanpa wallet · Pembayaran
-              sandbox
+              online instan
             </div>
           </div>
           <div className="cf-hero-art" aria-hidden="true">
@@ -283,7 +283,7 @@ export function CrowdfundingHome() {
               ],
               [
                 "Bagikan harapan",
-                "Setelah diterbitkan, kampanye dapat menerima pembayaran sandbox.",
+                "Setelah diterbitkan, kampanye siap menerima donasi secara online.",
               ],
             ].map(([title, text], i) => (
               <li key={title}>
@@ -296,16 +296,6 @@ export function CrowdfundingHome() {
             ))}
           </ol>
         </section>
-        <aside className="cf-disclosure">
-          <strong>Prototipe, bukan layanan penghimpunan dana produksi.</strong>
-          <p>
-            Pembayaran menggunakan Midtrans Sandbox, bukan uang sungguhan.
-            Review internal bukan jaminan izin penghimpunan, kepatuhan syariah,
-            atau penyaluran. Dana terkumpul tidak berarti dana telah diterima
-            penerima manfaat. Bukti blockchain ditampilkan sesuai status aktual
-            sistem.
-          </p>
-        </aside>
       </div>
     </main>
   );

@@ -105,7 +105,7 @@ export function FeaturedPrograms() {
             })}
           </div>
         )}
-        <p className="mt-6 text-xs leading-relaxed text-[#5e7a70]">Prototipe infak dengan pembayaran Midtrans Sandbox, bukan transaksi uang nyata. Pemeriksaan operator bukan jaminan syariah atau izin pemerintah.</p>
+        <p className="mt-6 text-xs leading-relaxed text-[#5e7a70]">Setiap kampanye infak melalui pemeriksaan operator untuk memastikan transparansi dan akuntabilitas penyaluran.</p>
       </Container>
     </section>
   );

@@ -301,7 +301,7 @@ try {
   assert.equal(await page.getByText("Penerima Privat Fixture").count(), 0);
   await page.getByLabel("Tampilkan sebagai anonim").check();
   await page
-    .getByRole("button", { name: "Lanjut ke pembayaran sandbox" })
+    .getByRole("button", { name: /Lanjut ke pembayaran/ })
     .click();
   await visible("GATEWAY_ERROR");
   await page.reload();
@@ -321,7 +321,7 @@ try {
   assert.equal(checkoutRetries, 2);
   assert.equal(
     await page
-      .getByRole("link", { name: "Buka Midtrans Sandbox" })
+      .getByRole("link", { name: /Buka (Pembayaran Midtrans|Midtrans Sandbox)/ })
       .getAttribute("rel"),
     "noopener noreferrer",
   );
@@ -443,7 +443,7 @@ try {
   await visible("Kampanye ini tidak menerima donasi saat ini.");
   assert.equal(
     await page
-      .getByRole("button", { name: "Lanjut ke pembayaran sandbox" })
+      .getByRole("button", { name: /Lanjut ke pembayaran/ })
       .count(),
     0,
   );
@@ -502,7 +502,7 @@ try {
   await visible("Cerita kampanye B");
   await page.getByLabel("Tampilkan sebagai anonim").check();
   await page
-    .getByRole("button", { name: "Lanjut ke pembayaran sandbox" })
+    .getByRole("button", { name: /Lanjut ke pembayaran/ })
     .click();
   await visible("GATEWAY_ERROR");
   assert.equal(

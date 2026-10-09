@@ -173,7 +173,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
               <aside>
                 <div className="cf-donation cf-panel">
                   <span className="cf-badge">
-                    MIDTRANS SANDBOX · BUKAN UANG NYATA
+                    PEMBAYARAN RESMI & TERVERIFIKASI
                   </span>
                   <CampaignProgress campaign={campaign} />
                   <p className="cf-small">
@@ -247,7 +247,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                       >
                         {busy
                           ? "Menyiapkan pembayaran…"
-                          : "Lanjut ke pembayaran sandbox"}
+                          : "Lanjut ke pembayaran"}
                       </button>
                       <p className="cf-small">
                         Tidak perlu akun atau wallet. Konfirmasi pembayaran
@@ -295,11 +295,11 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Buka Midtrans Sandbox ↗
+                          Buka Pembayaran Midtrans ↗
                         </a>
                       ) : (
                         <p>
-                          Tautan sandbox belum tersedia. Periksa status sebelum
+                          Tautan pembayaran belum tersedia. Periksa status sebelum
                           membuat pembayaran lain.
                         </p>
                       )}

@@ -36,11 +36,6 @@ export function Footer() {
           <Link to="/laporan-periode">Laporan periode</Link>
         </nav>
       </div>
-      <div className="mx-auto mt-9 max-w-[1144px] border-t border-[#cddbc7] pt-5 text-xs leading-relaxed text-[#536a59]">
-        Prototipe crowdfunding · Pembayaran Midtrans Sandbox, bukan uang nyata.
-        Dana terkumpul bukan bukti penyaluran. Status blockchain ditampilkan
-        sesuai data yang tersedia.
-      </div>
     </footer>
   );
 }

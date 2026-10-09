@@ -121,7 +121,7 @@ async function scenario(kind) {
     }
     await page.getByLabel("Tampilkan sebagai anonim").check();
     await page
-      .getByRole("button", { name: "Lanjut ke pembayaran sandbox" })
+      .getByRole("button", { name: /Lanjut ke pembayaran/ })
       .click();
     if (kind === "late-status") {
       await page.getByText("PENDING", { exact: true }).waitFor();
@@ -169,7 +169,7 @@ async function scenario(kind) {
         .waitFor();
       assert.equal(
         await page
-          .getByRole("button", { name: "Lanjut ke pembayaran sandbox" })
+          .getByRole("button", { name: /Lanjut ke pembayaran/ })
           .isDisabled(),
         true,
       );

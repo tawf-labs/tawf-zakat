@@ -92,8 +92,8 @@ function AccountForm({ onLogin }: { onLogin: (user: User) => void }) {
           <li>Ajukan review sebelum publikasi</li>
         </ol>
         <Notice>
-          Masih dalam tahap prototipe. Pembayaran hanya sandbox. Persetujuan
-          operator bukan pengganti izin atau penilaian hukum.
+          Setiap pengajuan proposal melewati proses review dan verifikasi
+          operator sebelum dapat diterbitkan dan menerima donasi publik.
         </Notice>
       </section>
       <form onSubmit={submit} className="cf-panel cf-form">

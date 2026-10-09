@@ -33,7 +33,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Temukan kampanye individu dan organisasi, ajukan penggalangan dana, dan telusuri status bukti. Prototipe crowdfunding dengan pembayaran Midtrans Sandbox.",
+          "Temukan kampanye individu dan organisasi, ajukan penggalangan dana, dan telusuri status bukti transparansi kebaikan secara on-chain.",
       },
     ],
     links: [
