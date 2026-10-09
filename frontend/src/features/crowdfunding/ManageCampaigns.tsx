@@ -5,7 +5,6 @@ import {
   apiUrl,
   categories,
   money,
-  readable,
   saveSession,
   sessionToken,
   statusLabel,
@@ -14,6 +13,29 @@ import {
 } from "./client";
 import { Notice } from "./PublicCampaigns";
 import { ChainEvidence } from "./CampaignDetail";
+import {
+  FileText,
+  FileUp,
+  History,
+  ShieldAlert,
+  ShieldCheck,
+  CheckCheck,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  FilePlus2,
+  FileEdit,
+  Send,
+  Sparkles,
+  RefreshCw,
+  HeartHandshake,
+  RotateCcw,
+  PauseCircle,
+  Clock,
+  MessageSquareQuote,
+  Layers,
+  ArrowUp,
+} from "lucide-react";
 
 // Every private completion is bound to its initiating mount, credential and generation.
 function useSessionGuard() {
@@ -400,6 +422,388 @@ function ReviewForm({
     </section>
   );
 }
+function formatDateTime(isoString?: string): string {
+  if (!isoString) return "";
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    return (
+      new Intl.DateTimeFormat("id-ID", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(d) + " WIB"
+    );
+  } catch {
+    return isoString;
+  }
+}
+
+interface ReviewChecklist {
+  identity?: boolean;
+  consent?: boolean;
+  needs?: boolean;
+  budget?: boolean;
+  distribution?: boolean;
+}
+
+interface ReviewNoteItem {
+  decision?: string;
+  notes?: string;
+  checks?: ReviewChecklist;
+  complianceReference?: string;
+  version?: number;
+  at?: string;
+}
+
+function parseReviewNotes(raw: unknown): ReviewNoteItem[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        if (typeof item === "object" && item !== null) return item as ReviewNoteItem;
+        if (typeof item === "string") return { notes: item };
+        return null;
+      })
+      .filter((x): x is ReviewNoteItem => x !== null);
+  }
+  if (typeof raw === "object") return [raw as ReviewNoteItem];
+  if (typeof raw === "string") return [{ notes: raw }];
+  return [];
+}
+
+const reviewCheckLabels: Record<keyof ReviewChecklist, string> = {
+  identity: "Identitas Penggalang",
+  consent: "Persetujuan Penerima Manfaat",
+  needs: "Kebutuhan & Bukti Pendukung",
+  budget: "Rencana Anggaran Biaya",
+  distribution: "Rencana Distribusi / Penyaluran",
+};
+
+function ReviewNotesCard({ notes }: { notes: unknown }) {
+  const items = parseReviewNotes(notes);
+  if (!items.length) return null;
+
+  return (
+    <div className="cf-review-container">
+      {items.map((item, idx) => {
+        const decisionKey = (item.decision || "").toUpperCase();
+        const isApproved = decisionKey === "APPROVE";
+        const isRevision =
+          decisionKey === "REQUEST_REVISION" || decisionKey === "REVISE";
+        const isRejected = decisionKey === "REJECT";
+        const isReopened = decisionKey === "REOPEN";
+
+        const badgeClass = isApproved
+          ? "cf-review-badge approve"
+          : isRevision
+            ? "cf-review-badge revision"
+            : isRejected
+              ? "cf-review-badge reject"
+              : isReopened
+                ? "cf-review-badge reopen"
+                : "cf-review-badge default";
+
+        const BadgeIcon = isApproved
+          ? CheckCircle2
+          : isRevision
+            ? AlertCircle
+            : isRejected
+              ? XCircle
+              : isReopened
+                ? RotateCcw
+                : FileText;
+
+        const badgeLabel = isApproved
+          ? "Proposal Disetujui"
+          : isRevision
+            ? "Perlu Revisi / Perbaikan"
+            : isRejected
+              ? "Proposal Ditolak"
+              : isReopened
+                ? "Revisi Material Dibuka"
+                : item.decision || "Catatan Evaluasi";
+
+        return (
+          <div key={idx} className="cf-review-card">
+            <div className="cf-review-header">
+              <div className="cf-review-header-left">
+                <span className={badgeClass}>
+                  <BadgeIcon size={14} />
+                  <span>{badgeLabel}</span>
+                </span>
+                {item.version != null && (
+                  <span className="cf-review-ver">Versi {item.version}</span>
+                )}
+              </div>
+              {item.at && (
+                <span className="cf-review-meta">
+                  <Clock size={12} />
+                  {formatDateTime(item.at)}
+                </span>
+              )}
+            </div>
+
+            {item.notes && (
+              <div className="cf-review-quote">
+                <div className="cf-review-quote-label">
+                  <MessageSquareQuote size={12} />
+                  <span>Catatan & Masukan Reviewer</span>
+                </div>
+                <p className="cf-review-text">{item.notes}</p>
+              </div>
+            )}
+
+            {item.checks && Object.keys(item.checks).length > 0 && (
+              <div className="cf-review-checks-wrap">
+                <span className="cf-review-checks-title">
+                  Verifikasi Kepatuhan & Syariah
+                </span>
+                <div className="cf-review-checks">
+                  {(
+                    Object.keys(reviewCheckLabels) as Array<
+                      keyof ReviewChecklist
+                    >
+                  ).map((k) => {
+                      const checked = item.checks?.[k];
+                      if (checked === undefined) return null;
+                      return (
+                        <div
+                          key={k}
+                          className={`cf-check-item ${checked ? "passed" : "failed"}`}
+                        >
+                          {checked ? (
+                            <CheckCircle2
+                              size={14}
+                              className="cf-check-icon passed"
+                            />
+                          ) : (
+                            <XCircle size={14} className="cf-check-icon failed" />
+                          )}
+                          <span>{checkLabels[k]}</span>
+                        </div>
+                      );
+                    },
+                  )}
+                </div>
+              </div>
+            )}
+
+            {item.complianceReference && (
+              <div className="cf-review-footer">
+                <span className="cf-compliance-ref">
+                  <ShieldCheck size={13} />
+                  Referensi Kepatuhan: <strong>{item.complianceReference}</strong>
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface HistoryItem {
+  id?: string;
+  actorId?: string;
+  action?: string;
+  reason?: string;
+  version?: number;
+  at?: string;
+}
+
+const actionMap: Record<
+  string,
+  {
+    title: string;
+    defaultDesc?: string;
+    icon: typeof FileText;
+    color: "teal" | "blue" | "amber" | "green" | "red" | "purple" | "slate";
+  }
+> = {
+  CREATE: {
+    title: "Draf Proposal Dibuat",
+    defaultDesc: "Inisiasi pembuatan proposal penggalangan dana.",
+    icon: FilePlus2,
+    color: "teal",
+  },
+  EDIT: {
+    title: "Draf Proposal Diperbarui",
+    defaultDesc: "Pembaruan rincian rencana atau cerita kampanye disimpan.",
+    icon: FileEdit,
+    color: "blue",
+  },
+  DOCUMENT: {
+    title: "Dokumen Privat Diunggah",
+    defaultDesc: "Berkas pendukung verifikasi telah ditambahkan.",
+    icon: FileUp,
+    color: "blue",
+  },
+  SUBMIT: {
+    title: "Proposal Diajukan untuk Review",
+    defaultDesc: "Proposal dibekukan dan dikirim ke tim kurasi.",
+    icon: Send,
+    color: "amber",
+  },
+  REQUEST_REVISION: {
+    title: "Reviewer Meminta Revisi",
+    defaultDesc: "Terdapat data atau berkas yang perlu disesuaikan.",
+    icon: AlertCircle,
+    color: "amber",
+  },
+  REVISE: {
+    title: "Catatan Revisi Diberikan",
+    defaultDesc: "Terdapat catatan perbaikan dari tim peninjau.",
+    icon: AlertCircle,
+    color: "amber",
+  },
+  APPROVE: {
+    title: "Proposal Disetujui",
+    defaultDesc: "Proposal telah lolos verifikasi kepatuhan dan syariah.",
+    icon: CheckCircle2,
+    color: "green",
+  },
+  REJECT: {
+    title: "Proposal Ditolak",
+    defaultDesc: "Proposal belum memenuhi kriteria kelayakan program.",
+    icon: XCircle,
+    color: "red",
+  },
+  PUBLISH: {
+    title: "Kampanye Diterbitkan",
+    defaultDesc: "Kampanye resmi tayang ke publik dan siap menerima donasi.",
+    icon: Sparkles,
+    color: "green",
+  },
+  REOPEN: {
+    title: "Revisi Material Dibuka",
+    defaultDesc: "Perubahan diperbolehkan dengan penjedaan donasi sementara.",
+    icon: RotateCcw,
+    color: "purple",
+  },
+  STATUS: {
+    title: "Perubahan Status Kampanye",
+    icon: RefreshCw,
+    color: "slate",
+  },
+  SUSPENDED: {
+    title: "Kampanye Ditangguhkan",
+    defaultDesc: "Penerimaan donasi dijeda sementara waktu.",
+    icon: PauseCircle,
+    color: "amber",
+  },
+  CLOSED: {
+    title: "Kampanye Selesai & Ditutup",
+    defaultDesc: "Masa penggalangan dana telah resmi berakhir.",
+    icon: CheckCheck,
+    color: "slate",
+  },
+  CANCELLED: {
+    title: "Kampanye Dibatalkan",
+    icon: XCircle,
+    color: "red",
+  },
+  PAYMENT: {
+    title: "Donasi Diterima",
+    defaultDesc: "Transaksi donatur berhasil terverifikasi.",
+    icon: HeartHandshake,
+    color: "green",
+  },
+  REFUND: {
+    title: "Pengembalian Donasi",
+    icon: RotateCcw,
+    color: "amber",
+  },
+};
+
+function parseHistory(raw?: unknown[]): HistoryItem[] {
+  if (!raw || !Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "object" && item !== null) return item as HistoryItem;
+      return null;
+    })
+    .filter((x): x is HistoryItem => x !== null);
+}
+
+function ActivityTimeline({ history }: { history?: unknown[] }) {
+  const items = parseHistory(history);
+  if (!items.length) {
+    return (
+      <p className="cf-timeline-empty">
+        Belum ada riwayat aktivitas yang tercatat.
+      </p>
+    );
+  }
+
+  const sorted = [...items].reverse();
+
+  return (
+    <div className="cf-timeline">
+      {sorted.map((item, index) => {
+        const key = (item.action || "").toUpperCase();
+        const conf = actionMap[key] || {
+          title: item.action ? `Aktivitas: ${item.action}` : "Pembaruan Kampanye",
+          icon: History,
+          color: "slate",
+        };
+        const IconComponent = conf.icon;
+
+        let displayReason = item.reason;
+        if (item.reason === "Version frozen for operator review") {
+          displayReason =
+            "Data proposal dan dokumen dikunci untuk proses evaluasi operator.";
+        } else if (item.reason === "Operator published approved version") {
+          displayReason =
+            "Kampanye mulai tayang di halaman publik dan siap menerima donasi.";
+        }
+
+        return (
+          <div key={item.id || index} className="cf-timeline-item">
+            <div className={`cf-timeline-dot ${conf.color}`}>
+              <IconComponent size={13} />
+            </div>
+            <div className="cf-timeline-content">
+              <div className="cf-timeline-top">
+                <span className="cf-timeline-title">{conf.title}</span>
+                <div className="cf-timeline-meta">
+                  {item.version != null && (
+                    <span className="cf-timeline-ver">Versi {item.version}</span>
+                  )}
+                  {item.at && (
+                    <span className="cf-timeline-time">
+                      <Clock size={11} />
+                      {formatDateTime(item.at)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {displayReason ? (
+                <div className="cf-timeline-note">
+                  <p>{displayReason}</p>
+                </div>
+              ) : conf.defaultDesc ? (
+                <p className="cf-timeline-desc">{conf.defaultDesc}</p>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type TabKey =
+  | "all"
+  | "proposal"
+  | "documents"
+  | "history"
+  | "operator"
+  | "evidence";
+
 function PrivateCampaign({
   campaign,
   user,
@@ -416,9 +820,34 @@ function PrivateCampaign({
   const [reason, setReason] = useState("");
   const [nextStatus, setNextStatus] = useState("SUSPENDED");
   const [revisionReason, setRevisionReason] = useState("");
+  const [activeTab, setActiveTab] = useState<TabKey>("all");
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setShowScrollTop(window.scrollY > 400);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   const operator = user.role === "OPERATOR";
   const editable =
     !operator && ["DRAFT", "REVISION_REQUESTED"].includes(campaign.status);
+
+  const hasOperatorActions =
+    operator &&
+    (campaign.status === "SUBMITTED" ||
+      campaign.status === "APPROVED" ||
+      ["PUBLISHED", "SUSPENDED", "APPROVED"].includes(campaign.status));
+
+  function scrollToSection(id: string) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   async function refresh(current: () => boolean) {
     if (!current()) return;
     const data = await api<{ campaign: Campaign }>(`/campaigns/${campaign.id}`);
@@ -516,10 +945,7 @@ function PrivateCampaign({
           Oleh {campaign.organizer.organizationName || campaign.organizer.name}
         </p>
         {Boolean(campaign.reviewNotes) && (
-          <Notice>
-            <strong>Catatan review</strong>
-            <p className="cf-preline">{readable(campaign.reviewNotes)}</p>
-          </Notice>
+          <ReviewNotesCard notes={campaign.reviewNotes} />
         )}
         {error && <Notice error>{error}</Notice>}
         {message && <Notice>{message}</Notice>}
@@ -533,173 +959,347 @@ function PrivateCampaign({
           </Link>
         )}
       </section>
-      {editable ? (
-        <ProposalForm
-          key={`${campaign.id}-${campaign.version}`}
-          campaign={campaign}
-          onSave={onRefresh}
-        />
-      ) : (
-        <section className="cf-panel">
-          <h2>Proposal yang diajukan</h2>
-          <p>
-            <strong>Target:</strong> {money(campaign.targetAmount)} ·{" "}
-            <strong>Kategori:</strong> {categories[campaign.category]}
-            <br />
-            <strong>Berakhir:</strong>{" "}
-            {new Date(campaign.endsAt).toLocaleDateString("id-ID", {
-              dateStyle: "long",
-            })}
-            <br />
-            <strong>Pernyataan persetujuan penggalang:</strong>{" "}
-            {campaign.consent
-              ? "Diberikan; tetap perlu diperiksa operator"
-              : "Belum diberikan"}
-          </p>
-          {textFields.map(([name, label]) => (
-            <div key={name}>
-              <h3>{label}</h3>
-              <p className="cf-preline">{campaign[name] || "Tidak tersedia"}</p>
-            </div>
-          ))}
-        </section>
-      )}
-      <section className="cf-panel cf-form">
-        <h2>Dokumen pendukung privat</h2>
-        <p>
-          Hanya pemilik dan operator berwenang yang dapat mengakses dokumen.
-          Tidak ditampilkan pada halaman publik.
-        </p>
-        {campaign.documents?.length ? (
-          campaign.documents.map((doc) => (
-            <button
-              disabled={busy}
-              className="cf-text-button"
-              key={doc.id}
-              onClick={() => void download(doc.id, doc.name)}
-            >
-              Unduh {doc.name}
-            </button>
-          ))
-        ) : (
-          <p>Belum ada dokumen.</p>
+
+      {/* Sticky Tab Navigation Sub-Bar */}
+      <nav aria-label="Navigasi bagian kampanye" className="cf-tab-nav">
+        <button
+          type="button"
+          className={`cf-tab-btn ${activeTab === "all" ? "active" : ""}`}
+          onClick={() => setActiveTab("all")}
+        >
+          <Layers size={14} />
+          <span>Semua Bagian</span>
+        </button>
+        <button
+          type="button"
+          className={`cf-tab-btn ${activeTab === "proposal" ? "active" : ""}`}
+          onClick={() => {
+            if (activeTab === "all") scrollToSection("section-proposal");
+            else setActiveTab("proposal");
+          }}
+        >
+          <FileText size={14} />
+          <span>{editable ? "Perbaiki Proposal" : "Detail Proposal"}</span>
+        </button>
+        <button
+          type="button"
+          className={`cf-tab-btn ${activeTab === "documents" ? "active" : ""}`}
+          onClick={() => {
+            if (activeTab === "all") scrollToSection("section-documents");
+            else setActiveTab("documents");
+          }}
+        >
+          <FileUp size={14} />
+          <span>Dokumen Privat</span>
+          {campaign.documents?.length ? (
+            <span className="cf-tab-count">{campaign.documents.length}</span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          className={`cf-tab-btn ${activeTab === "history" ? "active" : ""}`}
+          onClick={() => {
+            if (activeTab === "all") scrollToSection("section-history");
+            else setActiveTab("history");
+          }}
+        >
+          <History size={14} />
+          <span>Riwayat & Review</span>
+          {campaign.history?.length ? (
+            <span className="cf-tab-count">{campaign.history.length}</span>
+          ) : null}
+        </button>
+        {hasOperatorActions && (
+          <button
+            type="button"
+            className={`cf-tab-btn ${activeTab === "operator" ? "active" : ""}`}
+            onClick={() => {
+              if (activeTab === "all") scrollToSection("section-operator");
+              else setActiveTab("operator");
+            }}
+          >
+            <ShieldAlert size={14} />
+            <span>Aksi Operator</span>
+          </button>
         )}
-        {editable && (
-          <label>
-            Unggah dokumen (PDF, JPEG, PNG · maks. 2 MB)
-            <input
-              type="file"
-              accept="application/pdf,image/jpeg,image/png"
-              disabled={busy}
-              onChange={(e) => {
-                void upload(e.target.files?.[0]);
-                e.target.value = "";
-              }}
+        <button
+          type="button"
+          className={`cf-tab-btn ${activeTab === "evidence" ? "active" : ""}`}
+          onClick={() => {
+            if (activeTab === "all") scrollToSection("section-evidence");
+            else setActiveTab("evidence");
+          }}
+        >
+          <ShieldCheck size={14} />
+          <span>Bukti On-Chain</span>
+        </button>
+      </nav>
+
+      {/* Quick Jump Bar in All View Mode */}
+      {activeTab === "all" && (
+        <div className="cf-jump-nav">
+          <span className="cf-jump-label">Pintasan Cepat:</span>
+          <button
+            type="button"
+            className="cf-jump-btn"
+            onClick={() => scrollToSection("section-proposal")}
+          >
+            📋 Proposal
+          </button>
+          <button
+            type="button"
+            className="cf-jump-btn"
+            onClick={() => scrollToSection("section-documents")}
+          >
+            📁 Dokumen ({campaign.documents?.length || 0})
+          </button>
+          <button
+            type="button"
+            className="cf-jump-btn"
+            onClick={() => scrollToSection("section-history")}
+          >
+            ⏱️ Riwayat ({campaign.history?.length || 0})
+          </button>
+          {hasOperatorActions && (
+            <button
+              type="button"
+              className="cf-jump-btn"
+              onClick={() => scrollToSection("section-operator")}
+            >
+              🛡️ Operator
+            </button>
+          )}
+          <button
+            type="button"
+            className="cf-jump-btn"
+            onClick={() => scrollToSection("section-evidence")}
+          >
+            ⛓️ Bukti On-Chain
+          </button>
+        </div>
+      )}
+
+      {/* 1. PROPOSAL SECTION */}
+      {(activeTab === "all" || activeTab === "proposal") && (
+        <div id="section-proposal">
+          {editable ? (
+            <ProposalForm
+              key={`${campaign.id}-${campaign.version}`}
+              campaign={campaign}
+              onSave={onRefresh}
             />
-          </label>
-        )}
-        {editable && (
-          <button
-            className="cf-button"
-            disabled={busy}
-            onClick={() => void action("submit")}
-          >
-            Ajukan untuk review
-          </button>
-        )}
-      </section>
-      {operator && campaign.status === "SUBMITTED" && (
-        <ReviewForm busy={busy} action={action} />
+          ) : (
+            <section className="cf-panel">
+              <h2>Proposal yang diajukan</h2>
+              <p>
+                <strong>Target:</strong> {money(campaign.targetAmount)} ·{" "}
+                <strong>Kategori:</strong> {categories[campaign.category]}
+                <br />
+                <strong>Berakhir:</strong>{" "}
+                {new Date(campaign.endsAt).toLocaleDateString("id-ID", {
+                  dateStyle: "long",
+                })}
+                <br />
+                <strong>Pernyataan persetujuan penggalang:</strong>{" "}
+                {campaign.consent
+                  ? "Diberikan; tetap perlu diperiksa operator"
+                  : "Belum diberikan"}
+              </p>
+              {textFields.map(([name, label]) => (
+                <div key={name}>
+                  <h3>{label}</h3>
+                  <p className="cf-preline">
+                    {campaign[name] || "Tidak tersedia"}
+                  </p>
+                </div>
+              ))}
+            </section>
+          )}
+        </div>
       )}
-      {operator && campaign.status === "APPROVED" && (
-        <section className="cf-panel">
-          <h2>Siap dipublikasikan</h2>
-          <p>
-            Publikasi menampilkan cerita kampanye; dokumen pendukung tetap
-            privat.
-          </p>
-          <button
-            className="cf-button"
-            disabled={busy}
-            onClick={() => void action("publish")}
-          >
-            Terbitkan kampanye
-          </button>
-        </section>
-      )}
-      {operator &&
-        ["PUBLISHED", "SUSPENDED", "APPROVED"].includes(campaign.status) && (
+
+      {/* 2. DOCUMENTS SECTION */}
+      {(activeTab === "all" || activeTab === "documents") && (
+        <div id="section-documents">
           <section className="cf-panel cf-form">
-            <h2>Kelola status kampanye</h2>
-            <label>
-              Status tujuan
-              <select
-                value={nextStatus}
-                onChange={(e) => setNextStatus(e.target.value)}
-              >
-                <option value="SUSPENDED">Tangguhkan</option>
-                <option value="CLOSED">Tutup</option>
-                <option value="CANCELLED">Batalkan</option>
-              </select>
-            </label>
-            <label>
-              Alasan perubahan
-              <textarea
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-              />
-            </label>
-            <button
-              className="cf-button cf-secondary"
-              disabled={busy || !reason.trim()}
-              onClick={() =>
-                void action("status", { status: nextStatus, reason })
-              }
-            >
-              Simpan status
-            </button>
-          </section>
-        )}
-      {operator &&
-        ["APPROVED", "PUBLISHED", "SUSPENDED"].includes(campaign.status) && (
-          <section className="cf-panel cf-form">
-            <h2>Revisi material kampanye</h2>
+            <h2>Dokumen pendukung privat</h2>
             <p>
-              Donasi dijeda sampai proposal disetujui dan diterbitkan ulang.
-              Jika sudah pernah terbit, publik tetap melihat versi terakhir yang
-              diterbitkan; perubahan draf tetap privat selama review.
+              Hanya pemilik dan operator berwenang yang dapat mengakses dokumen.
+              Tidak ditampilkan pada halaman publik.
             </p>
-            <label>
-              Alasan revisi material
-              <textarea
-                value={revisionReason}
-                maxLength={5000}
-                rows={3}
-                onChange={(e) => setRevisionReason(e.target.value)}
-              />
-            </label>
-            <button
-              className="cf-button cf-secondary"
-              disabled={busy || !revisionReason.trim()}
-              onClick={() => void action("reopen", { reason: revisionReason })}
-            >
-              Minta revisi material
-            </button>
+            {campaign.documents?.length ? (
+              campaign.documents.map((doc) => (
+                <button
+                  disabled={busy}
+                  className="cf-text-button"
+                  key={doc.id}
+                  onClick={() => void download(doc.id, doc.name)}
+                >
+                  Unduh {doc.name}
+                </button>
+              ))
+            ) : (
+              <p>Belum ada dokumen.</p>
+            )}
+            {editable && (
+              <label>
+                Unggah dokumen (PDF, JPEG, PNG · maks. 2 MB)
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png"
+                  disabled={busy}
+                  onChange={(e) => {
+                    void upload(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            )}
+            {editable && (
+              <button
+                className="cf-button"
+                disabled={busy}
+                onClick={() => void action("submit")}
+              >
+                Ajukan untuk review
+              </button>
+            )}
           </section>
-        )}
-      <ChainEvidence campaign={campaign} />
-      <section className="cf-panel">
-        <h2>Riwayat pengajuan</h2>
-        {campaign.history?.length ? (
-          campaign.history.map((item, index) => (
-            <p className="cf-preline cf-history" key={index}>
-              {readable(item)}
+        </div>
+      )}
+
+      {/* 3. OPERATOR ACTIONS */}
+      {(activeTab === "all" || activeTab === "operator") && hasOperatorActions && (
+        <div id="section-operator">
+          {operator && campaign.status === "SUBMITTED" && (
+            <ReviewForm busy={busy} action={action} />
+          )}
+          {operator && campaign.status === "APPROVED" && (
+            <section className="cf-panel">
+              <h2>Siap dipublikasikan</h2>
+              <p>
+                Publikasi menampilkan cerita kampanye; dokumen pendukung tetap
+                privat.
+              </p>
+              <button
+                className="cf-button"
+                disabled={busy}
+                onClick={() => void action("publish")}
+              >
+                Terbitkan kampanye
+              </button>
+            </section>
+          )}
+          {operator &&
+            ["PUBLISHED", "SUSPENDED", "APPROVED"].includes(campaign.status) && (
+              <section className="cf-panel cf-form">
+                <h2>Kelola status kampanye</h2>
+                <label>
+                  Status tujuan
+                  <select
+                    value={nextStatus}
+                    onChange={(e) => setNextStatus(e.target.value)}
+                  >
+                    <option value="SUSPENDED">Tangguhkan</option>
+                    <option value="CLOSED">Tutup</option>
+                    <option value="CANCELLED">Batalkan</option>
+                  </select>
+                </label>
+                <label>
+                  Alasan perubahan
+                  <textarea
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  />
+                </label>
+                <button
+                  className="cf-button cf-secondary"
+                  disabled={busy || !reason.trim()}
+                  onClick={() =>
+                    void action("status", { status: nextStatus, reason })
+                  }
+                >
+                  Simpan status
+                </button>
+              </section>
+            )}
+          {operator &&
+            ["APPROVED", "PUBLISHED", "SUSPENDED"].includes(campaign.status) && (
+              <section className="cf-panel cf-form">
+                <h2>Revisi material kampanye</h2>
+                <p>
+                  Donasi dijeda sampai proposal disetujui dan diterbitkan ulang.
+                  Jika sudah pernah terbit, publik tetap melihat versi terakhir yang
+                  diterbitkan; perubahan draf tetap privat selama review.
+                </p>
+                <label>
+                  Alasan revisi material
+                  <textarea
+                    value={revisionReason}
+                    maxLength={5000}
+                    rows={3}
+                    onChange={(e) => setRevisionReason(e.target.value)}
+                  />
+                </label>
+                <button
+                  className="cf-button cf-secondary"
+                  disabled={busy || !revisionReason.trim()}
+                  onClick={() =>
+                    void action("reopen", { reason: revisionReason })
+                  }
+                >
+                  Minta revisi material
+                </button>
+              </section>
+            )}
+        </div>
+      )}
+
+      {/* 4. CHAIN EVIDENCE */}
+      {(activeTab === "all" || activeTab === "evidence") && (
+        <div id="section-evidence">
+          <ChainEvidence campaign={campaign} />
+        </div>
+      )}
+
+      {/* 5. HISTORY & REVIEW SECTION */}
+      {(activeTab === "all" || activeTab === "history") && (
+        <div id="section-history">
+          <section className="cf-panel">
+            <div className="cf-section-card-header">
+              <div>
+                <span className="cf-eyebrow">TRANSPARANSI PROSES</span>
+                <h2>Riwayat pengajuan</h2>
+              </div>
+              <span className="cf-counter-pill">
+                {campaign.history?.length || 0} aktivitas
+              </span>
+            </div>
+            <p className="cf-section-desc">
+              Catatan kronologis setiap pembaruan proposal, pengajuan, dan evaluasi tim verifikasi.
             </p>
-          ))
-        ) : (
-          <p>Belum ada riwayat yang tersedia.</p>
-        )}
-      </section>
+            {activeTab === "history" && Boolean(campaign.reviewNotes) && (
+              <div style={{ marginBottom: "20px" }}>
+                <ReviewNotesCard notes={campaign.reviewNotes} />
+              </div>
+            )}
+            <ActivityTimeline history={campaign.history} />
+          </section>
+        </div>
+      )}
+
+      {/* Floating Back to Top Button */}
+      {showScrollTop && (
+        <button
+          type="button"
+          className="cf-back-top"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Kembali ke atas"
+        >
+          <ArrowUp size={15} />
+          <span>Ke Atas</span>
+        </button>
+      )}
     </>
   );
 }
