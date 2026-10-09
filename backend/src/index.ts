@@ -30,6 +30,9 @@ import contributionBatchRoutes from "./routes/contribution-batches";
 import { certificateRoutes, publicCertificateRoutes } from "./routes/certificates";
 import receiptVerificationRoutes from "./routes/receipt-verification";
 import { installWorkspaceRuntime } from "./workspace-wiring";
+import { installCrowdfundingRuntime, crowdfundingRuntime } from "./crowdfunding-runtime";
+import { bodyLimit } from "hono/body-limit";
+import { createCrowdfundingRoutes } from "./routes/crowdfunding";
 
 // Start background indexer polling for Sepolia L1 events
 // Can be disabled via ENABLE_EMBEDDED_INDEXER=false when running a dedicated standalone indexer worker in production
@@ -71,6 +74,9 @@ app.route("/api/workspace", contributionRoutes);
 app.route("/api/workspace", contributionBatchRoutes);
 app.route("/api/workspace", activityRoutes);
 app.route("/api/workspace", certificateRoutes);
+await installCrowdfundingRuntime();
+const crowdfundingRoutes = createCrowdfundingRoutes(crowdfundingRuntime);
+app.route("/api/crowdfunding", crowdfundingRoutes);
 app.route("/api/donor", donorAccessRoutes);
 app.route("/api/public", receiptVerificationRoutes);
 app.route("/api/public", publicCertificateRoutes);
@@ -217,10 +223,11 @@ app.post("/api/donations/fiat", handleFiatDonation);
 
 // 1b. Inflow: public contribution lookup (the pending check also syncs Midtrans settlement)
 const syncPendingPayment = async (donation: DonationRecord) => {
-  if (donation.status === "PAID") return recordGatewayPayment(donation);
-  if (donation.status !== "PENDING") return;
+  // A local PAID flag may come from the demo simulator, not a gateway verification.
+  // Retry a missed ledger write only after re-verifying the gateway, never from that flag alone.
+  if (donation.status !== "PENDING" && donation.status !== "PAID") return;
   const midtransCheck = await checkMidtransStatus(donation.trxId);
-  if (midtransCheck && midtransCheck.isSettled) {
+  if (midtransCheck?.isSettled && midtransCheck.orderId === donation.trxId && midtransCheck.currency === "IDR" && Number(midtransCheck.grossAmount) === donation.amountIDR) {
     const paidTime = midtransCheck.settlementTime || new Date().toISOString();
     await dbService.markDonationAsPaid(donation.trxId, paidTime);
     donation.status = "PAID";
@@ -244,9 +251,14 @@ app.get("/api/donations/:trxId", contributionLookupHandler("trxId", false));
 app.get("/api/public/contributions/:id", contributionLookupHandler("id", false));
 
 // 1c. Inflow: Midtrans Payment Webhook (Idempotent & Signature-Verified)
+app.use("/api/webhooks/payment", bodyLimit({ maxSize: 100000, onError: c => c.json({ success: false, error: "Notification too large" }, 413) }));
 app.post("/api/webhooks/payment", async (c) => {
   try {
     const body = await c.req.json();
+    // Preserve the merchant's existing callback URL, but never use legacy trust shortcuts for CF orders.
+    if (typeof body?.order_id === "string" && body.order_id.startsWith("CF-")) {
+      return crowdfundingRoutes.request("/midtrans/notification", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    }
     const {
       order_id,
       status_code,
@@ -263,17 +275,6 @@ app.post("/api/webhooks/payment", async (c) => {
     const donation = await dbService.getDonationByTrxId(order_id);
     if (!donation) {
       return c.json({ error: "Donation order not found", success: false }, 404);
-    }
-
-    // Idempotency: If already paid or batched, acknowledge immediately without duplicate work
-    if (donation.status === "PAID" || donation.status === "BATCHED") {
-      await recordGatewayPayment(donation);
-      return c.json({
-        success: true,
-        message: "Payment notification already processed",
-        status: donation.status,
-        trxId: order_id,
-      });
     }
 
     // Verify SHA-512 Signature
@@ -294,6 +295,14 @@ app.post("/api/webhooks/payment", async (c) => {
         },
         401
       );
+    }
+
+    // Authenticate replays too: local PAID can originate from the untrusted demo simulator.
+    if (donation.status === "PAID" || donation.status === "BATCHED") {
+      if ((transaction_status === "settlement" || transaction_status === "capture") && Number(gross_amount) === donation.amountIDR) {
+        await recordGatewayPayment(donation);
+      }
+      return c.json({ success: true, message: "Payment notification already processed", status: donation.status, trxId: order_id });
     }
 
     // If status is settlement / capture, transition to PAID
@@ -332,6 +341,9 @@ app.post("/api/webhooks/payment", async (c) => {
 
 // 1d. Inflow: Sandbox Payment Simulator (One-Click for Demo / Judges)
 app.post("/api/webhooks/simulator", async (c) => {
+  if (process.env.MIDTRANS_IS_PRODUCTION === "true" || (process.env.NODE_ENV !== "test" && process.env.ENABLE_LEGACY_PAYMENT_SIMULATOR !== "true")) {
+    return c.json({ success: false, error: "Legacy payment simulator is disabled" }, 403);
+  }
   try {
     const body = await c.req.json();
     const { trxId } = body;
@@ -347,8 +359,7 @@ app.post("/api/webhooks/simulator", async (c) => {
 
     const paidTimestamp = new Date().toISOString();
     const updated = await dbService.markDonationAsPaid(trxId, paidTimestamp);
-    // Same ledger entry a real webhook would produce (#104 depends on it existing).
-    await recordGatewayPayment({ ...donation, ...(updated ?? {}), paidAt: paidTimestamp });
+    // Demo state only: never create a verified institutional contribution here.
 
     eventBus.broadcast("DONATION_PAID", {
       trxId,

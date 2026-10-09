@@ -1,0 +1,847 @@
+.cf {
+  --cf-green: #145740;
+  --cf-ink: #173b30;
+  --cf-muted: #586e63;
+  color: var(--cf-ink);
+  background: #fffcf7;
+  line-height: 1.65;
+  font-size: 16px;
+}
+.cf * {
+  box-sizing: border-box;
+}
+.cf-container {
+  max-width: 1200px;
+  margin: auto;
+  padding: 0 28px;
+}
+.cf h1,
+.cf h2,
+.cf h3,
+.cf p {
+  margin-top: 0;
+}
+.cf h1,
+.cf h2 {
+  letter-spacing: -0.045em;
+  line-height: 1.12;
+}
+.cf h1 {
+  font-family: var(--font-serif);
+  font-size: clamp(42px, 5.4vw, 76px);
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+.cf h1 em {
+  color: #397759;
+  font-weight: 500;
+}
+.cf h2 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 36px;
+  margin-bottom: 20px;
+}
+.cf h3 {
+  font-size: 19px;
+  line-height: 1.4;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+.cf p {
+  color: var(--cf-muted);
+  margin-bottom: 18px;
+}
+.cf button,
+.cf a,
+.cf input,
+.cf select,
+.cf textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+.cf button {
+  cursor: pointer;
+}
+.cf button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cf :is(a, button, input, textarea, select):focus-visible {
+  outline: 3px solid #317656;
+  outline-offset: 4px;
+}
+.cf-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  font-weight: 750;
+  color: var(--cf-green);
+  margin-bottom: 18px;
+}
+.cf-eyebrow > span {
+  width: 7px;
+  height: 7px;
+  background: #517e2e;
+  border-radius: 50%;
+}
+.cf-hero {
+  overflow: hidden;
+  border-bottom: 1px solid #e1e7d9;
+  background:
+    radial-gradient(ellipse at 90% 20%, #e6efd8, transparent 60%), #f7f5ec;
+}
+.cf-hero-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  align-items: center;
+  gap: 65px;
+  min-height: 590px;
+  padding-top: 65px;
+  padding-bottom: 65px;
+}
+.cf-hero p {
+  max-width: 540px;
+  font-size: 17px;
+}
+.cf-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.cf-button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 12px 21px;
+  border: 1px solid var(--cf-green);
+  background: var(--cf-green);
+  color: white;
+  border-radius: 10px;
+  font-weight: 650;
+  font-size: 14px;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.cf-button:hover {
+  background: #0e4030;
+  color: white;
+}
+.cf-secondary {
+  background: transparent;
+  color: var(--cf-green);
+  border-color: #b6c9b9;
+}
+.cf-secondary:hover {
+  background: #e9f0df;
+  color: var(--cf-green);
+}
+.cf-danger {
+  background: #8a302c;
+  border-color: #8a302c;
+}
+.cf-hero-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #4c6757;
+  font-size: 12px;
+  margin-top: 25px;
+}
+.cf-hero-art {
+  position: relative;
+  background: #21563f;
+  color: #e6f2ba;
+  height: 410px;
+  border-radius: 180px 180px 18px 18px;
+  box-shadow: 14px 14px 0 #dce4cb;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 35px;
+  isolation: isolate;
+}
+.cf-orbit {
+  position: absolute;
+  width: 260px;
+  height: 260px;
+  border: 1px solid #93ad72;
+  border-radius: 50%;
+  top: 40px;
+  right: -22px;
+  z-index: -1;
+}
+.cf-sprout {
+  align-self: center;
+  margin-bottom: 26px;
+  color: #cee88e;
+}
+.cf-art-label span {
+  font-size: 9px;
+  letter-spacing: 0.17em;
+}
+.cf-art-label strong {
+  display: block;
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 43px;
+  line-height: 1.1;
+  margin-top: 12px;
+}
+.cf-art-stamp {
+  position: absolute;
+  right: -20px;
+  bottom: 42px;
+  background: #d0ed91;
+  color: #254933;
+  border: 7px solid #f7f5ec;
+  border-radius: 50%;
+  width: 104px;
+  height: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  transform: rotate(12deg);
+}
+.cf-trust {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 25px 0;
+  border-bottom: 1px solid #e1e7d9;
+  font-size: 13px;
+  color: #4b6656;
+}
+.cf-trust span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cf-section {
+  padding: 68px 0;
+  scroll-margin-top: 150px;
+}
+.cf-section-heading {
+  display: flex;
+  gap: 25px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.cf-section-heading h2 {
+  margin-bottom: 0;
+}
+.cf-search {
+  display: flex;
+  align-items: center;
+  border: 1px solid #d8e0d2;
+  border-radius: 10px;
+  padding: 0 12px;
+  gap: 7px;
+  background: #fff;
+  min-width: 300px;
+}
+.cf-search input {
+  border: 0;
+  background: transparent;
+  min-height: 46px;
+  width: 100%;
+  font-size: 13px;
+  outline: none;
+}
+.cf-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 24px 0 30px;
+}
+.cf-filters button,
+.cf-presets button {
+  min-height: 44px;
+  border: 1px solid #d7dfd1;
+  padding: 9px 17px;
+  border-radius: 24px;
+  font-size: 13px;
+  background: white;
+  color: #48634e;
+}
+.cf-filters button.active,
+.cf-presets button.active {
+  background: #e9f2d6;
+  color: #234629;
+  border-color: #789b58;
+}
+.cf-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.cf-card {
+  background: #fff;
+  border: 1px solid #e0e6da;
+  border-radius: 16px;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: box-shadow 0.2s;
+}
+.cf-card:hover {
+  box-shadow: 0 12px 28px #173b3010;
+}
+.cf-cover {
+  min-height: 220px;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  background: #dee9d6;
+  color: #437054;
+  position: relative;
+  overflow: hidden;
+}
+.cf-cover span {
+  font-family: var(--font-serif);
+  font-size: 25px;
+}
+.cf-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cf-cover-education {
+  background: #eee7cf;
+  color: #7a6b3f;
+}
+.cf-cover-humanitarian {
+  background: #e2e9eb;
+  color: #54737a;
+}
+.cf-cover-community {
+  background: #ebe1d7;
+  color: #806346;
+}
+.cf-card-body {
+  padding: 23px;
+}
+.cf-card-body .cf-eyebrow {
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+.cf-card-body h3 {
+  font-size: 21px;
+}
+.cf-card-body > p {
+  font-size: 13px;
+}
+.cf-card-body .cf-organizer {
+  font-size: 11px;
+}
+.cf-card-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  margin-top: 20px;
+}
+.cf-amount {
+  font-size: 19px;
+  font-weight: 750;
+}
+.cf-amount span {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cf-muted);
+}
+.cf progress {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  display: block;
+  margin: 12px 0;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e8eddf;
+}
+.cf progress::-webkit-progress-bar {
+  background: #e8eddf;
+}
+.cf progress::-webkit-progress-value {
+  background: #589343;
+  border-radius: 8px;
+}
+.cf progress::-moz-progress-bar {
+  background: #589343;
+}
+.cf-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--cf-muted);
+}
+.cf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 50px 24px;
+  border: 1px dashed #c8d4c0;
+  border-radius: 16px;
+  background: #f5f7ed;
+}
+.cf-empty > svg {
+  margin-bottom: 20px;
+  color: #538041;
+}
+.cf-empty p {
+  max-width: 600px;
+  font-size: 14px;
+}
+.cf-how {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 80px;
+  padding: 48px;
+  background: #edf1e4;
+  border-radius: 20px;
+  margin-bottom: 40px;
+}
+.cf-how p {
+  font-size: 14px;
+}
+.cf-how ol {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.cf-how li {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+.cf-how li:last-child {
+  margin-bottom: 0;
+}
+.cf-how li > span {
+  background: #d5e4b8;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+.cf-how li p {
+  margin: 0;
+  font-size: 13px;
+}
+.cf-how li h3 {
+  font-size: 16px;
+  margin-bottom: 5px;
+}
+.cf-disclosure {
+  padding: 0 0 45px;
+  font-size: 12px;
+  color: #526553;
+}
+.cf-disclosure p {
+  margin: 8px 0 0;
+  max-width: 950px;
+}
+.cf-page {
+  padding: 44px 0 70px;
+  min-height: 70vh;
+}
+.cf-back {
+  display: inline-block;
+  font-size: 13px;
+  color: #42674f;
+  margin-bottom: 30px;
+}
+.cf-detail-heading {
+  max-width: 870px;
+  margin-bottom: 35px;
+}
+.cf-detail-heading h1 {
+  font-size: clamp(36px, 4.5vw, 60px);
+}
+.cf-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 35px;
+  align-items: start;
+}
+.cf-detail-grid article > .cf-cover {
+  height: 350px;
+  border-radius: 16px;
+}
+.cf-panel {
+  background: white;
+  padding: 28px;
+  border: 1px solid #dce4d6;
+  border-radius: 15px;
+  margin-bottom: 22px;
+  overflow-wrap: anywhere;
+}
+.cf-panel h2 {
+  font-size: 29px;
+}
+.cf-panel p {
+  font-size: 14px;
+}
+.cf-panel .cf-eyebrow {
+  margin-bottom: 10px;
+}
+.cf-detail-grid article > .cf-panel:first-of-type {
+  margin-top: 22px;
+}
+.cf-badge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.055em;
+  background: #f4edce;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #695727;
+  margin-bottom: 20px;
+  font-weight: 650;
+}
+.cf-donation {
+  position: sticky;
+  top: 150px;
+}
+.cf-donation .cf-progress-block {
+  margin-bottom: 18px;
+}
+.cf .cf-small {
+  font-size: 12px;
+  color: #5a6c61;
+}
+.cf-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.cf-form h2,
+.cf-form p {
+  margin-bottom: 0;
+}
+.cf-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 550;
+}
+.cf-form :is(input:not([type="checkbox"]), select, textarea) {
+  border: 1px solid #bcccbc;
+  border-radius: 8px;
+  padding: 11px 12px;
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  color: #173b30;
+  background: #fffefa;
+  min-height: 46px;
+}
+.cf-form textarea {
+  resize: vertical;
+}
+.cf-form .cf-checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.6;
+}
+.cf-checkbox input {
+  width: 19px;
+  height: 19px;
+  margin-top: 3px;
+  accent-color: #215b3c;
+  flex-shrink: 0;
+}
+.cf-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+}
+.cf-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cf-presets button {
+  font-size: 11px;
+  padding: 9px 12px;
+  border-radius: 8px;
+}
+.cf-notice {
+  padding: 16px 18px;
+  background: #edf3e8;
+  color: #31543c;
+  border: 1px solid #cfddc5;
+  border-radius: 10px;
+  margin-bottom: 18px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.cf-error {
+  background: #fff1eb;
+  color: #86392c;
+  border-color: #eec5b7;
+}
+.cf-text-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-size: 13px;
+  color: #24583d;
+  background: none;
+  border: none;
+  padding: 6px 0;
+}
+.cf-evidence {
+  padding: 25px;
+  margin-bottom: 22px;
+  background: #eaf0e2;
+  border: 1px solid #d7e2ce;
+  border-radius: 14px;
+}
+.cf-evidence p {
+  font-size: 13px;
+}
+.cf-hash {
+  overflow-wrap: anywhere;
+}
+.cf-preline {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cf-payment {
+  border-top: 1px solid #d8e2d1;
+  padding-top: 20px;
+  margin-top: 25px;
+}
+.cf-payment .cf-button {
+  display: flex;
+}
+.cf-account-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 90px;
+  padding: 30px 0;
+  align-items: start;
+}
+.cf-account-grid h1 {
+  font-size: 62px;
+}
+.cf-account-steps {
+  padding-left: 23px;
+  line-height: 2.4;
+  margin: 25px 0;
+  font-size: 14px;
+}
+.cf-manage-grid {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.cf-manage-grid > aside h2 {
+  font-size: 25px;
+}
+.cf-campaign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cf-list-item {
+  padding: 14px;
+  border: 1px solid #dce4d6;
+  border-radius: 9px;
+  text-align: left;
+  background: #fafbf6;
+}
+.cf-list-item[aria-pressed="true"] {
+  border-color: #406841;
+  background: #edf3e4;
+}
+.cf-list-item strong {
+  display: block;
+  font-size: 13px;
+}
+.cf-list-item span {
+  font-size: 11px;
+  color: #5f725f;
+}
+.cf-history {
+  padding-bottom: 15px;
+  border-bottom: 1px solid #dce4d6;
+}
+@media (max-width: 900px) {
+  .cf-hero-grid {
+    gap: 32px;
+    grid-template-columns: 1.2fr 1fr;
+  }
+  .cf-hero-art {
+    height: 355px;
+    padding: 25px;
+  }
+  .cf-art-label strong {
+    font-size: 35px;
+  }
+  .cf-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cf-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .cf-how {
+    gap: 30px;
+    padding: 30px;
+  }
+  .cf-detail-grid {
+    gap: 20px;
+    grid-template-columns: 1.1fr 1fr;
+  }
+  .cf-panel {
+    padding: 22px;
+  }
+  .cf-account-grid {
+    gap: 35px;
+  }
+  .cf-account-grid h1 {
+    font-size: 48px;
+  }
+  .cf-manage-grid {
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 20px;
+  }
+}
+@media (max-width: 640px) {
+  .cf-container {
+    padding: 0 20px;
+  }
+  .cf-hero-grid {
+    grid-template-columns: 1fr;
+    padding-top: 42px;
+    padding-bottom: 45px;
+    gap: 35px;
+  }
+  .cf-hero h1 {
+    font-size: 48px;
+  }
+  .cf-hero-art {
+    height: 295px;
+    max-width: 340px;
+    width: 100%;
+    justify-self: center;
+  }
+  .cf-sprout {
+    position: absolute;
+    top: 35px;
+    right: 45px;
+    width: 110px;
+    height: 110px;
+  }
+  .cf-orbit {
+    width: 190px;
+    height: 190px;
+    right: 15px;
+    top: 20px;
+  }
+  .cf-art-label strong {
+    font-size: 37px;
+  }
+  .cf-trust {
+    flex-direction: column;
+    gap: 14px;
+    padding: 22px 0;
+  }
+  .cf-section {
+    padding: 40px 0;
+  }
+  .cf h2 {
+    font-size: 31px;
+  }
+  .cf-search {
+    width: 100%;
+    min-width: 0;
+  }
+  .cf-cards,
+  .cf-how,
+  .cf-detail-grid,
+  .cf-account-grid,
+  .cf-manage-grid {
+    grid-template-columns: 1fr;
+  }
+  .cf-how {
+    padding: 26px;
+    gap: 20px;
+  }
+  .cf-panel {
+    padding: 22px;
+  }
+  .cf-detail-grid article > .cf-cover {
+    height: 240px;
+  }
+  .cf-donation {
+    position: static;
+  }
+  .cf-detail-grid aside {
+    grid-row: 1;
+  }
+  .cf-detail-heading {
+    margin-bottom: 20px;
+  }
+  .cf-page {
+    padding-top: 28px;
+  }
+  .cf-account-grid {
+    padding-top: 8px;
+  }
+  .cf-account-grid h1 {
+    font-size: 46px;
+  }
+  .cf-form-row {
+    grid-template-columns: 1fr;
+  }
+  .cf-manage-grid > aside {
+    max-height: 400px;
+    overflow: auto;
+  }
+  .cf-amount {
+    font-size: 22px;
+  }
+  .cf-badge {
+    font-size: 9px;
+  }
+  .cf-art-stamp {
+    right: -10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cf * {
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

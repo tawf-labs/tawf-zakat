@@ -13,6 +13,7 @@ import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import React, { useState } from "react";
 import { DeploymentGate } from "../components/DeploymentGate";
 import { RootWorkspaceAccessProvider } from "../features/workspace/useWorkspaceAccess";
+import { CrowdfundingNav, isCrowdfundingPath } from "../features/crowdfunding/CrowdfundingNav";
 
 import appCss from "../styles.css?url";
 
@@ -27,12 +28,12 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "Tawf Zakat — Protokol Zakat Transparan & Syariah",
+        title: "TAWF — Kebaikan Bersama",
       },
       {
         name: "description",
         content:
-          "Salurkan zakat, infaq, dan sedekah secara amanah dengan transparansi 100% dan pengawasan Dewan Pengawas Syariah.",
+          "Temukan kampanye individu dan organisasi, ajukan penggalangan dana, dan telusuri status bukti. Prototipe crowdfunding dengan pembayaran Midtrans Sandbox.",
       },
     ],
     links: [
@@ -69,13 +70,18 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <Navbar />
+      {pathname !== "/" && isCrowdfundingPath(pathname) ? <CrowdfundingNav /> : <Navbar />}
       <ErrorBoundary>
         <div className="flex-1">{children}</div>
       </ErrorBoundary>
       {!isWorkspace && <Footer />}
     </>
   );
+}
+
+function RouteDeploymentGate({ children }: { children: React.ReactNode }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return isCrowdfundingPath(pathname) ? children : <DeploymentGate>{children}</DeploymentGate>;
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {
@@ -131,7 +137,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 "--ck-dropdown-box-shadow": "0px 12px 32px rgba(27, 118, 94, 0.12)",
               }}
             >
-              <DeploymentGate>
+              <RouteDeploymentGate>
               <WalletProvider>
                 <WebSocketProvider>
                   <RootWorkspaceAccessProvider>
@@ -140,7 +146,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                   </RootWorkspaceAccessProvider>
                 </WebSocketProvider>
               </WalletProvider>
-              </DeploymentGate>
+              </RouteDeploymentGate>
             </SafeConnectKitProvider>
           </QueryClientProvider>
         </WagmiProvider>

@@ -11,7 +11,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "verify:ssr": "VERCEL=1 vite build && node scripts/verify-ssr.mjs"
+    "verify:ssr": "VERCEL=1 vite build && node scripts/verify-ssr.mjs",
+    "verify:crowdfunding": "node scripts/verify-crowdfunding.mjs && node scripts/verify-crowdfunding-payment-races.mjs"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.20",

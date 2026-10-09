@@ -3,7 +3,7 @@
  * institution, fund type and contact; a signature-verified settlement records a
  * RECEIVED contribution; anything unverified records nothing.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import app from "../src/index";
@@ -96,6 +96,31 @@ describe("gateway webhook to ledger", () => {
     process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
     await post("/api/webhooks/simulator", { trxId: body.trxId });
     expect(await contributions.listContributions(INSTITUTION)).toHaveLength(0);
+    const gateway = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({ order_id: body.trxId, currency: "IDR", gross_amount: "250000.00", transaction_status: "pending" })) as unknown as typeof fetch);
+    try {
+      await app.fetch(new Request(`http://localhost:3001/api/donations/status/${body.trxId}`));
+      await app.fetch(new Request(`http://localhost:3001/api/donations/${body.trxId}`));
+      expect(gateway).toHaveBeenCalledTimes(1);
+    } finally { gateway.mockRestore(); }
+    expect(await contributions.listContributions(INSTITUTION)).toHaveLength(0);
+    expect((await settle(body.trxId, { signature_key: "forged-replay" })).status).toBe(401);
+    expect(await contributions.listContributions(INSTITUTION)).toHaveLength(0);
+  });
+
+  it("re-verifies PAID at the gateway before recovering a transient ledger write failure", async () => {
+    const { body } = await invoice(); process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
+    const failedWrite = spyOn(contributions, "createContribution").mockRejectedValueOnce(new Error("transient ledger outage"));
+    try { expect((await settle(body.trxId)).status).toBe(200); }
+    finally { failedWrite.mockRestore(); }
+    expect(await contributions.listContributions(INSTITUTION)).toHaveLength(0);
+    const gateway = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({ order_id: body.trxId, currency: "IDR", gross_amount: "250000.00", transaction_status: "settlement", fraud_status: "accept" })) as unknown as typeof fetch);
+    try {
+      expect((await app.fetch(new Request(`http://localhost:3001/api/donations/status/${body.trxId}`))).status).toBe(200);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(await contributions.listContributions(INSTITUTION)).toHaveLength(1);
+      await app.fetch(new Request(`http://localhost:3001/api/donations/status/${body.trxId}`));
+      expect(await contributions.listContributions(INSTITUTION)).toHaveLength(1);
+    } finally { gateway.mockRestore(); }
   });
 
   it("records nothing when no institution is configured for online payments", async () => {

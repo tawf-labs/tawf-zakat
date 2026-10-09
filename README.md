@@ -1,4 +1,78 @@
-# ZKT: Zero-Knowledge Zakat
+# ZKT — Kampanye Infak dan Bukti Pengelolaan Dana
+
+> **Cakupan aktif:** penggalangan infak publik yang diperiksa operator, pembayaran Midtrans **sandbox**, dan bukti pencatatan kampanye pada blockchain; ruang kerja lembaga yang sudah ada tetap terpisah. Lihat [CONTEXT.md](CONTEXT.md) untuk istilah dan batas tanggung jawab.
+>
+> **Bukan layanan produksi siap menerima dana:** pengujian sandbox tidak membuktikan izin PUB, legalitas penyelenggara, kepatuhan syariah, atau realisasi bantuan. Pencatatan blockchain tidak memverifikasi kebenaran cerita maupun saldo bank. Kontrak registry kampanye baru perlu dikonfigurasi dan dideploy tersendiri sebelum UI boleh menampilkan konfirmasi rantai.
+>
+## Menjalankan kampanye infak sandbox
+
+Prasyarat: Bun 1.4.2+, PostgreSQL lokal/pengujian, dan Foundry untuk pengujian kontrak. Jangan mengarahkan migrasi percobaan ke database produksi. Modul crowdfunding memakai penyimpanan terpisah dari ruang kerja lembaga; seluruh mutasi dan antrean blockchain disimpan atomik dalam satu aggregate PostgreSQL. Desain ini untuk MVP bervolume kecil, bukan klaim kapasitas produksi.
+
+Konfigurasi backend melalui environment lokal yang tidak di-commit:
+
+- `CROWDFUNDING_DATABASE_URL`: koneksi PostgreSQL pengujian; wajib untuk API kampanye. Tidak ada migrasi otomatis atau fallback data sementara ketika database belum tersedia.
+- `CAMPAIGN_DOCUMENT_KEY`: kunci acak 32 byte dalam bentuk 64 karakter hex untuk enkripsi dokumen privat. Simpan aman dan cadangkan terpisah dari database; kehilangan kunci membuat dokumen tidak dapat dibaca.
+- `MIDTRANS_SERVER_KEY`: server key yang diterima akun Midtrans pada endpoint sandbox. Awalan key saja bukan bukti environment: key berawalan `Mid-server-...` maupun `SB-Mid-server-...` dapat diperiksa, tetapi seluruh request dan redirect tetap dibatasi ke sandbox; tidak ada fallback production. `MIDTRANS_IS_PRODUCTION` harus tidak aktif. Gagal menghubungi gateway tidak diganti pembayaran mock.
+- `CAMPAIGN_REGISTRY_ADDRESS`, `CAMPAIGN_CHAIN_RPC_URL`, `CAMPAIGN_CHAIN_ID`, `CAMPAIGN_RECORDER_PRIVATE_KEY`: registry dan akun pencatat khusus. Adapter hanya menerima chain lokal `31337` atau Arbitrum Sepolia `421614`. Kunci pencatat tidak dikirim ke browser. Tanpa konfigurasi ini, UI menyatakan blockchain belum dikonfigurasi dan antrean tetap tersimpan.
+
+Setelah memilih database pengujian dan menyetel environment:
+
+```bash
+cd backend
+bun install
+bun run crowdfunding:migrate
+# Set CROWDFUNDING_OPERATOR_NAME, CROWDFUNDING_OPERATOR_EMAIL,
+# dan CROWDFUNDING_OPERATOR_PASSWORD melalui pengelola secret/environment lokal.
+bun run crowdfunding:operator
+bun run dev
+```
+
+Operator dibuat lewat CLI, bukan pilihan peran pada formulir pendaftaran. Password minimal 12 karakter. CLI menolak promosi otomatis alamat email yang sudah terdaftar. Registrasi publik hanya menghasilkan akun penggalang individu/organisasi; kepemilikan email belum diverifikasi lewat OTP, dan pemeriksaan identitas kampanye tetap tugas petugas.
+
+Di terminal lain:
+
+```bash
+cd frontend
+bun install
+PORT=3000 VITE_API_BASE_URL=http://localhost:3001 bun run dev
+```
+
+Buka `http://localhost:3000/` atau `/kampanye` untuk halaman publik, `/galang-dana` untuk penggalang, dan `/kelola-kampanye` untuk operator. Tidak ada kampanye fiktif yang otomatis diterbitkan. Buat proposal, unggah bukti privat, ajukan, lalu masuk sebagai operator untuk memeriksa versi, meminta revisi/menyetujui, dan menerbitkannya. Dokumen dibatasi PDF/JPEG/PNG maksimal 2 MiB per berkas.
+
+Checkout membuka halaman resmi Midtrans sandbox. Browser hanya memeriksa status yang dikonfirmasi backend. Endpoint notifikasi khusus kampanye adalah `/api/crowdfunding/midtrans/notification`; endpoint lama `/api/webhooks/payment` juga meneruskan order kampanye berawalan `CF-` ke pemeriksaan yang sama. Gunakan URL HTTPS API yang dapat dijangkau Midtrans saat menguji notifikasi eksternal. Localhost saja tidak dapat menerima webhook dari layanan luar. Sandbox tidak memodelkan biaya operasional/pemrosesan nyata atau transfer ke penerima manfaat.
+
+Jika pembuatan checkout terganggu, gunakan pemulihan pembayaran yang sama: backend memeriksa status Midtrans terlebih dahulu dan tidak membuat ID pesanan baru untuk hasil yang masih ambigu. Jika pesanan sudah ada tetapi tautan checkout tidak dapat dipulihkan, pemeriksaan di sisi merchant mungkin diperlukan. Akses pembayaran donatur disimpan per tab browser, bukan akun donatur; penutupan tab atau hilangnya respons jaringan sebelum token diterima belum memiliki pemulihan lintas perangkat.
+
+Operator dapat membuka kembali kampanye yang sudah disetujui/terbit untuk revisi material. Donasi baru dijeda, halaman publik mempertahankan isi versi terakhir yang diterbitkan, dan perubahan harus diajukan, diperiksa, disetujui, lalu diterbitkan kembali. Checkout yang sudah diterbitkan sebelum jeda masih dapat dibayar; penerimaan yang dikonfirmasi tetap dicatat. Publikasi laporan perkembangan, rincian anggaran publik, dan alur pencairan/penyaluran crowdfunding belum tersedia; ruang kerja penyaluran lembaga lama bukan pengganti otomatis fitur tersebut.
+
+Pemeriksaan lokal (tanpa pembayaran atau broadcast publik):
+
+```bash
+cd backend
+bun run typecheck
+NODE_ENV=test bun test
+# Integrasi Chromium → frontend → API → PGlite; hanya gateway berupa fixture.
+NODE_ENV=test CROWDFUNDING_BROWSER=1 bun test test/crowdfunding_browser.test.ts
+cd ../frontend
+bun run typecheck
+bun run build
+cd ../sc
+forge test --match-contract CampaignEvidenceRegistryTest
+```
+
+Tes browser memerlukan Playwright di frontend dan Chromium lokal; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` dapat dipakai untuk memilih executable selain `/usr/bin/chromium`.
+
+Regresi driver PostgreSQL nyata tersedia di `backend/test/crowdfunding-postgres.test.ts`. Aktifkan dengan `NODE_ENV=test` dan `CROWDFUNDING_POSTGRES_TEST_URL` yang menunjuk PostgreSQL lokal. Tes memakai tabel TEMP di dalam transaksi, tidak mengubah tabel aplikasi, dan memeriksa agar aggregate JSON tetap berupa object setelah penulisan serta rollback.
+
+Registry baru: `sc/src/CampaignEvidenceRegistry.sol`. Administrator dan pencatat harus berbeda. Script `sc/script/DeployCampaignEvidenceRegistry.s.sol` tetap dibatasi ke chain lokal. Deployment testnet terpisah memakai `backend/src/scripts/deploy-campaign-registry.ts`: default dry-run, broadcast hanya dengan `--broadcast`, chain wajib Arbitrum Sepolia `421614`, batas pengeluaran deployer 0,001 ETH testnet termasuk pengisian saldo gas pencatat, dan menolak deployment ulang bila alamat/jurnal sudah ada. Jangan menaruh private key pada argumen CLI.
+
+**Snapshot deployment 9 Oktober 2026:** registry kampanye di Arbitrum Sepolia adalah [`0x45239b7e7db0cdddd25dcdd3bf88f31acd1dbcba`](https://sepolia.arbiscan.io/address/0x45239b7e7db0cdddd25dcdd3bf88f31acd1dbcba). Receipt deploy, peran admin/pencatat, kecocokan bytecode, dan satu pencatatan sintetis sudah diperiksa pada saat deployment. Detail transaksi tersimpan di [`docs/deployments/2026-10-09-campaign-registry-arbitrum-sepolia.json`](docs/deployments/2026-10-09-campaign-registry-arbitrum-sepolia.json). Ini snapshot historis, bukan pengganti pemeriksaan RPC terkini. Catatan sintetis bukan donasi atau bukti penyaluran. Registry lembaga lama tidak diganti.
+
+Konfigurasi lokal disimpan di `backend/.env`: `CAMPAIGN_REGISTRY_ADDRESS`, `CAMPAIGN_CHAIN_ID`, `CAMPAIGN_CHAIN_RPC_URL`, dan `CAMPAIGN_RECORDER_PRIVATE_KEY`. Restart backend setelah mengubah environment. Backend memproses antrean bukti ketika registry dikonfigurasi dan `DEPLOYMENT_PENDING` tidak aktif; akun pencatat memerlukan saldo ETH testnet untuk gas. Deployment registry tidak membuktikan izin penggalangan, pembayaran terkonfirmasi, atau bantuan diterima.
+
+## Dokumentasi historis protokol zakat
+
+> Klaim alamat deployment, framework, dan status ZK di bawah bukan konfigurasi kampanye infak aktif. Frontend aktif berada di `frontend/` (TanStack Start/React), backend di `backend/` (Bun/Hono); jangan memakai perintah `cd fe` di bagian historis untuk menjalankan aplikasi aktif. Untuk snapshot deployment lembaga, lihat `docs/deployments/` dan ADR terkait; snapshot bukan pemeriksaan RPC terkini.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.31-blue.svg)](https://soliditylang.org/)

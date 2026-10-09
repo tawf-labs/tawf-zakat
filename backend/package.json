@@ -18,6 +18,8 @@
     "proposal:decisions:apply": "bun src/scripts/proposal-decided-lines.ts apply",
     "shares:verify": "bun src/scripts/allocation-beneficiary-shares.ts verify",
     "shares:apply": "bun src/scripts/allocation-beneficiary-shares.ts apply",
+    "crowdfunding:migrate": "bun src/scripts/crowdfunding-admin.ts migrate",
+    "crowdfunding:operator": "bun src/scripts/crowdfunding-admin.ts operator",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

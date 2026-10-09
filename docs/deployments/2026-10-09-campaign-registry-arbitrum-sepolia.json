@@ -1,0 +1,33 @@
+{
+  "contract": "CampaignEvidenceRegistry",
+  "chainId": 421614,
+  "network": "Arbitrum Sepolia",
+  "administrator": "0x5e9B652C4E8a013f6fAb69F0b55377c408B59968",
+  "recorder": "0x5625F133a12eC7Ad4cc20AFFB6f2D62c74b3956e",
+  "source": "sc/src/CampaignEvidenceRegistry.sol",
+  "createdAt": "2026-10-09T10:14:16.046Z",
+  "creationBytecodeHash": "0x433ab683d7ff8e4829cff48796a7cd460fcfb6fb7616b8689fbb1bf3ef25e3fc",
+  "status": "DEPLOYED_CONFIGURED_AND_RECORDING_CHECKED",
+  "deploymentTransactionHash": "0xb6ef263f4c01b73b6c44fdc2b8ee5924d885e8c6d43c8be08a84f03af12906f5",
+  "address": "0x45239b7e7db0cdddd25dcdd3bf88f31acd1dbcba",
+  "deploymentBlock": "317364039",
+  "deploymentBlockHash": "0x038a7ed9fc17b06ce2fdc0b9ed6686022143c0143dc8eaaf0cf2f60363c85ce8",
+  "runtimeBytecodeHash": "0xf995c4d4577b4cc90de1a82fa24a997aa171dc16e02fa7e0a32a33f56f905b74",
+  "deploymentGasUsed": "272440",
+  "explorer": "https://sepolia.arbiscan.io/address/0x45239b7e7db0cdddd25dcdd3bf88f31acd1dbcba",
+  "recorderFundingTransactionHash": "0xc90897e4b57a2da66f08a998987554ff4d2ab84d74211a314a4ba8dcfa9d39c3",
+  "recorderFundingWei": "200000000000000",
+  "checkedAt": "2026-10-09T10:15:27.678Z",
+  "deployedCodeMatchesBuild": true,
+  "smokeCheck": {
+    "eventId": "deployment-check:0x45239b7e7db0cdddd25dcdd3bf88f31acd1dbcba",
+    "campaignId": "deployment-check:arbitrum-sepolia",
+    "kind": "DEPLOYMENT_CHECK",
+    "payloadHash": "0xbe987b992885638555a9503db9f06b64e5d816adcb50abfc7ab441a226ca007f",
+    "synthetic": true,
+    "transactionHash": "0x4811f365989355333f15e9fc94b4fda2cb733662862f1862592db3b0fe4ca62e",
+    "blockNumber": "317364311",
+    "status": "success",
+    "explorer": "https://sepolia.arbiscan.io/tx/0x4811f365989355333f15e9fc94b4fda2cb733662862f1862592db3b0fe4ca62e"
+  }
+}

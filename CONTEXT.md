@@ -1,8 +1,46 @@
-# ZKT — Bukti dan Rekonsiliasi Pengelolaan Zakat
+# ZKT — Penggalangan Infak dan Bukti Pengelolaan Dana
 
-ZKT adalah layanan teknologi bagi Pengelola Zakat untuk menelusuri bukti, merekonsiliasi catatan, dan memeriksa angka laporan. Pengelolaan serta penyaluran dana merupakan tanggung jawab lembaga.
+ZKT mencakup penggalangan infak publik yang dikurasi operator dan layanan teknologi lembaga untuk menelusuri bukti, merekonsiliasi catatan, serta memeriksa laporan. Peran penyelenggara penggalangan, penggalang, dan pelaksana penyaluran dibedakan; keberadaan aplikasi bukan bukti izin operasional atau legalitas badan penyelenggara.
 
 ## Language
+
+### Penggalangan infak publik
+
+**Penggalang kampanye**:
+Individu atau organisasi yang mengajukan kebutuhan bantuan dan bertanggung jawab atas informasi serta bukti yang disampaikannya.
+_Avoid_: Penyelenggara PUB atau pemegang izin, hanya karena memiliki halaman kampanye; amil lembaga, untuk setiap penggalang individu.
+
+**Penyelenggara penggalangan**:
+Badan yang bertanggung jawab atas pelaksanaan pengumpulan sumbangan dan kewajiban yang berlaku pada kegiatannya; identitas serta dasar kewenangannya harus dibedakan dari identitas penggalang.
+_Avoid_: Menganggap badan atau izin telah ada karena aplikasi dapat menerbitkan kampanye.
+
+**Proposal kampanye**:
+Usulan penggalangan infak berisi kebutuhan, target, periode, penerima manfaat, rencana penggunaan dana, dan bukti pendukung yang diperiksa sebelum diterbitkan kepada publik.
+_Avoid_: Pengajuan penyaluran, yang mengatur pelaksanaan bantuan; keputusan internal lembaga sebagai pengganti otomatis pemeriksaan kampanye publik.
+
+**Kampanye publik**:
+Versi proposal kampanye yang disetujui dan diterbitkan untuk menerima donasi; perubahan material membutuhkan pemeriksaan kembali.
+_Avoid_: Draf penggalang; program bantuan lembaga yang otomatis boleh menerima donasi publik.
+
+**Operator penggalangan**:
+Petugas platform yang memeriksa proposal, mencatat hasil verifikasi, dan mengambil tindakan publikasi sesuai kewenangannya, terpisah dari penggalang proposal tersebut.
+_Avoid_: Auditor independen; pemberi fatwa; petugas pemerintah; penggalang yang menyetujui proposalnya sendiri.
+
+**Pemeriksaan kampanye**:
+Penelaahan identitas, persetujuan, bukti kebutuhan, kewajaran anggaran, dan rencana penyaluran dengan hasil serta batas pemeriksaan yang dicatat.
+_Avoid_: Jaminan bahwa seluruh cerita pasti benar; izin pemerintah; verifikasi otomatis hanya karena dokumen diunggah.
+
+**Donasi kampanye terkonfirmasi**:
+Pembayaran yang telah dikonfirmasi melalui sumber pembayaran dan dikaitkan dengan kampanye tujuan; pengembalian dana dicatat tersendiri.
+_Avoid_: Klik tombol bayar; callback browser; dana telah diterima penerima manfaat; transaksi sandbox sebagai uang nyata.
+
+**Bukti pencatatan kampanye**:
+Komitmen kriptografis atas versi catatan atau keputusan penggalangan yang dapat ditelusuri beserta koreksinya.
+_Avoid_: Bukti penyakit benar; jaminan saldo bank; bukti penyaluran nyata tanpa bukti pendukung; status pembayaran sebagai status konfirmasi blockchain.
+
+**Mitra penyalur kampanye**:
+Lembaga mitra yang melaksanakan bantuan sesuai penugasan dan melaporkan realisasinya; penyerahan dana kepada mitra tidak otomatis membuktikan bantuan diterima penerima manfaat.
+_Avoid_: Penggalang sebagai penerima manfaat secara otomatis; transfer ke mitra sebagai akhir pertanggungjawaban penyelenggara.
 
 ### Pelaku
 
@@ -10,7 +48,7 @@ ZKT adalah layanan teknologi bagi Pengelola Zakat untuk menelusuri bukti, mereko
 Lembaga pengelola zakat berizin, mencakup BAZNAS pusat, provinsi, kabupaten/kota, serta LAZ pada tingkatnya.
 
 **Vendor teknologi**:
-Penyedia layanan teknologi bagi Pengelola Zakat; dalam konteks proyek ini, ZKT menempati peran tersebut.
+Penyedia layanan teknologi bagi Pengelola Zakat; ZKT menempati peran tersebut dalam layanan ruang kerja lembaga. Peran ini tidak dengan sendirinya menetapkan siapa penyelenggara penggalangan pada kampanye publik.
 _Avoid_: Amil, pengelola dana zakat, jika yang dimaksud adalah tim penyedia teknologi.
 
 **Muzakki**:

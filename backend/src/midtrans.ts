@@ -176,6 +176,8 @@ export async function checkMidtransStatus(orderId: string): Promise<{
   isSettled: boolean;
   status: string;
   grossAmount?: string;
+  orderId?: string;
+  currency?: string;
   settlementTime?: string;
 } | null> {
   const serverKey = process.env.MIDTRANS_SERVER_KEY;
@@ -202,11 +204,13 @@ export async function checkMidtransStatus(orderId: string): Promise<{
     if (response.ok) {
       const data = (await response.json()) as any;
       const status = data.transaction_status || "unknown";
-      const isSettled = status === "settlement" || status === "capture";
+      const isSettled = (status === "settlement" && (!data.fraud_status || data.fraud_status === "accept")) || (status === "capture" && data.fraud_status === "accept");
       return {
         isSettled,
         status,
         grossAmount: data.gross_amount,
+        orderId: data.order_id,
+        currency: data.currency,
         settlementTime: data.settlement_time || data.transaction_time,
       };
     }

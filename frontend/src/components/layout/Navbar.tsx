@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TawfLogo } from "./TawfLogo";
 import { Link } from "@tanstack/react-router";
 import { SafeConnectKitButton } from "../../lib/SafeConnectKitProvider";
 import {
@@ -40,7 +41,9 @@ export function Navbar() {
 
   const navLinks = [
     { to: "/", label: "Beranda", icon: Home },
-    { to: "/donasi", label: "Salurkan Zakat", icon: HeartHandshake },
+    { to: "/kampanye", label: "Kampanye", icon: HeartHandshake },
+    { to: "/galang-dana", label: "Galang Dana", icon: HeartHandshake },
+    { to: "/donasi", label: "Kontribusi Lembaga", icon: HeartHandshake },
     { to: "/transparansi", label: "Transparansi", icon: Eye },
     { to: "/verifikasi", label: "Cek Bukti", icon: CheckCircle2 },
     { to: "/rekonsiliasi", label: "Rekonsiliasi", icon: Scale },
@@ -53,18 +56,8 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto flex h-16 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
         {/* Brand Logo */}
         <div className="min-w-0">
-          <Link to="/" className="flex items-center gap-2.5 whitespace-nowrap group">
-            <div className="w-8 h-8 shrink-0 rounded-xl bg-gradient-to-br from-[#1b765e] to-[#17332c] flex items-center justify-center text-white font-serif font-bold text-base shadow-xs group-hover:scale-105 transition-transform">
-              Z
-            </div>
-            <div className="flex flex-col">
-              <span className="font-serif text-lg sm:text-xl font-bold tracking-tight text-[#17332c] leading-none">
-                TAWF<span className="hidden sm:inline"> ZAKAT</span>
-              </span>
-              <span className="hidden sm:block text-[9px] tracking-[0.18em] uppercase text-[#1b765e] font-semibold">
-                Transparan & Syariah
-              </span>
-            </div>
+          <Link to="/" aria-label="TAWF beranda" className="flex min-h-11 items-center whitespace-nowrap rounded focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b765e]">
+            <TawfLogo />
           </Link>
         </div>
 
