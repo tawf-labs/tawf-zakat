@@ -15,6 +15,7 @@ import {
   Users,
   Wallet,
   type LucideIcon,
+  Scale,
 } from "lucide-react";
 import type { WorkspaceSection, WorkspaceSectionId } from "./workspaceNavigation";
 
@@ -25,6 +26,7 @@ const icons: Record<WorkspaceSectionId, LucideIcon> = {
   activities: ClipboardCheck,
   certificates: BadgeCheck,
   evidence: FileText,
+  reconciliation: Scale,
   identity: UserRound,
   members: Users,
 };

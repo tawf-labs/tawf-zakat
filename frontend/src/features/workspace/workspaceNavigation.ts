@@ -1,6 +1,6 @@
 import type { Capabilities } from "./workspaceClient";
 
-export type WorkspaceSectionId = "overview" | "contributions" | "disbursement" | "activities" | "certificates" | "evidence" | "identity" | "members";
+export type WorkspaceSectionId = "overview" | "contributions" | "disbursement" | "activities" | "certificates" | "evidence" | "reconciliation" | "identity" | "members";
 export type WorkspaceSection = { id: WorkspaceSectionId; label: string; description: string; group: "Ruang kerja" | "Operasional" | "Bukti & pemeriksaan" | "Pengaturan" };
 
 // Kept in the code but not offered in the MVP workspace (ADR-0039 amendment, 2026-10-02):
@@ -12,6 +12,7 @@ const sections: WorkspaceSection[] = [
   { id: "activities", label: "Kegiatan", description: "Telusuri pendanaan dan perkembangan kegiatan lembaga.", group: "Operasional" },
   { id: "certificates", label: "Sertifikat", description: "Terbitkan dan periksa bukti digital kegiatan penyaluran.", group: "Operasional" },
   { id: "evidence", label: "Bukti & laporan", description: "Susun laporan periode dari data penyaluran yang tercatat di aplikasi.", group: "Bukti & pemeriksaan" },
+  { id: "reconciliation", label: "Rekonsiliasi", description: "Periksa selisih antara catatan lembaga, catatan publik, dan laporan yang mendasarinya.", group: "Bukti & pemeriksaan" },
   { id: "identity", label: "Identitas & mandat", description: "Periksa mandat pribadi dan konteks akun pengesahan lembaga.", group: "Pengaturan" },
   { id: "members", label: "Petugas & akses", description: "Kelola petugas, mandat operasional, dan akun pengesahan lembaga.", group: "Pengaturan" },
 ];

@@ -16,10 +16,10 @@
  *   authorized by the registry onchain (ADR-0022).
  */
 
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { sha256, toHex } from "viem";
 import { resolveTenant, type WorkspaceRole } from "./tenancy";
-import type { WorkspaceRuntime } from "./workspace-runtime";
+import { workspaceRuntime, type WorkspaceRuntime } from "./workspace-runtime";
 
 /** Refusal reasons are a closed vocabulary, so a message can never leak a row. */
 export type Refusal =
@@ -99,3 +99,16 @@ export async function authenticateWorkspace(
     session: { institutionId: tenant.institutionId, account: stored.account, role: tenant.role },
   };
 }
+
+/**
+ * Door for staff tools mounted outside the workspace routes (reconciliation,
+ * period figures). They read ledgers no anonymous visitor should reach, so any
+ * active workspace member may pass and everyone else is refused before the route runs.
+ */
+export const requireWorkspaceSession: MiddlewareHandler = async (c, next) => {
+  const runtime = workspaceRuntime();
+  if (!runtime) return c.json({ success: false, error: "Ruang kerja lembaga belum dikonfigurasi." }, 503);
+  const auth = await authenticateWorkspace(c, runtime, undefined);
+  if (!auth.ok) return auth.response;
+  await next();
+};

@@ -20,7 +20,11 @@ import {
 } from "../src/reconciliation-internal";
 import { depositKeyOf, USDC_DEPOSIT_BUCKET } from "../src/internal-usdc-source";
 import { serializeReport } from "../src/routes/reconciliation";
-import app from "../src/index";
+import { Hono } from "hono";
+import reconciliationRoutes from "../src/routes/reconciliation";
+
+// Route logic is exercised without the session door; staff_tool_access.test.ts covers the door itself.
+const app = new Hono().route("/api/reconciliation", reconciliationRoutes);
 
 const PERIOD: ReconciliationOptions["period"] = { kind: "AKHIR_TAHUN", year: 2026 };
 const CHAIN_ID = 421614;

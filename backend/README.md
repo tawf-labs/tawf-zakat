@@ -27,7 +27,9 @@ code, and all `VITE_` variables. The base URL and model above are the defaults;
 only the key is required. Legacy `ANTHROPIC_*` settings are ignored and can be
 removed from this app's server environment.
 
-`POST /api/period-report/draft` uses non-thinking mode, JSON output, a 4,096-token
+The narrative suggestion in the workspace period-report wizard
+(`POST /api/evidence/period-reports/:id/report/narrative`; the public
+`POST /api/period-report/draft` endpoint was retired) uses non-thinking mode, JSON output, a 4,096-token
 output cap, and one request with a 30-second timeout (including response reading).
 There are no automatic retries or fallback providers. Only aggregated period
 figures and report notes are sent, not donor or beneficiary identities. Zod
@@ -327,3 +329,10 @@ for the explicit change from the previous gasless design and remaining limits.
 API references: [Chat completions](https://api-docs.deepseek.com/api/create-chat-completion/),
 [JSON output](https://api-docs.deepseek.com/guides/json_mode/),
 [thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/).
+
+## Staff-only tools
+
+`/api/reconciliation/*` and `/api/period-report/verify` require an active workspace
+session (`Authorization: Bearer <session token>`); anonymous callers get 401, and 503
+while no workspace is configured. They read the legacy single-ledger sources, so any
+active member of any institution may call them — they are not scoped per institution.

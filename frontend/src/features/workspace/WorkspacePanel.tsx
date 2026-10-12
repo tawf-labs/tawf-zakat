@@ -16,6 +16,7 @@ import type { PrivateRequests } from "./privateRequests";
 import { WorkspaceShell, WorkspaceShortcut } from "./WorkspaceShell";
 import { workspaceSections } from "./workspaceNavigation";
 import { PeriodReportPanel } from "./PeriodReportPanel";
+import { ReconciliationWorkbench } from "../reconciliation";
 import { WorkspaceAuthority } from "./WorkspaceAuthority";
 import { DisbursementPanel } from "../disbursement";
 import { ContributionPanel } from "../contributions";
@@ -307,6 +308,7 @@ function ReadyWorkspace({
         case "activities": return <ActivityPanel requests={requests} canManage={capabilities.manageDisbursement} allocationRevision={allocationRevision} />;
         case "certificates": return <CertificateIssuancePanel requests={requests} institutionId={institution.id} canManage={capabilities.manageDisbursement} />;
         case "evidence": return <PeriodReportPanel requests={requests} canPrepare={capabilities.prepareEvidence} canWriteReport={role === "OFFICER"} onOpenCosts={() => navigate("disbursement")} />;
+        case "reconciliation": return <ReconciliationWorkbench requests={requests} />;
         case "identity": return <WorkspaceAuthority requests={requests} workspace={workspace} view="identity" />;
         case "members": return capabilities.manageMembers ? <>
           <WorkspaceAuthority requests={requests} workspace={workspace} view="management" />

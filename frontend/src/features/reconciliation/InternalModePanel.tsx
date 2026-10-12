@@ -6,6 +6,7 @@ import { InternalReportResult } from "./InternalReportResult";
 import { internalPeriodLabel } from "./reconciliationTools";
 import {
   runInternalReconciliation,
+  useReconciliationPost,
   ReconciliationRequestError,
 } from "./reconciliationClient";
 import type { CurrencyUnit, InternalReconciliationResponse } from "./types";
@@ -24,12 +25,13 @@ export function InternalModePanel() {
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [checkedAt, setCheckedAt] = useState(new Date());
+  const post = useReconciliationPost();
 
   const run = async () => {
     setIsRunning(true);
     setError(null);
     try {
-      setResult(await runInternalReconciliation());
+      setResult(await runInternalReconciliation(post));
       setCheckedAt(new Date());
     } catch (caught) {
       setResult(null);

@@ -1,5 +1,9 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
-import app from "../src/index";
+import { Hono } from "hono";
+import reconciliationRoutes from "../src/routes/reconciliation";
+
+// Route logic is exercised without the session door; staff_tool_access.test.ts covers the door itself.
+const app = new Hono().route("/api/reconciliation", reconciliationRoutes);
 import { dbService } from "../src/db";
 import { sourceRead } from "../src/source-read";
 

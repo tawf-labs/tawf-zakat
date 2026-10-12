@@ -28,7 +28,6 @@ import {
   type FigureValue,
   type PeriodFigures,
 } from "../period-report";
-import { draftReport } from "../report-drafter";
 import {
   validateDraft,
   type DraftClaim,
@@ -240,11 +239,6 @@ export function periodReportBody(
 }
 
 /** Decodes a request body down to its reporting period. */
-async function readPeriod(c: any): Promise<ReportingPeriod> {
-  const body = asRecord(await c.req.json(), "Badan permintaan");
-  return parseReportingPeriod(body.period, "Periode pelaporan");
-}
-
 const badRequest = (c: any, message: string) => c.json({ success: false, error: message }, 400);
 const serverError = (c: any, error: any) =>
   c.json({ success: false, error: error?.message || "Laporan periode gagal dihitung." }, 500);
@@ -273,27 +267,6 @@ periodReportRoutes.post("/verify", async (c) => {
         sources
       )
     );
-  } catch (error: any) {
-    return serverError(c, error);
-  }
-});
-
-// The model writes the draft, the validator judges it, and the caller sees both.
-// A drafting failure never fails this request: the figures were computed from the
-// ledger before the model was asked, and they stand whether or not it answered.
-periodReportRoutes.post("/draft", async (c) => {
-  let period: ReportingPeriod;
-  try {
-    period = await readPeriod(c);
-  } catch (error: unknown) {
-    if (error instanceof WireInputError) return badRequest(c, error.message);
-    return badRequest(c, "Badan permintaan bukan JSON yang sah.");
-  }
-
-  try {
-    const { figures, sources } = await periodFiguresFor(period);
-    const attempt = await draftReport(figures);
-    return c.json(periodReportBody(figures, attempt.draft, attempt.unavailable, sources));
   } catch (error: any) {
     return serverError(c, error);
   }

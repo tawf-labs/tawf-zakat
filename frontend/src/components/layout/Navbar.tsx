@@ -6,10 +6,10 @@ import {
   Menu,
   X,
   HeartHandshake,
+  HandCoins,
+  Megaphone,
   CheckCircle2,
   Home,
-  Scale,
-  FileCheck,
   Building2,
   User,
   Copy,
@@ -41,11 +41,9 @@ export function Navbar() {
   const navLinks = [
     { to: "/", label: "Beranda", icon: Home },
     { to: "/kampanye", label: "Kampanye", icon: HeartHandshake },
-    { to: "/galang-dana", label: "Galang Dana", icon: HeartHandshake },
-    { to: "/donasi", label: "Kontribusi Lembaga", icon: HeartHandshake },
+    { to: "/galang-dana", label: "Galang Dana", icon: Megaphone },
+    { to: "/donasi", label: "Zakat & Sedekah", icon: HandCoins },
     { to: "/verifikasi", label: "Cek Bukti", icon: CheckCircle2 },
-    { to: "/rekonsiliasi", label: "Rekonsiliasi", icon: Scale },
-    { to: "/laporan-periode", label: "Laporan Periode", icon: FileCheck },
     { to: "/ruang-kerja", label: "Ruang Kerja", icon: Building2 },
   ];
 
@@ -320,7 +318,7 @@ export function Navbar() {
       <div className="hidden xl:block border-t border-[#dbe7dd]/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Desktop Nav Links */}
-          <nav aria-label="Navigasi utama" className="hidden xl:grid grid-cols-7 gap-1 py-2 text-xs font-semibold text-[#5e7a70]">
+          <nav aria-label="Navigasi utama" className="hidden xl:grid grid-cols-6 gap-1 py-2 text-xs font-semibold text-[#5e7a70]">
             {navLinks.map((link) => {
               const Icon = link.icon;
               return (

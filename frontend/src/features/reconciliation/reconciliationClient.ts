@@ -1,4 +1,4 @@
-import { getApiBaseUrl } from "../../lib/contracts";
+import { createContext, useContext } from "react";
 import type {
   InternalReconciliationResponse,
   ReconciliationReport,
@@ -21,45 +21,30 @@ export type InterInstitutionRequest = {
 /** The server's own words when it refuses a payload - shown to the Amil as-is. */
 export class ReconciliationRequestError extends Error {}
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  let payload: any = null;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new ReconciliationRequestError(
-      `Server membalas ${response.status} tanpa isi yang bisa dibaca.`
-    );
-  }
-
-  if (!response.ok || payload?.success === false) {
-    throw new ReconciliationRequestError(
-      payload?.error || `Rekonsiliasi gagal dijalankan (HTTP ${response.status}).`
-    );
-  }
-
-  return payload as T;
+/** Authenticated POST supplied by the workspace; this module never holds a credential. */
+export type ReconciliationPost = <T>(path: string, body: unknown) => Promise<T>;
+export const ReconciliationPostContext = createContext<ReconciliationPost | null>(null);
+export function useReconciliationPost(): ReconciliationPost {
+  const post = useContext(ReconciliationPostContext);
+  if (!post) throw new Error("Rekonsiliasi hanya tersedia di dalam ruang kerja lembaga.");
+  return post;
 }
 
 export async function runInterInstitutionReconciliation(
+  post: ReconciliationPost,
   request: InterInstitutionRequest
 ): Promise<ReconciliationReport> {
-  const payload = await postJson<{ report: ReconciliationReport }>(
+  const payload = await post<{ report: ReconciliationReport }>(
     "/api/reconciliation/antar-lembaga",
     request
   );
   return payload.report;
 }
 
-export async function runInternalReconciliation(request?: {
+export async function runInternalReconciliation(post: ReconciliationPost, request?: {
   period?: ReportingPeriod;
   fromBlock?: number;
   toBlock?: number;
 }): Promise<InternalReconciliationResponse> {
-  return postJson<InternalReconciliationResponse>("/api/reconciliation/internal", request ?? {});
+  return post<InternalReconciliationResponse>("/api/reconciliation/internal", request ?? {});
 }

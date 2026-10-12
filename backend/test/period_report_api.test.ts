@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import app from "../src/index";
+import { Hono } from "hono";
+import periodReportRoutes from "../src/routes/period-report";
+
+// Route logic is exercised without the session door; staff_tool_access.test.ts covers the door itself.
+const app = new Hono().route("/api/period-report", periodReportRoutes);
 
 const ENDPOINT = "http://localhost:3001/api/period-report/verify";
 

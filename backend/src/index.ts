@@ -15,6 +15,7 @@ import { indexerEngine } from "./indexer";
 import { eventBus, createWebSocketHandler, websocket } from "./ws";
 import reconciliationRoutes from "./routes/reconciliation";
 import periodReportRoutes from "./routes/period-report";
+import { requireWorkspaceSession } from "./workspace-session";
 import reportAuthorityRoutes from "./routes/report-authority";
 import workspaceRoutes from "./routes/workspace";
 import disbursementRoutes from "./routes/disbursement";
@@ -58,9 +59,11 @@ app.use("/api/*", async (c, next) => {
 app.get("/ws", createWebSocketHandler());
 
 // Reconciliation Engine (Spec #55) - lives in its own route module
+app.use("/api/reconciliation/*", requireWorkspaceSession);
 app.route("/api/reconciliation", reconciliationRoutes);
 
 // Laporan Periode Terverifikasi (Spec #61) - likewise its own route module
+app.use("/api/period-report/*", requireWorkspaceSession);
 app.route("/api/period-report", periodReportRoutes);
 
 // Ruang kerja lembaga (Spec #68) - tenancy and access, its own module again.

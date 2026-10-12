@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { bucketsUsed, parseLedgerText, type LedgerTextResult } from "./ledgerText";
 import {
   runInterInstitutionReconciliation,
+  useReconciliationPost,
   ReconciliationRequestError,
 } from "./reconciliationClient";
 import { downloadCsv } from "../../lib/download";
@@ -40,6 +41,7 @@ const rowCount = (parsed: LedgerTextResult) =>
  * getting a result back out as a file.
  */
 export function useInterInstitutionReconciliation() {
+  const post = useReconciliationPost();
   const [periodKind, setPeriodKind] = useState<ReportingPeriod["kind"]>("AKHIR_TAHUN");
   const [year, setYear] = useState(new Date().getFullYear() - 1);
   const [scope, setScope] = useState<BalanceSheetScope>("ALL");
@@ -66,7 +68,7 @@ export function useInterInstitutionReconciliation() {
   );
 
   const reconcileOnce = (position: BalanceSheetPosition | null) =>
-    runInterInstitutionReconciliation({
+    runInterInstitutionReconciliation(post, {
       claim: claim.side,
       source: source.side,
       options: {

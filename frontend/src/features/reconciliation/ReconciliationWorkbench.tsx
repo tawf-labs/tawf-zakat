@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { AlertOctagon, PlayCircle } from "lucide-react";
+import { ReconciliationPostContext, type ReconciliationPost } from "./reconciliationClient";
 import { Button } from "../../components/ui/Button";
 import { LedgerSideEditor } from "./LedgerSideEditor";
 import { LedgerFormatHelp } from "./LedgerFormatHelp";
@@ -7,7 +9,24 @@ import { ReconciliationResult } from "./ReconciliationResult";
 import { InternalModePanel } from "./InternalModePanel";
 import { useInterInstitutionReconciliation } from "./useInterInstitutionReconciliation";
 
-export function ReconciliationWorkbench() {
+/** `requests` is the signed-in workspace's own client; every reconciliation call goes through it. */
+export function ReconciliationWorkbench({
+  requests,
+}: {
+  requests: { json<T>(path: string, init?: RequestInit): Promise<T> };
+}) {
+  const post = useMemo<ReconciliationPost>(
+    () => (path, body) => requests.json(path, { method: "POST", body: JSON.stringify(body) }),
+    [requests],
+  );
+  return (
+    <ReconciliationPostContext.Provider value={post}>
+      <Workbench />
+    </ReconciliationPostContext.Provider>
+  );
+}
+
+function Workbench() {
   const workbench = useInterInstitutionReconciliation();
 
   return (
