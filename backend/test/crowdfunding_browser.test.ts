@@ -79,6 +79,8 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     // No external services/fonts/checkout are needed; do not contact live dependencies.
     await context.route("**/*", (route: any) => {
       const url = new URL(route.request().url());
+      // Stand-in for Midtrans Snap.js: records what the page asks the popup to pay.
+      if (url.hostname === "app.sandbox.midtrans.com" && url.pathname === "/snap/snap.js") return route.fulfill({ contentType: "text/javascript", body: "window.__snapPay = window.__snapPay || []; window.snap = { pay: (token, callbacks) => window.__snapPay.push({ token, callbacks: Object.keys(callbacks) }) };" });
       return ["127.0.0.1", "localhost"].includes(url.hostname) ? route.continue() : route.abort();
     });
     const page = await context.newPage();
@@ -158,6 +160,11 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await page.getByRole("button", { name: "Coba lagi checkout yang sama" }).click();
     await visible("PENDING");
     expect(checkoutAttempts).toEqual([paymentId, paymentId]);
+    // The recovered checkout opens the Snap popup for the same payment, as the zakat flow does.
+    await page.waitForFunction(() => (window as any).__snapPay?.length === 1);
+    expect(await page.evaluate(() => (window as any).__snapPay[0])).toEqual({ token: `fixture-${paymentId}`, callbacks: ["onSuccess", "onPending", "onError", "onClose"] });
+    await page.getByRole("button", { name: "Bayar Sekarang" }).click();
+    await page.waitForFunction(() => (window as any).__snapPay?.length === 2);
     expect(await store.transaction(s => Object.keys(s.payments).length)).toBe(1);
     expect(await store.transaction(s => s.campaigns[campaignId].collectedAmount)).toBe(0);
     settled = true;

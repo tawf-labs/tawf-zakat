@@ -12,6 +12,7 @@ import { CampaignCover, CampaignProgress, Notice } from "./PublicCampaigns";
 import { PublicUpdates } from "./CampaignUpdates";
 import { DonorWall } from "./CampaignDonors";
 import { useCampaignPayment } from "./useCampaignPayment";
+import { payWithSnap } from "../../lib/snapClient";
 
 export function ChainEvidence({ campaign }: { campaign: Campaign }) {
   const labels: Record<string, string> = {
@@ -102,8 +103,29 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     }, 10000);
     return () => clearInterval(timer);
   }, [payment, checkPayment]);
+  // The Snap popup only opens on the donor's own action, never for a payment restored on reload.
+  const openCheckout = useRef(false);
+  const pay = useCallback(
+    (token: string) => {
+      // Popup callbacks are browser-side hints: each one only asks the server for the confirmed status.
+      const recheck = () => void checkPayment();
+      void payWithSnap(token, {
+        onSuccess: recheck,
+        onPending: recheck,
+        onError: recheck,
+        onClose: recheck,
+      });
+    },
+    [checkPayment],
+  );
+  useEffect(() => {
+    if (!openCheckout.current || !payment?.token) return;
+    openCheckout.current = false;
+    if (payment.status.toUpperCase() === "PENDING") pay(payment.token);
+  }, [payment, pay]);
   async function donate(event: React.FormEvent) {
     event.preventDefault();
+    openCheckout.current = true;
     await create({
       amount,
       donorName: donorName.trim() || (anonymous ? "Anonim" : ""),
@@ -299,7 +321,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                               type="button"
                               className="cf-button cf-secondary"
                               disabled={busy}
-                              onClick={() => void retryCheckout()}
+                              onClick={() => {
+                                openCheckout.current = true;
+                                void retryCheckout();
+                              }}
                             >
                               {busy
                                 ? "Mencoba checkout…"
@@ -311,14 +336,24 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                             </p>
                           </>
                         )}
+                      {payment.status.toUpperCase() === "PENDING" &&
+                        payment.token && (
+                          <button
+                            type="button"
+                            className="cf-button"
+                            onClick={() => pay(payment.token!)}
+                          >
+                            Bayar Sekarang
+                          </button>
+                        )}
                       {safePaymentUrl(payment.redirectUrl) ? (
                         <a
-                          className="cf-button"
+                          className="cf-text-button"
                           href={safePaymentUrl(payment.redirectUrl)}
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Buka Pembayaran Midtrans ↗
+                          Buka Pembayaran Midtrans di tab baru ↗
                         </a>
                       ) : (
                         <p>
