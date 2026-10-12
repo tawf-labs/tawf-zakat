@@ -24,7 +24,7 @@ function VerifikasiPage() {
       <PageHeader
         badgeText="Verifikasi Digital Mandiri"
         title="Cek Bukti & Sertifikat Donasi"
-        description="Masukkan nomor transaksi Anda (contoh: TRX-…) untuk memastikan donasi tercatat dengan benar dan tidak dapat diubah diam-diam. Gratis dan tanpa dompet digital."
+        description="Masukkan nomor transaksi Anda (contoh: TRX-…) atau kode bukti donasi kampanye (CF-…) untuk memastikan donasi tercatat dengan benar dan tidak dapat diubah diam-diam. Gratis dan tanpa dompet digital."
       />
 
       <Container>

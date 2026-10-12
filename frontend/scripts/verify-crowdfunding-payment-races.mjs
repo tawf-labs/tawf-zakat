@@ -84,6 +84,7 @@ async function scenario(kind) {
       await release.promise;
       return send({ payment: payment("old-A", "PAID") });
     }
+    if (path.endsWith("/donors")) return send({ total: 0, donors: [] });
     if (path.endsWith("/donations")) {
       creates++;
       if (kind !== "late-status") {

@@ -121,6 +121,28 @@ await context.route("**/*", async (route) => {
   if (path === "/auth/logout") return send({});
   if (path === "/mine" || path === "/review")
     return send({ campaigns: accountB ? [] : [campaign] });
+  if (path === "/review/queue")
+    return send({
+      campaigns: [
+        {
+          id: campaign.id,
+          title: campaign.title,
+          status: campaign.status,
+          version: campaign.version,
+          organizer: "Akun Fixture",
+          updatedAt: "2030-01-01T00:00:00.000Z",
+          tasks: ["SUBMITTED", "APPROVED"].includes(campaign.status)
+            ? [
+                {
+                  type: campaign.status === "SUBMITTED" ? "PROPOSAL" : "PUBLISH",
+                  since: "2030-01-01T00:00:00.000Z",
+                },
+              ]
+            : [],
+        },
+      ],
+    });
+  if (path.endsWith("/donors")) return send({ total: 0, donors: [] });
   if (path === "/campaigns" && method === "POST") {
     const body = request.postDataJSON();
     assert.equal(body.coverImageUrl, undefined);
@@ -450,6 +472,8 @@ try {
   await page.goto(`${base}/kelola-kampanye`);
   await visible("Antrean & kampanye");
   delayDetail = true;
+  // Nothing awaits the operator on a campaign sent back for revision; it lives in the archive tab.
+  await page.getByRole("button", { name: /Semua kampanye/ }).click();
   await page.getByRole("button", { name: /Fixture proposal baru/ }).click();
   await detailStartedPromise;
   await page.getByRole("button", { name: "Keluar", exact: true }).click();

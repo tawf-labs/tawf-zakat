@@ -1964,6 +1964,94 @@
   color: var(--cf-muted);
 }
 
+.cf-payment .cf-receipt-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cf-receipt-code code {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--cf-border);
+  border-radius: 8px;
+  background: var(--cf-sand);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Donatur & doa */
+.cf-donors {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+}
+
+.cf-donors li {
+  display: flex;
+  gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid var(--cf-border);
+}
+
+.cf-donor-avatar {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--cf-green-pale);
+  color: var(--cf-green);
+  font-weight: 700;
+}
+
+.cf-donor-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.cf-donor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cf-donor-head strong {
+  font-size: 15px;
+  color: var(--cf-ink);
+}
+
+.cf-panel .cf-donor-amount {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--cf-muted);
+}
+
+.cf-donor-amount strong {
+  color: var(--cf-green);
+  font-variant-numeric: tabular-nums;
+}
+
+.cf-donor-prayer {
+  margin: 10px 0 0;
+  padding: 12px 16px;
+  background: var(--cf-sand);
+  border-left: 3px solid var(--cf-gold);
+  border-radius: 0 12px 12px 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--cf-ink);
+}
+
 /* Kabar & laporan realisasi */
 .cf-funds {
   display: grid;

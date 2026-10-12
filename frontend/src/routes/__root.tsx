@@ -11,6 +11,7 @@ import { WebSocketProvider } from "../lib/WebSocketContext";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import React, { useState } from "react";
+import { isCampaignReference } from "../features/verification/campaignReceiptApi";
 import { DeploymentGate } from "../components/DeploymentGate";
 import { RootWorkspaceAccessProvider } from "../features/workspace/useWorkspaceAccess";
 import { CrowdfundingNav, isCrowdfundingPath } from "../features/crowdfunding/CrowdfundingNav";
@@ -81,7 +82,11 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
 function RouteDeploymentGate({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  return isCrowdfundingPath(pathname) ? children : <DeploymentGate>{children}</DeploymentGate>;
+  // Checking a campaign donation does not depend on the institutional contract deployment.
+  const campaignReceipt = useRouterState({
+    select: (s) => s.location.pathname === "/verifikasi" && isCampaignReference(String((s.location.search as { trxId?: unknown }).trxId ?? "")),
+  });
+  return isCrowdfundingPath(pathname) || campaignReceipt ? children : <DeploymentGate>{children}</DeploymentGate>;
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {

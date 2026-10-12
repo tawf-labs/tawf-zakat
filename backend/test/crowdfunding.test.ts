@@ -332,6 +332,89 @@ describe("authoritative sandbox payment accounting and outbox", () => {
   });
 });
 
+describe("donor wall and prayers", () => {
+  async function give(id: string, body: Record<string, unknown>, settle = true) {
+    const r = await request(`/campaigns/${id}/donations`, "POST", { amount: 10000, donorName: "Budi", isAnonymous: false, ...body });
+    expect(r.status).toBe(201);
+    if (settle) expect((await request(`/payments/${r.body.payment.id}`, "GET", undefined, undefined, r.body.payment.accessToken)).body.payment.status).toBe("PAID");
+    return r.body.payment;
+  }
+  test("lists only confirmed donations with amounts; anonymous donors stay unnamed and prayers are optional", async () => {
+    const { id, owner } = await approved();
+    expect((await request(`/campaigns/${id}/donations`, "POST", { amount: 10000, donorName: "Budi", isAnonymous: false, prayer: "x".repeat(281) })).status).toBe(400);
+    const named = await give(id, { prayer: "  Semoga lekas pulih.  " });
+    await give(id, { donorName: "PRIVATE DONOR", isAnonymous: true, prayer: "Aamiin" });
+    await give(id, { donorName: "Siti", prayer: "" });
+    await give(id, { donorName: "Unpaid", prayer: "Not confirmed yet" }, false);
+    const wall = await request(`/campaigns/${id}/donors`);
+    expect(wall.status).toBe(200); expect(wall.body.total).toBe(3);
+    const byName = (name: string | null) => wall.body.donors.find((d: any) => d.name === name);
+    expect(byName("Budi")).toMatchObject({ amount: 10000, prayer: "Semoga lekas pulih." });
+    expect(byName(null)).toMatchObject({ amount: 10000, prayer: "Aamiin" });
+    expect(byName("Siti").prayer).toBeUndefined();
+    expect(Date.parse(byName("Budi").paidAt)).toBeGreaterThan(0);
+    for (const hidden of ["PRIVATE DONOR", "Unpaid", "Not confirmed", named.id, "CF-", "accessToken"]) expect(JSON.stringify(wall.body)).not.toContain(hidden);
+    const page = await request(`/campaigns/${id}/donors?offset=1&limit=1`);
+    expect(page.body.total).toBe(3); expect(page.body.donors).toHaveLength(1); expect(page.body.donors[0].id).toBe(wall.body.donors[1].id);
+    expect((await request(`/campaigns/${id}/donors?limit=500`)).status).toBe(400);
+    status = { ...status, transaction_status: "refund", refund_amount: "10000.00" };
+    await request(`/payments/${named.id}`, "GET", undefined, undefined, named.accessToken);
+    expect((await request(`/campaigns/${id}/donors`)).body.donors.map((d: any) => d.name).sort()).toEqual(["Siti", null].sort());
+    const unpublished = (await request("/campaigns", "POST", fields, owner.token)).body.campaign.id;
+    expect((await request(`/campaigns/${unpublished}/donors`)).status).toBe(404);
+    expect((await request(`/campaigns/${unpublished}/donors`, "GET", undefined, owner.token)).body.total).toBe(0);
+  });
+  test("an operator hides an unfit prayer while the donation stays listed", async () => {
+    const { id, owner, op } = await approved();
+    await give(id, { prayer: "TEKS TIDAK PANTAS" }); await give(id, { donorName: "Siti" });
+    const wall = (await request(`/campaigns/${id}/donors`)).body.donors;
+    const target = wall.find((d: any) => d.prayer); const silent = wall.find((d: any) => !d.prayer);
+    const path = `/campaigns/${id}/donors/${target.id}/hide-prayer`;
+    expect((await request(path, "POST", { reason: "Kata kasar" })).status).toBe(401);
+    expect((await request(path, "POST", { reason: "Kata kasar" }, owner.token)).status).toBe(403);
+    expect((await request(`/campaigns/${id}/donors/${silent.id}/hide-prayer`, "POST", { reason: "Nothing to hide" }, op)).status).toBe(404);
+    expect((await request(path, "POST", { reason: "Kata kasar" }, op)).body.donor).toMatchObject({ amount: 10000, prayerHidden: true });
+    expect((await request(path, "POST", { reason: "Again" }, op)).status).toBe(200);
+    const after = await request(`/campaigns/${id}/donors`);
+    expect(after.body.total).toBe(2);
+    expect(after.body.donors.find((d: any) => d.id === target.id)).toMatchObject({ name: "Budi", amount: 10000, prayerHidden: true });
+    expect(JSON.stringify(after.body)).not.toContain("TIDAK PANTAS"); expect(JSON.stringify(after.body)).not.toContain("Kata kasar");
+    expect(await store.transaction(s => s.campaigns[id].history.filter((h: any) => h.action === "PRAYER_HIDE").length)).toBe(1);
+  });
+});
+
+describe("public donation receipt check", () => {
+  test("a donor checks a donation by reference; chain evidence appears only once recorded", async () => {
+    const { id } = await approved();
+    const created = await request(`/campaigns/${id}/donations`, "POST", { amount: 10000, donorName: "PRIVATE DONOR", isAnonymous: false, prayer: "PRIVATE PRAYER" });
+    const payment = created.body.payment; const path = `/receipts/${payment.id}`;
+    expect((await request("/receipts/CF-00000000-0000-4000-8000-000000000000")).status).toBe(404);
+    expect((await request("/receipts/TRX-123")).status).toBe(404);
+    const pending = await request(path);
+    expect(pending.body.receipt).toMatchObject({ reference: payment.id, status: "PENDING", campaign: { id, title: fields.title } });
+    expect(pending.body.receipt.amount).toBeUndefined();
+    await request(`/payments/${payment.id}`, "GET", undefined, undefined, payment.accessToken);
+    const confirmed = await request(`/receipts/${payment.id.toUpperCase()}`);
+    expect(confirmed.body.receipt).toMatchObject({ status: "CONFIRMED", amount: 10000, refundedAmount: 0, campaign: { organizer: { name: "Owner" } } });
+    expect(Date.parse(confirmed.body.receipt.paidAt)).toBeGreaterThan(0);
+    expect(confirmed.body.receipt.chain).toBeUndefined();
+    for (const hidden of ["PRIVATE", "accessToken", "token", "owner@example", "salt", "snapshot"]) expect(JSON.stringify(confirmed.body)).not.toContain(hidden);
+    // A failed recording stays invisible; only a confirmed one is reported.
+    runtime.chain = { async record() { throw new Error("rpc down"); } };
+    await drainCampaignOutbox(runtime, true);
+    expect((await request(path)).body.receipt.chain).toBeUndefined();
+    const transactionHash = `0x${"ab".repeat(32)}`;
+    runtime.chain = { async record() { return { transactionHash }; } };
+    await drainCampaignOutbox(runtime, true);
+    const recorded = (await request(path)).body.receipt;
+    expect(recorded.chain).toMatchObject({ transactionHash, kind: "PAYMENT" });
+    expect(recorded.chain.payloadHash).toBe(await store.transaction(s => Object.values(s.outbox).find(e => e.snapshot.paymentId === payment.id)!.payloadHash));
+    status = { ...status, transaction_status: "partial_refund", refund_amount: "4000.00" };
+    await request(`/payments/${payment.id}`, "GET", undefined, undefined, payment.accessToken);
+    expect((await request(path)).body.receipt).toMatchObject({ status: "PARTIALLY_REFUNDED", amount: 10000, refundedAmount: 4000, chain: { kind: "PAYMENT" } });
+  });
+});
+
 describe("campaign news and realization reports", () => {
   const news = { kind: "NEWS", title: "Kelas dimulai", body: "Kegiatan belajar sudah berjalan." };
   const realization = { kind: "REALIZATION", title: "Pembelian buku", body: "Buku telah dibagikan kepada siswa.", usedAmount: 6000, carriedOutAt: "2026-01-15" };

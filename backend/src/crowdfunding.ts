@@ -64,6 +64,26 @@ export function queueRow(s: CrowdfundingState, c: any) {
   for (const item of c.updates ?? []) if (item.status === "SUBMITTED") tasks.push({ type: "REPORT", since: item.submittedAt, updateId: item.id, title: item.title, usedAmount: item.usedAmount });
   return { id: c.id, title: c.title, status: c.status, version: c.version, organizer: c.organizationName || u.organizationName || u.name, updatedAt: c.updatedAt, tasks };
 }
+// Donor wall: confirmed donations only, at their net amount. The id is derived so the
+// order id, which doubles as the donor's payment reference, never becomes public.
+export const donorId = (p: any) => hash(`donor:${p.id}`).slice(0, 24);
+export function donorDto(p: any) {
+  return { id: donorId(p), name: p.isAnonymous ? null : p.donorName, amount: p.paidAmount - p.refundedAmount, paidAt: p.paidAt ?? p.createdAt, ...(p.prayerHiddenAt ? { prayerHidden: true } : p.prayer ? { prayer: p.prayer } : {}) };
+}
+export function campaignDonors(s: CrowdfundingState, campaignId: string) {
+  return Object.values(s.payments).filter(p => p.campaignId === campaignId && p.paidAmount - p.refundedAmount > 0)
+    .sort((a, b) => (b.paidAt ?? b.createdAt).localeCompare(a.paidAt ?? a.createdAt) || a.id.localeCompare(b.id));
+}
+/** What a donor can check from the order reference alone: never the donor's name or prayer. */
+export function donationReceipt(s: CrowdfundingState, p: any) {
+  const c = campaign(s, p.campaignId);
+  const status = p.refundedAmount ? (p.refundedAmount === p.paidAmount ? "REFUNDED" : "PARTIALLY_REFUNDED") : p.paidAmount ? "CONFIRMED" : p.status === "FAILED" ? "FAILED" : "PENDING";
+  const receipt: Record<string, unknown> = { reference: p.id, status, campaign: { id: c.id, title: (c.publicSnapshot ?? c).title, organizer: publishedCampaignMaterial(s, c).organizer } };
+  if (!p.paidAmount) return receipt;
+  // Chain evidence is reported only once recorded; a pending or failed recording is not the donor's concern.
+  const recorded = Object.values(s.outbox).filter(e => e.snapshot?.paymentId === p.id && e.status === "CONFIRMED" && e.transactionHash).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
+  return { ...receipt, amount: p.paidAmount, refundedAmount: p.refundedAmount, paidAt: p.paidAt ?? p.createdAt, ...(recorded ? { chain: { transactionHash: recorded.transactionHash, payloadHash: recorded.payloadHash, kind: recorded.kind } } : {}) };
+}
 export const paymentDto = (p: any) => ({ id: p.id, token: p.token, redirectUrl: p.redirectUrl, status: p.status, amount: p.amount, refundedAmount: p.refundedAmount, retryAvailable: ["CREATING", "GATEWAY_ERROR", "PENDING"].includes(p.status) });
 
 export async function reconcilePayment(runtime: CampaignRuntime, id: string) {
@@ -94,6 +114,7 @@ export async function reconcilePayment(runtime: CampaignRuntime, id: string) {
       audit(c, "MIDTRANS", refunded > p.refundedAmount ? "REFUND" : "PAYMENT", "Verified with the payment gateway");
       enqueue(s, c, refunded > p.refundedAmount ? "REFUND" : "PAYMENT", { paymentId: p.id, paidAmount: paid, refundedAmount: refunded });
     }
+    if (paid && !p.paidAt) p.paidAt = new Date().toISOString();
     p.paidAmount = paid; p.refundedAmount = refunded;
     p.status = refunded ? (refunded === paid ? "REFUNDED" : "PARTIALLY_REFUNDED") : paid ? "PAID" : ["deny", "cancel", "expire", "failure"].includes(status) || p.status === "FAILED" ? "FAILED" : "PENDING";
     return paymentDto(p);

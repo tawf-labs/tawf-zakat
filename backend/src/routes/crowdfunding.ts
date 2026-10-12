@@ -4,7 +4,7 @@ import { MAX_ATTACHMENTS, campaignUpdate, createUpdate, reviewUpdate, submitUpda
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { CampaignError, authenticate, operator, campaign, owner, privateAccess, editable, audit, enqueue, dto, queueRow, publicUser, registration, campaignFields, hash, secret, paymentDto, reconcilePayment, retryCampaignPayment, publishedCampaignMaterial, drainCampaignOutbox, type CampaignRuntime } from "../crowdfunding";
+import { CampaignError, authenticate, operator, campaign, owner, privateAccess, editable, audit, enqueue, dto, queueRow, donorDto, donorId, campaignDonors, donationReceipt, publicUser, registration, campaignFields, hash, secret, paymentDto, reconcilePayment, retryCampaignPayment, publishedCampaignMaterial, drainCampaignOutbox, type CampaignRuntime } from "../crowdfunding";
 
 const PUBLIC = ["PUBLISHED", "SUSPENDED", "CLOSED"];
 const publiclyVisible = (campaign: any) => PUBLIC.includes(campaign.status) || !!campaign.publishedAt;
@@ -238,14 +238,34 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
     });
     return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), attachment), { headers: campaignDocumentHeaders(attachment) });
   });
+  app.get("/campaigns/:id/donors", async c => {
+    const page = z.object({ offset: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(50).default(10) }).parse(c.req.query());
+    return c.json({ success: true, ...await tx<object>(s => {
+      const v = campaign(s, c.req.param("id"));
+      if (!publiclyVisible(v)) { const u = bearer(c) ? authenticate(s, bearer(c)) : null; if (!u) throw new CampaignError("Campaign not found", 404); privateAccess(v, u); }
+      const donors = campaignDonors(s, v.id);
+      return { total: donors.length, donors: donors.slice(page.offset, page.offset + page.limit).map(donorDto) };
+    }) });
+  });
+  // Prayers are published unexamined; an operator can hide the text, never the donation itself.
+  app.post("/campaigns/:id/donors/:donorId/hide-prayer", async c => {
+    const input = z.object({ reason: z.string().trim().min(1).max(1000) }).strict().parse(await c.req.json());
+    return c.json({ success: true, donor: await tx(s => {
+      const u = authenticate(s, bearer(c)); operator(u); const v = campaign(s, c.req.param("id"));
+      const p = campaignDonors(s, v.id).find(p => donorId(p) === c.req.param("donorId"));
+      if (!p?.prayer) throw new CampaignError("Prayer not found", 404);
+      if (!p.prayerHiddenAt) { p.prayerHiddenAt = new Date().toISOString(); p.prayerHiddenReason = input.reason; audit(v, u.id, "PRAYER_HIDE", input.reason); }
+      return donorDto(p);
+    }) });
+  });
   app.post("/campaigns/:id/donations", async c => {
-    const input = z.object({ amount: z.number().int().min(1000).max(1_000_000_000), donorName: z.string().trim().min(1).max(120), isAnonymous: z.boolean() }).strict().parse(await c.req.json());
+    const { prayer, ...input } = z.object({ amount: z.number().int().min(1000).max(1_000_000_000), donorName: z.string().trim().min(1).max(120), isAnonymous: z.boolean(), prayer: z.string().trim().max(280).optional() }).strict().parse(await c.req.json());
     if (!runtime!.gateway) throw new CampaignError("Payment gateway is unconfigured", 503);
     const accessToken = secret();
     const p = await runtime!.store.transaction(s => {
       const v = campaign(s, c.req.param("id"));
       if (v.status !== "PUBLISHED" || Date.parse(v.endsAt) <= Date.now()) throw new CampaignError("Campaign is not accepting donations", 409);
-      const p = { id: `CF-${randomUUID()}`, campaignId: v.id, campaignVersion: v.version, checkoutLeaseUntil: Date.now() + 60000, ...input, accessTokenHash: hash(accessToken), status: "CREATING", paidAmount: 0, refundedAmount: 0, createdAt: new Date().toISOString() }; s.payments[p.id] = p; return p;
+      const p = { id: `CF-${randomUUID()}`, campaignId: v.id, campaignVersion: v.version, checkoutLeaseUntil: Date.now() + 60000, ...input, ...(prayer ? { prayer } : {}), accessTokenHash: hash(accessToken), status: "CREATING", paidAmount: 0, refundedAmount: 0, createdAt: new Date().toISOString() }; s.payments[p.id] = p; return p;
     });
     try {
       const checkout = await runtime!.gateway.create(p.id, p.amount, input.isAnonymous ? "Anonymous" : input.donorName);
@@ -256,6 +276,15 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
       const saved = await runtime!.store.transaction(s => { if (s.payments[p.id].status === "CREATING") s.payments[p.id].status = "GATEWAY_ERROR"; delete s.payments[p.id].checkoutLeaseUntil; return paymentDto(s.payments[p.id]); });
       return c.json({ success: false, error: "Checkout unavailable; payment is not confirmed", payment: { ...saved, accessToken } }, 502);
     }
+  });
+  // Public donation check by order reference. The reference is an unguessable id the donor already holds.
+  app.get("/receipts/:reference", async c => {
+    const reference = c.req.param("reference").trim().replace(/^cf-/i, "CF-");
+    return c.json({ success: true, receipt: await tx(s => {
+      const p = /^CF-[0-9a-fA-F-]{36}$/.test(reference) ? s.payments[`CF-${reference.slice(3).toLowerCase()}`] : undefined;
+      if (!p) throw new CampaignError("Donation not found", 404);
+      return donationReceipt(s, p);
+    }) });
   });
   app.post("/payments/:id/retry", async c => {
     const id = c.req.param("id"); const token = c.req.header("X-Payment-Token") || "";

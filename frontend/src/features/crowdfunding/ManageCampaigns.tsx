@@ -15,6 +15,7 @@ import {
 import { Notice } from "./PublicCampaigns";
 import { ChainEvidence } from "./CampaignDetail";
 import { ManageUpdates } from "./CampaignUpdates";
+import { DonorWall } from "./CampaignDonors";
 import {
   OperatorQueue,
   awaitsOperator,
@@ -45,6 +46,7 @@ import {
   Layers,
   ArrowUp,
   Megaphone,
+  HeartHandshake as DonorsIcon,
 } from "lucide-react";
 
 // Every private completion is bound to its initiating mount, credential and generation.
@@ -752,6 +754,11 @@ const actionMap: Record<
     icon: RotateCcw,
     color: "red",
   },
+  PRAYER_HIDE: {
+    title: "Doa Donatur Disembunyikan",
+    icon: XCircle,
+    color: "slate",
+  },
   PAYMENT: {
     title: "Donasi Diterima",
     defaultDesc: "Transaksi donatur berhasil terverifikasi.",
@@ -853,6 +860,7 @@ type TabKey =
   | "proposal"
   | "documents"
   | "updates"
+  | "donors"
   | "history"
   | "operator"
   | "evidence";
@@ -1078,6 +1086,22 @@ function PrivateCampaign({
             <span className="cf-tab-count">{campaign.updates.length}</span>
           ) : null}
         </button>
+        {Boolean(campaign.publishedAt) && (
+          <button
+            type="button"
+            className={`cf-tab-btn ${activeTab === "donors" ? "active" : ""}`}
+            onClick={() => {
+              if (activeTab === "all") scrollToSection("section-donors");
+              else setActiveTab("donors");
+            }}
+          >
+            <DonorsIcon size={14} />
+            <span>Donatur & Doa</span>
+            {campaign.donationCount ? (
+              <span className="cf-tab-count">{campaign.donationCount}</span>
+            ) : null}
+          </button>
+        )}
         <button
           type="button"
           className={`cf-tab-btn ${activeTab === "history" ? "active" : ""}`}
@@ -1269,6 +1293,19 @@ function PrivateCampaign({
           />
         </div>
       )}
+
+      {/* DONATUR & DOA */}
+      {(activeTab === "all" || activeTab === "donors") &&
+        Boolean(campaign.publishedAt) && (
+          <div id="section-donors">
+            <DonorWall
+              campaignId={campaign.id}
+              refreshKey={campaign.donationCount}
+              moderator={operator}
+              authenticated
+            />
+          </div>
+        )}
 
       {/* 3. OPERATOR ACTIONS */}
       {(activeTab === "all" || activeTab === "operator") && hasOperatorActions && (

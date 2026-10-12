@@ -34,6 +34,18 @@ _Avoid_: Jaminan bahwa seluruh cerita pasti benar; izin pemerintah; verifikasi o
 Pembayaran yang telah dikonfirmasi melalui sumber pembayaran dan dikaitkan dengan kampanye tujuan; pengembalian dana dicatat tersendiri.
 _Avoid_: Klik tombol bayar; callback browser; dana telah diterima penerima manfaat; transaksi sandbox sebagai uang nyata.
 
+**Daftar donatur kampanye**:
+Tampilan publik donasi kampanye terkonfirmasi beserta nominal bersihnya dan doa donatur bila ada. Donatur anonim tampil tanpa nama tetapi tetap dengan nominalnya; donasi yang dikembalikan penuh tidak tampil.
+_Avoid_: Daftar niat bayar atau checkout yang belum dikonfirmasi; menampilkan nama donatur yang memilih anonim.
+
+**Doa donatur**:
+Teks pendek opsional yang ditulis donatur saat berdonasi dan tampil apa adanya tanpa pemeriksaan lebih dulu; operator dapat menyembunyikan teksnya, bukan donasinya.
+_Avoid_: Pernyataan platform atau penggalang; menghapus donasi karena doanya tidak pantas.
+
+**Kode bukti donasi kampanye**:
+Referensi pesanan pembayaran yang dipegang donatur untuk memeriksa donasinya sendiri: status, nominal, kampanye tujuan, dan pencatatan blockchain bila sudah terkonfirmasi. Pemeriksaan tidak membuka nama donatur atau doanya.
+_Avoid_: Receipt kontribusi lembaga atau bukti ZK; bukti penyaluran; menyebut pencatatan blockchain sebelum terkonfirmasi.
+
 **Bukti pencatatan kampanye**:
 Komitmen kriptografis atas versi catatan atau keputusan penggalangan yang dapat ditelusuri beserta koreksinya.
 _Avoid_: Bukti penyakit benar; jaminan saldo bank; bukti penyaluran nyata tanpa bukti pendukung; status pembayaran sebagai status konfirmasi blockchain.

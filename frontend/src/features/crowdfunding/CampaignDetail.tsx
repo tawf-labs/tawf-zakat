@@ -10,6 +10,7 @@ import {
 } from "./client";
 import { CampaignCover, CampaignProgress, Notice } from "./PublicCampaigns";
 import { PublicUpdates } from "./CampaignUpdates";
+import { DonorWall } from "./CampaignDonors";
 import { useCampaignPayment } from "./useCampaignPayment";
 
 export function ChainEvidence({ campaign }: { campaign: Campaign }) {
@@ -58,6 +59,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [amount, setAmount] = useState(50000);
   const [donorName, setDonorName] = useState("");
   const [anonymous, setAnonymous] = useState(false);
+  const [prayer, setPrayer] = useState("");
   const load = useCallback(
     () =>
       api<{ campaign: Campaign }>(
@@ -106,6 +108,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       amount,
       donorName: donorName.trim() || (anonymous ? "Anonim" : ""),
       isAnonymous: anonymous,
+      ...(prayer.trim() ? { prayer: prayer.trim() } : {}),
     });
   }
   return (
@@ -155,6 +158,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                 </section>
                 <ChainEvidence campaign={campaign} />
                 <PublicUpdates campaign={campaign} />
+                <DonorWall
+                  campaignId={campaign.id}
+                  refreshKey={campaign.donationCount}
+                />
               </article>
               <aside>
                 <div className="cf-donation cf-panel">
@@ -215,6 +222,21 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                         />{" "}
                         Tampilkan sebagai anonim
                       </label>
+                      <label>
+                        Doa atau dukungan (opsional)
+                        <textarea
+                          rows={3}
+                          maxLength={280}
+                          value={prayer}
+                          onChange={(e) => setPrayer(e.target.value)}
+                          placeholder="Tulis doa untuk penerima manfaat"
+                        />
+                        <span className="cf-small">
+                          {prayer.length}/280 · tampil di halaman kampanye
+                          bersama nominal donasi Anda
+                          {anonymous ? ", tanpa nama" : ""}.
+                        </span>
+                      </label>
                       <button
                         className="cf-button"
                         disabled={
@@ -252,6 +274,21 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                       <p>
                         {money(payment.amount)} ·{" "}
                         <strong>{payment.status}</strong>
+                      </p>
+                      <p className="cf-receipt-code">
+                        Kode bukti donasi
+                        <code>{payment.id}</code>
+                        <Link
+                          to="/verifikasi"
+                          search={{ trxId: payment.id }}
+                          className="cf-text-button"
+                        >
+                          Verifikasi donasi ini
+                        </Link>
+                      </p>
+                      <p className="cf-small">
+                        Simpan kode ini untuk memeriksa donasi Anda kapan
+                        saja di halaman Cek Bukti.
                       </p>
                       {["GATEWAY_ERROR", "CREATING", "NOT_FOUND"].includes(
                         payment.status.toUpperCase(),

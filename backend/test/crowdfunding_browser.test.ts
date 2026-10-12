@@ -149,6 +149,8 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await visible("Cerita di balik harapan");
     expect(await page.getByText("RAHASIA-PENERIMA").count()).toBe(0);
     await page.getByLabel("Tampilkan sebagai anonim").check();
+    await page.getByLabel("Doa atau dukungan").fill("Semoga ruang belajarnya segera terwujud.");
+    await visible("Belum ada donasi yang terkonfirmasi");
     await page.getByRole("button", { name: "Lanjut ke pembayaran" }).click();
     await visible("GATEWAY_ERROR");
     const paymentId = await store.transaction(s => Object.values(s.payments)[0].id as string);
@@ -162,6 +164,12 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await page.getByRole("button", { name: "Periksa status pembayaran" }).click();
     await visible("PAID");
     expect(await store.transaction(s => s.campaigns[campaignId].collectedAmount)).toBe(50000);
+    // The donor wall lists the confirmed donation: unnamed because anonymous, amount and prayer shown.
+    const wall = page.locator("#donatur-doa");
+    await wall.getByText("Semoga ruang belajarnya segera terwujud.").waitFor();
+    expect((await wall.innerText()).replace(/\s/g, "")).toContain("HambaAllah");
+    expect((await wall.innerText()).replace(/\s/g, "")).toContain("Rp50.000");
+    if (process.env.CROWDFUNDING_SCREENSHOT_DIR) await wall.screenshot({ path: `${process.env.CROWDFUNDING_SCREENSHOT_DIR}/donor-wall.png` });
     await page.reload(); await visible("PAID");
     await page.getByRole("button", { name: "Periksa status pembayaran" }).click();
     await visible("PAID");
@@ -172,6 +180,28 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     expect(publicCampaign.campaign.beneficiaryName).toBeUndefined();
     expect(publicCampaign.campaign.documents).toBeUndefined();
     expect(await store.transaction(s => Object.values(s.outbox).length)).toBe(3);
+    // The donor verifies the donation from the receipt code. Chain evidence shows only once recorded.
+    const shot = async (name: string) => { if (process.env.CROWDFUNDING_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.CROWDFUNDING_SCREENSHOT_DIR}/${name}.png`, fullPage: true }); };
+    await visible(paymentId);
+    await page.getByRole("link", { name: "Verifikasi donasi ini" }).click();
+    await page.getByRole("heading", { name: "Bukti Donasi Kampanye" }).waitFor();
+    await visible("Donasi Terkonfirmasi");
+    const proof = page.locator("main");
+    expect((await proof.innerText()).replace(/\s/g, "")).toContain("Rp50.000");
+    expect(await proof.getByRole("link", { name: title }).getAttribute("href")).toBe(`/kampanye/${campaignId}`);
+    expect(await page.getByText("blockchain", { exact: false }).count()).toBe(0);
+    expect(await page.getByText("Semoga ruang belajarnya").count()).toBe(0);
+    const { drainCampaignOutbox } = await import("../src/crowdfunding");
+    runtime.chain = { async record() { return { transactionHash: `0x${"ab".repeat(32)}` }; } };
+    await drainCampaignOutbox(runtime, true);
+    await page.getByRole("button", { name: "Cek Status" }).click();
+    await visible("Tercatat di blockchain");
+    await visible(`0x${"ab".repeat(32)}`);
+    await shot("verify-donation");
+    runtime.chain = null;
+    await page.getByLabel("Referensi kontribusi").fill("CF-00000000-0000-4000-8000-000000000000");
+    await page.getByRole("button", { name: "Cek Status" }).click();
+    await visible("Kontribusi Tidak Ditemukan");
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto(`${base}/kampanye`); await visible(title);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
