@@ -149,7 +149,7 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await visible("Cerita di balik harapan");
     expect(await page.getByText("RAHASIA-PENERIMA").count()).toBe(0);
     await page.getByLabel("Tampilkan sebagai anonim").check();
-    await page.getByRole("button", { name: "Lanjut ke pembayaran sandbox" }).click();
+    await page.getByRole("button", { name: "Lanjut ke pembayaran" }).click();
     await visible("GATEWAY_ERROR");
     const paymentId = await store.transaction(s => Object.values(s.payments)[0].id as string);
     await page.reload(); await visible("GATEWAY_ERROR");

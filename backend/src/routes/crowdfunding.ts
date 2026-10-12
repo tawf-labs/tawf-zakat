@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import { encryptCampaignDocument, decryptCampaignDocument } from "../crowdfunding-documents";
+import { encryptCampaignDocument, decryptCampaignDocument, parseCampaignUpload, campaignDocumentHeaders } from "../crowdfunding-documents";
+import { MAX_ATTACHMENTS, campaignUpdate, createUpdate, reviewUpdate, submitUpdate, updateCreation, updateEditable, updateReview, updateRevision, updateWithdrawal, withdrawUpdate, assertUpdateContent, updateDto } from "../crowdfunding-updates";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { CampaignError, authenticate, operator, campaign, owner, privateAccess, editable, audit, enqueue, dto, publicUser, registration, campaignFields, hash, secret, paymentDto, reconcilePayment, retryCampaignPayment, publishedCampaignMaterial, drainCampaignOutbox, type CampaignRuntime } from "../crowdfunding";
+import { CampaignError, authenticate, operator, campaign, owner, privateAccess, editable, audit, enqueue, dto, queueRow, publicUser, registration, campaignFields, hash, secret, paymentDto, reconcilePayment, retryCampaignPayment, publishedCampaignMaterial, drainCampaignOutbox, type CampaignRuntime } from "../crowdfunding";
 
 const PUBLIC = ["PUBLISHED", "SUSPENDED", "CLOSED"];
 const publiclyVisible = (campaign: any) => PUBLIC.includes(campaign.status) || !!campaign.publishedAt;
@@ -71,6 +72,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
   app.get("/campaigns", async c => c.json({ success: true, campaigns: await tx(s => Object.values(s.campaigns).filter(v => publiclyVisible(v)).map(v => view(s, v))) }));
   app.get("/mine", async c => c.json({ success: true, campaigns: await tx(s => { const u = authenticate(s, bearer(c)); return Object.values(s.campaigns).filter(v => v.ownerId === u.id).map(v => view(s, v, true)); }) }));
   app.get("/review", async c => c.json({ success: true, campaigns: await tx(s => { operator(authenticate(s, bearer(c))); return Object.values(s.campaigns).filter(v => v.status !== "DRAFT").map(v => view(s, v, true)); }) }));
+  app.get("/review/queue", async c => c.json({ success: true, campaigns: await tx(s => { operator(authenticate(s, bearer(c))); return Object.values(s.campaigns).filter(v => v.status !== "DRAFT").map(v => queueRow(s, v)); }) }));
   app.get("/campaigns/:id", async c => c.json({ success: true, campaign: await tx(s => {
     const v = campaign(s, c.req.param("id"));
     const u = bearer(c) ? authenticate(s, bearer(c)) : null;
@@ -151,11 +153,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
     }) });
   });
   app.post("/campaigns/:id/documents", async c => {
-    const input = z.object({ name: z.string().trim().min(1).max(120).regex(/^[^/\\\x00-\x1f]+$/), contentType: z.enum(["application/pdf", "image/png", "image/jpeg"]), dataBase64: z.string().min(4).max(2_800_000).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/) }).strict().parse(await c.req.json());
-    const bytes = Buffer.from(input.dataBase64, "base64");
-    if (bytes.length > 2 * 1024 * 1024) throw new CampaignError("Document exceeds 2 MiB", 413);
-    const valid = input.contentType === "application/pdf" ? bytes.subarray(0, 5).toString() === "%PDF-" : input.contentType === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-    if (!valid) throw new CampaignError("File content does not match its type");
+    const { input, bytes } = parseCampaignUpload(await c.req.json());
     const result = await runtime!.store.transaction(s => {
       const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); editable(v);
       if (v.documents.length >= 10) throw new CampaignError("At most 10 private documents");
@@ -169,11 +167,80 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
   });
   app.get("/campaigns/:id/documents/:documentId", async c => {
     const document = await runtime!.store.transaction(s => { const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); privateAccess(v, u); const d = v.documents.find((d: any) => d.id === c.req.param("documentId")); if (!d) throw new CampaignError("Document not found", 404); return d; });
-    return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), document), { headers: { "Content-Type": document.contentType, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.name)}`, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store", "Content-Security-Policy": "sandbox" } });
+    return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), document), { headers: campaignDocumentHeaders(document) });
+  });
+  // Kabar & laporan realisasi: fundraiser drafts, an independent operator examines before publication.
+  const updateResult = (s: any, v: any, item: any) => ({ campaign: view(s, v, true), update: updateDto(item, true) });
+  app.post("/campaigns/:id/updates", async c => {
+    const input = updateCreation.parse(await c.req.json());
+    return c.json({ success: true, ...await tx<object>(s => { const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); return updateResult(s, v, createUpdate(v, u.id, input)); }) }, 201);
+  });
+  app.patch("/campaigns/:id/updates/:updateId", async c => {
+    const input = updateRevision.parse(await c.req.json());
+    return c.json({ success: true, ...await tx<object>(s => {
+      const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId")); updateEditable(item);
+      assertUpdateContent({ ...item, ...input }); Object.assign(item, input); item.updatedAt = new Date().toISOString();
+      return updateResult(s, v, item);
+    }) });
+  });
+  app.delete("/campaigns/:id/updates/:updateId", async c => c.json({ success: true, campaign: await tx(s => {
+    const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId"));
+    // Once submitted, an update is part of the examined record and can no longer be discarded.
+    if (item.status !== "DRAFT" || item.revision) throw new CampaignError("Only never-submitted drafts can be deleted", 409);
+    v.updates = v.updates.filter((other: any) => other !== item); audit(v, u.id, "UPDATE_DELETE", item.title); return view(s, v, true);
+  }) }));
+  app.post("/campaigns/:id/updates/:updateId/submit", async c => c.json({ success: true, ...await tx<object>(s => {
+    const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId"));
+    submitUpdate(v, item, u.id); return updateResult(s, v, item);
+  }) }));
+  app.post("/campaigns/:id/updates/:updateId/review", async c => {
+    const input = updateReview.parse(await c.req.json());
+    return c.json({ success: true, ...await tx<object>(s => {
+      const u = authenticate(s, bearer(c)); operator(u); const v = campaign(s, c.req.param("id"));
+      if (u.id === v.ownerId) throw new CampaignError("Self review forbidden", 403);
+      const item = campaignUpdate(v, c.req.param("updateId")); reviewUpdate(v, item, u.id, input); return updateResult(s, v, item);
+    }) });
+  });
+  app.post("/campaigns/:id/updates/:updateId/withdraw", async c => {
+    const input = updateWithdrawal.parse(await c.req.json());
+    return c.json({ success: true, ...await tx<object>(s => {
+      const u = authenticate(s, bearer(c)); operator(u); const v = campaign(s, c.req.param("id"));
+      if (u.id === v.ownerId) throw new CampaignError("Self review forbidden", 403);
+      const item = campaignUpdate(v, c.req.param("updateId")); withdrawUpdate(v, item, u.id, input.reason); return updateResult(s, v, item);
+    }) });
+  });
+  app.post("/campaigns/:id/updates/:updateId/attachments", async c => {
+    const { input, bytes } = parseCampaignUpload(await c.req.json(), true);
+    return c.json({ success: true, ...await tx<object>(s => {
+      const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId")); updateEditable(item);
+      // Kabar is published without examination, so it only carries images the fundraiser makes public.
+      if (item.kind === "NEWS" && (input.visibility !== "PUBLIC" || input.contentType === "application/pdf")) throw new CampaignError("News attachments must be public images");
+      if (item.attachments.length >= MAX_ATTACHMENTS) throw new CampaignError(`At most ${MAX_ATTACHMENTS} attachments per update`);
+      const id = randomUUID();
+      item.attachments.push({ id, name: input.name, contentType: input.contentType, visibility: input.visibility, size: bytes.length, createdAt: new Date().toISOString(), encrypted: encryptCampaignDocument(runtime!.documentKey, v.id, id, bytes), contentHash: hash(bytes) });
+      item.updatedAt = new Date().toISOString();
+      return updateResult(s, v, item);
+    }) }, 201);
+  });
+  app.delete("/campaigns/:id/updates/:updateId/attachments/:attachmentId", async c => c.json({ success: true, ...await tx<object>(s => {
+    const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId")); updateEditable(item);
+    if (!item.attachments.some((a: any) => a.id === c.req.param("attachmentId"))) throw new CampaignError("Attachment not found", 404);
+    item.attachments = item.attachments.filter((a: any) => a.id !== c.req.param("attachmentId")); item.updatedAt = new Date().toISOString();
+    return updateResult(s, v, item);
+  }) }));
+  app.get("/campaigns/:id/updates/:updateId/attachments/:attachmentId", async c => {
+    const attachment = await runtime!.store.transaction(s => {
+      const v = campaign(s, c.req.param("id")); const item = (v.updates ?? []).find((u: any) => u.id === c.req.param("updateId"));
+      const a = item?.attachments.find((a: any) => a.id === c.req.param("attachmentId"));
+      // Only attachments an operator released with a still-published update are public.
+      if (!(a?.published && item.status === "PUBLISHED" && publiclyVisible(v))) { privateAccess(v, authenticate(s, bearer(c))); if (!a) throw new CampaignError("Attachment not found", 404); }
+      return a;
+    });
+    return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), attachment), { headers: campaignDocumentHeaders(attachment) });
   });
   app.post("/campaigns/:id/donations", async c => {
     const input = z.object({ amount: z.number().int().min(1000).max(1_000_000_000), donorName: z.string().trim().min(1).max(120), isAnonymous: z.boolean() }).strict().parse(await c.req.json());
-    if (!runtime!.gateway) throw new CampaignError("Midtrans sandbox is unconfigured", 503);
+    if (!runtime!.gateway) throw new CampaignError("Payment gateway is unconfigured", 503);
     const accessToken = secret();
     const p = await runtime!.store.transaction(s => {
       const v = campaign(s, c.req.param("id"));
@@ -187,7 +254,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
     } catch {
       // Keep the intent: a timeout can still have created an order at the gateway.
       const saved = await runtime!.store.transaction(s => { if (s.payments[p.id].status === "CREATING") s.payments[p.id].status = "GATEWAY_ERROR"; delete s.payments[p.id].checkoutLeaseUntil; return paymentDto(s.payments[p.id]); });
-      return c.json({ success: false, error: "Sandbox checkout unavailable; payment is not confirmed", payment: { ...saved, accessToken } }, 502);
+      return c.json({ success: false, error: "Checkout unavailable; payment is not confirmed", payment: { ...saved, accessToken } }, 502);
     }
   });
   app.post("/payments/:id/retry", async c => {
@@ -209,7 +276,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
   });
   app.post("/midtrans/notification", async c => {
     const body = await c.req.json();
-    if (!runtime!.gateway) throw new CampaignError("Midtrans sandbox is unconfigured", 503);
+    if (!runtime!.gateway) throw new CampaignError("Payment gateway is unconfigured", 503);
     if (!body || !runtime!.gateway.verify(body)) throw new CampaignError("Invalid gateway signature", 401);
     await tx(s => { if (!s.payments[body.order_id]) throw new CampaignError("Payment not found", 404); });
     await reconcilePayment(runtime!, body.order_id);

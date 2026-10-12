@@ -219,7 +219,7 @@ export function CrowdfundingHome() {
               <p>
                 {campaigns.length
                   ? "Coba kata kunci atau kategori lain."
-                  : "Kampanye akan tampil setelah selesai ditinjau dan diterbitkan. Tidak ada angka donasi simulasi yang ditampilkan sebagai dana nyata."}
+                  : "Kampanye akan tampil setelah selesai ditinjau dan diterbitkan."}
               </p>
               <Link to="/galang-dana" className="cf-button cf-secondary">
                 Ajukan kampanye pertama

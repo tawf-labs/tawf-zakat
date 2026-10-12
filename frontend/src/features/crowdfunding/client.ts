@@ -27,7 +27,9 @@ export type Campaign = {
   chainStatus: string;
   chainTxHash?: string;
   history?: unknown[];
-  updates?: unknown[];
+  updates?: CampaignUpdate[];
+  reportedUsedAmount?: number;
+  publishedAt?: string;
   beneficiaryName?: string;
   relationship?: string;
   budgetPlan?: string;
@@ -35,6 +37,46 @@ export type Campaign = {
   consent?: boolean;
   documents?: { id: string; name: string }[];
   reviewNotes?: unknown;
+};
+export type CampaignUpdate = {
+  id: string;
+  kind: "NEWS" | "REALIZATION";
+  title: string;
+  status: string;
+  body?: string;
+  usedAmount?: number;
+  carriedOutAt?: string;
+  publishedAt?: string;
+  correctsId?: string;
+  supersededById?: string;
+  withdrawnAt?: string;
+  withdrawnReason?: string;
+  revision?: number;
+  attachments?: {
+    id: string;
+    name: string;
+    contentType: string;
+    size: number;
+    visibility?: "PRIVATE" | "PUBLIC";
+    published?: boolean;
+  }[];
+  reviewNotes?: { decision: string; notes: string; at: string }[];
+};
+export type QueueTask = {
+  type: "PROPOSAL" | "PUBLISH" | "REPORT";
+  since: string;
+  updateId?: string;
+  title?: string;
+  usedAmount?: number;
+};
+export type QueueRow = {
+  id: string;
+  title: string;
+  status: string;
+  version: number;
+  organizer: string;
+  updatedAt: string;
+  tasks: QueueTask[];
 };
 export type Payment = {
   id: string;

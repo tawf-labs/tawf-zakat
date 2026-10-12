@@ -9,10 +9,19 @@ import {
   sessionToken,
   statusLabel,
   type Campaign,
+  type QueueRow,
   type User,
 } from "./client";
 import { Notice } from "./PublicCampaigns";
 import { ChainEvidence } from "./CampaignDetail";
+import { ManageUpdates } from "./CampaignUpdates";
+import {
+  OperatorQueue,
+  awaitsOperator,
+  queueTasks,
+  taskFocus,
+  type QueueFocus,
+} from "./OperatorQueue";
 import {
   FileText,
   FileUp,
@@ -35,6 +44,7 @@ import {
   MessageSquareQuote,
   Layers,
   ArrowUp,
+  Megaphone,
 } from "lucide-react";
 
 // Every private completion is bound to its initiating mount, credential and generation.
@@ -706,6 +716,42 @@ const actionMap: Record<
     icon: XCircle,
     color: "red",
   },
+  UPDATE_CREATE: {
+    title: "Draf Kabar/Laporan Dibuat",
+    icon: FilePlus2,
+    color: "blue",
+  },
+  UPDATE_DELETE: {
+    title: "Draf Kabar/Laporan Dihapus",
+    icon: XCircle,
+    color: "slate",
+  },
+  UPDATE_SUBMIT: {
+    title: "Kabar/Laporan Diajukan",
+    defaultDesc: "Menunggu pemeriksaan operator sebelum tampil ke publik.",
+    icon: Send,
+    color: "amber",
+  },
+  UPDATE_PUBLISH: {
+    title: "Kabar/Laporan Diterbitkan",
+    icon: Megaphone,
+    color: "green",
+  },
+  UPDATE_REQUEST_REVISION: {
+    title: "Kabar/Laporan Perlu Perbaikan",
+    icon: AlertCircle,
+    color: "amber",
+  },
+  UPDATE_REJECT: {
+    title: "Kabar/Laporan Ditolak",
+    icon: XCircle,
+    color: "red",
+  },
+  UPDATE_WITHDRAW: {
+    title: "Kabar/Laporan Ditarik dari Publik",
+    icon: RotateCcw,
+    color: "red",
+  },
   PAYMENT: {
     title: "Donasi Diterima",
     defaultDesc: "Transaksi donatur berhasil terverifikasi.",
@@ -759,6 +805,12 @@ function ActivityTimeline({ history }: { history?: unknown[] }) {
         } else if (item.reason === "Operator published approved version") {
           displayReason =
             "Kampanye mulai tayang di halaman publik dan siap menerima donasi.";
+        } else if (
+          // Records written before the wording change keep the older reason.
+          item.reason === "Verified with the payment gateway" ||
+          item.reason === "Authoritative sandbox verification"
+        ) {
+          displayReason = "Dikonfirmasi oleh penyedia pembayaran.";
         }
 
         return (
@@ -800,6 +852,7 @@ type TabKey =
   | "all"
   | "proposal"
   | "documents"
+  | "updates"
   | "history"
   | "operator"
   | "evidence";
@@ -807,10 +860,12 @@ type TabKey =
 function PrivateCampaign({
   campaign,
   user,
+  focus,
   onRefresh,
 }: {
   campaign: Campaign;
   user: User;
+  focus?: QueueFocus;
   onRefresh: (campaign: Campaign) => void;
 }) {
   const scope = useSessionGuard();
@@ -829,6 +884,20 @@ function PrivateCampaign({
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Opened from the operator worklist: land on the part that needs the decision.
+  useEffect(() => {
+    if (!focus) return;
+    const frame = requestAnimationFrame(() => {
+      if (focus !== "top") return scrollToSection(`section-${focus}`);
+      const top = document
+        .getElementById("campaign-detail")
+        ?.getBoundingClientRect().top;
+      if (top !== undefined && (top < 0 || top > window.innerHeight * 0.6))
+        scrollToSection("campaign-detail");
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   const operator = user.role === "OPERATOR";
@@ -997,6 +1066,20 @@ function PrivateCampaign({
         </button>
         <button
           type="button"
+          className={`cf-tab-btn ${activeTab === "updates" ? "active" : ""}`}
+          onClick={() => {
+            if (activeTab === "all") scrollToSection("section-updates");
+            else setActiveTab("updates");
+          }}
+        >
+          <Megaphone size={14} />
+          <span>Kabar & Laporan</span>
+          {campaign.updates?.length ? (
+            <span className="cf-tab-count">{campaign.updates.length}</span>
+          ) : null}
+        </button>
+        <button
+          type="button"
           className={`cf-tab-btn ${activeTab === "history" ? "active" : ""}`}
           onClick={() => {
             if (activeTab === "all") scrollToSection("section-history");
@@ -1052,6 +1135,13 @@ function PrivateCampaign({
             onClick={() => scrollToSection("section-documents")}
           >
             📁 Dokumen ({campaign.documents?.length || 0})
+          </button>
+          <button
+            type="button"
+            className="cf-jump-btn"
+            onClick={() => scrollToSection("section-updates")}
+          >
+            📣 Kabar & Laporan ({campaign.updates?.length || 0})
           </button>
           <button
             type="button"
@@ -1165,6 +1255,18 @@ function PrivateCampaign({
               </button>
             )}
           </section>
+        </div>
+      )}
+
+      {/* KABAR & LAPORAN REALISASI */}
+      {(activeTab === "all" || activeTab === "updates") && (
+        <div id="section-updates">
+          <ManageUpdates
+            campaign={campaign}
+            user={user}
+            guard={scope}
+            onRefresh={onRefresh}
+          />
         </div>
       )}
 
@@ -1309,6 +1411,9 @@ export function ManageCampaigns() {
   const [user, setUser] = useState<User>();
   const [ready, setReady] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [queue, setQueue] = useState<QueueRow[]>([]);
+  const [focus, setFocus] = useState<QueueFocus>();
+  const [opened, setOpened] = useState(0);
   const [selected, setSelected] = useState<Campaign>();
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1340,9 +1445,13 @@ export function ManageCampaigns() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<{ campaigns: Campaign[] }>(
-        account.role === "OPERATOR" ? "/review" : "/mine",
-      );
+      if (account.role === "OPERATOR") {
+        const data = await api<{ campaigns: QueueRow[] }>("/review/queue");
+        if (!current()) return;
+        setQueue(data.campaigns);
+        return data.campaigns;
+      }
+      const data = await api<{ campaigns: Campaign[] }>("/mine");
       if (current()) setCampaigns(data.campaigns);
     } catch (e) {
       if (current())
@@ -1354,7 +1463,7 @@ export function ManageCampaigns() {
   useEffect(() => {
     if (user) void load(user);
   }, [user]);
-  async function select(id: string) {
+  async function select(id: string, section?: QueueFocus) {
     if (!renderCurrent()) return;
     const current = scope.capture();
     setLoading(true);
@@ -1363,6 +1472,8 @@ export function ManageCampaigns() {
       const data = await api<{ campaign: Campaign }>(`/campaigns/${id}`);
       if (!current()) return;
       setSelected(data.campaign);
+      setFocus(section);
+      setOpened((count) => count + 1);
       setCreating(false);
     } catch (e) {
       if (current())
@@ -1373,9 +1484,24 @@ export function ManageCampaigns() {
   }
   function saved(campaign: Campaign) {
     if (!renderCurrent()) return;
+    // An operator decision that leaves nothing pending here moves on to the longest-waiting item.
+    const resolved =
+      user?.role === "OPERATOR" &&
+      selected?.id === campaign.id &&
+      awaitsOperator(selected) &&
+      !awaitsOperator(campaign);
     setSelected(campaign);
     setCreating(false);
-    void load();
+    void load().then(async (rows) => {
+      if (!resolved || !rows) return;
+      const next = queueTasks(rows)[0];
+      if (next) await select(next.row.id, taskFocus(next.task));
+      setMessage(
+        next
+          ? "Keputusan tersimpan. Menampilkan item berikutnya dalam antrean."
+          : "Keputusan tersimpan. Antrean kosong, tidak ada lagi yang menunggu tindakan.",
+      );
+    });
   }
   async function logout() {
     // Capture the old credential synchronously, then hide private data immediately.
@@ -1387,6 +1513,7 @@ export function ManageCampaigns() {
     setUser(undefined);
     setSelected(undefined);
     setCampaigns([]);
+    setQueue([]);
     setCreating(false);
     setLoading(false);
     setError("");
@@ -1439,7 +1566,9 @@ export function ManageCampaigns() {
               </Notice>
             )}
             {message && <Notice>{message}</Notice>}
-            <div className="cf-manage-grid">
+            <div
+              className={`cf-manage-grid ${user.role === "OPERATOR" ? "cf-manage-operator" : ""}`}
+            >
               <aside className="cf-panel cf-campaign-list">
                 <h2>
                   {user.role === "OPERATOR"
@@ -1465,19 +1594,35 @@ export function ManageCampaigns() {
                   Muat ulang daftar
                 </button>
                 {loading && <p role="status">Memuat…</p>}
-                {!loading && !campaigns.length && <p>Belum ada kampanye.</p>}
-                {campaigns.map((c) => (
-                  <button
-                    key={c.id}
-                    disabled={loading}
-                    aria-pressed={selected?.id === c.id}
-                    className="cf-list-item"
-                    onClick={() => void select(c.id)}
-                  >
-                    <strong>{c.title}</strong>
-                    <span>{statusLabel[c.status] || c.status}</span>
-                  </button>
-                ))}
+                {user.role === "OPERATOR" ? (
+                  <OperatorQueue
+                    rows={queue}
+                    loading={loading}
+                    selectedId={selected?.id}
+                    onOpen={(id, section) => {
+                      setMessage("");
+                      void select(id, section);
+                    }}
+                  />
+                ) : (
+                  <>
+                    {!loading && !campaigns.length && (
+                      <p>Belum ada kampanye.</p>
+                    )}
+                    {campaigns.map((c) => (
+                      <button
+                        key={c.id}
+                        disabled={loading}
+                        aria-pressed={selected?.id === c.id}
+                        className="cf-list-item"
+                        onClick={() => void select(c.id)}
+                      >
+                        <strong>{c.title}</strong>
+                        <span>{statusLabel[c.status] || c.status}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
                 {user.role === "OPERATOR" && (
                   <button
                     className="cf-text-button"
@@ -1508,7 +1653,7 @@ export function ManageCampaigns() {
                   </button>
                 )}
               </aside>
-              <div>
+              <div id="campaign-detail">
                 {creating ? (
                   <ProposalForm
                     key={`${user.id}-${scope.generation.current}`}
@@ -1516,9 +1661,10 @@ export function ManageCampaigns() {
                   />
                 ) : selected ? (
                   <PrivateCampaign
-                    key={`${user.id}-${scope.generation.current}-${selected.id}`}
+                    key={`${user.id}-${scope.generation.current}-${selected.id}-${opened}`}
                     campaign={selected}
                     user={user}
+                    focus={user.role === "OPERATOR" ? focus || "top" : undefined}
                     onRefresh={saved}
                   />
                 ) : (

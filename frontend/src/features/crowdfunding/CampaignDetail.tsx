@@ -4,12 +4,12 @@ import {
   api,
   categories,
   money,
-  readable,
   safePaymentUrl,
   statusLabel,
   type Campaign,
 } from "./client";
 import { CampaignCover, CampaignProgress, Notice } from "./PublicCampaigns";
+import { PublicUpdates } from "./CampaignUpdates";
 import { useCampaignPayment } from "./useCampaignPayment";
 
 export function ChainEvidence({ campaign }: { campaign: Campaign }) {
@@ -154,21 +154,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                   <p className="cf-preline">{campaign.story}</p>
                 </section>
                 <ChainEvidence campaign={campaign} />
-                <section className="cf-panel">
-                  <h2>Kabar & perkembangan</h2>
-                  {campaign.updates?.length ? (
-                    campaign.updates.map((update, index) => (
-                      <p className="cf-preline" key={index}>
-                        {readable(update)}
-                      </p>
-                    ))
-                  ) : (
-                    <p>
-                      Belum ada pembaruan yang dipublikasikan. Belum ada
-                      informasi penyaluran yang dapat ditampilkan.
-                    </p>
-                  )}
-                </section>
+                <PublicUpdates campaign={campaign} />
               </article>
               <aside>
                 <div className="cf-donation cf-panel">

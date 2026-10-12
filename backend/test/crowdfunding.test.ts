@@ -331,3 +331,189 @@ describe("authoritative sandbox payment accounting and outbox", () => {
     expect((await request(`/campaigns/${id}`)).body.campaign.chainStatus).toBe("CONFIRMED");
   });
 });
+
+describe("campaign news and realization reports", () => {
+  const news = { kind: "NEWS", title: "Kelas dimulai", body: "Kegiatan belajar sudah berjalan." };
+  const realization = { kind: "REALIZATION", title: "Pembelian buku", body: "Buku telah dibagikan kepada siswa.", usedAmount: 6000, carriedOutAt: "2026-01-15" };
+  const pdf = { name: "kuitansi.pdf", contentType: "application/pdf", dataBase64: Buffer.from("%PDF-1.7 PRIVATE RECEIPT").toString("base64") };
+  const photo = { name: "kegiatan.png", contentType: "image/png", dataBase64: Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from("photo")]).toString("base64") };
+  async function funded() {
+    const context = await approved(); const payment = await donate(context.id);
+    expect((await request(`/payments/${payment.id}`, "GET", undefined, undefined, payment.accessToken)).body.payment.status).toBe("PAID");
+    return context;
+  }
+  async function draft(id: string, token: string, body: unknown = news) {
+    const r = await request(`/campaigns/${id}/updates`, "POST", body, token); expect(r.status).toBe(201); return r.body.update;
+  }
+  async function published(id: string, owner: string, op: string, body: any = news) {
+    const update = await draft(id, owner, body); const path = `/campaigns/${id}/updates/${update.id}`;
+    expect((await request(`${path}/submit`, "POST", undefined, owner)).status).toBe(200);
+    if (body.kind === "REALIZATION") expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Diperiksa terhadap lampiran" }, op)).status).toBe(200);
+    return update;
+  }
+
+  test("operator worklist lists pending proposals, publications and reports without private material", async () => {
+    const { id, owner, op } = await funded();
+    expect((await request("/review/queue")).status).toBe(401);
+    expect((await request("/review/queue", "GET", undefined, owner.token)).status).toBe(403);
+    await request("/campaigns", "POST", fields, owner.token);
+    const waiting = (await request("/campaigns", "POST", { ...fields, title: "Second proposal" }, owner.token)).body.campaign.id;
+    await request(`/campaigns/${waiting}/submit`, "POST", undefined, owner.token);
+    const report = await draft(id, owner.token, realization);
+    await published(id, owner.token, op);
+    const row = async (campaignId: string) => (await request("/review/queue", "GET", undefined, op)).body.campaigns.find((c: any) => c.id === campaignId);
+    expect((await row(id)).tasks).toEqual([]);
+    await request(`/campaigns/${id}/updates/${report.id}/submit`, "POST", undefined, owner.token);
+    const queue = await request("/review/queue", "GET", undefined, op);
+    expect(queue.body.campaigns).toHaveLength(2);
+    expect(await row(id)).toMatchObject({ title: fields.title, status: "PUBLISHED", organizer: "Owner", tasks: [{ type: "REPORT", updateId: report.id, title: realization.title, usedAmount: 6000 }] });
+    expect((await row(waiting)).tasks).toMatchObject([{ type: "PROPOSAL" }]);
+    expect(Date.parse((await row(waiting)).tasks[0].since)).toBeGreaterThan(0);
+    for (const hidden of ["PRIVATE", "owner@example", "story", "history", "reviewNotes", "documents"]) expect(JSON.stringify(queue.body)).not.toContain(hidden);
+    await request(`/campaigns/${waiting}/review`, "POST", { expectedVersion: 1, decision: "APPROVE", notes: "Evidence reviewed", checks: { identity: true, consent: true, needs: true, budget: true, distribution: true }, complianceReference: "Reference" }, op);
+    expect((await row(waiting)).tasks).toMatchObject([{ type: "PUBLISH" }]);
+    await request(`/campaigns/${id}/updates/${report.id}/review`, "POST", { expectedRevision: 1, decision: "REJECT", notes: "Tanpa bukti" }, op);
+    expect((await row(id)).tasks).toEqual([]);
+  });
+
+  test("news is published by its owner without examination and can still be withdrawn by an operator", async () => {
+    const { id, owner, op } = await approved(); const other = await register("other@example.com");
+    const update = await draft(id, owner.token); const path = `/campaigns/${id}/updates/${update.id}`;
+    expect((await request(`${path}/attachments`, "POST", { ...pdf, visibility: "PUBLIC" }, owner.token)).status).toBe(400);
+    expect((await request(`${path}/attachments`, "POST", { ...photo, visibility: "PRIVATE" }, owner.token)).status).toBe(400);
+    const image = (await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC" }, owner.token)).body.update.attachments[0];
+    expect((await request(`${path}/attachments/${image.id}`)).status).toBe(401);
+    expect((await request(`/campaigns/${id}`)).body.campaign.updates).toEqual([]);
+    expect((await request(`${path}/submit`, "POST", undefined, other.token)).status).toBe(403);
+    expect((await request(`${path}/submit`, "POST", undefined, owner.token)).body.update.status).toBe("PUBLISHED");
+    const visible = (await request(`/campaigns/${id}`)).body.campaign.updates;
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({ kind: "NEWS", title: news.title, status: "PUBLISHED", attachments: [{ id: image.id, name: "kegiatan.png" }] });
+    expect((await app.request(`${path}/attachments/${image.id}`)).status).toBe(200);
+    expect((await request(path, "PATCH", { body: "Rewrite history" }, owner.token)).status).toBe(409);
+    expect((await request(`${path}/submit`, "POST", undefined, owner.token)).status).toBe(409);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "REJECT", notes: "Not reviewable" }, op)).status).toBe(409);
+    const correction = await published(id, owner.token, op, { ...news, title: "Ralat jadwal", correctsId: update.id });
+    expect((await request(`/campaigns/${id}`)).body.campaign.updates.find((u: any) => u.id === update.id).supersededById).toBe(correction.id);
+    expect((await request(`${path}/withdraw`, "POST", { reason: "Memuat data pribadi" }, op)).status).toBe(200);
+    expect((await request(`${path}/attachments/${image.id}`)).status).toBe(401);
+    expect((await request(`/campaigns/${id}`)).body.campaign.updates.find((u: any) => u.id === update.id)).toMatchObject({ status: "WITHDRAWN", withdrawnReason: "Memuat data pribadi" });
+  });
+
+  test("only the owner of a published campaign drafts updates; realization reports stay private until an operator publishes", async () => {
+    const { id, owner, op } = await funded(); const other = await register("other@example.com");
+    const unpublished = (await request("/campaigns", "POST", fields, owner.token)).body.campaign.id;
+    expect((await request(`/campaigns/${unpublished}/updates`, "POST", news, owner.token)).status).toBe(409);
+    expect((await request(`/campaigns/${id}/updates`, "POST", news)).status).toBe(401);
+    expect((await request(`/campaigns/${id}/updates`, "POST", news, other.token)).status).toBe(403);
+    expect((await request(`/campaigns/${id}/updates`, "POST", news, op)).status).toBe(403);
+    expect((await request(`/campaigns/${id}/updates`, "POST", { ...news, usedAmount: 5000 }, owner.token)).status).toBe(400);
+    const update = await draft(id, owner.token, realization); const path = `/campaigns/${id}/updates/${update.id}`;
+    expect(update.status).toBe("DRAFT");
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Too early" }, op)).status).toBe(409);
+    expect((await request(path, "PATCH", { body: "Kegiatan belajar berjalan dua kali sepekan." }, owner.token)).status).toBe(200);
+    expect((await request(`${path}/submit`, "POST", undefined, other.token)).status).toBe(403);
+    expect((await request(`${path}/submit`, "POST", undefined, owner.token)).body.update.status).toBe("SUBMITTED");
+    expect((await request(path, "PATCH", { body: "Late edit" }, owner.token)).status).toBe(409);
+    expect((await request(path, "DELETE", undefined, owner.token)).status).toBe(409);
+    expect((await request(`/campaigns/${id}`)).body.campaign.updates).toEqual([]);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Self" }, owner.token)).status).toBe(403);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 2, decision: "PUBLISH", notes: "Stale" }, op)).status).toBe(409);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "REQUEST_REVISION", notes: "Tambahkan tanggal kegiatan" }, op)).body.update.status).toBe("REVISION_REQUESTED");
+    expect((await request(`/campaigns/${id}`)).body.campaign.updates).toEqual([]);
+    expect((await request(`${path}/submit`, "POST", undefined, owner.token)).body.update.revision).toBe(2);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 2, decision: "PUBLISH", notes: "INTERNAL NOTE" }, op)).body.update.status).toBe("PUBLISHED");
+    const visible = await request(`/campaigns/${id}`);
+    expect(visible.body.campaign.updates).toHaveLength(1);
+    expect(visible.body.campaign.updates[0]).toMatchObject({ kind: "REALIZATION", title: realization.title, body: "Kegiatan belajar berjalan dua kali sepekan.", status: "PUBLISHED" });
+    for (const hidden of ["INTERNAL NOTE", "reviewNotes", "actorId", "Tambahkan tanggal", "revision"]) expect(JSON.stringify(visible.body)).not.toContain(hidden);
+    expect((await request(path, "PATCH", { body: "Rewrite history" }, owner.token)).status).toBe(409);
+    const unsubmitted = await draft(id, owner.token);
+    expect((await request(`/campaigns/${id}/updates/${unsubmitted.id}`, "DELETE", undefined, owner.token)).status).toBe(200);
+    expect((await request(`/campaigns/${id}`, "GET", undefined, owner.token)).body.campaign.updates).toHaveLength(1);
+    // Publishing an update records no chain event: recording them on chain is an undecided product question.
+    expect(await store.transaction(s => Object.values(s.outbox).filter(e => /UPDATE/.test(e.kind)).length)).toBe(0);
+  });
+
+  test("reported used amount counts only published realization reports and never exceeds confirmed donations", async () => {
+    const { id, owner, op } = await funded();
+    expect((await request(`/campaigns/${id}/updates`, "POST", { ...realization, usedAmount: undefined }, owner.token)).status).toBe(400);
+    expect((await request(`/campaigns/${id}/updates`, "POST", { ...realization, carriedOutAt: "2099-01-01" }, owner.token)).status).toBe(400);
+    const excessive = await draft(id, owner.token, { ...realization, usedAmount: 10001 });
+    expect((await request(`/campaigns/${id}/updates/${excessive.id}/submit`, "POST", undefined, owner.token)).status).toBe(409);
+    const first = await draft(id, owner.token, realization);
+    await request(`/campaigns/${id}/updates/${first.id}/submit`, "POST", undefined, owner.token);
+    expect((await request(`/campaigns/${id}`)).body.campaign.reportedUsedAmount).toBe(0);
+    await request(`/campaigns/${id}/updates/${first.id}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Sesuai kuitansi" }, op);
+    const summary = (await request(`/campaigns/${id}`)).body.campaign;
+    expect(summary).toMatchObject({ collectedAmount: 10000, reportedUsedAmount: 6000 });
+    expect(summary.updates[0]).toMatchObject({ usedAmount: 6000, carriedOutAt: "2026-01-15" });
+    const second = await draft(id, owner.token, { ...realization, usedAmount: 5000 });
+    expect((await request(`/campaigns/${id}/updates/${second.id}/submit`, "POST", undefined, owner.token)).status).toBe(409);
+    expect((await request(`/campaigns/${id}/updates/${second.id}`, "PATCH", { usedAmount: 4000 }, owner.token)).status).toBe(200);
+    await request(`/campaigns/${id}/updates/${second.id}/submit`, "POST", undefined, owner.token);
+    await request(`/campaigns/${id}/updates/${second.id}/review`, "POST", { expectedRevision: 1, decision: "REJECT", notes: "Tanpa bukti" }, op);
+    expect((await request(`/campaigns/${id}`)).body.campaign.reportedUsedAmount).toBe(6000);
+    // Reports remain possible after the collection period is closed.
+    await request(`/campaigns/${id}/status`, "POST", { status: "CLOSED", reason: "Funding period concluded" }, op);
+    await published(id, owner.token, op, { ...realization, usedAmount: 4000 });
+    expect((await request(`/campaigns/${id}`)).body.campaign.reportedUsedAmount).toBe(10000);
+  });
+
+  test("published updates are corrected by a superseding update and withdrawn with a public marker", async () => {
+    const { id, owner, op } = await funded();
+    const original = await published(id, owner.token, op, realization);
+    const article = await published(id, owner.token, op);
+    expect((await request(`/campaigns/${id}/updates`, "POST", { ...news, correctsId: original.id }, owner.token)).status).toBe(409);
+    const correction = await published(id, owner.token, op, { ...realization, usedAmount: 9000, correctsId: original.id });
+    let view = (await request(`/campaigns/${id}`)).body.campaign;
+    expect(view.reportedUsedAmount).toBe(9000);
+    expect(view.updates.find((u: any) => u.id === original.id).supersededById).toBe(correction.id);
+    expect(view.updates.find((u: any) => u.id === correction.id).correctsId).toBe(original.id);
+    expect((await request(`/campaigns/${id}/updates`, "POST", { ...realization, correctsId: original.id }, owner.token)).status).toBe(409);
+    expect((await request(`/campaigns/${id}/updates/${correction.id}/withdraw`, "POST", { reason: "Kuitansi tidak sah" }, owner.token)).status).toBe(403);
+    expect((await request(`/campaigns/${id}/updates/${correction.id}/withdraw`, "POST", { reason: "Kuitansi tidak sah" }, op)).status).toBe(200);
+    expect((await request(`/campaigns/${id}/updates/${correction.id}/withdraw`, "POST", { reason: "Again" }, op)).status).toBe(409);
+    view = (await request(`/campaigns/${id}`)).body.campaign;
+    expect(view.reportedUsedAmount).toBe(6000);
+    const marker = view.updates.find((u: any) => u.id === correction.id);
+    expect(marker).toMatchObject({ status: "WITHDRAWN", withdrawnReason: "Kuitansi tidak sah" });
+    expect(marker.body).toBeUndefined(); expect(marker.usedAmount).toBeUndefined();
+    expect(view.updates.find((u: any) => u.id === original.id).supersededById).toBeUndefined();
+    expect(view.updates.find((u: any) => u.id === article.id).status).toBe("PUBLISHED");
+  });
+
+  test("report attachments stay private unless proposed public by the fundraiser and released by the operator", async () => {
+    const { id, owner, op } = await funded(); const other = await register("other@example.com");
+    const update = await draft(id, owner.token, realization); const path = `/campaigns/${id}/updates/${update.id}`;
+    expect((await request(`${path}/attachments`, "POST", pdf, owner.token)).status).toBe(400);
+    expect((await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC" }, other.token)).status).toBe(403);
+    expect((await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC", dataBase64: Buffer.from("<script>").toString("base64") }, owner.token)).status).toBe(400);
+    const receipt = (await request(`${path}/attachments`, "POST", { ...pdf, visibility: "PRIVATE" }, owner.token)).body.update.attachments[0];
+    const discarded = (await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC" }, owner.token)).body.update.attachments[1];
+    expect((await request(`${path}/attachments/${discarded.id}`, "DELETE", undefined, owner.token)).body.update.attachments).toHaveLength(1);
+    const shown = (await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC" }, owner.token)).body.update.attachments[1];
+    const held = (await request(`${path}/attachments`, "POST", { ...photo, name: "wajah.png", visibility: "PUBLIC" }, owner.token)).body.update.attachments[2];
+    expect(shown.encrypted).toBeUndefined();
+    expect(JSON.stringify(await store.transaction(s => s.campaigns[id].updates))).not.toContain(photo.dataBase64);
+    await request(`${path}/submit`, "POST", undefined, owner.token);
+    expect((await request(`${path}/attachments`, "POST", { ...photo, visibility: "PUBLIC" }, owner.token)).status).toBe(409);
+    expect((await request(`${path}/attachments/${shown.id}`)).status).toBe(401);
+    expect((await app.request(`${path}/attachments/${receipt.id}`, { headers: { Authorization: `Bearer ${op}` } })).status).toBe(200);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Checked", publicAttachmentIds: [receipt.id] }, op)).status).toBe(400);
+    expect((await request(`${path}/review`, "POST", { expectedRevision: 1, decision: "PUBLISH", notes: "Checked", publicAttachmentIds: [shown.id] }, op)).status).toBe(200);
+    const visible = (await request(`/campaigns/${id}`)).body.campaign.updates[0];
+    expect(visible.attachments).toEqual([{ id: shown.id, name: "kegiatan.png", contentType: "image/png", size: shown.size }]);
+    const download = await app.request(`${path}/attachments/${shown.id}`);
+    expect(download.status).toBe(200); expect(download.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(Buffer.from(await download.arrayBuffer()).toString("base64")).toBe(photo.dataBase64);
+    for (const hidden of [receipt.id, held.id]) {
+      expect((await request(`${path}/attachments/${hidden}`)).status).toBe(401);
+      expect((await request(`${path}/attachments/${hidden}`, "GET", undefined, other.token)).status).toBe(403);
+    }
+    const owned = await app.request(`${path}/attachments/${receipt.id}`, { headers: { Authorization: `Bearer ${owner.token}` } });
+    expect(await owned.text()).toBe("%PDF-1.7 PRIVATE RECEIPT");
+    await request(`${path}/withdraw`, "POST", { reason: "Foto keliru" }, op);
+    expect((await request(`${path}/attachments/${shown.id}`)).status).toBe(401);
+  });
+});

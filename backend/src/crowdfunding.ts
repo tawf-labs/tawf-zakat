@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CrowdfundingState, CrowdfundingStore } from "./crowdfunding-store";
 import { CampaignGatewayError, type CampaignGateway } from "./crowdfunding-midtrans";
+import { reportedUsedAmount, updatesDto } from "./crowdfunding-updates";
 
 export class CampaignError extends Error {
   constructor(message: string, public status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 502 | 503 = 400) { super(message); }
@@ -50,14 +51,23 @@ export function dto(s: CrowdfundingState, c: any, chainConfigured: boolean, priv
   const confirmed = events.filter(e => e.status === "CONFIRMED");
   const chainStatus = !chainConfigured ? "UNCONFIGURED" : events.some(e => e.status === "FAILED") ? "FAILED" : !events.length || events.some(e => e.status !== "CONFIRMED") ? "PENDING" : "CONFIRMED";
   const material = !privileged && c.publicSnapshot ? c.publicSnapshot : publishedCampaignMaterial(s, c);
-  const value: Record<string, any> = { id: c.id, title: material.title, summary: material.summary, story: material.story, category: material.category, targetAmount: material.targetAmount, endsAt: material.endsAt, coverImageUrl: material.coverImageUrl, status: c.status, version: material.version, organizer: material.organizer, collectedAmount: c.collectedAmount, donationCount: c.donationCount, createdAt: c.createdAt, updatedAt: c.updatedAt, chainStatus, chainTxHash: confirmed.at(-1)?.transactionHash, publishedAt: c.publishedAt, chainEvents: events.map(e => ({ eventId: e.eventId, kind: e.kind, payloadHash: e.payloadHash, transactionHash: e.transactionHash, status: e.status })), updates: [] };
+  const value: Record<string, any> = { id: c.id, title: material.title, summary: material.summary, story: material.story, category: material.category, targetAmount: material.targetAmount, endsAt: material.endsAt, coverImageUrl: material.coverImageUrl, status: c.status, version: material.version, organizer: material.organizer, collectedAmount: c.collectedAmount, donationCount: c.donationCount, createdAt: c.createdAt, updatedAt: c.updatedAt, chainStatus, chainTxHash: confirmed.at(-1)?.transactionHash, publishedAt: c.publishedAt, chainEvents: events.map(e => ({ eventId: e.eventId, kind: e.kind, payloadHash: e.payloadHash, transactionHash: e.transactionHash, status: e.status })), updates: updatesDto(c, privileged), reportedUsedAmount: reportedUsedAmount(c) };
   if (privileged) Object.assign(value, { beneficiaryName: c.beneficiaryName, relationship: c.relationship, budgetPlan: c.budgetPlan, distributionPlan: c.distributionPlan, consent: c.consent, documents: c.documents.map((d: any) => ({ id: d.id, name: d.name, contentType: d.contentType, size: d.size, createdAt: d.createdAt })), reviewNotes: c.reviewNotes, history: c.history });
   return value;
+}
+/** Operator worklist row: what awaits an operator on a campaign, without its private material. */
+export function queueRow(s: CrowdfundingState, c: any) {
+  const u = s.users[c.ownerId];
+  const tasks: Record<string, unknown>[] = [];
+  if (c.status === "SUBMITTED") tasks.push({ type: "PROPOSAL", since: c.versions.at(-1)?.at ?? c.updatedAt });
+  if (c.status === "APPROVED") tasks.push({ type: "PUBLISH", since: c.reviewNotes.at(-1)?.at ?? c.updatedAt });
+  for (const item of c.updates ?? []) if (item.status === "SUBMITTED") tasks.push({ type: "REPORT", since: item.submittedAt, updateId: item.id, title: item.title, usedAmount: item.usedAmount });
+  return { id: c.id, title: c.title, status: c.status, version: c.version, organizer: c.organizationName || u.organizationName || u.name, updatedAt: c.updatedAt, tasks };
 }
 export const paymentDto = (p: any) => ({ id: p.id, token: p.token, redirectUrl: p.redirectUrl, status: p.status, amount: p.amount, refundedAmount: p.refundedAmount, retryAvailable: ["CREATING", "GATEWAY_ERROR", "PENDING"].includes(p.status) });
 
 export async function reconcilePayment(runtime: CampaignRuntime, id: string) {
-  if (!runtime.gateway) throw new CampaignError("Midtrans sandbox is unconfigured", 503);
+  if (!runtime.gateway) throw new CampaignError("Payment gateway is unconfigured", 503);
   const data = await runtime.gateway.status(id);
   return runtime.store.transaction(s => {
     const p = s.payments[id];
@@ -81,7 +91,7 @@ export async function reconcilePayment(runtime: CampaignRuntime, id: string) {
     if (paid !== p.paidAmount || refunded !== p.refundedAmount) {
       c.collectedAmount += net - previousNet;
       c.donationCount += Number(net > 0) - Number(previousNet > 0);
-      audit(c, "MIDTRANS", refunded > p.refundedAmount ? "REFUND" : "PAYMENT", "Authoritative sandbox verification");
+      audit(c, "MIDTRANS", refunded > p.refundedAmount ? "REFUND" : "PAYMENT", "Verified with the payment gateway");
       enqueue(s, c, refunded > p.refundedAmount ? "REFUND" : "PAYMENT", { paymentId: p.id, paidAmount: paid, refundedAmount: refunded });
     }
     p.paidAmount = paid; p.refundedAmount = refunded;
@@ -91,7 +101,7 @@ export async function reconcilePayment(runtime: CampaignRuntime, id: string) {
 }
 
 export async function retryCampaignPayment(runtime: CampaignRuntime, id: string, accessToken: string) {
-  if (!runtime.gateway) throw new CampaignError("Midtrans sandbox is unconfigured", 503);
+  if (!runtime.gateway) throw new CampaignError("Payment gateway is unconfigured", 503);
   const leaseOwner = randomUUID();
   const accepting = (s: CrowdfundingState, p: any) => {
     const c = campaign(s, p.campaignId);

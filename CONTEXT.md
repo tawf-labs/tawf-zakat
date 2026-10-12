@@ -38,6 +38,22 @@ _Avoid_: Klik tombol bayar; callback browser; dana telah diterima penerima manfa
 Komitmen kriptografis atas versi catatan atau keputusan penggalangan yang dapat ditelusuri beserta koreksinya.
 _Avoid_: Bukti penyakit benar; jaminan saldo bank; bukti penyaluran nyata tanpa bukti pendukung; status pembayaran sebagai status konfirmasi blockchain.
 
+**Kabar kampanye**:
+Perkembangan kegiatan atau kondisi terbaru yang diterbitkan penggalang sendiri pada kampanye yang sudah terbit, tanpa pemeriksaan operator lebih dulu; operator dapat menariknya setelah terbit dengan alasan yang tetap terlihat.
+_Avoid_: Revisi proposal kampanye; tempat menyebut nominal penggunaan dana, yang hanya sah lewat laporan realisasi; informasi yang telah diperiksa operator.
+
+**Laporan realisasi kampanye**:
+Pernyataan penggalang atas nominal dana yang digunakan, tanggal pelaksanaan, hasil kegiatan, dan lampiran pendukungnya, yang melekat pada kampanye yang sama dan diperiksa operator sebelum terbit. Setelah terbit tidak diubah: kekeliruan diperbaiki dengan laporan koreksi yang menggantikannya, atau ditarik operator dengan alasan yang tetap terlihat.
+_Avoid_: Pengajuan penyaluran atau laporan periode lembaga; bukti bantuan diterima penerima manfaat; saldo rekening; jaminan operator atas kebenaran klaim.
+
+**Nominal dilaporkan digunakan**:
+Jumlah nominal pada laporan realisasi yang sedang terbit dan belum digantikan koreksi; dibedakan dari dana terkumpul dan tidak boleh melebihinya.
+_Avoid_: Dana tersalurkan terverifikasi; pencairan dari gateway pembayaran.
+
+**Lampiran laporan**:
+Berkas pendukung kabar atau laporan realisasi. Pada laporan realisasi privat secara bawaan; tampil ke publik hanya bila penggalang mengusulkannya dan operator melepasnya satu per satu saat menerbitkan. Pada kabar hanya berupa foto, yang tampil ke publik bersama kabarnya.
+_Avoid_: Menganggap semua lampiran otomatis publik; kuitansi atau identitas sebagai dokumentasi publik.
+
 **Mitra penyalur kampanye**:
 Lembaga mitra yang melaksanakan bantuan sesuai penugasan dan melaporkan realisasinya; penyerahan dana kepada mitra tidak otomatis membuktikan bantuan diterima penerima manfaat.
 _Avoid_: Penggalang sebagai penerima manfaat secara otomatis; transfer ke mitra sebagai akhir pertanggungjawaban penyelenggara.

@@ -43,7 +43,11 @@ Checkout membuka halaman resmi Midtrans sandbox. Browser hanya memeriksa status 
 
 Jika pembuatan checkout terganggu, gunakan pemulihan pembayaran yang sama: backend memeriksa status Midtrans terlebih dahulu dan tidak membuat ID pesanan baru untuk hasil yang masih ambigu. Jika pesanan sudah ada tetapi tautan checkout tidak dapat dipulihkan, pemeriksaan di sisi merchant mungkin diperlukan. Akses pembayaran donatur disimpan per tab browser, bukan akun donatur; penutupan tab atau hilangnya respons jaringan sebelum token diterima belum memiliki pemulihan lintas perangkat.
 
-Operator dapat membuka kembali kampanye yang sudah disetujui/terbit untuk revisi material. Donasi baru dijeda, halaman publik mempertahankan isi versi terakhir yang diterbitkan, dan perubahan harus diajukan, diperiksa, disetujui, lalu diterbitkan kembali. Checkout yang sudah diterbitkan sebelum jeda masih dapat dibayar; penerimaan yang dikonfirmasi tetap dicatat. Publikasi laporan perkembangan, rincian anggaran publik, dan alur pencairan/penyaluran crowdfunding belum tersedia; ruang kerja penyaluran lembaga lama bukan pengganti otomatis fitur tersebut.
+Operator dapat membuka kembali kampanye yang sudah disetujui/terbit untuk revisi material. Donasi baru dijeda, halaman publik mempertahankan isi versi terakhir yang diterbitkan, dan perubahan harus diajukan, diperiksa, disetujui, lalu diterbitkan kembali. Checkout yang sudah diterbitkan sebelum jeda masih dapat dibayar; penerimaan yang dikonfirmasi tetap dicatat. Rincian anggaran publik dan alur pencairan/penyaluran crowdfunding belum tersedia; ruang kerja penyaluran lembaga lama bukan pengganti otomatis fitur tersebut.
+
+**Antrean operator.** `/kelola-kampanye` membuka daftar kerja, bukan daftar semua kampanye: proposal yang menunggu review, kampanye disetujui yang belum terbit, dan laporan realisasi yang menunggu pemeriksaan, diurutkan dari yang paling lama menunggu. Tab berangka menyaring per jenis pekerjaan; “Semua kampanye” adalah arsip yang bisa dicari dan disaring per status. Setelah keputusan yang menuntaskan pekerjaan pada satu kampanye, item antrean berikutnya terbuka otomatis. Daftar diambil dari `GET /api/crowdfunding/review/queue`, yang hanya memuat ringkasan tanpa material privat; daftar masih dikirim utuh dan dipotong di browser (40 baris per tampilan), belum berhalaman di server.
+
+**Kabar & laporan realisasi.** Setelah kampanye terbit (termasuk setelah ditutup), penggalang dapat menulis kabar atau laporan realisasi dari bagian “Kabar & Laporan” di `/galang-dana`, dengan hingga 5 lampiran. **Kabar** terbit langsung saat penggalang menerbitkannya, tanpa pemeriksaan operator; lampirannya hanya foto JPEG/PNG yang ikut tampil ke publik. **Laporan realisasi** diajukan lebih dulu: operator memeriksa, lalu menerbitkan, meminta perbaikan, atau menolak, dan lampirannya privat secara bawaan — berkas tampil ke publik hanya jika penggalang mengusulkannya **dan** operator mencentangnya saat menerbitkan. Halaman detail kampanye menandai kabar sebagai “ditulis penggalang” dan laporan sebagai “diperiksa operator”. Catatan yang sudah terbit tidak dapat diubah; perbaikannya adalah laporan koreksi yang menggantikan catatan lama, dan operator dapat menarik catatan dengan alasan yang tetap tampil. Halaman publik membedakan dana terkumpul, nominal yang dilaporkan digunakan (hanya laporan realisasi yang sedang terbit; total tidak boleh melebihi donasi terkonfirmasi), dan sisanya. Angka itu pernyataan penggalang yang diperiksa operator terhadap lampiran, bukan saldo rekening atau bukti bantuan diterima. Kabar dan laporan **belum** dicatat ke registry blockchain.
 
 Pemeriksaan lokal (tanpa pembayaran atau broadcast publik):
 
@@ -53,6 +57,7 @@ bun run typecheck
 NODE_ENV=test bun test
 # Integrasi Chromium → frontend → API → PGlite; hanya gateway berupa fixture.
 NODE_ENV=test CROWDFUNDING_BROWSER=1 bun test test/crowdfunding_browser.test.ts
+NODE_ENV=test CROWDFUNDING_BROWSER=1 bun test test/crowdfunding_updates_browser.test.ts
 cd ../frontend
 bun run typecheck
 bun run build
