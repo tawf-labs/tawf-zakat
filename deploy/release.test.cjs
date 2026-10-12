@@ -57,6 +57,7 @@ test("PM2 preparation template preserves inspected processes, paths and Node pre
     assert.equal(app.env.DEPLOYMENT_PENDING, "false");
     assert.equal(app.env.ENABLE_EMBEDDED_INDEXER, "false");
     assert.equal(app.env.EVIDENCE_FILE_DIR, "/home/tawf-labs/shared/backend/evidence-files");
+    assert.equal(app.env.CAMPAIGN_FILE_DIR, "/home/tawf-labs/shared/backend/campaign-files");
     assert.equal(app.env.TAWF_NODE_BIN_DIR, "/home/tawf-labs/shared/runtimes/node-check-8CwcWi/bin");
     assert.equal(app.env.PATH, app.env.TAWF_NODE_BIN_DIR + ":/usr/local/bin:/usr/bin");
     assert.equal(app.env.PRIVATE_KEY, undefined);

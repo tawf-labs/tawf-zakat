@@ -27,6 +27,8 @@ const common = {
     DEPLOYMENT_PENDING: "false",
     ENABLE_EMBEDDED_INDEXER: "false",
     EVIDENCE_FILE_DIR: "/home/tawf-labs/shared/backend/evidence-files",
+    // Outside the release directory, or campaign files would vanish at the next release switch.
+    CAMPAIGN_FILE_DIR: "/home/tawf-labs/shared/backend/campaign-files",
     TAWF_NODE_BIN_DIR: nodeBinDir,
     PATH: [nodeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter),
   },
