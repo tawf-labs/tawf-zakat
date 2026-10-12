@@ -10,7 +10,7 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const handlerPath = path.join(here, "..", ".vercel/output/functions/__server.func/index.mjs");
 
 const routes = ["/", "/donasi", "/verifikasi", "/ruang-kerja", "/about"];
-const retiredRoutes = ["/tata-kelola"];
+const retiredRoutes = ["/tata-kelola", "/transparansi"];
 
 const { default: handler } = await import(pathToFileURL(handlerPath).href);
 

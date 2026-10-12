@@ -30,7 +30,6 @@ export function Footer() {
         >
           <strong>Ruang institusional</strong>
           <Link to="/ruang-kerja">Ruang kerja lembaga</Link>
-          <Link to="/transparansi">Laporan & bukti publik</Link>
           <Link to="/verifikasi">Pemeriksaan bukti</Link>
           <Link to="/rekonsiliasi">Rekonsiliasi</Link>
           <Link to="/laporan-periode">Laporan periode</Link>

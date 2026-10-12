@@ -18,13 +18,12 @@ import { Route as LaporanPeriodeRouteImport } from './routes/laporan-periode'
 import { Route as RekonsiliasiRouteImport } from './routes/rekonsiliasi'
 import { Route as RuangKerjaRouteImport } from './routes/ruang-kerja'
 import { Route as SertifikatRouteImport } from './routes/sertifikat'
-import { Route as TransparansiRouteImport } from './routes/transparansi'
 import { Route as VerifikasiRouteImport } from './routes/verifikasi'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 import { Route as KampanyeIndexRouteImport } from './routes/kampanye.index'
 import { Route as KampanyeCampaignIdRouteImport } from './routes/kampanye.$campaignId'
-import { Route as TransparansiBuktiRouteImport } from './routes/transparansi/bukti'
-import { Route as TransparansiLaporanRouteImport } from './routes/transparansi/laporan'
+import { Route as TransparansiBuktiRouteImport } from './routes/transparansi.bukti'
+import { Route as TransparansiLaporanRouteImport } from './routes/transparansi.laporan'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -71,11 +70,6 @@ const SertifikatRoute = SertifikatRouteImport.update({
   path: '/sertifikat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TransparansiRoute = TransparansiRouteImport.update({
-  id: '/transparansi',
-  path: '/transparansi',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const VerifikasiRoute = VerifikasiRouteImport.update({
   id: '/verifikasi',
   path: '/verifikasi',
@@ -97,14 +91,14 @@ const KampanyeCampaignIdRoute = KampanyeCampaignIdRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const TransparansiBuktiRoute = TransparansiBuktiRouteImport.update({
-  id: '/bukti',
-  path: '/bukti',
-  getParentRoute: () => TransparansiRoute,
+  id: '/transparansi/bukti',
+  path: '/transparansi/bukti',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const TransparansiLaporanRoute = TransparansiLaporanRouteImport.update({
-  id: '/laporan',
-  path: '/laporan',
-  getParentRoute: () => TransparansiRoute,
+  id: '/transparansi/laporan',
+  path: '/transparansi/laporan',
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -117,7 +111,6 @@ export interface FileRoutesByFullPath {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/kampanye/$campaignId': typeof KampanyeCampaignIdRoute
@@ -135,7 +128,6 @@ export interface FileRoutesByTo {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/kampanye/$campaignId': typeof KampanyeCampaignIdRoute
@@ -154,7 +146,6 @@ export interface FileRoutesById {
   '/rekonsiliasi': typeof RekonsiliasiRoute
   '/ruang-kerja': typeof RuangKerjaRoute
   '/sertifikat': typeof SertifikatRoute
-  '/transparansi': typeof TransparansiRouteWithChildren
   '/verifikasi': typeof VerifikasiRoute
   '/admin/roles': typeof AdminRolesRoute
   '/kampanye/$campaignId': typeof KampanyeCampaignIdRoute
@@ -174,7 +165,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
     | '/kampanye/$campaignId'
@@ -192,7 +182,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
     | '/kampanye/$campaignId'
@@ -210,7 +199,6 @@ export interface FileRouteTypes {
     | '/rekonsiliasi'
     | '/ruang-kerja'
     | '/sertifikat'
-    | '/transparansi'
     | '/verifikasi'
     | '/admin/roles'
     | '/kampanye/$campaignId'
@@ -229,10 +217,11 @@ export interface RootRouteChildren {
   RekonsiliasiRoute: typeof RekonsiliasiRoute
   RuangKerjaRoute: typeof RuangKerjaRoute
   SertifikatRoute: typeof SertifikatRoute
-  TransparansiRoute: typeof TransparansiRouteWithChildren
   VerifikasiRoute: typeof VerifikasiRoute
   AdminRolesRoute: typeof AdminRolesRoute
   KampanyeCampaignIdRoute: typeof KampanyeCampaignIdRoute
+  TransparansiBuktiRoute: typeof TransparansiBuktiRoute
+  TransparansiLaporanRoute: typeof TransparansiLaporanRoute
   KampanyeIndexRoute: typeof KampanyeIndexRoute
 }
 
@@ -301,13 +290,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SertifikatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/transparansi': {
-      id: '/transparansi'
-      path: '/transparansi'
-      fullPath: '/transparansi'
-      preLoaderRoute: typeof TransparansiRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/verifikasi': {
       id: '/verifikasi'
       path: '/verifikasi'
@@ -338,34 +320,20 @@ declare module '@tanstack/react-router' {
     }
     '/transparansi/bukti': {
       id: '/transparansi/bukti'
-      path: '/bukti'
+      path: '/transparansi/bukti'
       fullPath: '/transparansi/bukti'
       preLoaderRoute: typeof TransparansiBuktiRouteImport
-      parentRoute: typeof TransparansiRoute
+      parentRoute: typeof rootRouteImport
     }
     '/transparansi/laporan': {
       id: '/transparansi/laporan'
-      path: '/laporan'
+      path: '/transparansi/laporan'
       fullPath: '/transparansi/laporan'
       preLoaderRoute: typeof TransparansiLaporanRouteImport
-      parentRoute: typeof TransparansiRoute
+      parentRoute: typeof rootRouteImport
     }
   }
 }
-
-interface TransparansiRouteChildren {
-  TransparansiBuktiRoute: typeof TransparansiBuktiRoute
-  TransparansiLaporanRoute: typeof TransparansiLaporanRoute
-}
-
-const TransparansiRouteChildren: TransparansiRouteChildren = {
-  TransparansiBuktiRoute: TransparansiBuktiRoute,
-  TransparansiLaporanRoute: TransparansiLaporanRoute,
-}
-
-const TransparansiRouteWithChildren = TransparansiRoute._addFileChildren(
-  TransparansiRouteChildren,
-)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -377,10 +345,11 @@ const rootRouteChildren: RootRouteChildren = {
   RekonsiliasiRoute: RekonsiliasiRoute,
   RuangKerjaRoute: RuangKerjaRoute,
   SertifikatRoute: SertifikatRoute,
-  TransparansiRoute: TransparansiRouteWithChildren,
   VerifikasiRoute: VerifikasiRoute,
   AdminRolesRoute: AdminRolesRoute,
   KampanyeCampaignIdRoute: KampanyeCampaignIdRoute,
+  TransparansiBuktiRoute: TransparansiBuktiRoute,
+  TransparansiLaporanRoute: TransparansiLaporanRoute,
   KampanyeIndexRoute: KampanyeIndexRoute,
 }
 export const routeTree = rootRouteImport

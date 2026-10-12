@@ -26,3 +26,25 @@ describe("supervisor portal retirement", () => {
     expect(source("routeTree.gen.ts")).toContain("/ruang-kerja");
   });
 });
+
+describe("transparency page retirement", () => {
+  it("removes the route and its exclusive transparency components", () => {
+    expect(existsSync(new URL("../src/routes/transparansi.tsx", import.meta.url))).toBe(false);
+    expect(existsSync(new URL("../src/features/transparency", import.meta.url))).toBe(false);
+    expect(source("routeTree.gen.ts")).not.toContain("fullPath: '/transparansi'");
+  });
+
+  it("removes transparency navigation links", () => {
+    for (const path of ["components/layout/Navbar.tsx", "components/layout/Footer.tsx"]) {
+      expect(source(path)).not.toContain('to: "/transparansi"');
+      expect(source(path)).not.toContain('to="/transparansi"');
+    }
+  });
+
+  it("preserves deep-link public proof and report routes", () => {
+    expect(existsSync(new URL("../src/routes/transparansi.bukti.tsx", import.meta.url))).toBe(true);
+    expect(existsSync(new URL("../src/routes/transparansi.laporan.tsx", import.meta.url))).toBe(true);
+    expect(source("routeTree.gen.ts")).toContain("/transparansi/bukti");
+    expect(source("routeTree.gen.ts")).toContain("/transparansi/laporan");
+  });
+});

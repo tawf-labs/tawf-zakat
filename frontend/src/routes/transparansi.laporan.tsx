@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PublicReport } from "../../features/reports/PublicReport";
+import { PublicReport } from "../features/reports/PublicReport";
 export const Route = createFileRoute("/transparansi/laporan")({
   validateSearch: (search: Record<string, unknown>) => ({ packageId: typeof search.packageId === "string" ? search.packageId : "" }),
   head: () => ({ meta: [{ title: "Ringkasan laporan periode | Tawf" }, { name: "description", content: "Ringkasan publik versi laporan, cakupan pemeriksaan, temuan, dan referensi registry." }] }),

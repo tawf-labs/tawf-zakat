@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "../../components/layout/PageHeader";
-import { Container } from "../../components/layout/Container";
-import { EvidenceViewer } from "../../features/evidence";
+import { PageHeader } from "../components/layout/PageHeader";
+import { Container } from "../components/layout/Container";
+import { EvidenceViewer } from "../features/evidence";
 
 interface BuktiSearchParams {
   cid?: string;
