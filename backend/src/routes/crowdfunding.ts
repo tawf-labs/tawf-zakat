@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { encryptCampaignDocument, decryptCampaignDocument, parseCampaignUpload, campaignDocumentHeaders } from "../crowdfunding-documents";
+import { parseCampaignUpload, campaignDocumentHeaders, campaignCoverHeaders, storeCampaignFile, readCampaignFile } from "../crowdfunding-documents";
 import { MAX_ATTACHMENTS, campaignUpdate, createUpdate, reviewUpdate, submitUpdate, updateCreation, updateEditable, updateReview, updateRevision, updateWithdrawal, withdrawUpdate, assertUpdateContent, updateDto } from "../crowdfunding-updates";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
@@ -102,7 +102,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
     const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); editable(v);
     if (!v.consent || Date.parse(v.endsAt) <= Date.now()) throw new CampaignError("Consent and future end date required");
     v.version++; v.status = "SUBMITTED";
-    v.versions.push({ version: v.version, at: new Date().toISOString(), fields: Object.fromEntries(Object.keys(campaignFields.shape).map(k => [k, v[k]])), documents: structuredClone(v.documents) });
+    v.versions.push({ version: v.version, at: new Date().toISOString(), fields: Object.fromEntries(Object.keys(campaignFields.shape).map(k => [k, v[k]])), documents: structuredClone(v.documents), ...(v.cover ? { cover: structuredClone(v.cover) } : {}) });
     audit(v, u.id, "SUBMIT", "Version frozen for operator review"); return view(s, v, true);
   }) }));
   app.post("/campaigns/:id/review", async c => {
@@ -152,13 +152,36 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
       v.status = input.status; audit(v, u.id, input.status, input.reason); enqueue(s, v, "STATUS"); return view(s, v, true);
     }) });
   });
+  // Cover image: an uploaded JPEG/PNG replaces the older paste-a-URL field. Each upload gets a new id,
+  // so the published cover keeps resolving while a revision carries a different one.
+  app.post("/campaigns/:id/cover", async c => {
+    const { input, bytes } = parseCampaignUpload(await c.req.json(), false, true);
+    return c.json({ success: true, campaign: await tx(async s => {
+      const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); editable(v);
+      const id = randomUUID();
+      const cover = { id, name: input.name, contentType: input.contentType, size: bytes.length, createdAt: new Date().toISOString(), encrypted: await storeCampaignFile(runtime!, v.id, id, bytes), contentHash: hash(bytes) };
+      (v.covers ??= []).push(cover); v.cover = cover; delete v.coverImageUrl;
+      audit(v, u.id, "COVER", "Cover image uploaded"); return view(s, v, true);
+    }) }, 201);
+  });
+  app.get("/campaigns/:id/cover/:coverId", async c => {
+    const cover = await runtime!.store.transaction(s => {
+      const v = campaign(s, c.req.param("id")); const found = (v.covers ?? []).find((x: any) => x.id === c.req.param("coverId"));
+      // Only the cover of the published material is public; a draft or superseded cover stays with owner and operator.
+      const published = publiclyVisible(v) && found && found.id === (v.publicSnapshot ?? publishedCampaignMaterial(s, v)).coverImageId;
+      if (!published) { privateAccess(v, authenticate(s, bearer(c))); if (!found) throw new CampaignError("Cover not found", 404); }
+      return { record: found, published };
+    });
+    return new Response(await readCampaignFile(runtime!, c.req.param("id"), cover.record), { headers: cover.published ? campaignCoverHeaders(cover.record) : { ...campaignCoverHeaders(cover.record), "Cache-Control": "private, no-store" } });
+  });
   app.post("/campaigns/:id/documents", async c => {
     const { input, bytes } = parseCampaignUpload(await c.req.json());
-    const result = await runtime!.store.transaction(s => {
+    const result = await runtime!.store.transaction(async s => {
       const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); editable(v);
       if (v.documents.length >= 10) throw new CampaignError("At most 10 private documents");
       const id = randomUUID();
-      const encrypted = encryptCampaignDocument(runtime!.documentKey, v.id, id, bytes);
+      // The ciphertext is written before the row commits; a failed commit leaves an unreferenced file, never a dangling record.
+      const encrypted = await storeCampaignFile(runtime!, v.id, id, bytes);
       const document = { name: input.name, contentType: input.contentType, id, size: bytes.length, createdAt: new Date().toISOString() };
       v.documents.push({ ...document, encrypted, contentHash: hash(bytes) }); audit(v, u.id, "DOCUMENT", "Private evidence uploaded");
       return { campaign: view(s, v, true), document };
@@ -167,7 +190,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
   });
   app.get("/campaigns/:id/documents/:documentId", async c => {
     const document = await runtime!.store.transaction(s => { const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); privateAccess(v, u); const d = v.documents.find((d: any) => d.id === c.req.param("documentId")); if (!d) throw new CampaignError("Document not found", 404); return d; });
-    return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), document), { headers: campaignDocumentHeaders(document) });
+    return new Response(await readCampaignFile(runtime!, c.req.param("id"), document), { headers: campaignDocumentHeaders(document) });
   });
   // Kabar & laporan realisasi: fundraiser drafts, an independent operator examines before publication.
   const updateResult = (s: any, v: any, item: any) => ({ campaign: view(s, v, true), update: updateDto(item, true) });
@@ -211,13 +234,13 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
   });
   app.post("/campaigns/:id/updates/:updateId/attachments", async c => {
     const { input, bytes } = parseCampaignUpload(await c.req.json(), true);
-    return c.json({ success: true, ...await tx<object>(s => {
+    return c.json({ success: true, ...await tx<object>(async s => {
       const u = authenticate(s, bearer(c)); const v = campaign(s, c.req.param("id")); owner(v, u); const item = campaignUpdate(v, c.req.param("updateId")); updateEditable(item);
       // Kabar is published without examination, so it only carries images the fundraiser makes public.
       if (item.kind === "NEWS" && (input.visibility !== "PUBLIC" || input.contentType === "application/pdf")) throw new CampaignError("News attachments must be public images");
       if (item.attachments.length >= MAX_ATTACHMENTS) throw new CampaignError(`At most ${MAX_ATTACHMENTS} attachments per update`);
       const id = randomUUID();
-      item.attachments.push({ id, name: input.name, contentType: input.contentType, visibility: input.visibility, size: bytes.length, createdAt: new Date().toISOString(), encrypted: encryptCampaignDocument(runtime!.documentKey, v.id, id, bytes), contentHash: hash(bytes) });
+      item.attachments.push({ id, name: input.name, contentType: input.contentType, visibility: input.visibility, size: bytes.length, createdAt: new Date().toISOString(), encrypted: await storeCampaignFile(runtime!, v.id, id, bytes), contentHash: hash(bytes) });
       item.updatedAt = new Date().toISOString();
       return updateResult(s, v, item);
     }) }, 201);
@@ -236,7 +259,7 @@ export function createCrowdfundingRoutes(configured: CampaignRuntime | null | ((
       if (!(a?.published && item.status === "PUBLISHED" && publiclyVisible(v))) { privateAccess(v, authenticate(s, bearer(c))); if (!a) throw new CampaignError("Attachment not found", 404); }
       return a;
     });
-    return new Response(decryptCampaignDocument(runtime!.documentKey, c.req.param("id"), attachment), { headers: campaignDocumentHeaders(attachment) });
+    return new Response(await readCampaignFile(runtime!, c.req.param("id"), attachment), { headers: campaignDocumentHeaders(attachment) });
   });
   app.get("/campaigns/:id/donors", async c => {
     const page = z.object({ offset: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(50).default(10) }).parse(c.req.query());

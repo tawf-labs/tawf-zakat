@@ -1986,6 +1986,15 @@
   user-select: all;
 }
 
+.cf-cover-preview {
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 1px solid var(--cf-border);
+}
+
 /* Donatur & doa */
 .cf-donors {
   list-style: none;

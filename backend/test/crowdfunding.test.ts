@@ -6,10 +6,15 @@ import { drainCampaignOutbox, hash, secret, type CampaignRuntime } from "../src/
 import { CampaignGatewayError, crowdfundingGatewayFromEnv } from "../src/crowdfunding-midtrans";
 import legacyApp from "../src/index";
 import { configureCrowdfundingForTests } from "../src/crowdfunding-runtime";
+import { campaignDiskFileStore, campaignMemoryFileStore, externalizeCampaignFiles, encryptCampaignDocument, storeCampaignFile } from "../src/crowdfunding-documents";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let db: PGlite;
 let store: CrowdfundingStore;
 let runtime: CampaignRuntime;
+let files: ReturnType<typeof campaignMemoryFileStore>;
 let app: ReturnType<typeof createCrowdfundingRoutes>;
 let status: Record<string, any>;
 let checkoutFails = false;
@@ -46,7 +51,8 @@ beforeEach(async () => {
   store = createCrowdfundingStore(db);
   checkoutFails = false; observedIntent = false;
   status = { currency: "IDR", gross_amount: "10000.00", transaction_status: "settlement", fraud_status: "accept" };
-  runtime = { store, chain: null, documentKey: Buffer.alloc(32, 42), gateway: {
+  files = campaignMemoryFileStore();
+  runtime = { store, chain: null, documentKey: Buffer.alloc(32, 42), files, gateway: {
     async create(id) { observedIntent = await store.transaction(s => !!s.payments[id]); if (checkoutFails) throw new Error("timeout"); return { token: "sandbox-token", redirectUrl: "https://app.sandbox.midtrans.com/snap/test" }; },
     async status(id) { return { order_id: id, ...status }; },
     verify(body) { return body.signature_key === "test-trusted-signature"; },
@@ -329,6 +335,90 @@ describe("authoritative sandbox payment accounting and outbox", () => {
     expect(calls[2]).toEqual(first);
     expect((await drainCampaignOutbox(runtime)).attempted).toBe(0);
     expect((await request(`/campaigns/${id}`)).body.campaign.chainStatus).toBe("CONFIRMED");
+  });
+});
+
+describe("campaign file storage and cover images", () => {
+  const png = (label: string) => ({ name: `${label}.png`, contentType: "image/png", dataBase64: Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from(label)]).toString("base64") });
+  test("ciphertext is kept in the file store, not in the aggregate row", async () => {
+    const auth = await register();
+    const id = (await request("/campaigns", "POST", fields, auth.token)).body.campaign.id;
+    const file = { name: "identity.pdf", contentType: "application/pdf", dataBase64: Buffer.from("%PDF-1.7 private document").toString("base64") };
+    const uploaded = (await request(`/campaigns/${id}/documents`, "POST", file, auth.token)).body.campaign.documents[0];
+    const stored = await store.transaction(s => s.campaigns[id].documents[0]);
+    expect(stored.encrypted).toMatchObject({ algorithm: "AES-256-GCM", stored: true });
+    expect(stored.encrypted.ciphertext).toBeUndefined();
+    const held = files.files.get(`${id}/${uploaded.id}`)!;
+    expect(held.length).toBe(Buffer.from(file.dataBase64, "base64").length);
+    expect(held.includes(Buffer.from("private document"))).toBe(false);
+    const path = `/campaigns/${id}/documents/${uploaded.id}`;
+    expect(await (await app.request(path, { headers: { Authorization: `Bearer ${auth.token}` } })).text()).toBe("%PDF-1.7 private document");
+    files.files.delete(`${id}/${uploaded.id}`);
+    expect((await request(path, "GET", undefined, auth.token)).status).toBe(503);
+    runtime.files = null;
+    expect((await request(`/campaigns/${id}/documents`, "POST", file, auth.token)).status).toBe(503);
+  });
+  test("the disk store keeps one file per record and rejects keys outside its layout", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "campaign-files-"));
+    try {
+      const disk = campaignDiskFileStore(directory);
+      await disk.write("11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222", Buffer.from("ciphertext"));
+      expect((await disk.read("11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222")).toString()).toBe("ciphertext");
+      runtime.files = disk;
+      await expect(storeCampaignFile(runtime, "../../etc", "22222222-2222-4222-8222-222222222222", Buffer.from("x"))).rejects.toThrow("Invalid file reference");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  test("records with inline ciphertext stay readable and can be moved out", async () => {
+    const auth = await register();
+    const id = (await request("/campaigns", "POST", fields, auth.token)).body.campaign.id;
+    const legacyId = "11111111-1111-4111-8111-111111111111"; const bytes = Buffer.from("%PDF-1.7 legacy inline");
+    await store.transaction(s => { s.campaigns[id].documents.push({ id: legacyId, name: "lama.pdf", contentType: "application/pdf", size: bytes.length, createdAt: new Date().toISOString(), encrypted: encryptCampaignDocument(runtime.documentKey, id, legacyId, bytes), contentHash: hash(bytes) }); });
+    const read = async () => (await app.request(`/campaigns/${id}/documents/${legacyId}`, { headers: { Authorization: `Bearer ${auth.token}` } })).text();
+    expect(await read()).toBe("%PDF-1.7 legacy inline");
+    expect(await store.transaction(s => externalizeCampaignFiles(runtime, s.campaigns))).toBe(1);
+    expect(await store.transaction(s => externalizeCampaignFiles(runtime, s.campaigns))).toBe(0);
+    expect(await store.transaction(s => s.campaigns[id].documents[0].encrypted.ciphertext)).toBeUndefined();
+    expect(await read()).toBe("%PDF-1.7 legacy inline");
+  });
+  test("the owner uploads a cover image; only the published cover is public", async () => {
+    const auth = await register(); const other = await register("other@example.com"); const op = await operatorToken();
+    const id = (await request("/campaigns", "POST", { ...fields, coverImageUrl: "https://example.com/old.png" }, auth.token)).body.campaign.id;
+    expect((await request(`/campaigns/${id}/cover`, "POST", png("a"))).status).toBe(401);
+    expect((await request(`/campaigns/${id}/cover`, "POST", png("a"), other.token)).status).toBe(403);
+    expect((await request(`/campaigns/${id}/cover`, "POST", { name: "a.pdf", contentType: "application/pdf", dataBase64: Buffer.from("%PDF-1.7").toString("base64") }, auth.token)).status).toBe(400);
+    expect((await request(`/campaigns/${id}/cover`, "POST", { ...png("a"), dataBase64: Buffer.from("<script>").toString("base64") }, auth.token)).status).toBe(400);
+    const first = await request(`/campaigns/${id}/cover`, "POST", png("first"), auth.token);
+    expect(first.status).toBe(201);
+    const firstId = first.body.campaign.coverImageId; expect(firstId).toBeDefined();
+    expect(first.body.campaign.coverImageUrl).toBeUndefined();
+    expect(JSON.stringify(first.body)).not.toContain("encrypted");
+    const firstPath = `/campaigns/${id}/cover/${firstId}`;
+    expect((await request(firstPath)).status).toBe(401);
+    expect((await request(firstPath, "GET", undefined, other.token)).status).toBe(403);
+    expect((await app.request(firstPath, { headers: { Authorization: `Bearer ${auth.token}` } })).headers.get("cache-control")).toBe("private, no-store");
+    await request(`/campaigns/${id}/submit`, "POST", undefined, auth.token);
+    expect((await request(`/campaigns/${id}/cover`, "POST", png("late"), auth.token)).status).toBe(409);
+    await request(`/campaigns/${id}/review`, "POST", { expectedVersion: 1, decision: "APPROVE", notes: "Evidence reviewed", checks: { identity: true, consent: true, needs: true, budget: true, distribution: true }, complianceReference: "Reference" }, op);
+    await request(`/campaigns/${id}/publish`, "POST", { expectedVersion: 1 }, op);
+    const shown = await app.request(firstPath);
+    expect(shown.status).toBe(200); expect(shown.headers.get("content-type")).toBe("image/png");
+    expect(shown.headers.get("cache-control")).toContain("immutable");
+    expect(Buffer.from(await shown.arrayBuffer()).toString("base64")).toBe(png("first").dataBase64);
+    expect((await request(`/campaigns/${id}`)).body.campaign.coverImageId).toBe(firstId);
+    // A revision uploads another cover: the public page keeps the published one until republication.
+    await request(`/campaigns/${id}/reopen`, "POST", { expectedVersion: 1, reason: "Ganti foto" }, op);
+    const secondId = (await request(`/campaigns/${id}/cover`, "POST", png("second"), auth.token)).body.campaign.coverImageId;
+    expect(secondId).not.toBe(firstId);
+    expect((await request(`/campaigns/${id}`)).body.campaign.coverImageId).toBe(firstId);
+    expect((await app.request(firstPath)).status).toBe(200);
+    expect((await request(`/campaigns/${id}/cover/${secondId}`)).status).toBe(401);
+    await request(`/campaigns/${id}/submit`, "POST", undefined, auth.token);
+    await request(`/campaigns/${id}/review`, "POST", { expectedVersion: 2, decision: "APPROVE", notes: "Evidence reviewed", checks: { identity: true, consent: true, needs: true, budget: true, distribution: true }, complianceReference: "Reference" }, op);
+    await request(`/campaigns/${id}/publish`, "POST", { expectedVersion: 2 }, op);
+    expect((await request(`/campaigns/${id}`)).body.campaign.coverImageId).toBe(secondId);
+    expect((await app.request(`/campaigns/${id}/cover/${secondId}`)).status).toBe(200);
+    expect((await request(firstPath)).status).toBe(401);
+    expect((await request(`/campaigns/${id}/cover/00000000-0000-4000-8000-000000000000`, "GET", undefined, auth.token)).status).toBe(404);
   });
 });
 

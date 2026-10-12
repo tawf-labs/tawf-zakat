@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CrowdfundingState, CrowdfundingStore } from "./crowdfunding-store";
 import { CampaignGatewayError, type CampaignGateway } from "./crowdfunding-midtrans";
 import { reportedUsedAmount, updatesDto } from "./crowdfunding-updates";
+import type { CampaignFileStore } from "./crowdfunding-documents";
 
 export class CampaignError extends Error {
   constructor(message: string, public status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 502 | 503 = 400) { super(message); }
@@ -13,7 +14,7 @@ const text = (max = 5000) => z.string().trim().min(1).max(max);
 export const registration = z.object({ name: text(120), email: z.email().max(254).transform(v => v.toLowerCase()), password: z.string().min(12).max(128), kind: z.enum(["INDIVIDUAL", "ORGANIZATION"]), organizationName: text(200).optional() }).strict().refine(v => v.kind !== "ORGANIZATION" || !!v.organizationName, "Organization name required");
 export const campaignFields = z.object({ title: text(160), summary: text(500), story: text(20000), category: z.enum(["HEALTH", "EDUCATION", "HUMANITARIAN", "COMMUNITY"]), targetAmount: z.number().int().min(1000).max(1_000_000_000_000), endsAt: z.iso.datetime({ offset: true }), coverImageUrl: z.url().max(2048).refine(v => new URL(v).protocol === "https:").optional(), beneficiaryName: text(200), relationship: text(500), budgetPlan: text(10000), distributionPlan: text(10000), consent: z.boolean(), organizationName: text(200).optional() }).strict();
 export interface CampaignChainRecorder { record(event: { eventId: string; campaignId: string; kind: string; payloadHash: `0x${string}` }): Promise<{ transactionHash: string }> }
-export interface CampaignRuntime { store: CrowdfundingStore; gateway: CampaignGateway | null; chain: CampaignChainRecorder | null; documentKey?: Buffer | null }
+export interface CampaignRuntime { store: CrowdfundingStore; gateway: CampaignGateway | null; chain: CampaignChainRecorder | null; documentKey?: Buffer | null; files?: CampaignFileStore | null }
 export function publicUser(u: any) { return { id: u.id, name: u.name, email: u.email, kind: u.kind, organizationName: u.organizationName, role: u.role }; }
 export function authenticate(s: CrowdfundingState, token: string) {
   const session = s.sessions[hash(token)];
@@ -37,21 +38,21 @@ export function enqueue(s: CrowdfundingState, c: any, kind: string, extra: Recor
   // Frozen evidence includes SHA-256 content hashes, not mutable download URLs.
   const salt = secret();
   const frozen = c.versions.find((v: any) => v.version === c.version);
-  const proposal = { version: c.version, fields: frozen?.fields ?? {}, documents: (frozen?.documents ?? []).map((d: any) => ({ id: d.id, contentHash: d.contentHash, name: d.name, contentType: d.contentType, size: d.size })), review: c.reviewNotes.filter((r: any) => r.version === c.version) };
+  const proposal = { version: c.version, fields: frozen?.fields ?? {}, documents: (frozen?.documents ?? []).map((d: any) => ({ id: d.id, contentHash: d.contentHash, name: d.name, contentType: d.contentType, size: d.size })), review: c.reviewNotes.filter((r: any) => r.version === c.version), ...(frozen?.cover ? { cover: { id: frozen.cover.id, contentHash: frozen.cover.contentHash } } : {}) };
   const proposalDigest = `0x${hash(canonicalJson({ salt, proposal }))}`;
   const snapshot = { campaignId: c.id, version: c.version, proposalDigest, status: c.status, targetAmount: c.targetAmount, collectedAmount: c.collectedAmount, donationCount: c.donationCount, kind, ...extra };
   s.outbox[eventId] = { eventId, campaignId: c.id, kind, payloadHash: `0x${hash(canonicalJson({ salt, snapshot }))}`, snapshot, salt, status: "PENDING", attempts: 0, createdAt: new Date().toISOString() };
 }
 export function publishedCampaignMaterial(s: CrowdfundingState, c: any) {
   const u = s.users[c.ownerId];
-  return { title: c.title, summary: c.summary, story: c.story, category: c.category, targetAmount: c.targetAmount, endsAt: c.endsAt, coverImageUrl: c.coverImageUrl, version: c.version, organizer: { name: u.name, kind: u.kind, organizationName: c.organizationName || u.organizationName } };
+  return { title: c.title, summary: c.summary, story: c.story, category: c.category, targetAmount: c.targetAmount, endsAt: c.endsAt, coverImageUrl: c.coverImageUrl, coverImageId: c.cover?.id, version: c.version, organizer: { name: u.name, kind: u.kind, organizationName: c.organizationName || u.organizationName } };
 }
 export function dto(s: CrowdfundingState, c: any, chainConfigured: boolean, privileged = false) {
   const events = Object.values(s.outbox).filter(e => e.campaignId === c.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.eventId.localeCompare(b.eventId));
   const confirmed = events.filter(e => e.status === "CONFIRMED");
   const chainStatus = !chainConfigured ? "UNCONFIGURED" : events.some(e => e.status === "FAILED") ? "FAILED" : !events.length || events.some(e => e.status !== "CONFIRMED") ? "PENDING" : "CONFIRMED";
   const material = !privileged && c.publicSnapshot ? c.publicSnapshot : publishedCampaignMaterial(s, c);
-  const value: Record<string, any> = { id: c.id, title: material.title, summary: material.summary, story: material.story, category: material.category, targetAmount: material.targetAmount, endsAt: material.endsAt, coverImageUrl: material.coverImageUrl, status: c.status, version: material.version, organizer: material.organizer, collectedAmount: c.collectedAmount, donationCount: c.donationCount, createdAt: c.createdAt, updatedAt: c.updatedAt, chainStatus, chainTxHash: confirmed.at(-1)?.transactionHash, publishedAt: c.publishedAt, chainEvents: events.map(e => ({ eventId: e.eventId, kind: e.kind, payloadHash: e.payloadHash, transactionHash: e.transactionHash, status: e.status })), updates: updatesDto(c, privileged), reportedUsedAmount: reportedUsedAmount(c) };
+  const value: Record<string, any> = { id: c.id, title: material.title, summary: material.summary, story: material.story, category: material.category, targetAmount: material.targetAmount, endsAt: material.endsAt, coverImageUrl: material.coverImageUrl, coverImageId: material.coverImageId, status: c.status, version: material.version, organizer: material.organizer, collectedAmount: c.collectedAmount, donationCount: c.donationCount, createdAt: c.createdAt, updatedAt: c.updatedAt, chainStatus, chainTxHash: confirmed.at(-1)?.transactionHash, publishedAt: c.publishedAt, chainEvents: events.map(e => ({ eventId: e.eventId, kind: e.kind, payloadHash: e.payloadHash, transactionHash: e.transactionHash, status: e.status })), updates: updatesDto(c, privileged), reportedUsedAmount: reportedUsedAmount(c) };
   if (privileged) Object.assign(value, { beneficiaryName: c.beneficiaryName, relationship: c.relationship, budgetPlan: c.budgetPlan, distributionPlan: c.distributionPlan, consent: c.consent, documents: c.documents.map((d: any) => ({ id: d.id, name: d.name, contentType: d.contentType, size: d.size, createdAt: d.createdAt })), reviewNotes: c.reviewNotes, history: c.history });
   return value;
 }

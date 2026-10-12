@@ -20,6 +20,7 @@
     "shares:apply": "bun src/scripts/allocation-beneficiary-shares.ts apply",
     "crowdfunding:migrate": "bun src/scripts/crowdfunding-admin.ts migrate",
     "crowdfunding:operator": "bun src/scripts/crowdfunding-admin.ts operator",
+    "crowdfunding:externalize-files": "bun src/scripts/crowdfunding-admin.ts externalize-files",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

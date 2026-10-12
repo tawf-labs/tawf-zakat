@@ -11,6 +11,7 @@ import { createServer } from "node:net";
 import { createCrowdfundingStore } from "../src/crowdfunding-store";
 import { createCrowdfundingRoutes } from "../src/routes/crowdfunding";
 import type { CampaignRuntime } from "../src/crowdfunding";
+import { campaignMemoryFileStore } from "../src/crowdfunding-documents";
 
 async function freePort(): Promise<number> {
   const socket = createServer();
@@ -31,7 +32,7 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser publishes ne
   await store.transaction(async state => {
     state.users.operator = { id: "operator", name: "Operator Fixture", email: "operator@example.test", kind: "INDIVIDUAL", role: "OPERATOR", passwordHash: await Bun.password.hash(password) };
   });
-  const runtime: CampaignRuntime = { store, documentKey: Buffer.alloc(32, 17), chain: null, gateway: {
+  const runtime: CampaignRuntime = { store, documentKey: Buffer.alloc(32, 17), files: campaignMemoryFileStore(), chain: null, gateway: {
     async create(id) { return { token: `fixture-${id}`, redirectUrl: "https://app.sandbox.midtrans.com/snap/v4/redirection/fixture-only" }; },
     async status(id) { return { order_id: id, currency: "IDR", gross_amount: "50000.00", transaction_status: "settlement", fraud_status: "accept" }; },
     verify() { return false; },

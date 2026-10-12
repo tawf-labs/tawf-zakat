@@ -4,14 +4,14 @@ import { Link } from "@tanstack/react-router";
 import { HeartHandshake, ArrowRight, Users } from "lucide-react";
 import { Container } from "../../components/layout/Container";
 import { Badge } from "../../components/ui/Badge";
-import { api, money, categories, type Campaign } from "../crowdfunding/client";
+import { api, money, categories, campaignCoverSrc, type Campaign } from "../crowdfunding/client";
 
 function CampaignPhoto({ campaign }: { campaign: Campaign }) {
   const [failed, setFailed] = useState(false);
-  const url = campaign.coverImageUrl;
+  const url = campaignCoverSrc(campaign);
   return (
     <div className="aspect-[16/10] overflow-hidden rounded-2xl bg-[#f4f8f3] flex items-center justify-center">
-      {url?.startsWith("https://") && !failed ? (
+      {url && !failed ? (
         <img src={url} alt={campaign.title} loading="lazy" referrerPolicy="no-referrer"
           className="h-full w-full object-cover" onError={() => setFailed(true)} />
       ) : (
@@ -74,7 +74,7 @@ export function FeaturedPrograms() {
               return (
                 <article key={campaign.id} className="min-w-0 rounded-3xl border border-[#dbe7dd] bg-white p-6 sm:p-7 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between gap-6">
                   <div className="space-y-4 min-w-0">
-                    <CampaignPhoto key={`${campaign.id}:${campaign.coverImageUrl}`} campaign={campaign} />
+                    <CampaignPhoto key={`${campaign.id}:${campaignCoverSrc(campaign)}`} campaign={campaign} />
                     <Badge variant="success">{categories[campaign.category] || "Infak"}</Badge>
                     <h3 className="font-serif text-xl font-bold text-[#17332c] leading-snug break-words">{campaign.title}</h3>
                     <p className="text-sm text-[#5e7a70] leading-relaxed line-clamp-3 break-words">{campaign.summary}</p>

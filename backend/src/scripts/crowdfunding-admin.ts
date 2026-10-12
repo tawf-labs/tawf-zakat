@@ -1,6 +1,7 @@
 import { crowdfundingPostgres } from "../crowdfunding-store";
 import { registration, publicUser } from "../crowdfunding";
 import { randomUUID } from "node:crypto";
+import { campaignFileStoreFromEnv, externalizeCampaignFiles } from "../crowdfunding-documents";
 
 const url = process.env.CROWDFUNDING_DATABASE_URL;
 if (!url || process.env.NODE_ENV === "test") throw new Error("Explicit CROWDFUNDING_DATABASE_URL required outside tests");
@@ -21,5 +22,9 @@ try {
       return publicUser(user);
     });
     console.log(JSON.stringify(user));
-  } else throw new Error("Usage: crowdfunding-admin.ts migrate|operator");
+  } else if (command === "externalize-files") {
+    // Idempotent: moves ciphertext still held inline in the aggregate row into CAMPAIGN_FILE_DIR.
+    const runtime = { files: campaignFileStoreFromEnv() };
+    console.log(`Moved ${await store.transaction(s => externalizeCampaignFiles(runtime, s.campaigns))} file(s) out of the aggregate row`);
+  } else throw new Error("Usage: crowdfunding-admin.ts migrate|operator|externalize-files");
 } finally { await sql.end(); }

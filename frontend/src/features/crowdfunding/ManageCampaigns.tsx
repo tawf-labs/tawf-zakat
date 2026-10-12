@@ -16,6 +16,7 @@ import { Notice } from "./PublicCampaigns";
 import { ChainEvidence } from "./CampaignDetail";
 import { ManageUpdates } from "./CampaignUpdates";
 import { DonorWall } from "./CampaignDonors";
+import { CampaignCoverUpload } from "./CampaignCoverUpload";
 import {
   OperatorQueue,
   awaitsOperator,
@@ -229,8 +230,6 @@ function ProposalForm({
     event.preventDefault();
     const current = scope.capture();
     const form = new FormData(event.currentTarget);
-    if (!String(form.get("coverImageUrl") || "").trim())
-      form.delete("coverImageUrl");
     const body = {
       ...Object.fromEntries(form),
       targetAmount: Number(form.get("targetAmount")),
@@ -316,17 +315,12 @@ function ProposalForm({
           defaultValue={campaign?.endsAt?.slice(0, 10)}
         />
       </label>
-      <label>
-        URL sampul (HTTPS, opsional)
-        <input
-          name="coverImageUrl"
-          type="url"
-          pattern="https://.*"
-          maxLength={2048}
-          defaultValue={campaign?.coverImageUrl || ""}
-          placeholder="https://…"
-        />
-      </label>
+      {!campaign && (
+        <p className="cf-small">
+          Foto sampul dan dokumen pendukung dapat diunggah setelah draf
+          disimpan.
+        </p>
+      )}
       <label className="cf-checkbox">
         <input
           type="checkbox"
@@ -759,6 +753,11 @@ const actionMap: Record<
     icon: XCircle,
     color: "slate",
   },
+  COVER: {
+    title: "Foto Sampul Diunggah",
+    icon: FileUp,
+    color: "blue",
+  },
   PAYMENT: {
     title: "Donasi Diterima",
     defaultDesc: "Transaksi donatur berhasil terverifikasi.",
@@ -954,15 +953,25 @@ function PrivateCampaign({
       if (current()) setBusy(false);
     }
   }
-  async function upload(file?: File) {
+  async function upload(
+    file?: File,
+    target: "documents" | "cover" = "documents",
+  ) {
     if (!file) return;
     const current = scope.capture();
     setError("");
-    if (
-      file.size > 2 * 1024 * 1024 ||
-      !["application/pdf", "image/jpeg", "image/png"].includes(file.type)
-    ) {
-      setError("Gunakan PDF, JPEG, atau PNG maksimal 2 MB.");
+    const cover = target === "cover";
+    const types = [
+      "image/jpeg",
+      "image/png",
+      ...(cover ? [] : ["application/pdf"]),
+    ];
+    if (file.size > 2 * 1024 * 1024 || !types.includes(file.type)) {
+      setError(
+        cover
+          ? "Gunakan foto JPEG atau PNG maksimal 2 MB."
+          : "Gunakan PDF, JPEG, atau PNG maksimal 2 MB.",
+      );
       return;
     }
     setBusy(true);
@@ -974,12 +983,17 @@ function PrivateCampaign({
         reader.readAsDataURL(file);
       });
       if (!current()) return;
-      await api(`/campaigns/${campaign.id}/documents`, {
+      await api(`/campaigns/${campaign.id}/${target}`, {
         method: "POST",
         body: { name: file.name, contentType: file.type, dataBase64 },
       });
       await refresh(current);
-      if (current()) setMessage("Dokumen privat berhasil diunggah.");
+      if (current())
+        setMessage(
+          cover
+            ? "Foto sampul berhasil diunggah."
+            : "Dokumen privat berhasil diunggah.",
+        );
     } catch (e) {
       if (current()) setError(e instanceof Error ? e.message : "Unggah gagal.");
     } finally {
@@ -1196,6 +1210,12 @@ function PrivateCampaign({
       {/* 1. PROPOSAL SECTION */}
       {(activeTab === "all" || activeTab === "proposal") && (
         <div id="section-proposal">
+          <CampaignCoverUpload
+            campaign={campaign}
+            editable={editable}
+            busy={busy}
+            onUpload={(file) => void upload(file, "cover")}
+          />
           {editable ? (
             <ProposalForm
               key={`${campaign.id}-${campaign.version}`}

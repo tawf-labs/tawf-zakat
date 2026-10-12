@@ -10,6 +10,7 @@ import { createServer } from "node:net";
 import { createCrowdfundingStore } from "../src/crowdfunding-store";
 import { createCrowdfundingRoutes } from "../src/routes/crowdfunding";
 import type { CampaignRuntime } from "../src/crowdfunding";
+import { campaignMemoryFileStore } from "../src/crowdfunding-documents";
 import { CampaignGatewayError } from "../src/crowdfunding-midtrans";
 
 async function freePort(): Promise<number> {
@@ -33,7 +34,7 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
   let settled = false;
   let checkoutCreated = false;
   const checkoutAttempts: string[] = [];
-  const runtime: CampaignRuntime = { store, documentKey: Buffer.alloc(32, 17), chain: null, gateway: {
+  const runtime: CampaignRuntime = { store, documentKey: Buffer.alloc(32, 17), files: campaignMemoryFileStore(), chain: null, gateway: {
     async create(id) {
       checkoutAttempts.push(id);
       if (checkoutAttempts.length === 1) throw new CampaignGatewayError("UNAVAILABLE");
@@ -114,6 +115,12 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await page.getByLabel("Saya memiliki persetujuan").check();
     await page.getByRole("button", { name: "Simpan draf proposal" }).click();
     await visible("Dokumen pendukung privat");
+    // Cover image: uploaded as a file, previewed privately while the proposal is a draft.
+    const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+    await page.getByLabel(/Unggah foto sampul/).setInputFiles({ name: "sampul.png", mimeType: "image/png", buffer: PNG });
+    await visible("Foto sampul berhasil diunggah.");
+    await page.waitForFunction(() => (document.querySelector(".cf-cover-preview") as HTMLImageElement | null)?.naturalWidth === 1);
+    await page.getByLabel(/Ganti foto sampul/).waitFor();
     await page.getByLabel("Unggah dokumen").setInputFiles({ name: "bukti.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nfixture-private-evidence") });
     await visible("Unduh bukti.pdf");
     await page.getByRole("button", { name: "Ajukan untuk review" }).click();
@@ -149,6 +156,9 @@ test.skipIf(process.env.CROWDFUNDING_BROWSER !== "1")("real browser submits, rev
     await logout();
     await page.goto(`${base}/kampanye/${campaignId}`);
     await visible("Cerita di balik harapan");
+    // Once published, the uploaded cover is served publicly without a session.
+    await page.waitForFunction(() => (document.querySelector(".cf-cover img") as HTMLImageElement | null)?.naturalWidth === 1);
+    expect(await page.locator(".cf-cover img").getAttribute("src")).toContain(`/api/crowdfunding/campaigns/${campaignId}/cover/`);
     expect(await page.getByText("RAHASIA-PENERIMA").count()).toBe(0);
     await page.getByLabel("Tampilkan sebagai anonim").check();
     await page.getByLabel("Doa atau dukungan").fill("Semoga ruang belajarnya segera terwujud.");

@@ -1,5 +1,5 @@
 import { crowdfundingStoreFromEnv } from "./crowdfunding-store";
-import { campaignDocumentKeyFromEnv } from "./crowdfunding-documents";
+import { campaignDocumentKeyFromEnv, campaignFileStoreFromEnv } from "./crowdfunding-documents";
 import { crowdfundingGatewayFromEnv } from "./crowdfunding-midtrans";
 import { drainCampaignOutbox, type CampaignRuntime } from "./crowdfunding";
 
@@ -14,7 +14,7 @@ export function configureCrowdfundingForTests(runtime: CampaignRuntime | null) {
 export async function createCrowdfundingRuntime(): Promise<CampaignRuntime | null> {
   const store = crowdfundingStoreFromEnv();
   if (!store) return null;
-  const runtime: CampaignRuntime = { store, gateway: crowdfundingGatewayFromEnv(), chain: null, documentKey: campaignDocumentKeyFromEnv() };
+  const runtime: CampaignRuntime = { store, gateway: crowdfundingGatewayFromEnv(), chain: null, documentKey: campaignDocumentKeyFromEnv(), files: campaignFileStoreFromEnv() };
   // Dynamic loading avoids RPC/signing initialization in unconfigured or test runtimes.
   try {
     const { createCampaignChainRecorderFromEnv } = await import("./campaign-chain");

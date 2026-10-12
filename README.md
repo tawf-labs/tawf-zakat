@@ -12,6 +12,7 @@ Konfigurasi backend melalui environment lokal yang tidak di-commit:
 
 - `CROWDFUNDING_DATABASE_URL`: koneksi PostgreSQL pengujian; wajib untuk API kampanye. Tidak ada migrasi otomatis atau fallback data sementara ketika database belum tersedia.
 - `CAMPAIGN_DOCUMENT_KEY`: kunci acak 32 byte dalam bentuk 64 karakter hex untuk enkripsi dokumen privat. Simpan aman dan cadangkan terpisah dari database; kehilangan kunci membuat dokumen tidak dapat dibaca.
+- `CAMPAIGN_FILE_DIR` (opsional, bawaan `.campaign-files`): direktori di server tempat berkas kampanye disimpan — foto sampul, dokumen pendukung, dan lampiran kabar/laporan. Isinya sudah terenkripsi dengan `CAMPAIGN_DOCUMENT_KEY`; baris database hanya menyimpan metadata. Cadangkan direktori ini bersama database: kehilangan salah satunya membuat berkas tidak terbaca. Untuk instalasi lama, jalankan `bun run crowdfunding:externalize-files` sekali untuk memindahkan berkas yang masih tersimpan di dalam baris database.
 - `MIDTRANS_SERVER_KEY`: server key yang diterima akun Midtrans pada endpoint sandbox. Awalan key saja bukan bukti environment: key berawalan `Mid-server-...` maupun `SB-Mid-server-...` dapat diperiksa, tetapi seluruh request dan redirect tetap dibatasi ke sandbox; tidak ada fallback production. `MIDTRANS_IS_PRODUCTION` harus tidak aktif. Gagal menghubungi gateway tidak diganti pembayaran mock.
 - `CAMPAIGN_REGISTRY_ADDRESS`, `CAMPAIGN_CHAIN_RPC_URL`, `CAMPAIGN_CHAIN_ID`, `CAMPAIGN_RECORDER_PRIVATE_KEY`: registry dan akun pencatat khusus. Adapter hanya menerima chain lokal `31337` atau Arbitrum Sepolia `421614`. Kunci pencatat tidak dikirim ke browser. Tanpa konfigurasi ini, UI menyatakan blockchain belum dikonfigurasi dan antrean tetap tersimpan.
 
@@ -37,7 +38,7 @@ bun install
 PORT=3000 VITE_API_BASE_URL=http://localhost:3001 bun run dev
 ```
 
-Buka `http://localhost:3000/` atau `/kampanye` untuk halaman publik, `/galang-dana` untuk penggalang, dan `/kelola-kampanye` untuk operator. Tidak ada kampanye fiktif yang otomatis diterbitkan. Buat proposal, unggah bukti privat, ajukan, lalu masuk sebagai operator untuk memeriksa versi, meminta revisi/menyetujui, dan menerbitkannya. Dokumen dibatasi PDF/JPEG/PNG maksimal 2 MiB per berkas.
+Buka `http://localhost:3000/` atau `/kampanye` untuk halaman publik, `/galang-dana` untuk penggalang, dan `/kelola-kampanye` untuk operator. Tidak ada kampanye fiktif yang otomatis diterbitkan. Buat proposal, unggah bukti privat, ajukan, lalu masuk sebagai operator untuk memeriksa versi, meminta revisi/menyetujui, dan menerbitkannya. Dokumen dibatasi PDF/JPEG/PNG maksimal 2 MiB per berkas. Foto sampul kampanye diunggah sebagai berkas JPEG/PNG (maksimal 2 MiB) dari halaman pengelolaan setelah draf disimpan; foto baru tampil ke publik setelah versi proposalnya diterbitkan.
 
 Checkout membuka halaman resmi Midtrans sandbox. Browser hanya memeriksa status yang dikonfirmasi backend. Endpoint notifikasi khusus kampanye adalah `/api/crowdfunding/midtrans/notification`; endpoint lama `/api/webhooks/payment` juga meneruskan order kampanye berawalan `CF-` ke pemeriksaan yang sama. Gunakan URL HTTPS API yang dapat dijangkau Midtrans saat menguji notifikasi eksternal. Localhost saja tidak dapat menerima webhook dari layanan luar. Sandbox tidak memodelkan biaya operasional/pemrosesan nyata atau transfer ke penerima manfaat.
 

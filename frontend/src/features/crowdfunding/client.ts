@@ -17,6 +17,7 @@ export type Campaign = {
   targetAmount: number;
   endsAt: string;
   coverImageUrl?: string;
+  coverImageId?: string;
   status: string;
   version: number;
   organizer: { name: string; kind: string; organizationName?: string };
@@ -95,6 +96,18 @@ export const saveSession = (token: string | null) =>
     : sessionStorage.removeItem(TOKEN_KEY);
 export function apiUrl(path: string) {
   return `${getApiBaseUrl()}/api/crowdfunding${path}`;
+}
+/** An uploaded cover is served by the API; older campaigns may still carry an external HTTPS URL. */
+export function campaignCoverSrc(
+  campaign: Pick<Campaign, "id" | "coverImageId" | "coverImageUrl">,
+) {
+  if (campaign.coverImageId)
+    return apiUrl(
+      `/campaigns/${encodeURIComponent(campaign.id)}/cover/${campaign.coverImageId}`,
+    );
+  return campaign.coverImageUrl && /^https:\/\//.test(campaign.coverImageUrl)
+    ? campaign.coverImageUrl
+    : undefined;
 }
 export class CrowdfundingApiError extends Error {
   constructor(

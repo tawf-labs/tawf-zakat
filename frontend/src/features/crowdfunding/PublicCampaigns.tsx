@@ -8,7 +8,14 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { api, categories, money, statusLabel, type Campaign } from "./client";
+import {
+  api,
+  campaignCoverSrc,
+  categories,
+  money,
+  statusLabel,
+  type Campaign,
+} from "./client";
 import "./crowdfunding.css";
 
 export function Notice({
@@ -29,13 +36,12 @@ export function Notice({
 }
 export function CampaignCover({ campaign }: { campaign: Campaign }) {
   const [failed, setFailed] = useState(false);
+  const src = campaignCoverSrc(campaign);
   return (
     <div className={`cf-cover cf-cover-${campaign.category.toLowerCase()}`}>
-      {campaign.coverImageUrl &&
-      /^https:\/\//.test(campaign.coverImageUrl) &&
-      !failed ? (
+      {src && !failed ? (
         <img
-          src={campaign.coverImageUrl}
+          src={src}
           alt=""
           loading="lazy"
           referrerPolicy="no-referrer"
