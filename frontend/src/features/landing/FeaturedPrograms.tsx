@@ -37,16 +37,16 @@ export function FeaturedPrograms() {
   const linkStyle = "inline-flex min-h-11 items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#1b765e] hover:underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b765e]";
 
   return (
-    <section id="kampanye-infak" aria-labelledby="kampanye-infak-heading" className="py-20 bg-[#f4f8f3]/40 border-b border-[#dbe7dd]/60">
+    <section id="kampanye-infak" aria-labelledby="kampanye-infak-heading" className="py-16 sm:py-20 bg-[#f4f8f3]/40 border-b border-[#dbe7dd]/60">
       <Container>
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
           <div className="space-y-3 max-w-2xl">
-            <Badge variant="success">Kampanye Infak Pilihan</Badge>
+            <Badge variant="success">Sedang Digalang</Badge>
             <h2 id="kampanye-infak-heading" className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-[#17332c]">
               Temukan Kebaikan yang Ingin Anda Dukung
             </h2>
             <p className="text-base text-[#5e7a70]">
-              Dukung kampanye dari individu dan organisasi yang telah melalui pemeriksaan sebelum diterbitkan. Lihat tujuan penggalangan, target dana, dan jumlah infak yang sudah terkumpul.
+              Kampanye infak dari individu dan organisasi yang telah diperiksa sebelum diterbitkan.
             </p>
           </div>
           <div className="flex flex-col items-start shrink-0">
@@ -105,7 +105,6 @@ export function FeaturedPrograms() {
             })}
           </div>
         )}
-        <p className="mt-6 text-xs leading-relaxed text-[#5e7a70]">Setiap kampanye infak melalui pemeriksaan operator untuk memastikan transparansi dan akuntabilitas penyaluran.</p>
       </Container>
     </section>
   );

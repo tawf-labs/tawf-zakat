@@ -110,14 +110,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       case "PROPOSAL_CREATED":
         toast.info("Proposal Zakat Baru Diajukan", {
-          description: `Proposal #${data?.proposalId} (Asnaf: ${data?.asnafLabel || "Mustahik"}) telah masuk ke antrean persetujuan DPS.`,
+          description: `Proposal #${data?.proposalId} (Asnaf: ${data?.asnafLabel || "Mustahik"}) telah masuk ke antrean persetujuan.`,
         });
         break;
 
       case "PROPOSAL_APPROVED":
         if (data?.isQuorumMet) {
-          toast.success("Kuorum Multi-Sig Terpenuhi!", {
-            description: `Proposal #${data?.proposalId} telah disetujui kuorum DPS dan siap untuk dicairkan/BAST.`,
+          toast.success("Persetujuan Terpenuhi", {
+            description: `Proposal #${data?.proposalId} telah disetujui dan siap disalurkan.`,
           });
         }
         break;
@@ -129,8 +129,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         break;
 
       case "AUDIT_ATTESTED":
-        toast.success("Atestasi Audit WTP Diterbitkan!", {
-          description: `Proposal #${data?.proposalId} telah tersertifikasi WTP oleh ${data?.auditorName || "Auditor KAP"}.`,
+        toast.success("Atestasi Diterbitkan", {
+          description: `Proposal #${data?.proposalId} telah diatestasi${data?.auditorName ? ` oleh ${data.auditorName}` : ""}.`,
         });
         break;
 

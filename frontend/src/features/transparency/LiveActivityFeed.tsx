@@ -20,20 +20,6 @@ export function LiveActivityFeed() {
       description: "Muzakki (Hamba Allah) menyalurkan Zakat Maal Rp 1.000.000",
       timestamp: "Baru saja",
     },
-    {
-      id: "demo-2",
-      type: "APPROVAL",
-      title: "Persetujuan DPS Safe Multisig",
-      description: "Dewan Pengawas Syariah menandatangani pencairan Program Pangan Fakir Miskin",
-      timestamp: "10 menit lalu",
-    },
-    {
-      id: "demo-3",
-      type: "AUDIT",
-      title: "Opini WTP Diterbitkan",
-      description: "Auditor Independen mengonfirmasi keabsahan BAST Program Beasiswa Santri",
-      timestamp: "1 jam lalu",
-    },
   ]);
 
   useEffect(() => {
@@ -55,8 +41,8 @@ export function LiveActivityFeed() {
         {
           id: `app-${Date.now()}`,
           type: "APPROVAL",
-          title: "Persetujuan Dewan Pengawas Syariah",
-          description: `Proposal #${data.proposalId} disetujui oleh DPS Safe Multisig.`,
+          title: "Pengajuan Penyaluran Disetujui",
+          description: `Proposal #${data.proposalId} telah disetujui.`,
           timestamp: "Baru saja",
         },
         ...prev.slice(0, 9),

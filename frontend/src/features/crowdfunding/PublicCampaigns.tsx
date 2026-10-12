@@ -72,12 +72,18 @@ export function CampaignProgress({ campaign }: { campaign: Campaign }) {
     </div>
   );
 }
-export function CrowdfundingHome() {
+export function CrowdfundingHome({
+  initialCategory,
+}: {
+  initialCategory?: string;
+}) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const [category, setCategory] = useState("ALL");
+  const [category, setCategory] = useState(
+    initialCategory && initialCategory in categories ? initialCategory : "ALL",
+  );
   const [search, setSearch] = useState("");
   useEffect(() => {
     let active = true;

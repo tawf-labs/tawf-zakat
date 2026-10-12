@@ -135,11 +135,11 @@ export function DisbursementTable({ proposals }: DisbursementTableProps) {
                   <TableCell>
                     {item.status?.toUpperCase() === "EXECUTED" ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                        <CheckCircle2 className="w-3 h-3" /> Tersalurkan & WTP
+                        <CheckCircle2 className="w-3 h-3" /> Tersalurkan
                       </span>
                     ) : item.status?.toUpperCase() === "APPROVED" ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 px-2.5 py-0.5 rounded-full">
-                        <ShieldCheck className="w-3 h-3" /> Disetujui DPS
+                        <ShieldCheck className="w-3 h-3" /> Disetujui
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">

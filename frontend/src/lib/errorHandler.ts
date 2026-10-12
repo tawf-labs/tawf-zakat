@@ -12,7 +12,7 @@ export const SYARIAH_ERROR_DICTIONARY: Record<string, string> = {
   InsufficientAmilTreasury:
     "Saldo hak operasional amil tidak mencukupi untuk penarikan ini.",
   QuorumNotMet:
-    "Penyaluran memerlukan minimal 2 persetujuan resmi dari Dewan Pengawas Syariah (DPS) & Auditor.",
+    "Penyaluran belum memenuhi jumlah persetujuan yang disyaratkan.",
   ProposalNotFound:
     "Data proposal penyaluran tidak ditemukan di smart contract Sepolia.",
   ProposalNotPending:

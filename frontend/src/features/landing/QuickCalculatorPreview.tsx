@@ -30,15 +30,15 @@ export function QuickCalculatorPreview() {
   const isCurrentWajib = calcType === "penghasilan" ? isIncomeWajib : isMaalWajib;
 
   return (
-    <section className="py-20 bg-white">
+    <section id="zakat" className="py-20 bg-white">
       <Container>
         <div className="max-w-4xl mx-auto">
           <div className="rounded-3xl border border-[#dbe7dd] bg-gradient-to-b from-[#f4f8f3] to-white p-6 sm:p-10 shadow-lg space-y-8">
             {/* Header */}
             <div className="text-center space-y-3">
-              <Badge variant="success">Kalkulator Syariah BAZNAS</Badge>
+              <Badge variant="success">Zakat</Badge>
               <h2 className="font-serif text-2xl sm:text-3xl font-bold text-[#17332c]">
-                Hitung Kewajiban Zakat Anda dalam 1 Menit
+                Tunaikan zakat, hitung dalam satu menit
               </h2>
               <p className="text-sm text-[#5e7a70] max-w-xl mx-auto">
                 Berdasarkan standar nisab emas 85 gram. Ketahui apakah penghasilan atau simpanan Anda sudah memenuhi syarat wajib zakat (2.5%).

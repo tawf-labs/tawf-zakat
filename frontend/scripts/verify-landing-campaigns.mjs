@@ -54,7 +54,11 @@ try {
   mode = "success";
   release();
   await section.getByRole("heading", { name: campaign.title, exact: true }).waitFor();
-  assert.match(await page.locator("h1").innerText(), /Tunaikan zakat/);
+  assert.match(await page.locator("h1").innerText(), /Berbagi kebaikan/);
+  assert.equal(await page.getByRole("link", { name: "Donasi Sekarang" }).getAttribute("href"), "/kampanye");
+  assert.equal(await page.getByRole("link", { name: "Tunaikan Zakat", exact: true }).getAttribute("href"), "/donasi");
+  assert.equal(await page.getByRole("link", { name: "Dukung pendidikan" }).getAttribute("href"), "/kampanye?kategori=EDUCATION");
+  assert.doesNotMatch(await page.locator("main").innerText(), /DPS|Dewan Pengawas|Auditor|Ringkasan Kas/i);
   assert.equal(await page.getByText("Menunggu Deployment Baru").count(), 0);
   assert.equal(await section.locator("article").count(), 3);
   assert.equal(await section.getByText("Kampanye Keempat").count(), 0);
@@ -95,5 +99,5 @@ try {
   await section.getByRole("button", { name: "Coba Lagi" }).click();
   await section.getByRole("heading", { name: campaign.title, exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: "PASS", campaignRequests: requests, checks: ["legacy hero", "public gate bypass", "public-only request", "3 active cards", "private fields hidden", "real amounts", "accessible progress", "image fallback", "CTA links", "keyboard detail navigation", "375/768/1024/1440 no overflow", "loading", "empty", "error/retry", "no page errors"] }));
+  console.log(JSON.stringify({ result: "PASS", campaignRequests: requests, checks: ["hero copy and CTAs", "no DPS/auditor claims", "public gate bypass", "public-only request", "3 active cards", "private fields hidden", "real amounts", "accessible progress", "image fallback", "CTA links", "keyboard detail navigation", "375/768/1024/1440 no overflow", "loading", "empty", "error/retry", "no page errors"] }));
 } finally { await browser.close(); }
