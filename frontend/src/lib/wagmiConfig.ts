@@ -10,7 +10,7 @@ const transports = {
 
 const walletConnectProjectId =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_WALLETCONNECT_PROJECT_ID) ||
-  "b6808bd11499531c85eddbf3cbc72e65";
+  "7b1defb5dd37ad236841ca811fac880f";
 
 const appMetadata = {
   name: "Tawf Zakat",
