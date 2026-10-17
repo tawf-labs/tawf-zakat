@@ -370,7 +370,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                       </button>
                       <p className="cf-small">
                         Akses pembayaran disimpan untuk tab ini. Status
-                        diperiksa berkala selama menunggu; tidak ada klaim dana
+                        diperiksa berkala selama menunggu. Tidak ada klaim dana
                         telah tersalurkan.
                       </p>
                     </section>

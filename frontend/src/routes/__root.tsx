@@ -29,7 +29,7 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "TAWF — Kebaikan Bersama",
+        title: "TAWF · Kebaikan Bersama",
       },
       {
         name: "description",

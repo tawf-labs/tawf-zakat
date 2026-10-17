@@ -31,7 +31,7 @@ export function WhySection() {
           <em>good.</em>
         </h2>
         <p>
-          We believe generosity is not just an obligation. It is a powerful force for change — when it is made visible, personal, and trusted.
+          We believe generosity is not just an obligation. It is a powerful force for change when it is made visible, personal, and trusted.
         </p>
       </div>
 

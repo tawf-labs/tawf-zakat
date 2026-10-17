@@ -138,7 +138,7 @@ export function parseFunding(text: string, ctx: CostContext): FundingParse {
     return {
       ok: false,
       message: found.length > 1
-        ? `Ada beberapa petugas bernama "${text.trim().slice(9)}"; bedakan namanya di Petugas & Akses.`
+        ? `Ada beberapa petugas bernama "${text.trim().slice(9)}". Bedakan namanya di Petugas & Akses.`
         : `Petugas "${text.trim().slice(9)}" tidak ada di Petugas & Akses (atau tidak aktif).`,
     };
   }
@@ -154,7 +154,7 @@ export function parseFunding(text: string, ctx: CostContext): FundingParse {
     return {
       ok: false,
       message: found.length > 1
-        ? "Petugas ini memegang lebih dari satu panjar; pilih panjarnya beserta nomor bukti kas keluar."
+        ? "Petugas ini memegang lebih dari satu panjar. Pilih panjarnya beserta nomor bukti kas keluar."
         : "Panjar tidak ditemukan pada pengajuan ini. Keluarkan panjarnya dulu di lembar Panjar.",
     };
   }
@@ -209,7 +209,7 @@ export function costRowIssues(fields: CostFields, ctx: CostContext): Partial<Rec
   if (!positiveIdr(amount)) issues.amountIdr = "Total wajib rupiah bulat lebih dari nol.";
   else if (quantity && price && !issues.quantity && !issues.unitPriceIdr) {
     const expected = exactLineTotal(quantity, price);
-    if (expected === null) issues.amountIdr = "Jml × Harga menghasilkan pecahan rupiah; sesuaikan Jml atau Harga.";
+    if (expected === null) issues.amountIdr = "Jml × Harga menghasilkan pecahan rupiah. Sesuaikan Jml atau Harga.";
     else if (expected !== BigInt(amount).toString()) issues.amountIdr = `Total harus sama dengan Jml × Harga (${expected}).`;
   }
 
@@ -290,7 +290,7 @@ export function costColumns(ctx: CostContext, purposes: readonly string[], year?
       value: (row) => row.fields.payee, apply: set("payee"), validate: check("payee"),
     },
     {
-      id: "receiptRef", header: "No. nota/kuitansi 📎", width: 150, hint: "Nomor nota; buka lampirannya dengan Enter atau klik ganda pada baris tercatat",
+      id: "receiptRef", header: "No. nota/kuitansi 📎", width: 150, hint: "Nomor nota, buka lampirannya dengan Enter atau klik ganda pada baris tercatat",
       options: ctx.receipts.map((r) => r.reference),
       value: (row) => {
         const count = receiptCount(row);

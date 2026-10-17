@@ -68,7 +68,7 @@ export function PeriodReportPublishStep({ saved, preparationId, requests, onPubl
           <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
           <div>
             <p className="font-semibold">Menunggu konfirmasi</p>
-            <p className="text-sm">Pengesahan sudah dikirim. Halaman ini memeriksa statusnya sendiri; laporan terbit setelah registry mengonfirmasi.</p>
+            <p className="text-sm">Pengesahan sudah dikirim. Halaman ini memeriksa statusnya sendiri. Laporan terbit setelah registry mengonfirmasi.</p>
             {state === "SUBMITTED" && intent?.authorization.signer.toLowerCase() === address?.toLowerCase() && (
               <Button type="button" variant="outline" size="sm" className="mt-2" disabled={working} onClick={() => void task.retry()}>
                 Kirim ulang pengesahan yang sama
@@ -79,7 +79,7 @@ export function PeriodReportPublishStep({ saved, preparationId, requests, onPubl
       ) : (
         <>
           {state && FAILED.includes(state) && (
-            <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Penerbitan sebelumnya gagal; laporan belum terbit. Sahkan ulang untuk mencoba lagi.</p>
+            <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Penerbitan sebelumnya gagal. Laporan belum terbit. Sahkan ulang untuk mencoba lagi.</p>
           )}
           {state === "NONCANONICAL" && (
             <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Catatan penerbitan berubah di jaringan. Kirim ulang pengesahan yang sama.</p>

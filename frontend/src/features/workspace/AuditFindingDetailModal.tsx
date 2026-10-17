@@ -162,7 +162,7 @@ function FullFinding({ finding, requests, applied, reload, onStartCorrection }: 
               )}
               {event.followupAction && <p className="mt-1 text-xs text-stone-700">Keputusan: {AUDITOR_FOLLOWUP_ACTION_LABELS[event.followupAction]}</p>}
               <p className="mt-2 whitespace-pre-wrap">{event.note}</p>
-              {correctedBy.has(event.id) && <p className="mt-1 text-xs text-amber-800">Catatan ini dikoreksi pada #{correctedBy.get(event.id)}; teks aslinya tetap ditampilkan.</p>}
+              {correctedBy.has(event.id) && <p className="mt-1 text-xs text-amber-800">Catatan ini dikoreksi pada #{correctedBy.get(event.id)}. Teks aslinya tetap ditampilkan.</p>}
               {event.attachments.length > 0 && (
                 <ul className="mt-2 space-y-1">
                   {event.attachments.map(file => (
@@ -207,14 +207,14 @@ function CorrectionGuide({ finding, onStartCorrection }: { finding: AuditFinding
         <ul className="mt-1 list-disc pl-5 text-xs">
           {finding.corrections.map(c => <li key={c.packageId}>Versi {c.reportVersion} · paket <span className="font-mono">{c.packageId}</span> · persiapan <span className="font-mono">{c.preparationId}</span></li>)}
         </ul>
-        <p className="mt-1 text-xs">Versi koreksi memerlukan pengesahan dan pemeriksaannya sendiri; temuan dan opini versi ini tidak diwariskan.</p>
+        <p className="mt-1 text-xs">Versi koreksi memerlukan pengesahan dan pemeriksaannya sendiri. Temuan dan opini versi ini tidak diwariskan.</p>
       </section>
     );
   }
   if (finding.status !== "MENUNGGU_KOREKSI_LAPORAN") return null;
   return (
     <section aria-label="Koreksi diperlukan" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-      <p>Auditor meminta versi koreksi. Tanggapan tidak mengubah versi {finding.reportVersion}; sumber resmi diperbaiki melalui versi baru yang menyebut paket ini sebagai pendahulu.</p>
+      <p>Auditor meminta versi koreksi. Tanggapan tidak mengubah versi {finding.reportVersion}. Sumber resmi diperbaiki melalui versi baru yang menyebut paket ini sebagai pendahulu.</p>
       {onStartCorrection
         ? <Button size="sm" variant="outline" onClick={() => onStartCorrection(finding.packageId)}>Siapkan versi koreksi dari paket ini</Button>
         : <p className="text-xs">Buka paket laporan ini dan isi ID pendahulu <span className="font-mono">{finding.packageId}</span>.</p>}
@@ -325,13 +325,13 @@ function CorrectionForm({ finding, requests, applied, reload }: FormProps) {
     event.preventDefault();
     const input = { expectedRevision: finding.revision, eventId, note: note.trim() };
     const updated = await write.run(`correct:${finding.id}:${JSON.stringify(input)}`, operationId => submitNoteCorrection(requests, finding.id, { ...input, operationId }));
-    if (applied(updated, "Koreksi catatan tercatat; catatan asli tetap terbaca.")) setNote("");
+    if (applied(updated, "Koreksi catatan tercatat. Catatan asli tetap terbaca.")) setNote("");
   }
   return (
     <details className="rounded-xl border border-stone-200 p-4">
       <summary className="cursor-pointer text-sm font-semibold">Koreksi catatan saya</summary>
       <form onSubmit={submit} className="mt-3 space-y-3">
-        <p className="text-xs text-stone-600">Koreksi ditambahkan ke riwayat; catatan asli tidak ditimpa dan status tidak berubah.</p>
+        <p className="text-xs text-stone-600">Koreksi ditambahkan ke riwayat. Catatan asli tidak ditimpa dan status tidak berubah.</p>
         <label className="block text-xs font-medium text-stone-700">Catatan yang dikoreksi
           <select className={field} value={eventId} onChange={e => setEventId(e.target.value)} disabled={write.pending}>
             {correctable.map(e => <option key={e.id} value={e.id}>#{e.seq} {EVENT_LABELS[e.eventType]}: {e.note.slice(0, 60)}</option>)}

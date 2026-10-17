@@ -67,7 +67,7 @@ export function RecordRealizationModal({ requests, draft, summary, notice, isOpe
 
   const operation = useRetryableOperation(
     (payload: RecordRealizationInput) => recordRealizations(requests, draft.id, payload),
-    "Hasil penyimpanan belum diketahui. Kirim ulang untuk memeriksa penyimpanan yang sama; realisasi tidak akan tercatat ganda."
+    "Hasil penyimpanan belum diketahui. Kirim ulang untuk memeriksa penyimpanan yang sama. Realisasi tidak akan tercatat ganda."
   );
   const locked = operation.locked || recorded !== null;
 

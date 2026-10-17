@@ -74,7 +74,7 @@ export const beneficiaryColumns: GridColumn<Beneficiary>[] = [
       b.identityBasis.kind === "ALTERNATIVE" ? { ...b, identityBasis: { kind: "ALTERNATIVE", description: text } } : null,
     validate: (b) =>
       b.identityBasis.kind === "ALTERNATIVE" && b.identityBasis.description.trim() === ""
-        ? "Jelaskan dasar identitas alternatif (mis. anak tanpa KTP); jangan mengarang NIK."
+        ? "Jelaskan dasar identitas alternatif (mis. anak tanpa KTP). Jangan mengarang NIK."
         : null,
   },
   {
@@ -177,7 +177,7 @@ export function aidLineColumns(beneficiaries: Beneficiary[]): GridColumn<AidLine
       },
     },
     {
-      id: "amountRequestedIdr", header: "Nilai IDR", width: 140, mono: true, align: "right", hint: "Bila UANG; rupiah bulat",
+      id: "amountRequestedIdr", header: "Nilai IDR", width: 140, mono: true, align: "right", hint: "Bila UANG, rupiah bulat",
       enabled: (line) => line.value.kind === "MONEY",
       value: (line) => money(line)?.amountRequestedIdr ?? "",
       normalize: normalizeRupiah,

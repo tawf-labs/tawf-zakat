@@ -38,7 +38,7 @@ export function CertificateCard({ contribution }: { contribution: PublicContribu
           </p>
           <p className="text-[11px] text-amber-800/90 leading-relaxed">
             Nama donatur, nominal, kontak dan dokumen tidak dibuka pada pencarian publik. Halaman ini juga tidak
-            menyatakan siapa pemilik kontribusi; pemilik dapat mencocokkan kuitansinya sendiri di bawah.
+            menyatakan siapa pemilik kontribusi. Pemilik dapat mencocokkan kuitansinya sendiri di bawah.
           </p>
         </div>
 

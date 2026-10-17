@@ -83,7 +83,7 @@ export function RecurringAidWarnings({ warnings, statusLabel, onShowInTable }: {
             <li key={group.proposalId}>
               <details className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
                 <summary className="cursor-pointer font-semibold">
-                  {group.programName} · {group.period} · {statusLabel(group.status)} — {group.names.length} penerima
+                  {group.programName} · {group.period} · {statusLabel(group.status)} · {group.names.length} penerima
                 </summary>
                 <p className="mt-1.5 max-h-40 overflow-y-auto leading-relaxed text-amber-950">{group.names.join(", ")}</p>
               </details>

@@ -71,7 +71,7 @@ export function LedgerSideEditor({
         className={fieldClass}
       >
         <option value="JENIS_DANA">Jenis dana BAZNAS (Zakat, Fitrah, Infak/Sedekah, Kurban, DSKL)</option>
-        <option value="BEBAS">Bebas - dimensi lain, misalnya jenis Pengelola Zakat</option>
+        <option value="BEBAS">Bebas: dimensi lain, misalnya jenis Pengelola Zakat</option>
       </select>
 
       <div className="mt-4 flex items-end justify-between gap-3">
@@ -107,9 +107,9 @@ export function LedgerSideEditor({
       <p className="mt-2 text-[11px] text-[#5e7a70]">
         {parsed.side.entries.length} entri terbaca
         {parsed.side.declaredTotals?.length
-          ? ` - ${parsed.side.declaredTotals.length} baris total`
+          ? ` · ${parsed.side.declaredTotals.length} baris total`
           : ""}
-        {loadedFileName ? ` - dari ${loadedFileName}` : ""}
+        {loadedFileName ? ` · dari ${loadedFileName}` : ""}
       </p>
 
       {fileError && (

@@ -9,15 +9,15 @@ import { conclusionLabel, formatBlockInstant, VERSION_STATE_LABELS } from "./evi
 import { AttestationPanel } from "./AttestationPanel";
 
 const labels = {
-  PREPARED: "Pengesahan disiapkan; belum dikirim", SUBMITTED: "Sudah dikirim; belum terbukti tercatat",
-  INCLUDED: "Bukti sudah tercatat; menunggu konfirmasi cukup", CONFIRMED: "Bukti tercatat dan terkonfirmasi",
-  REVERTED: "Pengiriman gagal; bukti tidak tercatat", INVALID_EVENT: "Catatan tidak cocok; pencatatan tidak diakui",
-  NONCANONICAL: "Catatan publik berubah; pencatatan perlu diperiksa ulang",
+  PREPARED: "Pengesahan disiapkan, belum dikirim", SUBMITTED: "Sudah dikirim, belum terbukti tercatat",
+  INCLUDED: "Bukti sudah tercatat, menunggu konfirmasi cukup", CONFIRMED: "Bukti tercatat dan terkonfirmasi",
+  REVERTED: "Pengiriman gagal, bukti tidak tercatat", INVALID_EVENT: "Catatan tidak cocok, pencatatan tidak diakui",
+  NONCANONICAL: "Catatan publik berubah, pencatatan perlu diperiksa ulang",
 };
 const publicationLabels = { ...labels,
-  INCLUDED: "Penerbitan sudah tercatat; menunggu konfirmasi", CONFIRMED: "Laporan terbit dan terkonfirmasi",
-  REVERTED: "Pengiriman gagal; laporan belum terbit", INVALID_EVENT: "Catatan tidak cocok; penerbitan tidak diakui",
-  NONCANONICAL: "Catatan publik berubah; penerbitan perlu diperiksa ulang",
+  INCLUDED: "Penerbitan sudah tercatat, menunggu konfirmasi", CONFIRMED: "Laporan terbit dan terkonfirmasi",
+  REVERTED: "Pengiriman gagal, laporan belum terbit", INVALID_EVENT: "Catatan tidak cocok, penerbitan tidak diakui",
+  NONCANONICAL: "Catatan publik berubah, penerbitan perlu diperiksa ulang",
 };
 type Props = { saved: SavedReportPackage; preparationId: string; requests: PrivateRequests; publication?: boolean; onCorrect?: (packageId: string) => void };
 export function RecordingPanel(props: Props) {
@@ -45,19 +45,19 @@ function RecordingView({ saved, preparationId, requests, publication = false, on
   const sent = intent && ["SUBMITTED", "INCLUDED", "CONFIRMED"].includes(intent.observation.state);
   return <section className="space-y-3 rounded border p-3">
     <h5 className="font-semibold">{publication ? "Penerbitan laporan" : "Pengesahan pencatatan bukti"}</h5>
-    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan pemeriksaan otomatis layanan untuk paket yang sama. Sistem memeriksa pernyataan layanan itu; hasil hitungan bergantung pada layanan dan sumber bank, bukan pembuktian matematis penuh. Pendapat auditor (atestasi) diperiksa terpisah dan dibaca per versi." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
+    <p className="text-sm">{publication ? "Penerbitan memerlukan pengesahan lembaga dan pemeriksaan otomatis layanan untuk paket yang sama. Sistem memeriksa pernyataan layanan itu. Hasil hitungan bergantung pada layanan dan sumber bank, bukan pembuktian matematis penuh. Pendapat auditor (atestasi) diperiksa terpisah dan dibaca per versi." : "Saya mengesahkan pencatatan paket ini beserta temuannya. Tindakan ini belum menerbitkan laporan, menyatakan sumber benar, atau memberikan opini auditor."}</p>
     <details><summary>Cakupan sumber dan temuan paket beku</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ snapshot: saved.snapshot, reconciliation: saved.reconciliation, disclosure: saved.disclosure, policy: saved.policy }, null, 2)}</pre></details>
     {history.length > 0 && <label className="block text-sm">Riwayat pengesahan paket<select className="block w-full rounded border p-2" value={intent?.id ?? ""} disabled={locked || checking} onChange={e => {
       task.select(e.target.value);
     }}><option value="">Pilih percobaan</option>{history.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>}
     {!intent && <Button disabled={locked || !address} onClick={prepare}>{preparing ? "Memeriksa kewenangan…" : publication ? "Minta pengesahan validator" : "Siapkan pengesahan pencatatan"}</Button>}
     {intent && <>
-      <p className="text-sm">Periode kewenangan {intent.authorization.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu; bukan izin untuk tindakan baru." : intent.signingAuthority === "STALE" ? "Wewenang berubah. Mulai tinjauan baru." : "Wewenang Anda dicek ulang sebelum penandatanganan."}</p>
+      <p className="text-sm">Periode kewenangan {intent.authorization.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu. Bukan izin untuk tindakan baru." : intent.signingAuthority === "STALE" ? "Wewenang berubah. Mulai tinjauan baru." : "Wewenang Anda dicek ulang sebelum penandatanganan."}</p>
       <p role="status">{statusUnavailable ? "Status pencatatan belum dapat dipastikan" : (publication ? publicationLabels : labels)[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {statusUnavailable ? "belum diketahui" : intent.observation.confirmations} / {intent.observation.requiredConfirmations}. {publication ? `Laporan ${saved.reportId} · versi ${saved.version}` : "Pengesahan ini hanya untuk pencatatan bukti."}</p>
       <p className="text-xs">Kebijakan {intent.observation.confirmationPolicy}. Konfirmasi yang tercapai belum berarti pencatatan sudah final di jaringan induk (Ethereum). {intent.domain.chainId === 31337 ? "Jaringan uji lokal, data percobaan." : intent.domain.chainId === 421614 ? "Arbitrum Sepolia (jaringan uji, bukan uang sungguhan)." : "Pastikan jaringan sudah benar sebelum menandatangani."}</p>
       <p className="break-all text-xs">Jaringan {intent.domain.chainId} · Alamat pencatatan {intent.domain.verifyingContract} <button onClick={() => navigator.clipboard.writeText(intent.domain.verifyingContract)}>Salin alamat pencatatan</button><br />Pengesah {intent.authorization.signer} <button onClick={() => navigator.clipboard.writeText(intent.authorization.signer)}>Salin akun</button><br />Berlaku sampai {new Date(Number(intent.authorization.deadline) * 1000).toLocaleString()}</p>
-      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Pemeriksaan otomatis: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}; wewenang dicek ulang saat pengiriman` : "belum tersedia"}. Auditor: {version?.attestations?.entries.length ? version.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ") : "belum diperiksa"}.</p>}
+      {publication && <p className="text-sm">Pengesahan lembaga: {intent.transactionHash ? "lihat status penerimaan transaksi" : "menunggu tanda tangan"}. Pemeriksaan otomatis: {intent.validator ? `pernyataan LOLOS tersedia dari ${intent.validator.authorization.signer}, wewenang dicek ulang saat pengiriman` : "belum tersedia"}. Auditor: {version?.attestations?.entries.length ? version.attestations.entries.map(note => conclusionLabel(note.conclusion)).join(", ") : "belum diperiksa"}.</p>}
       {publication && intent.validator && <details><summary>Pernyataan layanan pemeriksa (detail teknis)</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(intent.validator, null, 2)}</pre></details>}
       <details><summary>Parameter pengesahan yang akan ditandatangani</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value, 2)}</pre></details>
       <Button variant="outline" onClick={() => navigator.clipboard.writeText(JSON.stringify(evidenceTypedData(intent.domain, intent.authorization), (_, value) => typeof value === "bigint" ? value.toString() : value))}>Salin data pengesahan untuk wallet</Button>
@@ -83,8 +83,8 @@ function RecordingView({ saved, preparationId, requests, publication = false, on
         {versionLine && versionLine.length === 0 && <p>Laporan ini belum memiliki versi resmi.</p>}
         {versionLine && versionLine.length > 0 && <ol className="list-none space-y-2">{versionLine.map(entry => <li key={entry.packageId} className="rounded border p-2">
           <p className="font-semibold">Versi {entry.version} {entry.official ? "· resmi terkini" : "· digantikan"}</p>
-          <p className="break-all text-xs">Paket {entry.packageId}{entry.predecessor ? <><br />Menyusul paket {entry.predecessor}</> : <><br />Versi pertama; tidak menyusul versi lain.</>}</p>
-          <p className="text-xs">Alasan koreksi: {entry.correctionReason ?? "—"}</p>
+          <p className="break-all text-xs">Paket {entry.packageId}{entry.predecessor ? <><br />Menyusul paket {entry.predecessor}</> : <><br />Versi pertama. Tidak menyusul versi lain.</>}</p>
+          <p className="text-xs">Alasan koreksi: {entry.correctionReason ?? "Tidak ada"}</p>
           <p className="break-all text-xs">Pengesah lembaga {entry.endorsements.institution}<br />Validator {entry.endorsements.validator}</p>
           <p className="break-all text-xs">{entry.anchor ? <>Pencatatan {formatBlockInstant(entry.anchor.blockTimestamp)} · blok {entry.anchor.blockNumber} · konfirmasi {entry.anchor.confirmations}/{entry.anchor.requiredConfirmations}<br />Transaksi {entry.anchor.transactionHash}</> : "Receipt penerbitan tidak tersimpan pada ruang kerja ini."}</p>
           <p className="text-xs">Atestasi auditor versi ini: {entry.attestations.entries.length === 0 ? "belum diperiksa"

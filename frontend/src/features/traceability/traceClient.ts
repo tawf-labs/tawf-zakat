@@ -46,13 +46,13 @@ export const DIFFERENCE_LABELS = {
 } as const;
 
 const ISSUANCE_LABELS: Record<CertificateMintState, string> = {
-  PREPARED: "Disiapkan; belum diterbitkan",
-  SUBMITTED: "Penerbitan diajukan; menunggu konfirmasi",
-  INCLUDED: "Masuk blok; menunggu konfirmasi",
-  CONFIRMED: "Penerbitan terkonfirmasi; isi belum dapat diperiksa",
+  PREPARED: "Disiapkan, belum diterbitkan",
+  SUBMITTED: "Penerbitan diajukan, menunggu konfirmasi",
+  INCLUDED: "Masuk blok, menunggu konfirmasi",
+  CONFIRMED: "Penerbitan terkonfirmasi, isi belum dapat diperiksa",
   REVERTED: "Penerbitan gagal",
-  INVALID_EVENT: "Penerbitan tidak diakui; catatan transaksi tidak cocok",
-  NONCANONICAL: "Blok penerbitan berubah; perlu pemeriksaan ulang",
+  INVALID_EVENT: "Penerbitan tidak diakui, catatan transaksi tidak cocok",
+  NONCANONICAL: "Blok penerbitan berubah, perlu pemeriksaan ulang",
 };
 
 /** Status of the published version is distinct from issuance progress. */

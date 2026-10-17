@@ -100,7 +100,7 @@ export function RealizationRecipientRows({ id, rows, setRows, summary }: {
         }}><ListPlus className="h-4 w-4" /> Tambah semua sisa ({open.length - rows.length})</Button>
     </div>}
     {rows.length > 6 && <p className="text-xs text-stone-600">
-      Tiap baris terisi penuh dari sisa hak masing-masing; ubah kuantitas per baris kalau yang benar-benar diserahkan berbeda dari rencana.
+      Tiap baris terisi penuh dari sisa hak masing-masing. Ubah kuantitas per baris kalau yang benar-benar diserahkan berbeda dari rencana.
     </p>}
     {rows.length > 1 && <p className="text-xs text-stone-600">Baris-baris ini dicatat sebagai satu kelompok penyerahan. Satu BAST kelompok kemudian dialokasikan ke setiap penerima.</p>}
   </div>;

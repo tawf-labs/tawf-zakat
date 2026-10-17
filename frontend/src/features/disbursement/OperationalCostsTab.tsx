@@ -222,12 +222,12 @@ function CostSheet({ requests, proposalId, overview, ctx, purposes, expanded, fr
   const flags = useMemo(() => {
     const byKey = new Map<string, RowFlag>();
     for (const item of overview.items) {
-      if (item.status === "VOIDED") byKey.set(item.id, { badge: "batal", detail: "Baris dibatalkan; tidak dihitung. Buka riwayat untuk alasannya." });
+      if (item.status === "VOIDED") byKey.set(item.id, { badge: "batal", detail: "Baris dibatalkan. Tidak dihitung. Buka riwayat untuk alasannya." });
       else if (item.lockedBy) byKey.set(item.id, { badge: "terkunci laporan", detail: item.correctedAfterPublication
-        ? "Tercakup laporan terbit; dikoreksi untuk versi koreksi laporan. Riwayat menyimpan versi sebelumnya."
-        : "Tercakup laporan periode yang sudah terbit; hanya dapat diubah untuk versi koreksi laporan itu." });
-      else if (item.version > 1) byKey.set(item.id, { badge: "dikoreksi", detail: "Baris dikoreksi; versi sebelumnya ada di riwayat." });
-      else if (item.reimbursementId) byKey.set(item.id, { badge: "diganti", detail: "Talangan sudah diganti lembaga; baris tidak dapat dikoreksi." });
+        ? "Tercakup laporan terbit. Dikoreksi untuk versi koreksi laporan. Riwayat menyimpan versi sebelumnya."
+        : "Tercakup laporan periode yang sudah terbit. Hanya dapat diubah untuk versi koreksi laporan itu." });
+      else if (item.version > 1) byKey.set(item.id, { badge: "dikoreksi", detail: "Baris dikoreksi. Versi sebelumnya ada di riwayat." });
+      else if (item.reimbursementId) byKey.set(item.id, { badge: "diganti", detail: "Talangan sudah diganti lembaga. Baris tidak dapat dikoreksi." });
     }
     return byKey;
   }, [overview.items]);
@@ -255,7 +255,7 @@ function CostSheet({ requests, proposalId, overview, ctx, purposes, expanded, fr
       commit(remaining.length > 0 ? remaining : [newCostDraft()]);
       const failed = results.length - recordedKeys.size;
       if (recordedKeys.size > 0) toast.success(`${recordedKeys.size} baris biaya tercatat.`);
-      if (failed > 0) toast.warning(`${failed} baris belum tercatat dan tetap sebagai draf; lihat tandanya.`);
+      if (failed > 0) toast.warning(`${failed} baris belum tercatat dan tetap sebagai draf. Lihat tandanya.`);
     });
   const locked = preparing || operation.locked;
 
@@ -445,7 +445,7 @@ function PanjarSheet({ requests, proposalId, overview, ctx, onReturn }: {
   const valid = form.holderOfficerId && /^\d+$/.test(form.amountIdr) && form.amountIdr !== "0" && form.purpose.trim() && form.cashOutRef.trim() && form.issuedOn;
 
   return <div className="space-y-3 text-sm">
-    <p className="text-xs text-stone-600">Panjar adalah uang lembaga yang dibawa petugas. Biaya yang dibayar darinya dicatat di lembar Biaya dengan sumber dana panjar; sisanya dikembalikan.</p>
+    <p className="text-xs text-stone-600">Panjar adalah uang lembaga yang dibawa petugas. Biaya yang dibayar darinya dicatat di lembar Biaya dengan sumber dana panjar. Sisanya dikembalikan.</p>
     {overview.panjar.length === 0
       ? <p className="rounded-xl border border-dashed border-stone-200 p-4 text-center text-xs text-stone-600">Belum ada panjar.</p>
       : <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white">

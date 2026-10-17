@@ -129,7 +129,7 @@ export function AllocationModal({
               <select value={activityId} onChange={(e) => setActivityId(e.target.value)} className={fieldClass}>
                 {activities.map((act) => (
                   <option key={act.id} value={act.id}>
-                    {act.name} — sisa kebutuhan {formatNominal(act.unallocatedNeed, act.currencyUnit)}
+                    {act.name}, sisa kebutuhan {formatNominal(act.unallocatedNeed, act.currencyUnit)}
                   </option>
                 ))}
               </select>

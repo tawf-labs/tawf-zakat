@@ -610,7 +610,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: old version, dis
     await sign.click();
     await page.getByText("Sertifikat tercatat dalam blok", { exact: false }).waitFor();
     await mine();
-    await page.getByRole("status").filter({ hasText: "Sertifikat terbit; tingkat konfirmasi tercapai" }).waitFor();
+    await page.getByRole("status").filter({ hasText: "Sertifikat terbit, tingkat konfirmasi tercapai" }).waitFor();
 
     // Public verifier: the replacement is official, the old version stays readable as superseded.
     const verifier = page.getByRole("main");

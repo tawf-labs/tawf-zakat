@@ -104,7 +104,7 @@ export function MandateManagementSection({ requests }: { requests: PrivateReques
           <div className="flex items-center gap-1.5 text-xs text-stone-500 pl-1">
             <Calendar className="h-3.5 w-3.5 text-stone-400" />
             <span>Masa berlaku:</span>
-            <span className="font-medium text-stone-700">{formatTimestamp(mandate.validFrom)} – {formatTimestamp(mandate.validUntil)}</span>
+            <span className="font-medium text-stone-700">{formatTimestamp(mandate.validFrom)} sampai {formatTimestamp(mandate.validUntil)}</span>
           </div>
         </>}
       </div>

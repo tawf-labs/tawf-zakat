@@ -44,7 +44,7 @@ function Workbench() {
       <div className="grid gap-6 lg:grid-cols-2">
         <LedgerSideEditor
           title="Rekap yang Anda susun"
-          hint="Laporan Zakat Wilayah - angka yang akan Anda kirim ke BAZNAS pusat."
+          hint="Laporan Zakat Wilayah, yaitu angka yang akan Anda kirim ke BAZNAS pusat."
           draft={workbench.claimDraft}
           onDraftChange={workbench.setClaimDraft}
           parsed={workbench.claim}

@@ -125,8 +125,8 @@ function CorrectionChanges({ correction, comparedWithBookkeeping, onOpenCosts }:
             {figures.map((f) => (
               <tr key={f.name} className={`border-t border-stone-100 ${f.state === "TETAP" ? "" : "bg-amber-50"}`}>
                 <td className="py-2 pr-3 text-stone-700">{f.label}</td>
-                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums text-stone-500">{f.before ? formatValue(f.before) : "—"}</td>
-                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums font-semibold text-stone-900">{f.after ? formatValue(f.after) : "—"}</td>
+                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums text-stone-500">{f.before ? formatValue(f.before) : "Tidak ada"}</td>
+                <td className="whitespace-nowrap py-2 pr-3 text-right tabular-nums font-semibold text-stone-900">{f.after ? formatValue(f.after) : "Tidak ada"}</td>
                 <td className={`whitespace-nowrap py-2 text-right text-xs ${f.state === "TETAP" ? "text-stone-400" : "font-semibold text-amber-800"}`}>{CHANGE_LABELS[f.state]}</td>
               </tr>
             ))}
@@ -231,7 +231,7 @@ export function PeriodReportReviewWizard({ preparationId, periodName, requests, 
                   Alasan koreksi
                   <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} />
                   <span className="text-xs font-normal text-stone-500">
-                    Wajib. Laporan periode ini sudah pernah terbit; versi ini menggantikannya dan alasannya ikut tercatat bersama laporan.
+                    Wajib. Laporan periode ini sudah pernah terbit. Versi ini menggantikannya dan alasannya ikut tercatat bersama laporan.
                   </span>
                 </label>
               )}
@@ -274,7 +274,7 @@ export function PeriodReportReviewWizard({ preparationId, periodName, requests, 
               ) : (
                 <div role="status" className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-700">
                   <p className="font-semibold">Penerbitan belum dibuka</p>
-                  <p className="mt-1">{material.publicationUnavailable} Laporan tersimpan dengan status siap diterbitkan; operator perlu membuka penerbitan lebih dulu.</p>
+                  <p className="mt-1">{material.publicationUnavailable} Laporan tersimpan dengan status siap diterbitkan. Operator perlu membuka penerbitan lebih dulu.</p>
                 </div>
               )}
               <Button type="button" variant="ghost" onClick={onClose}>Tutup</Button>

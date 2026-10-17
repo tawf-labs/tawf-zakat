@@ -53,7 +53,7 @@ export function ReportPackageForm({ preparationId, requests, canPrepare, commitm
   }
   async function acceptSaved(next: SavedReportPackage) {
     const { digest, ...body } = next;
-    if (!await verifyReportCommitment(body, commitmentSalt, digest)) throw new Error("Digest paket tidak cocok; review dihentikan.");
+    if (!await verifyReportCommitment(body, commitmentSalt, digest)) throw new Error("Digest paket tidak cocok. Review dihentikan.");
     requests.assertCurrent();
     setSaved(next);
   }
@@ -81,7 +81,7 @@ export function ReportPackageForm({ preparationId, requests, canPrepare, commitm
     // Every download rechecks the reader's current authorization.
     const current = (await readReport(preparationId, saved.id, requests)).package;
     await acceptSaved(current);
-    const blob = new Blob([`DRAF — BELUM DITERBITKAN\nLaporan ${saved.reportId}, versi ${saved.version}\nPaket ${saved.id}\nDigest ${saved.digest}\nVonis ${saved.verdict.outcome}\n\n${saved.draft?.narrative ?? "Draf tidak tersedia"}\n\n${JSON.stringify(saved, null, 2)}`], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([`DRAF, BELUM DITERBITKAN\nLaporan ${saved.reportId}, versi ${saved.version}\nPaket ${saved.id}\nDigest ${saved.digest}\nVonis ${saved.verdict.outcome}\n\n${saved.draft?.narrative ?? "Draf tidak tersedia"}\n\n${JSON.stringify(saved, null, 2)}`], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `draf-${saved.id}.txt`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -119,22 +119,22 @@ export function ReportPackageForm({ preparationId, requests, canPrepare, commitm
           <h5 className="text-sm font-semibold">Perubahan terhadap versi {correction.predecessor.version}</h5>
           <p>Pendahulu {correction.predecessor.id} · vonis {correction.predecessor.outcome} · commitment snapshot {correction.predecessor.snapshotCommitment.slice(0, 18)}…</p>
           <p>{correction.samePreparation
-            ? "Koreksi ini memakai snapshot yang sama; angka tidak akan berubah kecuali draf diubah."
+            ? "Koreksi ini memakai snapshot yang sama. Angka tidak akan berubah kecuali draf diubah."
             : "Koreksi ini memakai snapshot baru. Snapshot dan berkas versi pendahulu tetap tersimpan apa adanya."}</p>
           <ul className="space-y-1">{correction.sources.map(source => <li key={source.role}>
             Sisi {source.role === "CLAIM" ? "klaim" : "sumber"}: {CHANGE_LABELS[source.state]}.
-            {source.before && source.after && source.state === "BERUBAH" && ` Cut-off ${source.before.cutOff} → ${source.after.cutOff}; status ${source.before.status} → ${source.after.status}; asal ${source.before.origin} → ${source.after.origin}.`}
+            {source.before && source.after && source.state === "BERUBAH" && ` Cut-off ${source.before.cutOff} → ${source.after.cutOff}, status ${source.before.status} → ${source.after.status}, asal ${source.before.origin} → ${source.after.origin}.`}
           </li>)}</ul>
           <table className="w-full text-left"><thead><tr>{["Angka", "Versi pendahulu", "Koreksi", "Status"].map(h => <th key={h} className="p-1">{h}</th>)}</tr></thead>
             <tbody>{correction.changes.map(change => <tr key={change.name} className="border-t">
               <td className="p-1">{change.label}</td>
-              <td className="p-1 font-mono">{change.before ? formatQuantity(change.before) : "—"}</td>
-              <td className="p-1 font-mono">{change.after ? formatQuantity(change.after) : "—"}</td>
+              <td className="p-1 font-mono">{change.before ? formatQuantity(change.before) : "Tidak ada"}</td>
+              <td className="p-1 font-mono">{change.after ? formatQuantity(change.after) : "Tidak ada"}</td>
               <td className="p-1">{CHANGE_LABELS[change.state]}</td>
             </tr>)}</tbody></table>
-          <p>Temuan: {correction.findingCount.before ?? "—"} menjadi {correction.findingCount.after ?? "—"}.</p>
+          <p>Temuan: {correction.findingCount.before ?? "tidak ada"} menjadi {correction.findingCount.after ?? "tidak ada"}.</p>
           {correction.blockers.map((note, i) => <p key={i} className="text-red-700">{note}</p>)}
-          <p>Pengesahan versi pendahulu tidak berlaku untuk koreksi ini; keduanya memerlukan pengesahan lembaga dan validator baru.</p>
+          <p>Pengesahan versi pendahulu tidak berlaku untuk koreksi ini. Keduanya memerlukan pengesahan lembaga dan validator baru.</p>
         </section>}
         {canPrepare && <div className="flex flex-wrap gap-2">
           <Button disabled={!!pending || !reportId || !narrative || (!!predecessor && !reason.trim())} onClick={() => act("Memeriksa draf…", () => save("HUMAN"))}>Simpan dan periksa draf</Button>
@@ -148,7 +148,7 @@ export function ReportPackageForm({ preparationId, requests, canPrepare, commitm
     </select></label>
     {saved && <div className="space-y-2 border-t pt-3">
       <p className="font-semibold">{saved.reportId} · versi {saved.version} · {saved.verdict.outcome} · {saved.status === "FROZEN" ? "Dibekukan" : "Draf tersimpan"}</p>
-      <p role="status">{saved.status === "FROZEN" && saved.verdict.outcome === "LOLOS" ? "Paket beku siap ditinjau. Pencatatan bukti dan penerbitan memerlukan pengesahan berbeda." : "Draf ditolak tetap dapat dicatat sebagai bukti setelah dibekukan; belum siap untuk pengesahan penerbitan."}</p>
+      <p role="status">{saved.status === "FROZEN" && saved.verdict.outcome === "LOLOS" ? "Paket beku siap ditinjau. Pencatatan bukti dan penerbitan memerlukan pengesahan berbeda." : "Draf ditolak tetap dapat dicatat sebagai bukti setelah dibekukan. Belum siap untuk pengesahan penerbitan."}</p>
       <p className="text-xs">Commitment paket cocok dengan isi yang ditampilkan.</p>
       <p className="break-all text-xs">Paket {saved.id}<br />Digest {saved.digest}</p>
       {saved.aiUnavailable && <p role="alert">{saved.aiUnavailable}</p>}

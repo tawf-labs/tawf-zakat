@@ -98,7 +98,7 @@ export function ReceiptsSheet({ requests, proposalId, receipts, items, onOpenFil
               <td className="px-2 py-1.5 font-mono">{receipt.reference}</td>
               <td className="px-2 py-1.5">{RECEIPT_KIND_LABELS[receipt.kind]}</td>
               <td className="px-2 py-1.5">{displayDate(receipt.issuedOn)}</td>
-              <td className="px-2 py-1.5">{receipt.issuer ?? "—"}</td>
+              <td className="px-2 py-1.5">{receipt.issuer ?? "Tidak ada"}</td>
               <td className="px-2 py-1.5">{citedBy(receipt.id)} baris</td>
               <td className="px-2 py-1.5">
                 <button type="button" className="inline-flex items-center gap-1 font-semibold text-emerald-800 underline" onClick={() => onOpenFiles(receipt)}>
@@ -219,7 +219,7 @@ export function ReceiptFilesDialog({ requests, proposalId, receipt, onClose }: {
     setMessage(null);
     const failed = await uploadAll(requests, proposalId, files.map((file) => ({ file, receiptId: receipt.id })));
     setBusy(false);
-    if (failed.length > 0) setMessage(failed.map((f) => `${f.file.name}: ${f.reason}`).join("; "));
+    if (failed.length > 0) setMessage(failed.map((f) => `${f.file.name}: ${f.reason}`).join(". "));
     refresh();
   }
 
@@ -244,8 +244,7 @@ export function ReceiptFilesDialog({ requests, proposalId, receipt, onClose }: {
         yang dapat membukanya. Setiap berkas diperiksa terhadap sidik SHA-256-nya saat dibuka.
       </DialogDescription>
       {locked && <p className="flex items-start gap-1.5 rounded-lg bg-stone-100 p-2 text-xs text-stone-700">
-        <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Nota ini sudah menjadi bukti baris biaya tercatat. Berkasnya tidak dapat dihapus;
-        tambahkan berkas baru atau koreksi barisnya.
+        <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Nota ini sudah menjadi bukti baris biaya tercatat. Berkasnya tidak dapat dihapus. Tambahkan berkas baru atau koreksi barisnya.
       </p>}
       {receipt.files.length === 0
         ? <p className="text-xs text-stone-600">

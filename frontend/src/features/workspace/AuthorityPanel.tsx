@@ -105,7 +105,7 @@ export function AuthorityPanel({ requests, workspace }: { requests: PrivateReque
       const result = await authorityRequest(`/authority/history?fromBlock=${fromBlock}`, requests); setHistory(result); setFromBlock(result.nextBlock);
     })}>Baca riwayat pencatatan (maks. 2.000 blok)</Button>
     {history !== null && <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(history, null, 2)}</pre>}
-    <p className="text-xs">Kehilangan seluruh otoritas memerlukan prosedur pemulihan tersendiri; operator teknis tidak dapat mengganti pengesah lembaga. Panduan pemulihan ada di dokumentasi internal (tiket #77).</p>
+    <p className="text-xs">Kehilangan seluruh otoritas memerlukan prosedur pemulihan tersendiri. Operator teknis tidak dapat mengganti pengesah lembaga. Panduan pemulihan ada di dokumentasi internal (tiket #77).</p>
     {message && <p role="status" className="rounded border p-3 text-sm">{message}</p>}
   </section>;
 }

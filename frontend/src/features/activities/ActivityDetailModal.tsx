@@ -182,7 +182,7 @@ export function ActivityDetailModal({
                     <p className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs leading-relaxed text-red-800">
                       Pengeluaran dan kewajiban kegiatan ini melampaui dana teralokasi sebesar{" "}
                       <strong>{formatNominal(acc.totalOverCommitmentIdr, detail.currencyUnit)}</strong>. Kelebihan ini
-                      tetap terlihat dan menunggu telaah lembaga; tidak ditulis menjadi nol.
+                      tetap terlihat dan menunggu telaah lembaga. Tidak ditulis menjadi nol.
                     </p>
                   )}
 

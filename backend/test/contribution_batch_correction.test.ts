@@ -1095,7 +1095,7 @@ describe("Batch Corrections & ZK Receipt Validity (Issue #110)", () => {
           operationId: `browser-correct-${width}`, correctionType: "AMOUNT", amountExact: "400000",
           reason: "Sumber dikoreksi", sourceProofRef: `SOURCE-${width}` });
         await check.click();
-        await page.getByText("Bukti lama masih sah — menunggu pemeriksaan baru karena catatan dikoreksi", { exact: true }).waitFor();
+        await page.getByText("Bukti lama masih sah, menunggu pemeriksaan baru karena catatan dikoreksi", { exact: true }).waitFor();
         await page.getByRole("button", { name: `Buka ${batch.id}`, exact: true }).click();
         const review = page.getByRole("region", { name: "Tinjau daftar penerimaan", exact: true });
         await review.getByText("Koreksi kelompok ini", { exact: true }).click();

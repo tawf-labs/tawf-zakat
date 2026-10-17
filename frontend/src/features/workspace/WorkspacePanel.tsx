@@ -209,7 +209,7 @@ function WorkspaceContents() {
         </div>
         <h2 className="mt-5 font-serif text-2xl font-bold text-[#17332c]">Hubungkan dompet digital lembaga</h2>
         <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-stone-600">
-          Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak cukup — server memeriksa tanda tangan Anda sebelum membuka ruang kerja.
+          Ruang kerja dibuka dengan menandatangani pesan sekali pakai. Alamat dompet saja tidak cukup. Server memeriksa tanda tangan Anda sebelum membuka ruang kerja.
         </p>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <SafeConnectKitButton>
@@ -298,7 +298,7 @@ function ReadyWorkspace({
             <details className="mt-4 border-t border-[#dbe7dd] pt-3">
               <summary className="min-h-11 cursor-pointer py-3 text-xs font-medium text-stone-600 focus-visible:outline-2 focus-visible:outline-[#1b765e]">Detail akun dan batas kewenangan</summary>
               <dl className="space-y-2 text-xs text-stone-600"><div><dt>Akun kerja</dt><dd className="mt-1 break-all font-mono text-stone-800">{workspace.account}</dd></div><div><dt>ID lembaga</dt><dd className="mt-1 break-all font-mono">{institution.id}</dd></div></dl>
-              <p className="mt-3 text-xs leading-relaxed text-stone-600">Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan diperiksa di catatan publik; keanggotaan di sini tidak menggantikannya.</p>
+              <p className="mt-3 text-xs leading-relaxed text-stone-600">Kewenangan ini hanya mengatur ruang kerja. Pencatatan bukti dan penerbitan laporan diperiksa di catatan publik. Keanggotaan di sini tidak menggantikannya.</p>
             </details>
           </section>
           <section><h3 className="mb-3 text-sm font-semibold text-[#17332c]">Mulai pekerjaan</h3><div className="grid gap-3 sm:grid-cols-2">{sections.filter(section => ["contributions", "disbursement", "activities", "evidence"].includes(section.id)).map(section => <WorkspaceShortcut key={section.id} section={section} onClick={() => navigate(section.id)} />)}</div></section>

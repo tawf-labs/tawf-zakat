@@ -11,7 +11,7 @@ interface MerkleProofDetailsProps {
 
 const checkLabel = (check: ReceiptCheck | null) =>
   !check ? "Belum diperiksa (butuh kuitansi pemilik)"
-    : check.isValid ? "Cocok — dihitung ulang oleh server terhadap root batch"
+    : check.isValid ? "Cocok, dihitung ulang oleh server terhadap root batch"
     : "Tidak cocok";
 
 export function MerkleProofDetails({ contribution, check }: MerkleProofDetailsProps) {
@@ -34,7 +34,7 @@ export function MerkleProofDetails({ contribution, check }: MerkleProofDetailsPr
             <Row label="Merkle root (catatan server)">
               <Mono>{batch?.merkleRoot ?? "Belum ada root"}</Mono>
               <span className="block text-[11px] text-[#5e7a70] mt-1">
-                Root dibaca dari catatan server; kecocokannya dengan kontrak tidak diperiksa di halaman ini.
+                Root dibaca dari catatan server. Kecocokannya dengan kontrak tidak diperiksa di halaman ini.
               </span>
             </Row>
             {batch?.anchorTxHash && (

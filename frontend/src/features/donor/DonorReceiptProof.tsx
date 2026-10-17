@@ -43,7 +43,7 @@ export function DonorReceiptProof({ contribution }: { contribution: DonorContrib
     <p className="text-xs text-tawf-muted">Yang dibuktikan: catatan kontribusi Anda masuk daftar yang sudah disahkan lembaga dan tidak diubah diam-diam. Ini bukan bukti uang sudah masuk bank atau bantuan sudah diserahkan.</p>
     {unavailable && <p role="alert" className="text-amber-800">Pemeriksaan belum tersedia. Coba lagi nanti.</p>}
     {status === "UNCONFIRMED" && !check.isFetching && <p className="text-xs text-tawf-muted">
-      Hasil historis tetap tersimpan; keberlakuan bukti saat ini belum dapat dikonfirmasi.
+      Hasil historis tetap tersimpan. Keberlakuan bukti saat ini belum dapat dikonfirmasi.
     </p>}
     <button type="button" disabled={check.isFetching} onClick={() => void check.refetch()}
       className="inline-flex items-center gap-2 rounded-xl border border-tawf-green-10 px-3 py-2 text-tawf-green disabled:opacity-50">

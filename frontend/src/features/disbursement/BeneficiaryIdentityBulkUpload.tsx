@@ -171,7 +171,7 @@ export function BeneficiaryIdentityBulkUpload({ requests, proposalId, beneficiar
 
           {failed.length > 0 && (
             <p role="alert" className="text-red-700">
-              {failed.length} berkas gagal diunggah: {failed.join(", ")}. Berkas lain yang cocok sudah tersimpan; coba lagi untuk yang gagal.
+              {failed.length} berkas gagal diunggah: {failed.join(", ")}. Berkas lain yang cocok sudah tersimpan. Coba lagi untuk yang gagal.
             </p>
           )}
           {error && <p role="alert" className="text-red-700">{error}</p>}

@@ -112,7 +112,7 @@ export function ProposalCancellationModal({
 
           {unknown && (
             <p className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-[11px] text-amber-900">
-              Tanda tangan sudah dibuat. Kirim ulang keputusan yang sama untuk membaca hasil yang tersimpan; ini tidak
+              Tanda tangan sudah dibuat. Kirim ulang keputusan yang sama untuk membaca hasil yang tersimpan. Ini tidak
               membuat keputusan kedua.
             </p>
           )}

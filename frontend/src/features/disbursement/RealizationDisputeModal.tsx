@@ -73,7 +73,7 @@ export function RealizationDisputeModal({ requests, proposalId, realization, ben
     <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto" showCloseButton={!busy}>
       <DialogTitle>Keberatan atas penerimaan</DialogTitle>
       <DialogDescription>
-        {beneficiaryName} · {realizationDisplay}. Keberatan menahan konfirmasi akhir; realisasi yang tercatat tidak dihapus atau dihitung ulang.
+        {beneficiaryName} · {realizationDisplay}. Keberatan menahan konfirmasi akhir. Realisasi yang tercatat tidak dihapus atau dihitung ulang.
         Dokumen yang belum lengkap bukan keberatan.
       </DialogDescription>
 

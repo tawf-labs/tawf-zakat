@@ -16,8 +16,8 @@ export function PublicReceiptProof({ reference }: { reference: string }) {
     {result && <div aria-live="polite" className="space-y-2 break-all">
       <p className="font-semibold">{check.isFetching ? "Sedang memeriksa catatan publik…" :
         result.status === "VERIFIED" && result.onChainConfirmed ? "Keaslian catatan terkonfirmasi di catatan publik" :
-        result.status === "PENDING_REPROOF" ? "Bukti lama masih sah — menunggu pemeriksaan baru karena catatan dikoreksi" :
-        result.status === "SUPERSEDED" ? "Bukti lama — catatan ini sudah diubah atau digantikan" :
+        result.status === "PENDING_REPROOF" ? "Bukti lama masih sah, menunggu pemeriksaan baru karena catatan dikoreksi" :
+        result.status === "SUPERSEDED" ? "Bukti lama: catatan ini sudah diubah atau digantikan" :
         result.status === "UNCONFIRMED" ? "Hasil di catatan publik belum dapat dikonfirmasi saat ini" :
         result.status === "NOT_AVAILABLE" ? "Bukti keaslian belum tersedia" : `Status bukti: ${result.status}`}</p>
 
@@ -32,7 +32,7 @@ export function PublicReceiptProof({ reference }: { reference: string }) {
       <p>Disahkan oleh lembaga{result.institutionId ? ` ${result.institutionId}` : ""}.</p>
       {result.endorsedBy && <p>Akun petugas pengesahan: <code>{result.endorsedBy}</code></p>}
       {result.txHash && <p>Nomor transaksi pemeriksaan: <code>{result.txHash}</code></p>}
-      {result.chainBusinessValidity === "UNKNOWN" && <p className="text-xs">Hasil pemeriksaan tersimpan di catatan publik; apakah masih berlaku juga dicek ke catatan lembaga.</p>}
+      {result.chainBusinessValidity === "UNKNOWN" && <p className="text-xs">Hasil pemeriksaan tersimpan di catatan publik. Apakah masih berlaku juga dicek ke catatan lembaga.</p>}
       {result.registryAddress && <p>Alamat catatan publik: <code>{result.registryAddress}</code></p>}
       {result.version != null && <p>Versi kuitansi: {result.version}</p>}
 
@@ -42,14 +42,14 @@ export function PublicReceiptProof({ reference }: { reference: string }) {
           <ul className="mt-1 space-y-1 border-t pt-1">
             {result.history.map((h, i) => (
               <li key={i} className="text-stone-600">
-                Kelompok #{h.batchId} (v{h.batchVersion}) — Status: {h.status} {h.txHash ? `— Transaksi: ${h.txHash.slice(0, 10)}...` : ""}
+                Kelompok #{h.batchId} (v{h.batchVersion}) · Status: {h.status} {h.txHash ? `· Transaksi: ${h.txHash.slice(0, 10)}...` : ""}
               </li>
             ))}
           </ul>
         </details>
       )}
     </div>}
-    {check.isFetched && !result && <p role="alert">Pemeriksaan belum tersedia. Gunakan ID kontribusi pada kuitansi; nomor referensi bank tidak dipakai untuk pemeriksaan publik.</p>}
+    {check.isFetched && !result && <p role="alert">Pemeriksaan belum tersedia. Gunakan ID kontribusi pada kuitansi. Nomor referensi bank tidak dipakai untuk pemeriksaan publik.</p>}
     <button type="button" disabled={check.isFetching} onClick={() => void check.refetch()} className="rounded-xl border border-[#dbe7dd] px-4 py-2 disabled:opacity-50">
       {check.isFetching ? "Memeriksa…" : "Periksa keaslian catatan"}
     </button>

@@ -79,7 +79,7 @@ export function describeSourceStatus(
     label: status === "MISSING" ? "Belum tersedia" : "Gagal dibaca",
     detail:
       (detail ?? "Alasannya tidak dicatat.") +
-      " Cakupan ini belum terperiksa; nol pada cakupan tersebut bukan hasil pembacaan.",
+      " Cakupan ini belum terperiksa. Nol pada cakupan tersebut bukan hasil pembacaan.",
     tone: "unproven",
   };
 }
@@ -159,9 +159,9 @@ export function describeChainScope(scope: ChainScopeView): Described {
   return {
     label: `Cakupan blok ${scope.fromBlock}-${scope.toBlock}`,
     detail:
-      `Kontrak ${scope.contract} di chain eip155:${scope.chainId}; ${observed}. ` +
+      `Kontrak ${scope.contract} di chain eip155:${scope.chainId}, ${observed}. ` +
       `Checkpoint indexer berada di blok ${scope.checkpoint.lastIndexedBlock} ` +
-      `(status ${scope.checkpoint.status}); deposit setelah blok itu belum terperiksa.` +
+      `(status ${scope.checkpoint.status}). Deposit setelah blok itu belum terperiksa.` +
       (scope.blockHashes === "NOT_RETAINED"
         ? " Cermin event menyimpan nomor blok tanpa block hash, sehingga kanonisitas blok tidak diklaim."
         : ""),

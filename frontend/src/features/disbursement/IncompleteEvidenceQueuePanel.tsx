@@ -20,7 +20,7 @@ export function IncompleteEvidenceQueuePanel({ requests, onOpenProposal }: {
         <FileClock className="h-5 w-5 text-amber-600" />
         <div>
           <h3 className="font-bold text-stone-900">Bukti realisasi belum lengkap</h3>
-          <p className="text-xs text-stone-600">Kejadian sudah memotong sisa hak; lengkapi bukti sesuai cara penyalurannya.</p>
+          <p className="text-xs text-stone-600">Kejadian sudah memotong sisa hak. Lengkapi bukti sesuai cara penyalurannya.</p>
         </div>
       </div>
       <Button type="button" variant="outline" size="sm" disabled={loading} className="flex items-center gap-1.5"

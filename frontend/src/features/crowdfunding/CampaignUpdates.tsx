@@ -220,9 +220,9 @@ function UpdateForm({
               value={draft.kind}
               onChange={(e) => set({ kind: e.target.value, correctsId: "" })}
             >
-              <option value="NEWS">Kabar — perkembangan kegiatan</option>
+              <option value="NEWS">Kabar: perkembangan kegiatan</option>
               <option value="REALIZATION">
-                Laporan realisasi — penggunaan dana
+                Laporan realisasi: penggunaan dana
               </option>
             </select>
           </label>
@@ -343,7 +343,7 @@ function OperatorReview({
                   )
                 }
               />{" "}
-              Tampilkan {file.name} — sudah diperiksa, tanpa data sensitif
+              Tampilkan {file.name} (sudah diperiksa, tanpa data sensitif)
             </label>
           ))}
         </fieldset>
@@ -603,7 +603,7 @@ export function ManageUpdates({
             {lastNote && (
               <p className="cf-update-note">
                 {decisionLabel[lastNote.decision] || lastNote.decision}{" "}
-                {day(lastNote.at)} — catatan operator: {lastNote.notes}
+                {day(lastNote.at)}, catatan operator: {lastNote.notes}
               </p>
             )}
             <ul className="cf-attachments cf-attachments-list">
@@ -655,7 +655,7 @@ export function ManageUpdates({
                         onChange={(e) => setVisibility(e.target.value)}
                       >
                         <option value="PRIVATE">
-                          Privat — hanya operator (kuitansi, identitas)
+                          Privat, hanya operator (kuitansi, identitas)
                         </option>
                         <option value="PUBLIC">
                           Usulkan tampil ke publik (dokumentasi kegiatan)

@@ -190,7 +190,7 @@ export function EndorseModal({ requests, target, onDone, onClose, onError }: Dec
         periodik lembaga.
       </div>
       <p className="text-stone-500">
-        Pengesahan dicatat atas mandat ENDORSE_CONTRIBUTIONS aktif milik akun Anda; mandat tidak dipilih secara manual.
+        Pengesahan dicatat atas mandat ENDORSE_CONTRIBUTIONS aktif milik akun Anda. Mandat tidak dipilih secara manual.
       </p>
       <div>
         <label htmlFor={`${id}-notes`} className={labelClass}>Catatan Pengesahan (Opsional)</label>

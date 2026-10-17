@@ -4,7 +4,7 @@ import type { DonorTrace } from "../traceability/traceClient";
 import { Notice } from "./DonorNotice";
 
 const REFUND_LABELS: Record<RefundStatus, string> = {
-  DECIDED: "Pengembalian diputuskan; belum dibayar",
+  DECIDED: "Pengembalian diputuskan, belum dibayar",
   PAID: "Pengembalian sudah dibayar",
   CANCELLED: "Keputusan pengembalian dibatalkan",
 };

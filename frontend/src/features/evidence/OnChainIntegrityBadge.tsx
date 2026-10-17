@@ -65,7 +65,7 @@ export function OnChainIntegrityBadge({ cid, onChainContext }: OnChainIntegrityB
       )}
 
       <div className="flex items-center justify-between text-[11px] text-[#5e7a70] pt-1">
-        <span className="font-mono">CID: {cid ? `${cid.slice(0, 10)}...${cid.slice(-8)}` : "—"}</span>
+        <span className="font-mono">CID: {cid ? `${cid.slice(0, 10)}...${cid.slice(-8)}` : "Tidak ada"}</span>
         <a
           href={`${SEPOLIA_EXPLORER_URL}/address/${ZAKAT_PROTOCOL_L1_ADDRESS}`}
           target="_blank"

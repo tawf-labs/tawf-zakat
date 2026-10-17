@@ -17,8 +17,8 @@ export function BatchHistory({ batches, selected, busy, onSelect }: {
     <ul className="space-y-1">{batches.map(batch => <li key={batch.id}
       className="flex items-center justify-between gap-2 py-1 border-b last:border-0">
       <span>v{batch.version} ({labels[batch.status] ?? batch.status})
-        {batch.id === selected.id ? " — sedang ditampilkan" : ""}
-        {batch.correctionReason ? ` — ${batch.correctionReason}` : ""}</span>
+        {batch.id === selected.id ? " (sedang ditampilkan)" : ""}
+        {batch.correctionReason ? `. Alasan: ${batch.correctionReason}` : ""}</span>
       {batch.id !== selected.id && <Button variant="outline" size="sm" disabled={busy}
         onClick={() => void onSelect(batch.id)}>Buka v{batch.version}</Button>}
     </li>)}</ul>
