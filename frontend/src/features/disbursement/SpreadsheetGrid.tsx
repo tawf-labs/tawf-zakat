@@ -746,7 +746,7 @@ const GridRow = memo(function GridRow<R>({
                 onBlur={onEditorBlur}
                 label={column.header}
               />
-            ) : enabled ? text : "—"}
+            ) : enabled ? text : "Tidak ada"}
           </td>
         );
       })}

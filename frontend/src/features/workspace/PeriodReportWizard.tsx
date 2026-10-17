@@ -28,8 +28,8 @@ import {
  */
 
 const PERIOD_OPTIONS: { kind: PeriodKind; label: string; hint: string }[] = [
-  { kind: "SEMESTER", label: "Semester I", hint: "1 Januari – 30 Juni" },
-  { kind: "AKHIR_TAHUN", label: "Akhir tahun", hint: "1 Januari – 31 Desember" },
+  { kind: "SEMESTER", label: "Semester I", hint: "1 Januari sampai 30 Juni" },
+  { kind: "AKHIR_TAHUN", label: "Akhir tahun", hint: "1 Januari sampai 31 Desember" },
 ];
 
 const rp = (amount: string) => `Rp${formatRupiah(amount)}`;
@@ -98,7 +98,7 @@ function PreviewTables({ preview }: { preview: PeriodReportPreview }) {
 
       {costs.advancesIdr !== "0" && (
         <p className="text-xs text-stone-600">
-          Panjar yang dikeluarkan {rp(costs.advancesIdr)}; belum dipertanggungjawabkan {rp(costs.unaccountedAdvancesIdr)}.
+          Panjar yang dikeluarkan {rp(costs.advancesIdr)}, belum dipertanggungjawabkan {rp(costs.unaccountedAdvancesIdr)}.
         </p>
       )}
 
@@ -130,7 +130,7 @@ function PreviewTables({ preview }: { preview: PeriodReportPreview }) {
       )}
       {preview.unverified.length > 0 && (
         <p className="text-xs text-stone-600">
-          {preview.unverified.length} catatan tidak dapat dihitung (misalnya barang tanpa nilai rupiah); rinciannya ada di Detail teknis setelah data dikunci.
+          {preview.unverified.length} catatan tidak dapat dihitung (misalnya barang tanpa nilai rupiah). Rinciannya ada di Detail teknis setelah data dikunci.
         </p>
       )}
     </div>

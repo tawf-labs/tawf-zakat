@@ -33,7 +33,7 @@ export function OwnerReceiptCheck({ contribution }: { contribution: PublicContri
         </summary>
         <p className="text-xs text-[#5e7a70] mt-2">
           Pemilik kuitansi dapat memasukkan kode rahasia dan nominal dari kuitansinya. Server memeriksa kecocokannya
-          dengan catatan lembaga; data ini tidak ditampilkan kepada publik.
+          dengan catatan lembaga. Data ini tidak ditampilkan kepada publik.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-4">

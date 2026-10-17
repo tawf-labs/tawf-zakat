@@ -79,7 +79,7 @@ export function ActivityAllocations({ detail }: { detail: ActivityDetail }) {
                 <span className="font-semibold text-stone-800">{when(entry.occurredAt)}</span> ·{" "}
                 {formatNominal(entry.amountExact, detail.currencyUnit)} dari <span className="font-mono">{entry.contributionId}</span>{" "}
                 (versi kontribusi {entry.contributionVersion}) oleh <span className="font-mono">{entry.actorAccount.slice(0, 10)}…</span>
-                {entry.actorOfficerId && ` / ${entry.actorOfficerId}`} — {entry.reason}
+                {entry.actorOfficerId && ` / ${entry.actorOfficerId}`}. Alasan: {entry.reason}
               </li>
             ))}
           </ol>

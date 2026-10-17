@@ -74,7 +74,7 @@ export function MetadataInspectorCard({ metadata, onSelectAttachment }: Metadata
             <span className="text-[10px] text-emerald-700 font-semibold">Anti-Doxxing Terlindungi</span>
           </div>
           <p className="font-bold text-[#17332c]">
-            {metadata.beneficiaryName || metadata.disguisedName || "Hamba Allah (Mustahik)"} — NIK: {metadata.beneficiaryNIKMasked || "3201************"}
+            {metadata.beneficiaryName || metadata.disguisedName || "Hamba Allah (Mustahik)"}, NIK: {metadata.beneficiaryNIKMasked || "3201************"}
           </p>
           <p className="font-mono text-[11px] text-[#5e7a70] break-all bg-white p-2 rounded-xl border border-[#dbe7dd]">
             Hash: {metadata.beneficiaryHash || "0x7a8b9c...d4e5"}

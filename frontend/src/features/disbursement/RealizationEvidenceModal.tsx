@@ -73,7 +73,7 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
   const operation = useRetryableOperation(
     ({ realizationId, ...input }: UploadRealizationDocumentInput & { realizationId: string }) =>
       uploadRealizationDocument(requests, proposalId, realizationId, input),
-    "Hasil unggah bukti belum diketahui. Kirim ulang untuk memeriksa unggahan yang sama; bukti tidak akan tersimpan ganda."
+    "Hasil unggah bukti belum diketahui. Kirim ulang untuk memeriksa unggahan yang sama. Bukti tidak akan tersimpan ganda."
   );
 
   async function upload() {
@@ -136,7 +136,7 @@ export function RealizationEvidenceModal({ requests, proposalId, realization, re
       <DialogDescription>
         {realization.method === "CASH" || realization.method === "GOODS_HANDOVER"
           ? "Penyerahan tunai atau barang dibuktikan dengan tanda terima atau BAST beserta jumlahnya."
-          : "Transfer dan pembayaran penyedia dibuktikan dengan bukti pembayaran."} Berkas disimpan privat; keberadaan berkas tidak membuktikan kebenaran isinya.
+          : "Transfer dan pembayaran penyedia dibuktikan dengan bukti pembayaran."} Berkas disimpan privat. Keberadaan berkas tidak membuktikan kebenaran isinya.
       </DialogDescription>
 
       <form className="space-y-4 text-sm text-stone-800" onSubmit={(event) => { event.preventDefault(); void upload(); }}>

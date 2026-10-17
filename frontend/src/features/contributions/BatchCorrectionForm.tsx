@@ -16,7 +16,7 @@ export function BatchCorrectionForm({ draft, busy, submitting, onCorrect }: Prop
     <summary className="font-medium cursor-pointer">{draft ? "Perbarui draf daftar" : "Koreksi kelompok ini"}</summary>
     <p className="text-xs text-stone-600">{draft
       ? "Jika sumber berubah, buat draf daftar pengganti untuk diperiksa dan disahkan kembali. Draf lama tetap tersimpan. Pencatatan yang sudah terkirim harus diselesaikan dahulu."
-      : "Buat versi penerus setelah kontribusi dikoreksi atau dana dikembalikan. Semua kuitansi anggota yang masih sah perlu dibuktikan ulang; kuitansi lama tetap tersimpan sebagai riwayat."}</p>
+      : "Buat versi penerus setelah kontribusi dikoreksi atau dana dikembalikan. Semua kuitansi anggota yang masih sah perlu dibuktikan ulang. Kuitansi lama tetap tersimpan sebagai riwayat."}</p>
     <form className="space-y-2 pt-2" onSubmit={event => {
       event.preventDefault();
       if (!busy && reason.trim() && source.trim()) void onCorrect(reason.trim(), source.trim());

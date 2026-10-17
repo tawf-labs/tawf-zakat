@@ -79,7 +79,7 @@ export function OfficerMandatesCard({ mandates = [], officerName }: OfficerManda
                     <div className="flex items-center gap-1.5 text-stone-500 text-[11px]">
                       <Calendar className="h-3.5 w-3.5 text-stone-400 shrink-0" />
                       <span>
-                        {formatTimestamp(mandate.validFrom)} – {formatTimestamp(mandate.validUntil)}
+                        {formatTimestamp(mandate.validFrom)} sampai {formatTimestamp(mandate.validUntil)}
                       </span>
                     </div>
                   </div>
@@ -102,7 +102,7 @@ export function OfficerMandatesCard({ mandates = [], officerName }: OfficerManda
         <p>
           <strong>Batas wewenang ini:</strong> Mandat di sini hanya berlaku untuk pekerjaan di dalam aplikasi lembaga
           (menyusun draf, memeriksa, mengesahkan usulan). Mandat ini <em>tidak otomatis memberi</em> peran sebagai
-          Auditor atau pengelola dana di catatan publik; peran itu diberikan secara terpisah.
+          Auditor atau pengelola dana di catatan publik. Peran itu diberikan secara terpisah.
         </p>
       </div>
     </div>

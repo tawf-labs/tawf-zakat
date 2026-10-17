@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/Button";
 import type { FileAvailability, RecoveryFileStatus, RecoveryStatus } from "../../../../shared/registry-recovery";
 import type { RecordingObservation } from "../../../../shared/report-registry";
 const fileLabels: Record<FileAvailability, string> = { AVAILABLE: "Tersedia dan hash cocok", MISSING: "Berkas hilang", CORRUPT: "Berkas rusak atau tidak cocok", UNAVAILABLE: "Berkas belum tersedia" };
-const transactionLabels: Record<RecordingObservation["state"], string> = { PREPARED: "Belum dikirim", SUBMITTED: "Diajukan; belum terbukti masuk blok", INCLUDED: "Masuk blok; menunggu konfirmasi", CONFIRMED: "Tingkat konfirmasi tercapai", NONCANONICAL: "Blok berubah; perlu pemeriksaan ulang", REVERTED: "Transaksi gagal", INVALID_EVENT: "Event tidak cocok" };
+const transactionLabels: Record<RecordingObservation["state"], string> = { PREPARED: "Belum dikirim", SUBMITTED: "Diajukan, belum terbukti masuk blok", INCLUDED: "Masuk blok, menunggu konfirmasi", CONFIRMED: "Tingkat konfirmasi tercapai", NONCANONICAL: "Blok berubah, perlu pemeriksaan ulang", REVERTED: "Transaksi gagal", INVALID_EVENT: "Event tidak cocok" };
 
 /** Backup bytes must match the committed source; the server decides, never this form. */
 export function RecoveryPanel({ requests, preparationId, canRecover }: { requests: PrivateRequests; preparationId: string; canRecover: boolean }) {
@@ -51,7 +51,7 @@ export function RecoveryPanel({ requests, preparationId, canRecover }: { request
     {!recovery && <p role="status">Status chain belum dapat dipastikan.</p>}
     {chainError && <p role="alert">{chainError}</p>}
     {recovery && <>
-      <p role="status">{recovery.state === "CURRENT" ? "Status sesuai blok saat pemeriksaan." : recovery.state === "CATCHING_UP" ? "Pemeriksaan tersimpan; blok baru menunggu putaran berikutnya." : "Perlu pemeriksaan ulang; status terakhir belum memastikan keadaan terbaru."}</p>
+      <p role="status">{recovery.state === "CURRENT" ? "Status sesuai blok saat pemeriksaan." : recovery.state === "CATCHING_UP" ? "Pemeriksaan tersimpan. Blok baru menunggu putaran berikutnya." : "Perlu pemeriksaan ulang. Status terakhir belum memastikan keadaan terbaru."}</p>
       <p className="text-xs">Diperiksa {recovery.checkpoint ? new Date(recovery.checkpoint.checkedAt).toLocaleString("id-ID") : "belum pernah"}. Kebijakan {recovery.confirmationPolicy}: {recovery.requiredConfirmations} konfirmasi blok, bukan finalitas settlement L1.</p>
       <details><summary>Riwayat pemeriksaan transaksi lembaga</summary>
         <p className="text-xs">Catatan lama dipertahankan sebagai riwayat. Status tindakan terbaru tersedia pada panel pencatatan, penerbitan, atau atestasi.</p>

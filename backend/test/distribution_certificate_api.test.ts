@@ -459,7 +459,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("browser smoke: prepares, endors
     await sign.click();
     await page.getByText("Sertifikat tercatat dalam blok", { exact: false }).waitFor();
     await rpc.request({ method: "evm_mine" as any });
-    await page.getByRole("status").filter({ hasText: "Sertifikat terbit; tingkat konfirmasi tercapai" }).waitFor();
+    await page.getByRole("status").filter({ hasText: "Sertifikat terbit, tingkat konfirmasi tercapai" }).waitFor();
     const publicVerifier = page.getByRole("main");
     await publicVerifier.getByLabel("ID Sertifikat", { exact: true }).fill(certificateId);
     await publicVerifier.getByRole("button", { name: "Periksa", exact: true }).click();

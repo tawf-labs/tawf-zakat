@@ -349,8 +349,8 @@ export const GOVERNANCE_EIP712_TYPES = {
 export const AUDIT_STANDARD = "PSAK 109 & Fikih BAZNAS";
 export const AUDIT_DOCUMENT_MAX_BYTES = 1 * 1024 * 1024; // 1MB (matches server upload limit)
 export const AUDIT_OPINIONS = [
-  { value: "WTP", label: "WTP — Wajar Tanpa Pengecualian" },
-  { value: "WDP", label: "WDP — Wajar Dengan Pengecualian" },
-  { value: "TW", label: "TW — Tidak Wajar" },
-  { value: "TMP", label: "TMP — Tidak Memberikan Pendapat" },
+  { value: "WTP", label: "WTP (Wajar Tanpa Pengecualian)" },
+  { value: "WDP", label: "WDP (Wajar Dengan Pengecualian)" },
+  { value: "TW", label: "TW (Tidak Wajar)" },
+  { value: "TMP", label: "TMP (Tidak Memberikan Pendapat)" },
 ] as const;

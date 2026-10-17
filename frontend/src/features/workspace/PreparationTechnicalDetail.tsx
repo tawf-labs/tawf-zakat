@@ -152,7 +152,7 @@ function SourceCard({ source }: { source: EvidencePreparation["sources"][number]
                 <td className="p-2">{bucketLabel(row.bucket)}</td>
                 <td className="p-2">{positionLabel(row.balanceSheet)}</td>
                 <td className="whitespace-nowrap p-2 font-mono">{formatQuantity({ amount: row.amount, unit: row.unit })}</td>
-                <td className="whitespace-nowrap p-2 font-mono">{row.amilAmount === null ? "—" : formatQuantity({ amount: row.amilAmount, unit: row.unit })}</td>
+                <td className="whitespace-nowrap p-2 font-mono">{row.amilAmount === null ? "Tidak ada" : formatQuantity({ amount: row.amilAmount, unit: row.unit })}</td>
               </tr>)}</tbody>
             </table>
           </div>

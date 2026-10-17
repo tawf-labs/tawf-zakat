@@ -164,7 +164,7 @@ export function ProposalDecisionBanner({ requests, draft, recorded }: {
         {outside ? <>
           <p className="mt-1">
             Keputusan diambil lewat proses internal lembaga di luar aplikasi. Aplikasi mencatat rujukannya dan akun yang
-            menerbitkan; tidak ada tanda tangan pengesah atau berkas SK di sini.
+            menerbitkan. Tidak ada tanda tangan pengesah atau berkas SK di sini.
           </p>
           <dl className="mt-1 space-y-1 font-mono text-[11px]">
             <div><dt className="inline">Diterbitkan oleh akun: </dt><dd className="inline">{decision.operatorAccount}</dd></div>

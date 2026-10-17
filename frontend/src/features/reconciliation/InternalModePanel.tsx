@@ -55,7 +55,7 @@ export function InternalModePanel() {
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-[#5e7a70]">
             Memeriksa apakah catatan PostgreSQL protokol ini benar-benar cermin dari event
-            on-chain yang terindeks - batch settlement Merkle beserta donasi di dalamnya, dan
+            on-chain yang terindeks, yaitu batch settlement Merkle beserta donasi di dalamnya, dan
             proposal penyaluran. Anda tidak perlu mengunggah apa pun.
           </p>
         </div>

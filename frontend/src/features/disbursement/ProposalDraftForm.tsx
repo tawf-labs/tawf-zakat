@@ -422,7 +422,7 @@ export function ProposalDraftForm({
       <p className="text-xs text-stone-500">
         {!isReadOnly
           ? decidesOutsideApp
-            ? "Draf dapat disimpan berkali-kali. Terbitkan setelah lembaga memutuskan lewat proses internalnya (mis. rapat pengurus); kelengkapan daftar penerima dan dokumen wajib diperiksa otomatis, lalu pengajuan langsung siap menerima donasi dan disalurkan."
+            ? "Draf dapat disimpan berkali-kali. Terbitkan setelah lembaga memutuskan lewat proses internalnya (mis. rapat pengurus). Kelengkapan daftar penerima dan dokumen wajib diperiksa otomatis, lalu pengajuan langsung siap menerima donasi dan disalurkan."
             : "Draf dapat disimpan berkali-kali. Saat diajukan, kelengkapan administrasi dan dokumen wajib akan diverifikasi secara otomatis sebelum masuk antrean pemeriksaan."
           : readOnlyMessage(draft.status)}
       </p>

@@ -100,7 +100,7 @@ export function ProposalDocumentManager({ requests, proposalId, beneficiaries, a
             {loading || policy === null
               ? <p className="text-xs text-stone-500">Memuat kelengkapan dokumen…</p>
               : policy === "unavailable"
-                ? <p className="text-xs text-stone-500">Kebijakan dokumen lembaga tidak dapat dimuat; kelengkapan akan diperiksa saat pengajuan.</p>
+                ? <p className="text-xs text-stone-500">Kebijakan dokumen lembaga tidak dapat dimuat. Kelengkapan akan diperiksa saat pengajuan.</p>
                 : !error && <ProposalRequiredDocuments items={required} />}
           </TabsContent>
           <TabsContent value="upload" className="mt-0 space-y-4">

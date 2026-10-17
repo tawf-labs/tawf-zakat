@@ -88,7 +88,7 @@ function TraceBody({ trace }: { trace: DonorTrace }) {
                 </span>
               </div>
               {activity.allocationBasis === "BEFORE_CORRECTION" && (
-                <Notice tone="warning">Alokasi ini dibuat sebelum kontribusi dikoreksi; nilainya sedang ditelaah lembaga.</Notice>
+                <Notice tone="warning">Alokasi ini dibuat sebelum kontribusi dikoreksi. Nilainya sedang ditelaah lembaga.</Notice>
               )}
               {isActivityTrack(activity.track) ? (
                 <ActivityTrackView track={activity.track} />

@@ -15,7 +15,7 @@ import {
 const failureText = (failure: unknown, fallback: string) =>
   failure instanceof WorkspaceRequestError && failure.status < 500
     ? failure.message
-    : `${fallback} Hasilnya belum diketahui; muat ulang status realisasi sebelum mencoba lagi.`;
+    : `${fallback} Hasilnya belum diketahui. Muat ulang status realisasi sebelum mencoba lagi.`;
 
 /**
  * Confirmation of receipt, separate from the officer's realization record. The OTP goes only
@@ -94,7 +94,7 @@ export function RecipientConfirmationModal({ requests, proposalId, realization, 
             Nomor telepon atau email penerima / perwakilan
             <select id={`${id}-contact`} value={contact} disabled={busy}
               className="mt-1 w-full rounded-lg border border-stone-300 p-2 text-sm font-normal" onChange={(event) => setContact(event.target.value)}>
-              {!contacts.length && <option value="">Kontak belum tercatat; gunakan BAST</option>}
+              {!contacts.length && <option value="">Kontak belum tercatat, gunakan BAST</option>}
               {contacts.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>

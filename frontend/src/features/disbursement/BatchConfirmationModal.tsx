@@ -12,7 +12,7 @@ import {
 const failureText = (failure: unknown, fallback: string) =>
   failure instanceof WorkspaceRequestError && failure.status < 500
     ? failure.message
-    : `${fallback} Hasilnya belum diketahui; muat ulang status realisasi sebelum mencoba lagi.`;
+    : `${fallback} Hasilnya belum diketahui. Muat ulang status realisasi sebelum mencoba lagi.`;
 
 /**
  * Confirms every member of one group handover in a single click - the pace a large roster
@@ -59,7 +59,7 @@ export function BatchConfirmationModal({ requests, proposalId, batchGroupId, mem
       <DialogTitle>Konfirmasi kelompok (BAST)</DialogTitle>
       <DialogDescription>
         Satu pemeriksaan BAST untuk {members.length} penerima dalam penyerahan kelompok ini. Pemeriksa harus petugas
-        selain pencatat realisasi. Setiap anggota tetap diperiksa dan dilaporkan sendiri - yang sudah terkonfirmasi,
+        selain pencatat realisasi. Setiap anggota tetap diperiksa dan dilaporkan sendiri. Yang sudah terkonfirmasi,
         diperselisihkan, atau belum lengkap buktinya tidak ikut lolos begitu saja.
       </DialogDescription>
 

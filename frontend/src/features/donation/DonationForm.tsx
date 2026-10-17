@@ -339,7 +339,7 @@ export function DonationForm({
             helperText="Nama yang dicantumkan pada sertifikat zakat"
           />
           <Input
-            label="NIK KTP (Opsional — untuk Hash Privasi)"
+            label="NIK KTP (Opsional, untuk Hash Privasi)"
             type="text"
             placeholder="16 Digit NIK"
             value={nik}
@@ -347,7 +347,7 @@ export function DonationForm({
             helperText="Digunakan untuk menghasilkan salted hash anti-doxxing"
           />
           <Input
-            label="Email (Opsional — untuk melacak penyaluran)"
+            label="Email (Opsional, untuk melacak penyaluran)"
             type="email"
             placeholder="nama@contoh.com"
             value={donorEmail}
@@ -393,7 +393,7 @@ export function DonationForm({
               <>
                 <HeartHandshake className="w-5 h-5 text-[#c4ed70]" />
                 <span>
-                  Tunaikan {zakatType} —{" "}
+                  Tunaikan {zakatType}:{" "}
                   {paymentMethod === "usdc"
                     ? `${usdcAmount} USDC`
                     : `Rp ${amountIDR.toLocaleString("id-ID")}`}

@@ -6,13 +6,13 @@ import { getRecovery, listRecoveries, prepareRecovery, sendRecovery, type Certif
 import { WorkspaceRequestError, type PrivateRequests } from "./privateRequests";
 
 const STATE_LABELS: Record<string, string> = {
-  PREPARED: "Pengesahan pemulihan disiapkan; belum dikirim",
-  SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
-  INCLUDED: "Pemulihan tercatat dalam blok; konfirmasi belum cukup",
+  PREPARED: "Pengesahan pemulihan disiapkan, belum dikirim",
+  SUBMITTED: "Transaksi diajukan, belum terbukti masuk blok",
+  INCLUDED: "Pemulihan tercatat dalam blok, konfirmasi belum cukup",
   CONFIRMED: "Token pengganti terbit ke pengendali baru",
-  REVERTED: "Transaksi gagal; pemegang belum berubah",
-  INVALID_EVENT: "Event tidak cocok; pemulihan tidak diakui",
-  NONCANONICAL: "Blok berubah; pemulihan perlu diperiksa ulang",
+  REVERTED: "Transaksi gagal, pemegang belum berubah",
+  INVALID_EVENT: "Event tidak cocok, pemulihan tidak diakui",
+  NONCANONICAL: "Blok berubah, pemulihan perlu diperiksa ulang",
 };
 
 type Props = { requests: PrivateRequests; institutionId: string; activityId: string; line: CertificateLineStatus; disabled: boolean };
@@ -54,7 +54,7 @@ export function CertificateRecoverySection({ requests, institutionId, activityId
     try { await task(); }
     catch (failure) {
       const uncertain = ["submit", "retry"].includes(label) && !(failure instanceof WorkspaceRequestError && failure.status < 500);
-      setError(`${failure instanceof Error ? failure.message : "Permintaan ditolak."}${uncertain ? " Hasil belum dapat dipastikan; periksa status sebelum mengulang." : ""}`);
+      setError(`${failure instanceof Error ? failure.message : "Permintaan ditolak."}${uncertain ? " Hasil belum dapat dipastikan. Periksa status sebelum mengulang." : ""}`);
     }
     finally { setBusy(null); }
   }
@@ -86,7 +86,7 @@ export function CertificateRecoverySection({ requests, institutionId, activityId
       {custody?.recoveryNeeded && (
         <p role="alert" className="text-xs text-amber-800">
           Token resmi dipegang {custody.holder}, sedangkan pengendali institusi pada kontrak kini {custody.resolvedCustodian}.
-          Pemulihan menerbitkan token pengganti ke pengendali tersebut; token lama, penerbit dan isi tidak berubah dan tidak ada token yang dipindahkan.
+          Pemulihan menerbitkan token pengganti ke pengendali tersebut. Token lama, penerbit dan isi tidak berubah dan tidak ada token yang dipindahkan.
         </p>
       )}
       {!recovery && (

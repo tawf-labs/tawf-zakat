@@ -110,14 +110,14 @@ export function AidLineRow({
               placeholder="Sumber/rujukan dan perhitungan, mis. penawaran pemasok: 10 kg × Rp15.000"
               value={line.value.valuationBasis ?? ""}
               onChange={(e) => onChange({ ...line, value: { ...line.value, valuationBasis: e.target.value || null } as AidLine["value"] })} />
-            Estimasi pengajuan; biaya aktual dicatat terpisah pada uang muka & biaya.
+            Estimasi pengajuan. Biaya aktual dicatat terpisah pada uang muka & biaya.
           </label>
         </div>
       )}
       <input
         className="mt-2 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
         aria-label={`Referensi bukti ${index + 1}`}
-        placeholder="Referensi bukti (catatan nomor surat; unggah dokumennya pada lampiran)"
+        placeholder="Referensi bukti (catatan nomor surat, unggah dokumennya pada lampiran)"
         value={line.evidenceReference ?? ""}
         onChange={(e) => onChange({ ...line, evidenceReference: e.target.value || null })}
       />

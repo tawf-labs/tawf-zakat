@@ -1236,7 +1236,7 @@ function PrivateCampaign({
                 <br />
                 <strong>Pernyataan persetujuan penggalang:</strong>{" "}
                 {campaign.consent
-                  ? "Diberikan; tetap perlu diperiksa operator"
+                  ? "Diberikan, tetap perlu diperiksa operator"
                   : "Belum diberikan"}
               </p>
               {textFields.map(([name, label]) => (
@@ -1337,7 +1337,7 @@ function PrivateCampaign({
             <section className="cf-panel">
               <h2>Siap dipublikasikan</h2>
               <p>
-                Publikasi menampilkan cerita kampanye; dokumen pendukung tetap
+                Publikasi menampilkan cerita kampanye. Dokumen pendukung tetap
                 privat.
               </p>
               <button
@@ -1389,7 +1389,7 @@ function PrivateCampaign({
                 <p>
                   Donasi dijeda sampai proposal disetujui dan diterbitkan ulang.
                   Jika sudah pernah terbit, publik tetap melihat versi terakhir yang
-                  diterbitkan; perubahan draf tetap privat selama review.
+                  diterbitkan. Perubahan draf tetap privat selama review.
                 </p>
                 <label>
                   Alasan revisi material

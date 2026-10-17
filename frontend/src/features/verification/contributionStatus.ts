@@ -31,7 +31,7 @@ export const STATUS_BADGES: Record<PublicContributionStatus, StatusBadge> = {
     Icon: CheckCircle2,
     label: "Diterima Lembaga",
     tone: "bg-blue-50 border-blue-200 text-blue-800",
-    explanation: "Lembaga mencatat penerimaan kontribusi ini; pencocokan dengan bukti sumber lembaga belum dilakukan.",
+    explanation: "Lembaga mencatat penerimaan kontribusi ini. Pencocokan dengan bukti sumber lembaga belum dilakukan.",
   },
   RECONCILED: {
     Icon: CheckCircle2,

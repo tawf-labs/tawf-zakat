@@ -102,7 +102,7 @@ export function ProposalDocumentList({ documents, beneficiaries, readOnly, onDow
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-stone-600">
-                      {targetName || "—"}
+                      {targetName || "Tidak ada"}
                     </td>
                     <td className="px-3 py-2.5 text-stone-500">
                       {formatSize(doc.sizeBytes)}

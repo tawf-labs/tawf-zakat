@@ -58,12 +58,12 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("trace distinguishes refund and 
     const refresh = async () => { await reload.focus(); await page.keyboard.press("Enter"); };
     trace.refunds = { status: "OK", data: [{ id: "refund-one", status: "DECIDED", amountExact: "50000", currencyUnit: "IDR", decidedAt: now, paidAt: null }] };
     await refresh();
-    await donor.getByText("Pengembalian diputuskan; belum dibayar", { exact: true }).waitFor();
+    await donor.getByText("Pengembalian diputuskan, belum dibayar", { exact: true }).waitFor();
     expect(await donor.getByText("Pengembalian sudah dibayar", { exact: true }).count()).toBe(0);
     trace.refunds.data[0] = { ...trace.refunds.data[0]!, status: "PAID", paidAt: now + 10 };
     await refresh();
     await donor.getByText("Pengembalian sudah dibayar", { exact: true }).waitFor();
-    expect(await donor.getByText("Pengembalian diputuskan; belum dibayar", { exact: true }).count()).toBe(0);
+    expect(await donor.getByText("Pengembalian diputuskan, belum dibayar", { exact: true }).count()).toBe(0);
     trace.refunds.data[0] = { ...trace.refunds.data[0]!, status: "CANCELLED", paidAt: null };
     await refresh();
     await donor.getByText("Keputusan pengembalian dibatalkan", { exact: true }).waitFor();
@@ -78,7 +78,7 @@ it.skipIf(!process.env.REGISTRY_BROWSER_MODULE)("trace distinguishes refund and 
     expect(await donor.getByText("Belum terbit", { exact: true }).count()).toBe(0);
     track.certificates.data.lines[0]!.issuance = { state: "SUBMITTED", reason: null };
     await refresh();
-    await donor.getByText("Penerbitan diajukan; menunggu konfirmasi", { exact: true }).waitFor();
+    await donor.getByText("Penerbitan diajukan, menunggu konfirmasi", { exact: true }).waitFor();
     const verifierPath = "/sertifikat?institutionId=institution-one&certificateId=certificate-one&version=1";
     track.certificates.data.lines[0] = { certificateId: "certificate-one", issuance: { state: "CONFIRMED", reason: null }, published: { version: "1", validity: "DISPUTED", observationState: "CONFIRMED", replacementState: "NONE", scopeStatus: "DISPUTED", issuer: `0x${"1".repeat(40)}`, contentDigest: `0x${"2".repeat(64)}`, verifierPath, totals: { confirmedCount: 0, disputedCount: 1, unconfirmedCount: 0 } } };
     await refresh();

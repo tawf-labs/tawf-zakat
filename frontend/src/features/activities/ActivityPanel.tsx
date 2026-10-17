@@ -49,7 +49,7 @@ export function ActivityPanel({ requests, canManage, allocationRevision = 0 }: {
           </div>
           <p className="mt-1 text-xs text-stone-600">
             Setiap kegiatan mengikuti satu versi pengajuan yang disahkan. Kontribusi yang disahkan lembaga dialokasikan
-            secara eksplisit; sisa yang belum dialokasikan tetap terlihat.
+            secara eksplisit. Sisa yang belum dialokasikan tetap terlihat.
           </p>
         </div>
         <div className="flex items-center gap-2">

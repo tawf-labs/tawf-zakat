@@ -30,10 +30,10 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 const states: Record<string, string> = {
-  PREPARED: "Atestasi disiapkan; belum dikirim", SUBMITTED: "Sudah dikirim; belum terbukti tercatat",
-  INCLUDED: "Atestasi sudah tercatat; menunggu konfirmasi cukup", CONFIRMED: "Atestasi tercatat pada versi ini",
-  REVERTED: "Pengiriman gagal; atestasi tidak tercatat", INVALID_EVENT: "Catatan tidak cocok; atestasi tidak diakui",
-  NONCANONICAL: "Catatan publik berubah; atestasi perlu diperiksa ulang",
+  PREPARED: "Atestasi disiapkan, belum dikirim", SUBMITTED: "Sudah dikirim, belum terbukti tercatat",
+  INCLUDED: "Atestasi sudah tercatat, menunggu konfirmasi cukup", CONFIRMED: "Atestasi tercatat pada versi ini",
+  REVERTED: "Pengiriman gagal, atestasi tidak tercatat", INVALID_EVENT: "Catatan tidak cocok, atestasi tidak diakui",
+  NONCANONICAL: "Catatan publik berubah, atestasi perlu diperiksa ulang",
 };
 
 export type VersionAttestation = { id: string; auditor: string; scope: string; conclusion: string;
@@ -99,7 +99,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
             <p>Lingkup: {scopeLabel(note.scope)}</p>
             <p className="break-all">Auditor {note.auditor}<br />Dasar mandat: {note.mandate || "tidak tercatat"}</p>
             <p className="break-all">Commitment bukti pemeriksaan {note.evidenceCommitment}</p>
-            <p className="break-all">{note.predecessor ? `Tindak lanjut dari catatan ${note.predecessor}` : "Catatan pertama; bukan tindak lanjut."}</p>
+            <p className="break-all">{note.predecessor ? `Tindak lanjut dari catatan ${note.predecessor}` : "Catatan pertama. Bukan tindak lanjut."}</p>
           </li>)}</ul>}
     </div>
 
@@ -128,7 +128,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
         </select></label>}
       <label className="block">Bukti pemeriksaan (kertas kerja)
         <input type="file" multiple className="block w-full" onChange={e => void attach(e.target.files)} /></label>
-      <p className="text-xs">{evidence.length === 0 ? "Bukti pemeriksaan wajib dilampirkan. Bukti disimpan terbatas; yang tercatat di pencatatan publik hanya sidik jari digitalnya." : `${evidence.length} berkas akan disimpan dan dikunci (sidik jarinya dicatat) sebelum penandatanganan.`}</p>
+      <p className="text-xs">{evidence.length === 0 ? "Bukti pemeriksaan wajib dilampirkan. Bukti disimpan terbatas. Yang tercatat di pencatatan publik hanya sidik jari digitalnya." : `${evidence.length} berkas akan disimpan dan dikunci (sidik jarinya dicatat) sebelum penandatanganan.`}</p>
       <Button disabled={!!busy || !conclusion || evidence.length === 0 || !address} onClick={prepare}>Siapkan atestasi untuk versi ini</Button>
     </fieldset>}
 
@@ -136,7 +136,7 @@ export function AttestationPanel({ saved, preparationId, requests, recorded, bas
       <p role="status">{statusUnavailable ? "Status chain belum dapat dipastikan" : states[intent.observation.state]}</p>
       <p className="text-xs">Konfirmasi: {intent.observation.confirmations} / {intent.observation.requiredConfirmations}. Kebijakan {intent.observation.confirmationPolicy}.</p>
       <p className="text-xs">Kesimpulan yang akan ditandatangani: {conclusionLabel(intent.statement.conclusion)} · lingkup {scopeLabel(intent.statement.scope)}.</p>
-      <p className="text-sm">Periode kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu; bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat Anda dicek ulang sebelum penandatanganan."}</p>
+      <p className="text-sm">Periode kewenangan {intent.statement.authorityEpoch} · {intent.signingAuthority === "HISTORICAL" ? "Wewenang saat pencatatan dulu. Bukan izin atestasi baru." : intent.signingAuthority === "STALE" ? "Mandat berubah. Mulai tinjauan atestasi baru." : "Mandat Anda dicek ulang sebelum penandatanganan."}</p>
       <p className="break-all text-xs">Commitment bukti pemeriksaan {intent.statement.evidenceCommitment}<br />Berkas: {intent.evidence.files.map(file => file.fileName).join(", ")}</p>
       {intent.evidence.files.map(file => <Button key={file.id} variant="outline" disabled={!!busy} onClick={() => act("Mengunduh bukti pemeriksaan…", async assertCurrent => {
         const blob = await requests.blob(`/api/evidence/${path}/${intent.id}/files/${file.id}`);

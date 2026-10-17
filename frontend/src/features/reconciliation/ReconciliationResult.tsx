@@ -72,7 +72,7 @@ export function ReconciliationResult({
             </h3>
             <p className="text-sm text-[#5e7a70]">
               Terurut dari selisih terbesar. Setiap baris menunjuk Pengelola Zakat, jenis dana, dan
-              nilai rupiahnya - itulah yang menentukan kabupaten mana yang perlu dihubungi.
+              nilai rupiahnya. Itulah yang menentukan kabupaten mana yang perlu dihubungi.
             </p>
             <DiscrepancyTable
               discrepancies={entryGaps}

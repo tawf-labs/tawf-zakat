@@ -119,7 +119,7 @@ function PublishedLockNotice({ item, declared, onDeclare, disabled }: {
     </p>
     <label className="flex items-start gap-2 font-semibold">
       <input type="checkbox" checked={declared} disabled={disabled} className="mt-0.5" onChange={(e) => onDeclare(e.target.checked)} />
-      Perubahan ini untuk versi koreksi laporan tersebut; riwayat baris akan mencatatnya.
+      Perubahan ini untuk versi koreksi laporan tersebut. Riwayat baris akan mencatatnya.
     </label>
   </div>;
 }
@@ -219,7 +219,7 @@ export function HistoryDialog({ requests, proposalId, item, ctx, onClose, onCorr
     queryFn: () => getCostItemHistory(requests, proposalId, item.id),
   });
   const officer = (officerId: string) => ctx.officers.find((o) => o.id === officerId)?.displayName ?? officerId;
-  const receiptRef = (receiptId: string | null) => (receiptId ? ctx.receipts.find((r) => r.id === receiptId)?.reference ?? "?" : "—");
+  const receiptRef = (receiptId: string | null) => (receiptId ? ctx.receipts.find((r) => r.id === receiptId)?.reference ?? "?" : "Tidak ada");
   return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
     <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
       <DialogTitle>Riwayat baris biaya</DialogTitle>

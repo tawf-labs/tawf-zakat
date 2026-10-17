@@ -76,7 +76,7 @@ export function DonorContributionSummary({ contribution }: { contribution: Donor
           <div key={correction.toVersion} className="rounded-xl border border-tawf-green-10 p-3 text-sm space-y-1">
             <p className="font-semibold text-tawf-green">Versi {correction.fromVersion} → {correction.toVersion} · {formatDate(correction.createdAt)}</p>
             <p className="text-xs text-tawf-muted">{formatNominal(correction.fromAmountExact, contribution.currencyUnit)} → {formatNominal(correction.toAmountExact, contribution.currencyUnit)}</p>
-            {correction.correctionType === "DUPLICATE" && <p className="text-xs text-amber-700">Catatan ganda dikeluarkan dari pendanaan; nominal historis tetap tersimpan.</p>}
+            {correction.correctionType === "DUPLICATE" && <p className="text-xs text-amber-700">Catatan ganda dikeluarkan dari pendanaan. Nominal historis tetap tersimpan.</p>}
             <p className="text-xs text-tawf-muted">Alasan: {correction.reason}</p>
           </div>
         ))}

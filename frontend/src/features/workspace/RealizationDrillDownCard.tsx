@@ -166,7 +166,7 @@ function ProvenanceView({
         <p className="font-semibold text-stone-800">Sisi {roleLabel(provenance.role)}</p>
         <p>
           Cut-off {formatInstant(provenance.cutOff)} · dibekukan {formatSeconds(provenance.frozenAt)}. Status bukti,
-          konfirmasi dan penerimaan diperselisihkan adalah status saat dibekukan; perubahan sesudahnya tidak mengubah
+          konfirmasi dan penerimaan diperselisihkan adalah status saat dibekukan. Perubahan sesudahnya tidak mengubah
           rincian ini.
         </p>
       </div>
@@ -212,7 +212,7 @@ function ProvenanceView({
           </ul>
         )}
         <p className="mt-1 text-[11px] italic text-stone-500">
-          Pembayaran dan penyerahan barang dicatat oleh lembaga; bukan mutasi bank independen atau transaksi onchain.
+          Pembayaran dan penyerahan barang dicatat oleh lembaga. Bukan mutasi bank independen atau transaksi onchain.
         </p>
       </div>
 
@@ -359,7 +359,7 @@ function RealizationRow({
         {item.aidLineValuation && (
           <div className="mt-0.5 max-w-xs text-[11px] text-stone-500">
             {item.aidLineValuation.valuedAmountIdr !== null
-              ? `Estimasi rincian bantuan: Rp ${formatRupiah(item.aidLineValuation.valuedAmountIdr)} (dasar: ${item.aidLineValuation.valuationBasis}); tidak dijumlahkan ke realisasi rupiah.`
+              ? `Estimasi rincian bantuan: Rp ${formatRupiah(item.aidLineValuation.valuedAmountIdr)} (dasar: ${item.aidLineValuation.valuationBasis}). Tidak dijumlahkan ke realisasi rupiah.`
               : "Rincian bantuan tanpa dasar valuasi rupiah."}
           </div>
         )}
@@ -500,7 +500,7 @@ function ActivityTraceView({ trace }: { trace: ProvenanceActivityTrace }) {
         <p>{trace.realizationsWithoutActivity.length} realisasi belum terhubung ke kegiatan penyaluran pada cut-off.</p>
       )}
       {trace.contributionsWithoutDonor > 0 && (
-        <p>{trace.contributionsWithoutDonor} kontribusi teralokasi tidak memuat detail donatur; sumber donor tidak lengkap.</p>
+        <p>{trace.contributionsWithoutDonor} kontribusi teralokasi tidak memuat detail donatur. Sumber donor tidak lengkap.</p>
       )}
       <p className="text-[11px] italic text-stone-500">
         {trace.coverage} {trace.disclaimer}

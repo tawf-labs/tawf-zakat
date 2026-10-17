@@ -8,7 +8,7 @@ export function LedgerFormatHelp() {
       dikosongkan (dianggap <em>on balance sheet</em>). Baris yang diawali{" "}
       <code className="rounded bg-white px-1 py-0.5">TOTAL</code> atau{" "}
       <code className="rounded bg-white px-1 py-0.5">GRAND TOTAL</code> diperlakukan sebagai total
-      yang dideklarasikan, sehingga penjumlahan di dalam rekap Anda sendiri ikut diperiksa - dan
+      yang dideklarasikan, sehingga penjumlahan di dalam rekap Anda sendiri ikut diperiksa, dan
       grand total kedua laporan dibandingkan langsung satu sama lain.
     </div>
   );

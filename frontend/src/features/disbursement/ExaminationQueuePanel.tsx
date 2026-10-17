@@ -50,7 +50,7 @@ export function ExaminationQueuePanel({
   const currentList = activeTab === "examiner" ? examinerQueue : revisionQueue;
 
   const formatDate = (epochSec?: number | null) => {
-    if (!epochSec) return "—";
+    if (!epochSec) return "Tidak ada";
     return new Date(epochSec * 1000).toLocaleString("id-ID", {
       dateStyle: "medium",
       timeStyle: "short",
@@ -161,7 +161,7 @@ export function ExaminationQueuePanel({
                   <span className="text-stone-400">· v{item.version}</span>
                 </div>
                 <p className="text-stone-500">
-                  Asal: <strong>{item.originOfRequest || "—"}</strong> · {item.beneficiaryCount} penerima manfaat
+                  Asal: <strong>{item.originOfRequest || "Tidak ada"}</strong> · {item.beneficiaryCount} penerima manfaat
                 </p>
                 <p className="text-[11px] text-stone-400">
                   Diajukan: {formatDate(item.submittedAt || item.updatedAt)}

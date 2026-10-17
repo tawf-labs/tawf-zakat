@@ -78,7 +78,7 @@ export function ReconciliationSummary({
               <TrendingDown className="h-4 w-4 text-sky-600" />
             )}
             {netAmount === "0"
-              ? "Selisih saling menghapus di tingkat total - periksa rinciannya di bawah."
+              ? "Selisih saling menghapus di tingkat total. Periksa rinciannya di bawah."
               : claimIsBigger
                 ? `${report.claimLabel} lebih besar daripada ${report.sourceLabel}.`
                 : `${report.sourceLabel} lebih besar daripada ${report.claimLabel}.`}

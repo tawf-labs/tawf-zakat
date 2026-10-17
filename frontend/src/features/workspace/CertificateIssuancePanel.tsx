@@ -9,13 +9,13 @@ import { CertificateLineSection } from "./CertificateLineSection";
 import { CertificateRecoverySection } from "./CertificateRecoverySection";
 
 const STATE_LABELS: Record<string, string> = {
-  PREPARED: "Pengesahan disiapkan; belum dikirim",
-  SUBMITTED: "Transaksi diajukan; belum terbukti masuk blok",
-  INCLUDED: "Sertifikat tercatat dalam blok; konfirmasi belum cukup",
-  CONFIRMED: "Sertifikat terbit; tingkat konfirmasi tercapai",
-  REVERTED: "Transaksi gagal; sertifikat belum terbit",
-  INVALID_EVENT: "Event tidak cocok; penerbitan tidak diakui",
-  NONCANONICAL: "Blok berubah; penerbitan perlu diperiksa ulang",
+  PREPARED: "Pengesahan disiapkan, belum dikirim",
+  SUBMITTED: "Transaksi diajukan, belum terbukti masuk blok",
+  INCLUDED: "Sertifikat tercatat dalam blok, konfirmasi belum cukup",
+  CONFIRMED: "Sertifikat terbit, tingkat konfirmasi tercapai",
+  REVERTED: "Transaksi gagal, sertifikat belum terbit",
+  INVALID_EVENT: "Event tidak cocok, penerbitan tidak diakui",
+  NONCANONICAL: "Blok berubah, penerbitan perlu diperiksa ulang",
 };
 
 type Props = { requests: PrivateRequests; institutionId: string; canManage: boolean };

@@ -28,11 +28,11 @@ export function CertificateResult({ certificate: c, onSelectVersion, viewingVers
           <p className="mt-0.5">{validity.detail}</p>
           {c.scope && <p className="mt-1">{SCOPE_LABELS[c.scope.sourceStatus]}{c.scope.disputedCount > 0 ? ` (${c.scope.disputedCount} diperselisihkan)` : ""}.</p>}
           {c.replacement && c.replacement.state !== "NONE" && (
-            <p className="mt-1">{REPLACEMENT_LABELS[c.replacement.state]}{c.replacement.version ? ` — versi ${c.replacement.version}` : ""}.</p>
+            <p className="mt-1">{REPLACEMENT_LABELS[c.replacement.state]}{c.replacement.version ? `, versi ${c.replacement.version}` : ""}.</p>
           )}
         </div>
       ) : (
-        <p role="status" className="text-xs text-stone-600">Status keberlakuan tidak tersedia dari layanan ini; token saja tidak menunjukkan sertifikat masih berlaku.</p>
+        <p role="status" className="text-xs text-stone-600">Status keberlakuan tidak tersedia dari layanan ini. Token saja tidak menunjukkan sertifikat masih berlaku.</p>
       )}
       {c.predecessor && (
         <p className="text-xs text-stone-700">
@@ -67,8 +67,8 @@ export function CertificateResult({ certificate: c, onSelectVersion, viewingVers
         <section aria-label="Pemegang token" className="space-y-1 text-xs">
           <h4 className="text-[11px] font-semibold uppercase text-[#5e7a70]">Pemegang token</h4>
           <p>
-            {c.custody.current ? "Pemegang sesuai dengan pengendali institusi saat ini." : "Pemegang berbeda dari pengendali institusi saat ini; pemulihan belum selesai."}
-            {c.custody.tokens.length > 1 && " Token ini menggantikan token lama melalui pemulihan; penerbit dan isi tidak berubah."}
+            {c.custody.current ? "Pemegang sesuai dengan pengendali institusi saat ini." : "Pemegang berbeda dari pengendali institusi saat ini. Pemulihan belum selesai."}
+            {c.custody.tokens.length > 1 && " Token ini menggantikan token lama melalui pemulihan. Penerbit dan isi tidak berubah."}
           </p>
           <ul className="space-y-1">
             {c.custody.tokens.map((t) => (
