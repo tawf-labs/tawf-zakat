@@ -102,7 +102,7 @@ Privacy-preserving zakat donations using UltraHONK zero-knowledge proofs on Ethe
 > single contract. Donations work; the ZK privacy tier does not yet.
 > See `sc/src/DAO/verifiers/HonkVerifier.sol` and `security-analysis-corrections.md`.
 
-- **Testnet**: [ziswaf.tawf.foundation](https://ziswaf.tawf.foundation)
+- **Testnet**: [donate.tawf.foundation](https://donate.tawf.foundation)
 - **Live Sepolia Protocol Contract**: [`0x6014542ce8f759946aa6f3f9af54fb91685065a5`](https://sepolia.etherscan.io/address/0x6014542ce8f759946aa6f3f9af54fb91685065a5)
 - **Multi-Sig Safe DPS Address**: [`0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1`](https://app.safe.global/home?safe=sep:0xb4E4253e2aFfdC0710Cb9394b8C4E935F11B00f1)
 - **Settlement Merkle Root Verifier**: SHA-256 in-browser / WebAssembly

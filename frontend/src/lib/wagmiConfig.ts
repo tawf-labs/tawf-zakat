@@ -10,12 +10,12 @@ const transports = {
 
 const walletConnectProjectId =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_WALLETCONNECT_PROJECT_ID) ||
-  "b6808bd11499531c85eddbf3cbc72e65";
+  "7b1defb5dd37ad236841ca811fac880f";
 
 const appMetadata = {
   name: "Tawf Zakat",
   description: "Zakat Transparency & Anti-Corruption Protocol on Ethereum L1",
-  url: typeof window !== "undefined" ? window.location.origin : "https://tawf.foundation",
+  url: typeof window !== "undefined" ? window.location.origin : "https://donate.tawf.foundation",
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 
