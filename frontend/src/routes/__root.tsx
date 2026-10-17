@@ -14,7 +14,7 @@ import React, { useState } from "react";
 import { isCampaignReference } from "../features/verification/campaignReceiptApi";
 import { DeploymentGate } from "../components/DeploymentGate";
 import { RootWorkspaceAccessProvider } from "../features/workspace/useWorkspaceAccess";
-import { CrowdfundingNav, isCrowdfundingPath } from "../features/crowdfunding/CrowdfundingNav";
+import { isCrowdfundingPath } from "../features/crowdfunding/CrowdfundingNav";
 
 import appCss from "../styles.css?url";
 
@@ -71,7 +71,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {pathname !== "/" && isCrowdfundingPath(pathname) ? <CrowdfundingNav /> : <Navbar />}
+      <Navbar />
       <ErrorBoundary>
         <div className="flex-1">{children}</div>
       </ErrorBoundary>

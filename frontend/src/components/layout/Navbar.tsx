@@ -49,6 +49,12 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[#dbe7dd] bg-white/95 backdrop-blur-md shadow-xs transition-all">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-white focus:p-4 focus:text-[#0f3d30]"
+      >
+        Lewati navigasi
+      </a>
       <div className="max-w-7xl mx-auto flex h-16 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
         {/* Brand Logo */}
         <div className="min-w-0">
