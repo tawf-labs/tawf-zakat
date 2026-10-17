@@ -15,7 +15,7 @@ const walletConnectProjectId =
 const appMetadata = {
   name: "Tawf Zakat",
   description: "Zakat Transparency & Anti-Corruption Protocol on Ethereum L1",
-  url: typeof window !== "undefined" ? window.location.origin : "https://tawf.foundation",
+  url: typeof window !== "undefined" ? window.location.origin : "https://donate.tawf.foundation",
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 

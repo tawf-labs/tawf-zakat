@@ -2,5 +2,25 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "bun run build",
-  "installCommand": "bun install"
+  "installCommand": "bun install",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "zakat.tawf.foundation" }],
+      "destination": "https://donate.tawf.foundation/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "zkt.tawf.foundation" }],
+      "destination": "https://donate.tawf.foundation/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "ziswaf.tawf.foundation" }],
+      "destination": "https://donate.tawf.foundation/:path*",
+      "permanent": true
+    }
+  ]
 }
